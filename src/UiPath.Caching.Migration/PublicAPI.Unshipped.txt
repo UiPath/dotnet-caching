@@ -105,6 +105,7 @@ UiPath.Caching.Migration.IRouter.ModeReason.get -> UiPath.Caching.Migration.Rout
 UiPath.Caching.Migration.RouterBuilder.UseBypassWhen(System.Func<bool>! flag) -> UiPath.Caching.Migration.RouterBuilder!
 UiPath.Caching.Migration.RouterBuilder.UseNodeIdentity(string! processId) -> UiPath.Caching.Migration.RouterBuilder!
 UiPath.Caching.Migration.RouterBuilder.UseSourceTimeout(System.TimeSpan timeout) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.UseSourceConnection(System.Func<StackExchange.Redis.IDatabase!>! database) -> UiPath.Caching.Migration.RouterBuilder!
 UiPath.Caching.Migration.RouterMode
 UiPath.Caching.Migration.RouterMode.BypassLibrary = 1 -> UiPath.Caching.Migration.RouterMode
 UiPath.Caching.Migration.RouterMode.Library = 0 -> UiPath.Caching.Migration.RouterMode

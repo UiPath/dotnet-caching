@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -78,7 +79,8 @@ public static class RouterServiceCollectionExtensions
             }
         }
 
-        services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId));
+        var section = configuration.GetSection(sectionName);
+        services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId, section));
         services.AddHostedService<RouterHostedService>();
         return services;
     }
@@ -104,6 +106,20 @@ public static class RouterServiceCollectionExtensions
         LibrarySettleBound.ThrowIfBeyondHorizon(LibrarySettleBound.Join(connection?.ConnectionString, connection?.ConnectionStringExtraParams));
     }
 
+    /// <summary>The key the stack's node list store uses: the same name, with braces escaped, through the stack's key strategy.</summary>
+    internal static RedisKey NodeListKey(CacheOptions cacheOptions, RedisCacheOptions redisOptions)
+    {
+        var name = string.Join(cacheOptions.Separator, "Caching", "Nodes")
+            .Replace("%", "%25", StringComparison.Ordinal)
+            .Replace("{", "%7B", StringComparison.Ordinal)
+            .Replace("}", "%7D", StringComparison.Ordinal);
+        return (redisOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, RedisKeyspaces.String).GetRedisKey(name);
+    }
+
+    /// <summary>The router stack's source identity: the named stack's <c>?stack=</c> form, then the process part.</summary>
+    internal static Uri StackIdentity(Uri source, string processId) =>
+        WithProcess(new Uri($"{source.AbsoluteUri.Split('?')[0]}?stack={Uri.EscapeDataString(StackName)}"), processId);
+
     internal static Uri WithProcess(Uri source, string processId)
     {
         var text = source.AbsoluteUri;
@@ -111,7 +127,7 @@ public static class RouterServiceCollectionExtensions
         return query < 0 ? new Uri($"{text}-p{processId}") : new Uri($"{text[..query]}-p{processId}{text[query..]}");
     }
 
-    private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId)
+    private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, IConfigurationSection section)
     {
         var logger = root.GetService<ILoggerFactory>()?.CreateLogger("UiPath.Caching.Migration") ?? NullLogger.Instance;
         var core = new RouterCore(root.GetRequiredService<TimeProvider>(), predicate, logger)
@@ -130,7 +146,9 @@ public static class RouterServiceCollectionExtensions
 
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
             core.UseLibrary(token => StartLibraryAsync(root, builder, token));
-            var router = new Router(core, builder.Registrations);
+            var advertiser = CreateAdvertiser(root, builder, core, processId, section, logger);
+            var router = new Router(core, builder.Registrations) { Advertiser = advertiser };
+
             RouterBanner.Log(logger, builder, processId);
             router.Start();
             return router;
@@ -140,6 +158,48 @@ public static class RouterServiceCollectionExtensions
             core.CancelBackground();
             core.DisposeResources();
             throw;
+        }
+    }
+
+    /// <summary>From the router's section and the process id, never from the library's container, so a library build that hangs or throws cannot hold or disable it.</summary>
+    private static RouterAdvertiser? CreateAdvertiser(IServiceProvider root, RouterBuilder builder, RouterCore core, string processId, IConfigurationSection section, ILogger logger)
+    {
+        try
+        {
+            var cacheOptions = new CacheOptions();
+            section.Bind(cacheOptions);
+            // The one timing source: the router's own section, which the stack does not bind for itself (its Redis options are set in code).
+            var negotiation = new FormatNegotiationOptions();
+            section.GetSection("Redis:FormatNegotiation").Bind(negotiation);
+            if (negotiation.AdvertiseInterval <= TimeSpan.Zero || negotiation.LivenessWindow <= TimeSpan.Zero)
+            {
+                logger.LogWarning("The router runs without a node advertisement: Redis:FormatNegotiation AdvertiseInterval and LivenessWindow must be positive.");
+                return null;
+            }
+
+            Func<CancellationToken, ValueTask<IDatabase>> database = builder.SourceDatabase is { } source
+                ? _ => ValueTask.FromResult(source())
+                : async token =>
+                {
+                    var connector = root.GetRequiredService<IRedisConnector>();
+                    await connector.ConnectAsync(token).ConfigureAwait(false);
+                    return connector.Database;
+                };
+            var build = typeof(Router).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
+            return new RouterAdvertiser(
+                new RouterAdvertisementStore(database, NodeListKey(new CacheOptions { Separator = cacheOptions.Separator }, new RedisCacheOptions { RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance })),
+                StackIdentity(cacheOptions.SourceUri ?? CacheOptions.MachineUri, processId).ToString().ToLowerInvariant(),
+                build,
+                [new BypassTokens(core)],
+                negotiation.AdvertiseInterval,
+                negotiation.LivenessWindow,
+                core.Clock,
+                logger);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogWarning(ex, "The router could not set up its node advertisement; it runs without one.");
+            return null;
         }
     }
 
