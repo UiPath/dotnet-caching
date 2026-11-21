@@ -169,9 +169,8 @@ public class InnerTierOutageTests
     [InlineData(true)]
     public async Task Concurrent_batch_misses_run_the_generator_once_when_the_inner_tier_refuses_the_write(bool throws)
     {
-        var inner = BatchMissInner();
-        inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(_ => throws ? throw new InvalidOperationException("inner write failed") : new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Failed, null)));
+        var inner = BatchMissInner(out var many);
+        many.Answer = (keys, _, _) => throws ? throw new InvalidOperationException("inner write failed") : Array.ConvertAll(keys, _ => FillOutcome.Failed);
         using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner);
         var generated = 0;
         async Task<KeyValuePair<int, string?>[]> Generate(int[] states, CancellationToken token)
@@ -195,9 +194,19 @@ public class InnerTierOutageTests
     public async Task A_batch_miss_canceled_during_the_inner_write_keeps_nothing_local(bool answersFalse)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        var inner = BatchMissInner();
-        inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(_ => CancelFill(cts, answersFalse), _ => new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Failed, null)));
+        var inner = BatchMissInner(out var many);
+        var cancelled = false;
+        many.Answer = (keys, _, _) =>
+        {
+            if (cancelled)
+            {
+                return Array.ConvertAll(keys, _ => FillOutcome.Failed);
+            }
+
+            cancelled = true;
+            cts.Cancel();
+            return answersFalse ? Array.ConvertAll(keys, _ => FillOutcome.Failed) : throw new OperationCanceledException(cts.Token);
+        };
         using var cache = InMemoryMultilayer.Cache(inner: inner);
         var generated = 0;
         Task<KeyValuePair<int, string?>[]> Generate(int[] states, CancellationToken _)
@@ -541,13 +550,13 @@ public class InnerTierOutageTests
         return answersFalse ? new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Failed, null)) : throw new OperationCanceledException(cts.Token);
     }
 
-    private static ICache BatchMissInner()
+    private static ICache BatchMissInner(out FillManyInner many)
     {
         var inner = Substitute.For<ICache>();
         inner.GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(ci => new ValueTask<KeyValuePair<CacheKey, ICacheEntry<string?>>[]>(Array.ConvertAll(
                 ci.Arg<CacheKey[]>(),
                 k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }))));
-        return inner;
+        return FillManyInner.Wrap(inner, out many);
     }
 }

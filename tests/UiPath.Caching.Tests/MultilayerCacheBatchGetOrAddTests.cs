@@ -27,6 +27,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
     private readonly List<CacheKey[]> _innerSetCalls = [];
 
     private ICache _innerCache = default!;
+    private FillManyInner _many = default!;
     private MemoryCache _memoryCache = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;
@@ -77,8 +78,8 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         _generatorCalls[0].Should().Equal(
             MissingOfTen,
             "every missing state arrives in a single array, in request order");
-        _innerSetCalls.Should().HaveCount(7, "each of the seven generated values is filled on its own");
-        _innerSetCalls.SelectMany(keys => keys).Should().OnlyHaveUniqueItems();
+        _innerSetCalls.Should().HaveCount(1, "the seven generated values are written in one batch");
+        _innerSetCalls[0].Should().HaveCount(7);
         result.Should().HaveCount(10);
         result.Single(r => r.Key == 5L).Value.Should().Be("hit:5");
         result.Single(r => r.Key == 6L).Value.Should().Be("gen:6");
@@ -104,7 +105,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
     }
 
     [Fact]
-    public async Task Missing_keys_are_filled_in_the_inner_cache_one_by_one()
+    public async Task Missing_keys_are_written_to_the_inner_cache_in_one_batch()
     {
         await Sut.GetOrAddAsync<string, long>(
             [new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)],
@@ -112,8 +113,8 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
             (CachePolicy?)null,
             testContextAccessor.Current.CancellationToken);
 
-        _innerSetCalls.Should().HaveCount(2, "each key is filled on its own, so one that loses leaves the others");
-        _innerSetCalls.SelectMany(keys => keys).Should().BeEquivalentTo(new[] { (CacheKey)"a", (CacheKey)"b" });
+        _innerSetCalls.Should().HaveCount(1, "one batch write, not one per key");
+        _innerSetCalls[0].Should().BeEquivalentTo(new[] { (CacheKey)"a", (CacheKey)"b" });
     }
 
     [Fact]
@@ -385,12 +386,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         await Sut.GetOrAddAsync<string, long>([new((CacheKey)"b", 2L)], Generate, TimeSpan.FromMinutes(3), null, token);
 
         _innerSetCalls.Should().HaveCount(2);
-        await _innerCache.Received(1).TryFillAsync<string>(
-            Arg.Any<CacheKey>(),
-            Arg.Any<string?>(),
-            Arg.Is<DateTimeOffset>(d => d == expiration),
-            Arg.Any<CachePolicy?>(),
-            Arg.Any<CancellationToken>());
+        _many.Calls.Count(c => c.Expiration == expiration).Should().Be(1);
     }
 
     [Fact]
@@ -415,7 +411,8 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(_ => new TestChangeToken { ActiveChangeCallbacks = true, HasChanged = false });
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
-        _innerCache = _fixture.Freeze<ICache>();
+        _innerCache = Substitute.For<ICache>();
+        _fixture.Inject(FillManyInner.Wrap(_innerCache, out _many));
         _options = new InMemoryRedisCacheOptions
         {
             DefaultExpiration = TimeSpan.FromMinutes(10),
@@ -457,18 +454,12 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
                         : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue }))
                 .ToArray());
 
-        _innerCache.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(c =>
-            {
-                var key = c.Arg<CacheKey>();
-                lock (_innerSetCalls)
-                {
-                    _innerSetCalls.Add([key]);
-                    _stored[key] = c.ArgAt<string?>(1);
-                }
-
-                return new FillResult<string>(FillOutcome.Added, null);
-            });
+        _many.Answer = (keys, values, _) =>
+        {
+            _innerSetCalls.Add(keys);
+            for (var i = 0; i < keys.Length; i++) { _stored[keys[i]] = (string?)values[i]; }
+            return Array.ConvertAll(keys, _ => FillOutcome.Added);
+        };
 
         return ValueTask.CompletedTask;
     }

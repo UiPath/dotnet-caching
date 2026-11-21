@@ -49,6 +49,44 @@ public sealed class SafeFillRedisIntegrationTests(RedisContainerFixture fixture)
         (await Raw.KeyTimeToLiveAsync(Find(key)))!.Value.Should().BeCloseTo(Ttl, TimeSpan.FromSeconds(15));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_batch_fill_writes_the_absent_keys_and_returns_the_value_stored_first_for_a_held_one(bool scripts)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var a = Node("a", scripts);
+        var b = Node("b", scripts);
+        var (x, y, z) = ($"it-{Guid.NewGuid():N}", $"it-{Guid.NewGuid():N}", $"it-{Guid.NewGuid():N}");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<KeyValuePair<int, string?>[]> Generate(int[] states, CancellationToken _)
+        {
+            started.TrySetResult();
+            await release.Task;
+            return [.. states.Select(s => new KeyValuePair<int, string?>(s, $"from-a-{s}"))];
+        }
+
+        var batch = a.GetOrAddAsync<string, int>([new(x, 1), new(y, 2), new(z, 3)], Generate, Ttl, null, Ct).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        (await b.GetOrAddAsync<string>(y, _ => Task.FromResult<string?>("from-b"), Ttl, Ct)).Should().Be("from-b");
+        release.SetResult();
+
+        var result = await batch;
+
+        result.Single(r => r.Key == 1).Value.Should().Be("from-a-1");
+        result.Single(r => r.Key == 2).Value.Should().Be("from-b", "the key another node stored first is the answer");
+        result.Single(r => r.Key == 3).Value.Should().Be("from-a-3");
+        (await Raw.StringGetAsync(Find(x))).ToString().Should().Contain("from-a-1");
+        (await Raw.StringGetAsync(Find(y))).ToString().Should().Contain("from-b").And.NotContain("from-a-2");
+        (await Raw.StringGetAsync(Find(z))).ToString().Should().Contain("from-a-3");
+        foreach (var key in new[] { x, y, z })
+        {
+            (await Raw.KeyTimeToLiveAsync(Find(key)))!.Value.Should().BeCloseTo(Ttl, TimeSpan.FromSeconds(15));
+        }
+
+        (await a.GetAsync<string>(y, Ct)).Should().Be("from-b", "the stored value is kept locally");
+    }
     [Fact]
     public async Task A_chunked_hash_fill_is_renamed_under_an_absent_key_and_leaves_a_held_one()
     {

@@ -375,7 +375,7 @@ internal sealed class CachePeers : IDisposable
     }
 
     /// <summary>The inner tier of a node over the shared store: counts its reads, can hold or fail them, and reports a connection state the test sets.</summary>
-    internal class NodeInner : DispatchProxy, IConnectionState, ISharedTier, IMigrationCache, IStampedTier
+    internal class NodeInner : DispatchProxy, IConnectionState, ISharedTier, IMigrationCache, IStampedTier, IFillManyTier
     {
         private static readonly MethodInfo ReadOne = typeof(NodeInner).GetMethod(nameof(ReadOneAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
         private static readonly MethodInfo ReadMany = typeof(NodeInner).GetMethod(nameof(ReadManyAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -390,6 +390,8 @@ internal sealed class CachePeers : IDisposable
         private Task? _afterNextRead;
         private int _singleReads;
         private int _batchReads;
+        private int _fills;
+        private int _fillBatches;
 
         public event EventHandler? OnConnectionFailed;
 
@@ -406,6 +408,12 @@ internal sealed class CachePeers : IDisposable
         public int SingleReads => Volatile.Read(ref _singleReads);
 
         public int BatchReads => Volatile.Read(ref _batchReads);
+
+        /// <summary>The keys a fill command reached, whether it wrote them or found them held.</summary>
+        public int Fills => Volatile.Read(ref _fills);
+
+        /// <summary>The batch fill commands, each of which reached one or more keys.</summary>
+        public int FillBatches => Volatile.Read(ref _fillBatches);
 
         public int[] BatchSizes => [.. _batchSizes];
 
@@ -476,6 +484,19 @@ internal sealed class CachePeers : IDisposable
                 ? Store.Values.TryUpdate(cacheKey.Name, value, seen.Value)
                 : Store.Values.TryAdd(cacheKey.Name, value);
             return new(won ? StampedWrite.Won : StampedWrite.Lost);
+        }
+
+        ValueTask<FillResult<T>[]> IFillManyTier.TryFillManyAsync<T>(KeyValuePair<CacheKey, T?>[] entries, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
+            where T : default
+        {
+            Interlocked.Increment(ref _fillBatches);
+            var results = new FillResult<T>[entries.Length];
+            for (var i = 0; i < entries.Length; i++)
+            {
+                results[i] = FillOneAsync(entries[i].Key, entries[i].Value).AsTask().Result;
+            }
+
+            return new(results);
         }
 
         async ValueTask<StoreOutcome> IMigrationCache.WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
@@ -578,6 +599,7 @@ internal sealed class CachePeers : IDisposable
 
         private ValueTask<FillResult<string>> FillString(CacheKey key, string? value)
         {
+            Interlocked.Increment(ref _fills);
             if (!Store.Values.TryAdd(key.Name, value))
             {
                 var remaining = Store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
@@ -591,6 +613,7 @@ internal sealed class CachePeers : IDisposable
 
         private ValueTask<FillResult<T>> FillOneAsync<T>(CacheKey key, T? value)
         {
+            Interlocked.Increment(ref _fills);
             // A write when the key is absent, as the store's NX is; one that finds it answers with the stored value.
             if (!Store.Values.TryAdd(key.Name, value))
             {

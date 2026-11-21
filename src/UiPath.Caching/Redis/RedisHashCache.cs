@@ -1544,8 +1544,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         var absent = report?.OnlyIfAbsent == true;
         if (expiration < now || hashEntries.Length == 0)
         {
-            // A fill of an absent key has nothing to write, and must not delete what is held.
-            return !absent && await DeleteKeyAsync(redisKey, token).ConfigureAwait(false);
+            return await DeleteKeyAsync(redisKey, token).ConfigureAwait(false);
         }
 
         // Written to a staging key and renamed under the key, so a hash that appeared meanwhile is never merged into.

@@ -35,11 +35,12 @@ internal sealed partial class MultilayerCache
         {
             try
             {
+                stamp.TryGet(out var seen);
                 return await cache._background.WriteAsync(
                     options.CacheKey.Name,
-                    (Cache: cache, Shape: this, Options: options, Value: value, Policy: policy, Stamp: stamp),
+                    (Cache: cache, Shape: this, Options: options, Value: value, Policy: policy, Seen: seen),
                     null,
-                    static (s, _) => ((IStampedTier)s.Cache._innerCache).WriteIfStampAsync<T?>(s.Options.CacheKey, s.Value, s.Options.Expiration, s.Policy, s.Stamp.Stamp, s.Options.Token),
+                    static (s, _) => ((IStampedTier)s.Cache._innerCache).WriteIfStampAsync<T?>(s.Options.CacheKey, s.Value, s.Options.Expiration, s.Policy, s.Seen, s.Options.Token),
                     static (s, written, keeper) =>
                     {
                         if (written == StampedWrite.Won)
@@ -110,8 +111,11 @@ internal sealed partial class MultilayerCache
         private static async ValueTask<ICacheEntry<T?>> ReadStampedForAdoptionAsync(IStampedTier tier, CacheEntryOptions options, CachePolicy policy, StampBox stamp)
         {
             var (snapshot, seen) = await tier.ReadStampedAsync<T>(options.CacheKey, policy, options.Token).ConfigureAwait(false);
-            stamp.Stamp = seen;
-            stamp.Read = snapshot.Outcome != SnapshotOutcome.Failed;
+            if (snapshot.Outcome != SnapshotOutcome.Failed)
+            {
+                stamp.Record(seen);
+            }
+
             return await AdoptionEntryAsync(new ValueTask<SnapshotRead<T>>(snapshot)).ConfigureAwait(false);
         }
     }

@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
-using System.Runtime.InteropServices;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
@@ -20,9 +19,8 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     private const int StripeLocks = 1024;
 
     private readonly Lock _gate = new();
-    private readonly Lock _fillGate = new();
-    // Keys with a fill in progress, each with the number of changes of that key since the first fill began: exact where a stripe's count is shared.
-    private readonly Dictionary<string, FillWatch> _fills = new(StringComparer.Ordinal);
+    // Exact per key where a stripe's count is shared.
+    private readonly FillWatches _fills = new();
     private readonly TelemetryTags<string> _refusedSuperseded = [new(TagCache, cacheName), new(TagReason, "superseded")];
     private readonly TelemetryTags<string> _refusedChanged = [new(TagCache, cacheName), new(TagReason, "changed")];
     private readonly TelemetryTags<string> _refusedInFlight = [new(TagCache, cacheName), new(TagReason, "in_flight")];
@@ -37,8 +35,6 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     private int[] _writing = [];
     private Lock[] _stripes = [];
     private volatile bool _counting;
-    // Keys with a fill in progress, for a cheap check by every write.
-    private int _filling;
     // The write order, from the first background write on.
     private volatile bool _active;
     private int _inFlight;
@@ -57,6 +53,9 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
     /// <summary>Whether changes are counted per stripe, so a fill from a read begun before one is refused.</summary>
     public bool Counting => _counting;
+
+    /// <summary>A fill of some key is in progress.</summary>
+    public bool Filling => _fills.Any;
 
     internal int InFlight => Volatile.Read(ref _inFlight);
 
@@ -138,80 +137,18 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         RunCore(key, state, local, work, false, true) ?? false;
 
     /// <summary>Starts watching the key for changes by anything but a fill; the token it returns is what <see cref="FillIntact"/> takes.</summary>
-    public long BeginFill(string key)
-    {
-        lock (_fillGate)
-        {
-            ref var watch = ref CollectionsMarshal.GetValueRefOrAddDefault(_fills, key, out _);
-            watch.Count++;
-            Volatile.Write(ref _filling, _fills.Count);
-            return watch.Version;
-        }
-    }
+    public long BeginFill(string key) => _fills.Begin(key);
 
-    public void EndFill(string key)
-    {
-        lock (_fillGate)
-        {
-            ref var watch = ref CollectionsMarshal.GetValueRefOrNullRef(_fills, key);
-            if (!Unsafe.IsNullRef(ref watch) && --watch.Count == 0)
-            {
-                _fills.Remove(key);
-                Volatile.Write(ref _filling, _fills.Count);
-            }
-        }
-    }
+    public void EndFill(string key) => _fills.End(key);
 
     /// <summary>True when nothing but a fill has changed the key since <paramref name="token"/> was taken; a token that was not taken stands for no watch.</summary>
-    public bool FillIntact(string key, long token)
-    {
-        if (token == Untracked)
-        {
-            return true;
-        }
-
-        lock (_fillGate)
-        {
-            ref var watch = ref CollectionsMarshal.GetValueRefOrNullRef(_fills, key);
-            return !Unsafe.IsNullRef(ref watch) && watch.Version == token;
-        }
-    }
+    public bool FillIntact(string key, long token) => token == Untracked || _fills.Intact(key, token);
 
     /// <summary>A local write or removal of the key, or a peer's: a fill in progress for it no longer holds the newest word.</summary>
-    public void NoteChange(string key)
-    {
-        if (Volatile.Read(ref _filling) == 0)
-        {
-            return;
-        }
-
-        lock (_fillGate)
-        {
-            ref var watch = ref CollectionsMarshal.GetValueRefOrNullRef(_fills, key);
-            if (!Unsafe.IsNullRef(ref watch))
-            {
-                watch.Version++;
-            }
-        }
-    }
+    public void NoteChange(string key) => _fills.Changed(key);
 
     /// <summary>Changes that were not heard, or an invalidation of every key: every fill in progress is superseded.</summary>
-    public void NoteChangeAll()
-    {
-        if (Volatile.Read(ref _filling) == 0)
-        {
-            return;
-        }
-
-        lock (_fillGate)
-        {
-            foreach (var key in _fills.Keys.ToArray())
-            {
-                ref var watch = ref CollectionsMarshal.GetValueRefOrNullRef(_fills, key);
-                watch.Version++;
-            }
-        }
-    }
+    public void NoteChangeAll() => _fills.ChangedAll();
 
     /// <summary>A peer's change of the key.</summary>
     public void Heard(string key)
@@ -257,19 +194,25 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     {
         if (!_active)
         {
-            var unordered = keys as string[] ?? keys.ToArray();
-            if (!fill)
+            var noting = !fill && _fills.Any;
+            if (!_counting && !noting)
             {
-                Array.ForEach(unordered, NoteChange);
+                return default;
+            }
+
+            var unordered = keys as string[] ?? keys.ToArray();
+            if (noting)
+            {
+                NoteChanges(unordered);
             }
 
             return _counting ? EnterUnordered(null, unordered) : default;
         }
 
         var all = keys as string[] ?? keys.ToArray();
-        if (!fill)
+        if (!fill && _fills.Any)
         {
-            Array.ForEach(all, NoteChange);
+            NoteChanges(all);
         }
 
         var mine = new Awaited();
@@ -647,6 +590,14 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
 
         Interlocked.Decrement(ref _writing[stripe]);
+    }
+
+    private void NoteChanges(string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            NoteChange(key);
+        }
     }
 
     private Lock StripeLock(int stripe) => _stripes[stripe % StripeLocks];
@@ -1109,13 +1060,6 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
             }
         }
     }
-
-    private struct FillWatch
-    {
-        public int Count;
-        public long Version;
-    }
-
     internal sealed class Awaited() : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
     {
         // Under _gate.

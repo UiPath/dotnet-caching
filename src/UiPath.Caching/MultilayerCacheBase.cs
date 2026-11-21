@@ -145,6 +145,8 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
     internal bool FillsTracked => _background.Counting;
 
+    internal bool FillsWatched => _background.Filling;
+
     protected ICachingTelemetryProvider Telemetry { get; }
 
     /// <summary>The fail-safe values, once a fail-safe policy kept one; null before.</summary>

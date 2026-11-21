@@ -18,7 +18,8 @@ public class SafeHashFillTests
     [InlineData(HashCacheSetOption.HashReplace)]
     public async Task A_fill_never_replaces_a_hash_a_peer_wrote_while_its_generator_ran(HashCacheSetOption option)
     {
-        using var c = new PeerCluster();
+        // The peer's event is not heard, so the write is found by the fill itself, which is the NX of the key.
+        using var c = new PeerCluster { AutoDeliver = false };
         var (writer, other) = (c.Add("a"), c.Add("b"));
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -40,6 +41,50 @@ public class SafeHashFillTests
         var reads = writer.InnerReads;
         (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("z", "0")));
         writer.InnerReads.Should().Be(reads, "the stored hash is kept locally");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_hash_fill_whose_key_was_changed_while_its_generator_ran_writes_and_keeps_nothing(bool removed)
+    {
+        using var c = new PeerCluster();
+        var (writer, other) = (c.Add("a"), c.Add("b"));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<IDictionary<string, string?>> Generate(CancellationToken _)
+        {
+            started.TrySetResult();
+            await release.Task;
+            return Fields(("a", "1"));
+        }
+
+        var call = writer.Cache.GetOrAddAsync<string>("k", Generate, DateTimeOffset.UtcNow.AddMinutes(5), HashCacheSetOption.KeyReplace, Awaited, Ct).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        if (removed)
+        {
+            await other.Cache.RemoveAsync<string>("k", Ct);
+        }
+        else
+        {
+            (await other.Cache.SetAsync<string>("k", Fields(("z", "0")), Merge, Awaited, Ct)).Should().BeTrue();
+        }
+
+        release.SetResult();
+
+        (await call).Should().BeEquivalentTo(Fields(("a", "1")), "the caller still gets what its generator made");
+        var read = await writer.Cache.GetAsync<string>("k", Awaited, Ct);
+        if (removed)
+        {
+            c.Redis.Fields().Should().BeNull("what the generator made may be older than the removal, so it is not stored");
+            read.Should().BeNullOrEmpty("nothing was kept locally either");
+        }
+        else
+        {
+            c.Redis.Fields().Should().BeEquivalentTo(Fields(("z", "0")), "what the generator made may be older than the write, so it does not meet it");
+            read.Should().BeEquivalentTo(Fields(("z", "0")), "nothing was kept locally either");
+        }
     }
 
     [Fact]

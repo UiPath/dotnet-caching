@@ -1777,7 +1777,6 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 }
                 else
                 {
-                    toStore.RemoveAll(e => !_background.FillIntact(e.CacheEntry.CacheKey.Name, BatchToken(watched, e.CacheEntry.CacheKey.Name)));
                     adopted = await FillBatchAsync(toStore.ToArray(), watched, policy, token).ConfigureAwait(false);
                 }
             }

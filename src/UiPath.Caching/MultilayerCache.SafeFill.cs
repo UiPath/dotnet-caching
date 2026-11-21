@@ -33,7 +33,7 @@ internal sealed partial class MultilayerCache
             return await _background.FillAsync(
                 options.CacheKey.Name,
                 new FillArgs<T>(this, options, value, policy, entry, fill),
-                static (s, _) => s.Cache.TryFillOrReplaceAsync(s.Options, s.Value, s.Policy),
+                static (s, _) => s.Cache.TryFillOrReplaceAsync(s.Options, s.Value, s.Policy, s.Fill),
                 static (s, filled, keeper) => s.Cache.KeepFilled(s, filled, keeper),
                 options.Token).ConfigureAwait(false);
         }
@@ -49,12 +49,18 @@ internal sealed partial class MultilayerCache
     }
 
     [AsyncMethodBuilder(typeof(Pooled<>))]
-    private async ValueTask<FillResult<T>> TryFillOrReplaceAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy)
+    private async ValueTask<FillResult<T>> TryFillOrReplaceAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy, long fill = BackgroundWrites.Untracked)
     {
         try
         {
             // A late fail-safe value checks in the key's turn that nothing removed or replaced the key since its generator started.
             if (!LateStillCurrent(options))
+            {
+                return default;
+            }
+
+            // Just before the command: a write or removal since the generator started leaves the key to it, and the keep that follows counts the refusal.
+            if (!_background.FillIntact(options.CacheKey.Name, fill))
             {
                 return default;
             }
@@ -65,10 +71,7 @@ internal sealed partial class MultilayerCache
                 return filled;
             }
 
-            // A stored value no serializer reads is replaced, as a write over it always did: a fill that left it would never heal it.
-            return await _innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, policy, options.Token).ConfigureAwait(false)
-                ? new FillResult<T>(FillOutcome.Added, default)
-                : default;
+            return await HealUnreadableAsync(options, value, policy).ConfigureAwait(false);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && options.Token.IsCancellationRequested))
         {
@@ -76,6 +79,12 @@ internal sealed partial class MultilayerCache
             return default;
         }
     }
+
+    /// <summary>A stored value no serializer reads is replaced, as a write over it always did: a fill that left it would never heal it.</summary>
+    private async ValueTask<FillResult<T>> HealUnreadableAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy) =>
+        await _innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, policy, options.Token).ConfigureAwait(false)
+            ? new FillResult<T>(FillOutcome.Added, default)
+            : default;
 
     private Filled<T> KeepFilled<T>(FillArgs<T> s, FillResult<T> filled, BackgroundWrites.Keeper keeper)
     {
@@ -158,8 +167,8 @@ internal sealed partial class MultilayerCache
         {
             return await _background.FillAsync(
                 entries.Select(static e => e.CacheEntry.CacheKey.Name),
-                (Cache: this, Entries: entries, Watched: watched, Policy: policy),
-                static (s, _) => s.Cache.TryFillEachAsync(s.Entries, s.Policy),
+                (Cache: this, Entries: entries, Watched: watched, Policy: policy, Token: token),
+                static (s, _) => s.Cache.TryFillEachAsync(s.Entries, s.Watched, s.Policy, s.Token),
                 static (s, results, keeper) => s.Cache.KeepFilledBatch(s.Entries, s.Watched, s.Policy, results, keeper),
                 token).ConfigureAwait(false);
         }
@@ -174,17 +183,57 @@ internal sealed partial class MultilayerCache
         }
     }
 
-    private async ValueTask<FillResult<T>[]> TryFillEachAsync<T>(CacheEntryValue<T>[] entries, CachePolicy policy)
+    /// <summary>The keys of a batch in one call when the inner tier takes one, each on its own otherwise; a key that changed since its generator started is left out.</summary>
+    private async ValueTask<FillResult<T>[]> TryFillEachAsync<T>(CacheEntryValue<T>[] entries, Dictionary<string, long> watched, CachePolicy policy, CancellationToken token)
     {
-        var fills = new Task<FillResult<T>>[entries.Length];
-        for (var i = 0; i < entries.Length; i++)
+        if (_innerCache is not IFillManyTier many)
         {
-            fills[i] = TryFillOrReplaceAsync(entries[i].CacheEntry, entries[i].Value, policy).AsTask();
+            var fills = new Task<FillResult<T>>[entries.Length];
+            for (var i = 0; i < entries.Length; i++)
+            {
+                fills[i] = TryFillOrReplaceAsync(entries[i].CacheEntry, entries[i].Value, policy, BatchToken(watched, entries[i].CacheEntry.CacheKey.Name)).AsTask();
+            }
+
+            return await Task.WhenAll(fills).ConfigureAwait(false);
         }
 
-        return await Task.WhenAll(fills).ConfigureAwait(false);
-    }
+        var results = new FillResult<T>[entries.Length];
+        var open = new List<int>(entries.Length);
+        for (var i = 0; i < entries.Length; i++)
+        {
+            var name = entries[i].CacheEntry.CacheKey.Name;
+            // In the key's turn, just before the command, as for a single fill.
+            if (LateStillCurrent(entries[i].CacheEntry) && _background.FillIntact(name, BatchToken(watched, name)))
+            {
+                open.Add(i);
+            }
+        }
 
+        if (open.Count == 0)
+        {
+            return results;
+        }
+
+        try
+        {
+            var pairs = open.Select(i => new KeyValuePair<CacheKey, T?>(entries[i].CacheEntry.CacheKey, entries[i].Value)).ToArray();
+            // One deadline for the batch, as a batch write has: every entry is built from the same resolved expiration.
+            var filled = await many.TryFillManyAsync<T>(pairs, entries[open[0]].CacheEntry.Expiration, policy, token).ConfigureAwait(false);
+            for (var k = 0; k < open.Count; k++)
+            {
+                var entry = entries[open[k]];
+                results[open[k]] = filled[k].Outcome == FillOutcome.Unreadable
+                    ? await HealUnreadableAsync(entry.CacheEntry, entry.Value, policy).ConfigureAwait(false)
+                    : filled[k];
+            }
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
+        {
+            LogBatchSetError(ex, entries);
+        }
+
+        return results;
+    }
     private Dictionary<string, ICacheEntry<T?>>? KeepFilledBatch<T>(CacheEntryValue<T>[] entries, Dictionary<string, long> watched, CachePolicy policy, FillResult<T>[] results, BackgroundWrites.Keeper keeper)
     {
         Dictionary<string, ICacheEntry<T?>>? adopted = null;

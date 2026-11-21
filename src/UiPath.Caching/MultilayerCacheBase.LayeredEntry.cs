@@ -192,7 +192,7 @@ public abstract partial class MultilayerCacheBase
                 : cache._clock.ToDateTimeOffset(ApplyJitter(duration, rehydrateJitter));
             var rehydrateOptions = shape.BuildOptions(originalCacheKey, rehydrateExpiration, ct);
             var disconnected = cache.GetInnerCacheDisconnected();
-            var stored = !disconnected && stamp.Read && shape.CanStamp
+            var stored = !disconnected && shape.CanStamp && stamp.TryGet(out _)
                 ? await StoreIfUnchangedAsync(originalCacheKey, entryExpiration, rehydrateOptions, shape.Present(newValue), policy, duration, run, stamp, ct).ConfigureAwait(false)
                 : await StoreAsync(rehydrateOptions, shape.Present(newValue), disconnected, policy).ConfigureAwait(false);
             if (!stored)
@@ -204,7 +204,7 @@ public abstract partial class MultilayerCacheBase
         }
 
         /// <summary>Writes the value over what the adoption read saw; when a write has landed since, that one stands and is kept here instead, and nothing is announced.</summary>
-        private async ValueTask<bool> StoreIfUnchangedAsync(CacheKey originalCacheKey, DateTimeOffset entryExpiration, TOptions options, TValue value, CachePolicy policy, TimeSpan duration, RehydrateRun run, StampBox stamp, CancellationToken ct)
+        private async ValueTask<bool> StoreIfUnchangedAsync(CacheKey originalCacheKey, DateTimeOffset entryExpiration, TOptions options, TValue value, CachePolicy policy, TimeSpan duration, RehydrateRun run, StampBox stamp, CancellationToken ct, bool again = false)
         {
             switch (await shape.StoreStampedAsync(options, value, policy, stamp).ConfigureAwait(false))
             {
@@ -212,7 +212,20 @@ public abstract partial class MultilayerCacheBase
                     // Written before the event, so a node it wakes reads the new value.
                     return await PublishSetAsync(options).ConfigureAwait(false);
                 case StampedWrite.Lost:
-                    await TryAdoptInnerAsync(originalCacheKey, entryExpiration, policy, duration, run, ct, new StampBox()).ConfigureAwait(false);
+                    var now = new StampBox();
+                    if (await TryAdoptInnerAsync(originalCacheKey, entryExpiration, policy, duration, run, ct, now).ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+
+                    // Gone since the read, by expiry or a removal: the value fills the key only if it is still absent, once.
+                    if (!again && now.TryGet(out var held) && held is null)
+                    {
+                        var absent = new StampBox();
+                        absent.Record(null);
+                        return await StoreIfUnchangedAsync(originalCacheKey, entryExpiration, options, value, policy, duration, run, absent, ct, again: true).ConfigureAwait(false);
+                    }
+
                     return true;
                 default:
                     return false;
@@ -233,7 +246,6 @@ public abstract partial class MultilayerCacheBase
             var budget = RehydrationCoordinator.AdoptReadTimeout(rehydrate, duration);
             read.CancelAfter(budget);
             var mark = cache.MarkInnerRead(options.CacheKey.Name, options.TopicKey);
-            stamp.Mark = mark;
             Task<ICacheEntry<TValue>>? reading = null;
             ICacheEntry<TValue> fetched;
             try

@@ -32,6 +32,42 @@ internal sealed partial class RedisCache
     public ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetIfChangedCoreAsync(cacheKey, value, comparer, GetExpiration(expiration), policy, token);
 
+    /// <summary>The attempts after a plain NX lost: one read of the winner, then whole attempts if it was gone again.</summary>
+    private static async ValueTask<FillRaw?> FillAfterAsync(RedisCache self, RedisKey key, RedisValue serialized, DateTimeOffset until, bool lost, CancellationToken token)
+    {
+        var read = lost;
+        for (var attempt = 0; attempt < FillAttempts; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+            FillRaw? filled;
+            if (read)
+            {
+                filled = self.RemainingOrZero(until) <= TimeSpan.Zero ? FillRaw.Lapsed : await ReadWinnerAsync(self, key).ConfigureAwait(false);
+            }
+            else
+            {
+                filled = await FillOnceAsync(self, key, serialized, until).ConfigureAwait(false);
+            }
+
+            read = false;
+            if (filled is { } done)
+            {
+                return done;
+            }
+        }
+
+        return null;
+    }
+
+    private static async ValueTask<FillRaw?> ReadWinnerAsync(RedisCache self, RedisKey key)
+    {
+        var read = new StrongBox<StrongBox<(RedisValue Value, DateTimeOffset? Expiration)>?>();
+        await ReadOnceAsync(self, key, read, atomic: true).ConfigureAwait(false);
+        var (value, deadline) = read.Value!.Value;
+        // Gone again since the NX lost: the caller tries once more.
+        return value.IsNull ? null : new FillRaw(false, value, self.Clock.ToDateTimeOffset(deadline));
+    }
+
     private static async ValueTask<FillRaw?> FillOnceAsync(RedisCache self, RedisKey key, RedisValue serialized, DateTimeOffset until)
     {
         var expiration = self.RemainingOrZero(until);
@@ -74,11 +110,7 @@ internal sealed partial class RedisCache
             return new FillRaw(true, RedisValue.Null, DateTimeOffset.MaxValue);
         }
 
-        var read = new StrongBox<StrongBox<(RedisValue Value, DateTimeOffset? Expiration)>?>();
-        await ReadOnceAsync(self, key, read, atomic: true).ConfigureAwait(false);
-        var (value, deadline) = read.Value!.Value;
-        // Gone again since the NX lost: the caller tries once more.
-        return value.IsNull ? null : new FillRaw(false, value, self.Clock.ToDateTimeOffset(deadline));
+        return await ReadWinnerAsync(self, key).ConfigureAwait(false);
     }
 
     private ValueTask<FillResult<T>> TryFillCoreAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset deadline, CachePolicy? policy, CancellationToken token)
@@ -102,6 +134,7 @@ internal sealed partial class RedisCache
             : SetIfChangedInternalAsync(cacheKey, redisKey, value, comparer, deadline, format, token);
     }
 
+    [AsyncMethodBuilder(typeof(Pooled<>))]
     private async ValueTask<FillResult<T>> TryFillInternalAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, T? value, DateTimeOffset deadline, TFormat format, CancellationToken token)
         where TFormat : struct, IValueFormat
     {
@@ -128,31 +161,28 @@ internal sealed partial class RedisCache
             _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), serialized);
             using (payload)
             {
-                var raw = await _write.ExecuteAsync(static async (s, token) =>
-                {
-                    for (var attempt = 0; attempt < FillAttempts; attempt++)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        if (await FillOnceAsync(s.Self, s.Key, s.Serialized, s.Deadline).ConfigureAwait(false) is { } filled)
+                // Scripts off: one plain NX, which a win answers as a write does. Null is a command the pipeline gave up on, which is not a loss.
+                var plain = !RewriteScriptsOn;
+                bool? won = plain
+                    ? await _write.ExecuteAsync(
+                        [AsyncMethodBuilder(typeof(Pooled<>))] static async ValueTask<bool?> (s, token) =>
                         {
-                            return filled;
-                        }
-                    }
+                            token.ThrowIfCancellationRequested();
+                            var remaining = s.Self.RemainingOrZero(s.Deadline);
+                            return remaining > TimeSpan.Zero && await s.Self.Database.StringSetAsync(s.Key, s.Serialized, remaining, When.NotExists, CommandFlags.DemandMaster).ConfigureAwait(false);
+                        },
+                        (Self: this, Key: redisKey, Serialized: serialized, Deadline: deadline),
+                        null,
+                        token).ConfigureAwait(false)
+                    : false;
 
-                    return (FillRaw?)null;
-                },
-                (Self: this, Key: redisKey, Serialized: serialized, Deadline: deadline),
-                null,
-                token).ConfigureAwait(false);
-
-                if (raw is { IsLapsed: true })
+                if (won == true)
                 {
-                    LogFillSkipped(Logged(cacheKey, redisKey, typeof(T)), ExpirationPassed);
-                    result = default;
+                    result = new(FillOutcome.Added, default, deadline);
                 }
-                else if (raw is { } stored)
+                else if (won is not null)
                 {
-                    result = stored.Added ? new(FillOutcome.Added, default, deadline) : ExistingEntry<T, TFormat>(redisKey, stored, format);
+                    result = await FillAfterNxAsync<T, TFormat>(cacheKey, redisKey, serialized, deadline, plain, format, token).ConfigureAwait(false);
                 }
             }
 
@@ -176,6 +206,29 @@ internal sealed partial class RedisCache
         }
 
         return result;
+    }
+
+    /// <summary>The fill when its plain NX lost, or when scripts are on and the script decides: the stored value is the answer.</summary>
+    private async ValueTask<FillResult<T>> FillAfterNxAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, RedisValue serialized, DateTimeOffset deadline, bool lost, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
+    {
+        var raw = await _write.ExecuteAsync(static (s, token) => FillAfterAsync(s.Self, s.Key, s.Serialized, s.Deadline, s.Lost, token),
+        (Self: this, Key: redisKey, Serialized: serialized, Deadline: deadline, Lost: lost),
+        null,
+        token).ConfigureAwait(false);
+
+        if (raw is { IsLapsed: true })
+        {
+            LogFillSkipped(Logged(cacheKey, redisKey, typeof(T)), ExpirationPassed);
+            return default;
+        }
+
+        if (raw is not { } stored)
+        {
+            return default;
+        }
+
+        return stored.Added ? new(FillOutcome.Added, default, deadline) : ExistingEntry<T, TFormat>(redisKey, stored, format);
     }
 
     /// <summary>A stored value as a read sees it; one its serializer throws on is logged and unreadable.</summary>

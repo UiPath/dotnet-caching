@@ -83,6 +83,7 @@ public class SafeFillTests
         release.SetResult();
 
         (await slow).Should().Be("generated");
+        a.Inner.Fills.Should().Be(0, "the key changed after its generator started, so the fill left it to the change");
         peers.Store.Values["k"].Should().Be("set");
         (await a.Cache.GetAsync<string>(Key, Policy, Ct)).Should().Be("set");
     }
@@ -265,6 +266,176 @@ public class SafeFillTests
         b.Published.Should().HaveCount(announced + 1);
     }
 
+    [Fact]
+    public async Task A_fill_waiting_for_its_turn_sends_no_command_when_a_change_lands_while_it_waits()
+    {
+        using var peers = new CachePeers();
+        var a = peers.Add("a");
+        var background = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(10), LocalExpiration = TimeSpan.FromMinutes(10), BackgroundDistributedWrite = true };
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        a.Inner.AfterWrite = hold.Task;
+
+        // The first fill is detached and held, so the key's next write waits for it.
+        await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("first"), background, Ct);
+        a.Local.Remove(Key.Name);
+        peers.Store.Values.TryRemove("k", out _).Should().BeTrue();
+        var fills = a.Inner.Fills;
+
+        var waiting = a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("second"), Policy, Ct).AsTask();
+        waiting.IsCompleted.Should().BeFalse("the fill waits behind the held write");
+        var removal = a.Cache.RemoveAsync<string>(Key, Ct).AsTask();
+        hold.SetResult();
+
+        (await waiting).Should().Be("second");
+        await removal;
+        a.Inner.Fills.Should().Be(fills, "the key changed after the generator and before the command, which the fill checks just before it");
+    }
+    [Fact]
+    public async Task A_fill_refused_for_a_change_during_its_generator_is_counted_as_superseded_once()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var a = peers.Add("a", telemetry: telemetry);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string?> Generate(CancellationToken _)
+        {
+            await release.Task;
+            return "generated";
+        }
+
+        var slow = a.Cache.GetOrAddAsync<string>(Key, Generate, Policy, Ct).AsTask();
+        await a.Cache.RemoveAsync<string>(Key, Ct);
+        release.SetResult();
+        await slow;
+
+        Superseded(telemetry).Should().Be(1);
+        telemetry.Metrics.Count(m => m.Name == "cache.background_write.fill_refused" && m.Properties!["reason"] != "superseded").Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_batch_fill_is_one_call_and_leaves_out_a_key_changed_while_its_generator_ran()
+    {
+        using var peers = new CachePeers();
+        var a = peers.Add("a");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<KeyValuePair<long, string?>[]> Generate(long[] states, CancellationToken _)
+        {
+            started.TrySetResult();
+            await release.Task;
+            return [.. states.Select(s => new KeyValuePair<long, string?>(s, $"gen:{s}"))];
+        }
+
+        var call = a.Cache.GetOrAddAsync<string, long>([new("a", 1L), new("b", 2L), new("c", 3L)], Generate, Policy, Ct).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        (await a.Cache.SetAsync<string>("a", "set", Policy, Ct)).Should().BeTrue();
+        release.SetResult();
+
+        var result = await call;
+
+        result.Single(r => r.Key == 1L).Value.Should().Be("gen:1", "the caller still gets what its generator made");
+        peers.Store.Values["a"].Should().Be("set", "the changed key is left to the change");
+        peers.Store.Values["b"].Should().Be("gen:2");
+        peers.Store.Values["c"].Should().Be("gen:3");
+        a.Inner.FillBatches.Should().Be(1, "the keys that are filled go in one call");
+        a.Inner.Fills.Should().Be(2);
+        (await a.Cache.GetAsync<string>("a", Policy, Ct)).Should().Be("set", "nothing generated was kept for the changed key");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_generator_that_throws_or_is_canceled_leaves_no_fill_watch(bool cancels)
+    {
+        using var peers = new CachePeers();
+        var a = peers.Add("a");
+        using var cts = new CancellationTokenSource();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string?> Generate(CancellationToken token)
+        {
+            started.TrySetResult();
+            await release.Task.WaitAsync(token);
+            throw new InvalidOperationException("generator failed");
+        }
+
+        var call = a.Cache.GetOrAddAsync<string>(Key, Generate, Policy, cts.Token).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        a.Cache.FillsWatched.Should().BeTrue("the generator is running");
+
+        if (cancels)
+        {
+            await cts.CancelAsync();
+        }
+        else
+        {
+            release.SetResult();
+        }
+
+        await IgnoreFailure(call);
+
+        a.Cache.FillsWatched.Should().BeFalse("the watch ends with the generator, however it ends");
+    }
+
+    [Fact]
+    public async Task A_rehydration_whose_key_expired_while_its_generator_ran_fills_the_absent_key()
+    {
+        using var peers = new CachePeers();
+        var b = peers.Add("b");
+        var policy = Rehydrating();
+        peers.Store.WriteQuietly("k", "old");
+        peers.Store.Remaining["k"] = TimeSpan.FromMinutes(2);
+        (await b.Cache.GetAsync<string>(Key, policy, Ct)).Should().Be("old");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string?> Generate(CancellationToken _)
+        {
+            started.TrySetResult();
+            await release.Task;
+            return "generated";
+        }
+
+        await b.Cache.GetOrAddAsync<string>(Key, Generate, policy, Ct);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        peers.Store.Values.TryRemove("k", out _).Should().BeTrue();
+        release.SetResult();
+
+        await CachePeers.Until(() => peers.Store.Values.TryGetValue("k", out var stored) && stored as string == "generated");
+        await b.Settled();
+        peers.Store.Values["k"].Should().Be("generated", "the key was gone when the compare lost, so the value fills it");
+    }
+
+    [Fact]
+    public async Task A_rehydration_that_found_its_key_absent_fills_it()
+    {
+        using var peers = new CachePeers();
+        var b = peers.Add("b");
+        var policy = Rehydrating();
+        peers.Store.WriteQuietly("k", "old");
+        peers.Store.Remaining["k"] = TimeSpan.FromMinutes(2);
+        (await b.Cache.GetAsync<string>(Key, policy, Ct)).Should().Be("old");
+        peers.Store.Values.TryRemove("k", out _).Should().BeTrue();
+
+        await b.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("generated"), policy, Ct);
+
+        await CachePeers.Until(() => peers.Store.Values.TryGetValue("k", out var stored) && stored as string == "generated");
+        peers.Store.Values["k"].Should().Be("generated");
+    }
+
+    private static double Superseded(RecordingTelemetryProvider telemetry) =>
+        telemetry.Metrics.Where(m => m.Name == "cache.background_write.fill_refused" && m.Properties!["reason"] == "superseded").Sum(m => m.Value);
+
+    private static async Task IgnoreFailure(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException)
+        {
+            // The outcome is not what the test is about.
+        }
+    }
     private static CachePolicy Rehydrating() => new()
     {
         DistributedExpiration = TimeSpan.FromMinutes(10),
