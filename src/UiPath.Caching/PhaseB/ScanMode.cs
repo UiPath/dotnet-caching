@@ -9,4 +9,7 @@ internal enum ScanMode
 
     /// <summary>One logical unit and one cursor, as an enterprise proxy shows a clustered database.</summary>
     ProxySingleUnit,
+
+    /// <summary>The scan answered but the time budget ended before its loop did; not a gate failure, the move's first scan traverses fully.</summary>
+    Incomplete,
 }

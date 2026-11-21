@@ -4,11 +4,12 @@ using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// The connector views of an instance move (section 3.2): the Src prefixed view for data, fences, control records, the claim, node list, locks and events;
-/// the Src raw view for scans only; one unprefixed Dst view. The key map strips and restores the Src connection prefix.
-/// </summary>
-/// <remarks>The views keep the connectors and resolve their databases on every access, because a reconnect replaces and disposes the multiplexer.</remarks>
+/// <summary>The connector views of an instance move (section 3.2): the Src prefixed view, the Src raw view and one unprefixed Dst view.</summary>
+/// <remarks>
+/// The Src prefixed view carries data, fences, control records, the claim, node list, locks and events; the Src raw view is for scans only. The key map
+/// strips and restores the Src connection prefix. The views keep the connectors and resolve their databases on every access, because a reconnect
+/// replaces and disposes the multiplexer.
+/// </remarks>
 internal sealed class MoveViews : IDisposable
 {
     private readonly Func<IDatabase> _source;

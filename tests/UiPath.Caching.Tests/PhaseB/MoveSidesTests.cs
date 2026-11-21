@@ -1,4 +1,6 @@
 using System.Net;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
@@ -12,8 +14,8 @@ namespace UiPath.Caching.Tests.PhaseB;
 
 /// <summary>
 /// Side capabilities, views, barriers and connection counters of the instance move. Beyond the shared test server: MOVE_SIDES_MASTER and MOVE_SIDES_REPLICA
-/// (a master and its replica, the replica with the debug command enabled), MOVE_SIDES_LIMITED (a user without SCAN, ROLE, CONFIG, INFO and WAIT) and
-/// MOVE_SIDES_NOMULTI (a user without MULTI and WATCH).
+/// (a master and its replica, the replica with the debug command enabled), MOVE_SIDES_LIMITED (a user without SCAN, ROLE, CONFIG, INFO and WAIT),
+/// MOVE_SIDES_NOMULTI (a user without MULTI and WATCH) and MOVE_SIDES_NOPEXPIREAT (a user without PEXPIREAT).
 /// </summary>
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
@@ -22,6 +24,9 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
     private const string Skip = "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.";
     private static readonly MasterCaps GoodMaster = new(new DnsEndPoint("m", 6379), new Version(7, 4), Scripts: true, Transactions: true, Hashes: true, Wait: true, 1, "noeviction");
     private static readonly SideCaps Good = Side(GoodMaster);
+    private static readonly EndPoint A = new DnsEndPoint("a", 6379);
+    private static readonly EndPoint B = new DnsEndPoint("b", 6379);
+    private static readonly EndPoint C = new DnsEndPoint("c", 6379);
 
     private static string? MasterWithReplica => Environment.GetEnvironmentVariable("MOVE_SIDES_MASTER");
 
@@ -30,6 +35,8 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
     private static string? Limited => Environment.GetEnvironmentVariable("MOVE_SIDES_LIMITED");
 
     private static string? NoMulti => Environment.GetEnvironmentVariable("MOVE_SIDES_NOMULTI");
+
+    private static string? NoPexpireat => Environment.GetEnvironmentVariable("MOVE_SIDES_NOPEXPIREAT");
 
     [Fact]
     public void S3_G6_is_the_conjunction_of_both_sides_and_names_the_failing_side()
@@ -62,7 +69,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
     public void One_restricted_or_older_master_decides_for_the_side()
     {
         var other = GoodMaster with { EndPoint = new DnsEndPoint("n", 6379), Version = new Version(6, 0, 8), Scripts = false, Wait = false, Replicas = null, EvictionPolicy = "allkeys-lru" };
-        var side = new SideCaps([GoodMaster, other], ScanMode.PerShard, SlotEnforced: false, []);
+        var side = new SideCaps([GoodMaster, other], ScanMode.PerShard, SlotEnforced: false, [], []);
 
         side.Version.Should().Be(new Version(6, 0, 8));
         side.Scripts.Should().BeFalse();
@@ -70,8 +77,8 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         side.Replicas.Should().BeNull("a master that refused ROLE makes the count unknown");
         side.EvictionPolicy.Should().Be("allkeys-lru");
         side.Failures("src").Should().Contain(f => f.Contains("n:6379", StringComparison.Ordinal));
-        new SideCaps([GoodMaster, GoodMaster with { Replicas = 0 }], ScanMode.PerShard, false, []).Replicas.Should().Be(0);
-        new SideCaps([GoodMaster, GoodMaster with { EvictionPolicy = null }], ScanMode.PerShard, false, []).EvictionPolicy.Should().BeNull();
+        new SideCaps([GoodMaster, GoodMaster with { Replicas = 0 }], ScanMode.PerShard, false, [], []).Replicas.Should().Be(0);
+        new SideCaps([GoodMaster, GoodMaster with { EvictionPolicy = null }], ScanMode.PerShard, false, [], []).EvictionPolicy.Should().BeNull();
     }
 
     [Theory]
@@ -114,7 +121,8 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         var caps = await SideProbe.ProbeAsync(refusing, "sidetest:mg:", "sidetest:*", cancellationToken: TestContext.Current.CancellationToken);
 
         caps.Scripts.Should().BeFalse();
-        caps.Denied.Should().Contain("EVAL");
+        DeniedCommands(caps).Should().Contain("EVAL");
+        caps.Denied.Should().OnlyContain(d => d.Contains("@", StringComparison.Ordinal), "every denial names the endpoint");
         caps.SlotEnforced.Should().BeTrue("without scripts the probe assumes slots are enforced, which is always safe");
         caps.MoveScriptsOn(refusing).UsesScripts.Should().BeFalse("this side takes the fallback on its own");
     }
@@ -130,8 +138,10 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         caps.Scan.Should().Be(ScanMode.None);
         caps.Replicas.Should().BeNull();
         caps.EvictionPolicy.Should().BeNull();
-        caps.Denied.Should().Contain(["SCAN", "ROLE"]);
-        caps.Failures("dst").Should().ContainSingle().Which.Should().Contain("scan");
+        caps.Notes("dst").Should().ContainSingle().Which.Should().Be("dst: eviction policy unknown, needs attestation (G12)");
+        DeniedCommands(caps).Should().Contain(["SCAN", "ROLE"]);
+        caps.Denied.Should().OnlyContain(d => d.Contains("@", StringComparison.Ordinal), "every denial names the endpoint");
+        caps.Failures("dst").Should().ContainSingle().Which.Should().Contain("scan", "an unknown eviction policy is a note for G12, not a gate failure");
     }
 
     [Fact]
@@ -146,8 +156,9 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         caps.Replicas.Should().Be(1);
 
         var barrier = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: false);
+        var target = await barrier.TargetAsync();
         await db.StringSetAsync("sidetest:k", "v");
-        (await barrier.WaitAsync(() => Task.CompletedTask, wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
+        (await barrier.WaitAsync(target, () => Task.CompletedTask, wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
     }
 
     [Fact]
@@ -162,8 +173,10 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
 
         var sleeping = replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", "2");
         await Task.Delay(100, TestContext.Current.CancellationToken);
+        var target = await barrier.TargetAsync();
         await db.StringSetAsync("sidetest:k", "v");
         var outcome = await barrier.WaitAsync(
+            target,
             async () =>
             {
                 reissued++;
@@ -173,7 +186,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
 
         outcome.Should().Be(BarrierOutcome.NotConfirmed, "0 or a timeout is not a confirmation");
         reissued.Should().Be(2, "each retry re-issues the writes, with no extra backoff");
-        (await barrier.WaitAsync(() => Task.CompletedTask, wayBack: true)).Should().Be(BarrierOutcome.SkippedAfterRecentFailure);
+        (await barrier.WaitAsync(target, () => Task.CompletedTask, wayBack: true)).Should().Be(BarrierOutcome.SkippedAfterRecentFailure);
         await sleeping;
     }
 
@@ -187,9 +200,12 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
 
         var db = mux.GetDatabase();
 
-        (await new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: true).WaitAsync(() => Task.CompletedTask, wayBack: false))
+        var free = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: true);
+        var expecting = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: false) { Retries = 1 };
+
+        (await free.WaitAsync(await free.TargetAsync(), () => Task.CompletedTask, wayBack: false))
             .Should().Be(BarrierOutcome.NoReplica);
-        (await new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: false) { Retries = 1 }.WaitAsync(() => Task.CompletedTask, wayBack: false))
+        (await expecting.WaitAsync(await expecting.TargetAsync(), () => Task.CompletedTask, wayBack: false))
             .Should().Be(BarrierOutcome.NotConfirmed, "a deployment not configured as replica-free expects a replica, whatever ROLE lists now");
     }
 
@@ -206,6 +222,20 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         views.ToRaw("app:s:k").Should().Be((RedisKey)"{tag}:app:s:k");
         views.SourceScanPattern("app:*").Should().Be("{tag}:app:*");
         views.SourceRaw.Should().NotBeSameAs(views.SourcePrefixed);
+
+        var name = $"viewsraw:{Guid.NewGuid():N}";
+        try
+        {
+            await views.SourceRaw.StringSetAsync($"{{tag}}:{name}", "raw");
+
+            (await src.GetDatabase().StringGetAsync($"{{tag}}:{name}")).ToString().Should().Be("raw", "SourceRaw wrote the key as given, with no prefix added");
+            (await src.GetDatabase().KeyExistsAsync($"{{tag}}:{{tag}}:{name}")).Should().BeFalse("SourceRaw added no second prefix");
+            (await views.SourcePrefixed.StringGetAsync(name)).ToString().Should().Be("raw", "the prefixed view adds the prefix the raw write already holds");
+        }
+        finally
+        {
+            await src.GetDatabase().KeyDeleteAsync([$"{{tag}}:{name}", $"{{tag}}:{{tag}}:{name}"]);
+        }
     }
 
     [Fact]
@@ -220,7 +250,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         master.Transactions.Should().BeFalse();
         master.Scripts.Should().BeTrue();
         master.Hashes.Should().BeTrue();
-        caps.Denied.Should().Contain("MULTI/WATCH");
+        DeniedCommands(caps).Should().Contain("MULTI/WATCH");
         master.Failures("dst").Should().BeEmpty("scripts run, so the fallback is not needed");
     }
 
@@ -238,7 +268,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
 
         var caps = await SideProbe.ProbeAsync(noMulti, "sidetest:mg:", "sidetest:*", cancellationToken: TestContext.Current.CancellationToken);
 
-        caps.Denied.Should().Contain(["EVAL", "MULTI/WATCH"]);
+        DeniedCommands(caps).Should().Contain(["EVAL", "MULTI/WATCH"]);
         caps.Failures("src").Should().ContainSingle().Which.Should().Contain("neither scripts nor the fallback");
     }
 
@@ -255,7 +285,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         var caps = await SideProbe.ProbeAsync(inside, "sidetest:mg:", "sidetest:*", cancellationToken: TestContext.Current.CancellationToken);
 
         caps.Scripts.Should().BeFalse();
-        caps.Denied.Should().NotContain("EVAL");
+        DeniedCommands(caps).Should().NotContain("EVAL");
         caps.Denied.Should().ContainSingle(d => d.StartsWith("script:", StringComparison.Ordinal) && d.Contains("hdel", StringComparison.Ordinal));
     }
 
@@ -272,10 +302,38 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
             var writes = keys.Select(k => batch.StringSetAsync(k, "v")).ToArray();
             batch.Execute();
             await Task.WhenAll(writes);
+            var steps = 0;
 
-            var caps = await SideProbe.ProbeAsync(db, "sidetest:mg:", "sidetest:bulk:*", cancellationToken: TestContext.Current.CancellationToken, scanCount: 10);
+            var caps = await SideProbe.ProbeAsync(CountingScans(mux, db, () => steps++), "sidetest:mg:", "sidetest:bulk:*", scanBudget: null, cancellationToken: TestContext.Current.CancellationToken, scanCount: 10);
 
             caps.Scan.Should().Be(ScanMode.PerShard);
+            steps.Should().BeGreaterThan(1000, "the scan walked every step of the keyspace with COUNT 10");
+        }
+        finally
+        {
+            await db.KeyDeleteAsync(keys);
+        }
+    }
+
+    [Fact]
+    public async Task A_scan_that_outlasts_its_budget_is_incomplete_and_the_default_budget_leaves_a_small_scan_whole()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = mux.GetDatabase();
+        var keys = Enumerable.Range(0, 300).Select(i => (RedisKey)$"sidetest:budget:{i}").ToArray();
+        try
+        {
+            await Task.WhenAll(keys.Select(k => db.StringSetAsync(k, "v")));
+            var ct = TestContext.Current.CancellationToken;
+
+            var bounded = await SideProbe.ProbeAsync(db, "sidetest:mg:", "sidetest:budget:*", scanBudget: TimeSpan.Zero, cancellationToken: ct, scanCount: 1);
+            var whole = await SideProbe.ProbeAsync(db, "sidetest:mg:", "sidetest:budget:*", cancellationToken: ct);
+
+            bounded.Scan.Should().Be(ScanMode.Incomplete);
+            bounded.Failures("src").Should().BeEmpty("an incomplete scan probe is not a gate failure");
+            bounded.Notes("src").Should().Contain("src: scan probe incomplete; the move's first scan traverses fully");
+            whole.Scan.Should().Be(ScanMode.PerShard);
         }
         finally
         {
@@ -293,6 +351,169 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
 
         await FluentActions.Awaiting(() => SideProbe.ProbeAsync(mux.GetDatabase(), "sidetest:mg:", "sidetest:*", cancellationToken: cancelled.Token))
             .Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task A_cancellation_inside_the_scan_throws_and_stops_the_walk()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = mux.GetDatabase();
+        var keys = Enumerable.Range(0, 300).Select(i => (RedisKey)$"sidetest:cancel:{i}").ToArray();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            await Task.WhenAll(keys.Select(k => db.StringSetAsync(k, "v")));
+            var steps = 0;
+
+            await FluentActions.Awaiting(() => SideProbe.ProbeAsync(
+                    CountingScans(mux, db, () =>
+                    {
+                        if (++steps == 3)
+                        {
+                            cancellation.Cancel();
+                        }
+                    }),
+                    "sidetest:mg:",
+                    "sidetest:cancel:*",
+                    scanBudget: null,
+                    cancellationToken: cancellation.Token,
+                    scanCount: 1))
+                .Should().ThrowAsync<OperationCanceledException>();
+            steps.Should().Be(3, "no step ran after the cancellation");
+        }
+        finally
+        {
+            await db.KeyDeleteAsync(keys);
+        }
+    }
+
+    [Fact]
+    public async Task A_user_denied_one_command_the_move_uses_reports_it_by_name_and_endpoint()
+    {
+        Assert.SkipUnless(NoPexpireat is not null, "Set MOVE_SIDES_NOPEXPIREAT to run.");
+        await using var mux = await ConnectionMultiplexer.ConnectAsync(NoPexpireat!);
+
+        var caps = await SideProbe.ProbeAsync(mux.GetDatabase(), "sidetest:mg:", "sidetest:*", cancellationToken: TestContext.Current.CancellationToken);
+
+        var master = caps.Masters.Should().ContainSingle().Subject;
+        master.Scripts.Should().BeFalse();
+        master.Transactions.Should().BeFalse();
+        caps.Denied.Should().Contain(d => d.StartsWith("script:pexpireat@", StringComparison.OrdinalIgnoreCase));
+        caps.Denied.Should().Contain(d => d.StartsWith("transaction:", StringComparison.Ordinal), "the server aborts the EXEC without naming the command, unlike the script");
+        caps.Failures("src").Should().Contain(f => f.Contains("neither scripts nor the fallback", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_side_that_cannot_use_scripts_needs_the_fallback_on_every_master()
+    {
+        var withoutFallback = GoodMaster with { EndPoint = new DnsEndPoint("n", 6379), Transactions = false };
+        var old = GoodMaster with { EndPoint = new DnsEndPoint("o", 6379), Version = new Version(6, 0, 8) };
+        var withoutScripts = GoodMaster with { EndPoint = new DnsEndPoint("p", 6379), Scripts = false };
+
+        new SideCaps([withoutFallback, withoutScripts], ScanMode.PerShard, false, [], []).Failures("src")
+            .Should().ContainSingle().Which.Should().Contain("n:6379").And.Contain("fallback");
+        new SideCaps([old, withoutScripts], ScanMode.PerShard, false, [], []).Failures("src")
+            .Should().ContainSingle().Which.Should().Contain("o:6379");
+        new SideCaps([withoutFallback, GoodMaster], ScanMode.PerShard, false, [], []).Failures("src")
+            .Should().BeEmpty("every master runs scripts, so the side never needs the fallback");
+    }
+
+    [Fact]
+    public void An_unreachable_primary_fails_the_side_and_unknown_eviction_and_an_incomplete_scan_are_notes()
+    {
+        var unreachable = new SideCaps([GoodMaster], ScanMode.PerShard, false, [], [new DnsEndPoint("down", 6379)]);
+
+        unreachable.Failures("dst").Should().ContainSingle().Which.Should().Be("dst: Unspecified/down:6379 unreachable");
+        Good.Notes("dst").Should().BeEmpty();
+        Side(GoodMaster with { EvictionPolicy = null }).Notes("dst").Should().Equal("dst: eviction policy unknown, needs attestation (G12)");
+        Side(GoodMaster, ScanMode.Incomplete).Notes("src").Should().Equal("src: scan probe incomplete; the move's first scan traverses fully");
+        SideCaps.Gate(Side(GoodMaster, ScanMode.Incomplete), Good).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_probe_of_two_primaries_covers_each_with_its_own_keys_and_reports_a_disconnected_one()
+    {
+        var side = new FakeSide(new FakePrimary(A, Replicas: 1), new FakePrimary(B, Replicas: 0), new FakePrimary(C, Connected: false));
+        var ct = TestContext.Current.CancellationToken;
+
+        var caps = await SideProbe.ProbeAsync(side.Database, "side:", "side:*", cancellationToken: ct);
+
+        caps.Masters.Select(static m => m.EndPoint).Should().Equal(A, B);
+        caps.Masters.Select(static m => m.Replicas).Should().Equal(1, 0);
+        caps.Masters.Select(static m => m.Wait).Should().Equal(true, false);
+        caps.Replicas.Should().Be(0);
+        caps.Wait.Should().BeFalse();
+        caps.Unreachable.Should().Equal(C);
+        caps.Failures("src").Should().Equal($"src: {C} unreachable");
+        side.Scanned.Should().BeEquivalentTo([A, B], "the disconnected primary is reported, never silently scanned or dropped");
+        side.WrittenKeys.Select(side.Owner).Distinct().Should().BeEquivalentTo([A, B], "each master was probed with a key it owns");
+
+        await SideProbe.ProbeAsync(side.Database, "side:", "side:*", cancellationToken: ct);
+
+        var second = side.WrittenKeys.Skip(side.WrittenKeys.Count / 2).ToHashSet();
+        side.WrittenKeys.Take(side.WrittenKeys.Count / 2).Should().NotIntersectWith(second, "a second call uses keys of its own");
+        side.WrittenKeys.Should().OnlyContain(k => Regex.IsMatch(k, @"^side:probe:\{[^}]+\}:[0-9a-f]{32}:[ab]$"), "keys keep the slot tag and carry a nonce");
+    }
+
+    [Fact]
+    public async Task A_role_denied_leaves_wait_to_the_wait_probe_itself()
+    {
+        var denied = new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM User u has no permissions to run the 'role' command");
+        var ct = TestContext.Current.CancellationToken;
+
+        var answering = await SideProbe.ProbeAsync(new FakeSide(new FakePrimary(A, Role: denied, Wait: 1)).Database, "side:", "side:*", cancellationToken: ct);
+        var silent = await SideProbe.ProbeAsync(new FakeSide(new FakePrimary(A, Role: denied, Wait: 0)).Database, "side:", "side:*", cancellationToken: ct);
+
+        answering.Masters.Single().Replicas.Should().BeNull();
+        answering.Masters.Single().Wait.Should().BeTrue();
+        silent.Masters.Single().Wait.Should().BeFalse("WAIT gave 0 five times: it is not assumed available");
+        answering.Denied.Should().Equal($"ROLE@{A}");
+    }
+
+    [Fact]
+    public async Task A_client_timeout_on_wait_the_eviction_reads_or_the_scan_is_not_an_error()
+    {
+        var timeout = new RedisTimeoutException(CommandFlags.None, "timeout", CommandStatus.Sent);
+        var side = new FakeSide(new FakePrimary(A, Replicas: 1, Wait: timeout, Config: timeout, Info: timeout, Scan: timeout));
+
+        var caps = await SideProbe.ProbeAsync(side.Database, "side:", "side:*", cancellationToken: TestContext.Current.CancellationToken);
+
+        caps.Masters.Single().Wait.Should().BeFalse();
+        caps.EvictionPolicy.Should().BeNull();
+        caps.Scan.Should().Be(ScanMode.None);
+        caps.Notes("src").Should().Contain("src: eviction policy unknown, needs attestation (G12)");
+    }
+
+    [Fact]
+    public async Task An_out_of_memory_refusal_is_an_error_not_a_denial()
+    {
+        var oom = new RedisServerException(RedisErrorKind.None, CommandFlags.None, "OOM command not allowed when used memory > 'maxmemory'.");
+        var side = new FakeSide(new FakePrimary(A, Replicas: 1)) { DatabaseFault = oom };
+
+        await FluentActions.Awaiting(() => SideProbe.ProbeAsync(side.Database, "side:", "side:*", cancellationToken: TestContext.Current.CancellationToken))
+            .Should().ThrowAsync<RedisServerException>().WithMessage("OOM*");
+    }
+
+    [Fact]
+    public void A_connector_that_reconnects_while_the_counter_subscribes_is_followed()
+    {
+        var first = new EventCountingMultiplexer();
+        var second = new EventCountingMultiplexer();
+        var third = new EventCountingMultiplexer();
+        var connector = new ReconnectingConnector(first) { ReplaceOnSubscribe = second };
+
+        using var changes = new ConnectionChanges(connector);
+
+        first.Attached.Should().Be(0, "the replaced multiplexer was never attached");
+        second.Attached.Should().Be(1, "the multiplexer current after the subscription is the one followed");
+
+        var mark = changes.Current;
+        connector.Reconnect(third);
+
+        changes.ChangedSince(mark).Should().BeTrue();
+        second.Attached.Should().Be(0);
+        third.Attached.Should().Be(1);
     }
 
     [Fact]
@@ -345,7 +566,25 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         changes.ChangedSince(mark).Should().BeTrue();
     }
 
-    private static SideCaps Side(MasterCaps master, ScanMode scan = ScanMode.PerShard) => new([master], scan, SlotEnforced: false, []);
+    private static IEnumerable<string> DeniedCommands(SideCaps caps) => caps.Denied.Select(static d => d[..d.IndexOf('@', StringComparison.Ordinal)]);
+
+    /// <summary>The database whose multiplexer shows every server wrapped so each SCAN step is reported to <paramref name="onScan"/>.</summary>
+    private static IDatabase CountingScans(IConnectionMultiplexer mux, IDatabase db, Action onScan)
+    {
+        var servers = mux.GetServers().Select(server => InterceptingProxy.Wrap(server, (method, args) =>
+        {
+            if (method.Name == nameof(IServer.ExecuteAsync) && args[0] is "SCAN")
+            {
+                onScan();
+            }
+
+            return InterceptingProxy.Proceed;
+        })).ToArray();
+        var wrapped = InterceptingProxy.Wrap(mux, (method, _) => method.Name == nameof(IConnectionMultiplexer.GetServers) ? servers : InterceptingProxy.Proceed);
+        return InterceptingProxy.Wrap(db, (method, _) => method.Name == "get_Multiplexer" ? wrapped : InterceptingProxy.Proceed);
+    }
+
+    private static SideCaps Side(MasterCaps master, ScanMode scan = ScanMode.PerShard) => new([master], scan, SlotEnforced: false, [], []);
 
     /// <summary>A bounded wait on a condition, on the task scheduler's own clock instead of the wall clock.</summary>
     private static Task WaitUntilAsync(Func<bool> condition, TimeSpan limit, CancellationToken cancellationToken) =>

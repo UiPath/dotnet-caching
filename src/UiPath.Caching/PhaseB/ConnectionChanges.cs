@@ -3,11 +3,11 @@ using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// Counts connection failures, restores, internal errors and configuration changes on every multiplexer of a move, so a promotion that captured the
-/// count before CAP abandons when it changed (PB step 10); for the instance move both servers count.
-/// </summary>
-/// <remarks>Over connectors it follows a reconnect: the replacement counts as a change, the old multiplexer is detached and the new one attached.</remarks>
+/// <summary>Counts connection failures, restores, internal errors and configuration changes on every multiplexer of a move.</summary>
+/// <remarks>
+/// A promotion that captured the count before CAP abandons when it changed (PB step 10); for the instance move both servers count. Over connectors it
+/// follows a reconnect: the replacement counts as a change, the old multiplexer is detached and the new one attached.
+/// </remarks>
 internal sealed class ConnectionChanges : IDisposable
 {
     private readonly object _gate = new();
@@ -31,14 +31,21 @@ internal sealed class ConnectionChanges : IDisposable
     public ConnectionChanges(params IRedisConnector[] connectors)
     {
         _connectors = [.. connectors];
-        _multiplexers = [.. connectors.Select(static c => c.Database.Multiplexer)];
+        _multiplexers = new IConnectionMultiplexer[connectors.Length];
         _handlers = new EventHandler[connectors.Length];
-        for (var i = 0; i < _connectors.Length; i++)
+        lock (_gate)
         {
-            var index = i;
-            Attach(_multiplexers[i]);
-            _handlers[i] = (_, _) => OnReconnected(index);
-            _connectors[i].OnReconnected += _handlers[i];
+            for (var i = 0; i < _connectors.Length; i++)
+            {
+                var index = i;
+                _handlers[i] = (_, _) => OnReconnected(index);
+
+                // Subscribe before the multiplexer is captured, then check again: a reconnect in between is followed, not missed.
+                _connectors[i].OnReconnected += _handlers[i];
+                _multiplexers[i] = _connectors[i].Database.Multiplexer;
+                Attach(_multiplexers[i]);
+                Follow(index);
+            }
         }
     }
 
@@ -75,21 +82,24 @@ internal sealed class ConnectionChanges : IDisposable
         Observe();
         lock (_gate)
         {
-            if (_disposed)
+            if (!_disposed)
             {
-                return;
+                Follow(index);
             }
-
-            var current = _connectors[index].Database.Multiplexer;
-            if (ReferenceEquals(current, _multiplexers[index]))
-            {
-                return;
-            }
-
-            Detach(_multiplexers[index]);
-            _multiplexers[index] = current;
-            Attach(current);
         }
+    }
+
+    private void Follow(int index)
+    {
+        var current = _connectors[index].Database.Multiplexer;
+        if (ReferenceEquals(current, _multiplexers[index]))
+        {
+            return;
+        }
+
+        Detach(_multiplexers[index]);
+        _multiplexers[index] = current;
+        Attach(current);
     }
 
     private void Attach(IConnectionMultiplexer multiplexer)
