@@ -17,6 +17,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
     public const string ReasonTransportUnknown = "transport_unknown";
     public const string ReasonUnaccountedSubscriber = "unaccounted_subscriber";
     public const string ReasonSubscriberDeficit = "subscriber_deficit";
+    public const string ReasonGated = "format_gate";
 
     // Not a reason to fall back: the Pub/Sub count has not yet shown the same thing twice, so a format in use stays and one not in use waits.
     private const string ReasonSettling = "settling";
@@ -27,13 +28,16 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
     private readonly TimeProvider _clock;
     private readonly ICachingTelemetryProvider _telemetry;
     private readonly ILogger _logger;
+    private readonly IFormatWriteGate? _writeGate;
     private readonly Lock _gate = new();
     private readonly long?[] _candidateSince;
     private readonly bool[] _suspended;
+    private readonly long[] _closedAt;
     private readonly string?[] _reasons;
     private HashSet<string> _readers = [];
     private volatile Snapshot _snapshot;
     private long _lastView;
+    private long _generation;
     private long? _graceStart;
     private bool _hasView;
     private bool _failed;
@@ -46,9 +50,11 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         TimeProvider clock,
         ICachingTelemetryProvider? telemetry = null,
         ILogger? logger = null,
-        DesiredEvents? events = null)
+        DesiredEvents? events = null,
+        IFormatWriteGate? writeGate = null)
     {
         options.Validate();
+        _writeGate = writeGate;
         _slots = [.. desired.Select(d => new Slot(d.Writer, d.Tokens, d.Policies, d.Others)), .. events is null ? [] : new[] { new Slot(null, events.Tokens, [], []) }];
         _eventSlot = events is null ? -1 : _slots.Length - 1;
         _options = options;
@@ -57,6 +63,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         _logger = logger ?? NullLogger.Instance;
         _candidateSince = new long?[_slots.Length];
         _suspended = new bool[_slots.Length];
+        _closedAt = new long[_slots.Length];
         _reasons = new string?[_slots.Length];
         Array.Fill(_reasons, ReasonNoView);
         _snapshot = Publish(new bool[_slots.Length], 0);
@@ -72,6 +79,8 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         }
     }
 
+    public bool Gated => _writeGate is not null;
+
     public bool Allows(ICacheValueSerializer writer)
     {
         var snapshot = _snapshot;
@@ -81,7 +90,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             if (ReferenceEquals(writers[i].Writer, writer))
             {
                 // A view that stopped refreshing, without failing, decays on its own: the age is checked here, off the cached stamp and the injected clock.
-                return writers[i].Allowed && _clock.GetElapsedTime(snapshot.Stamp) <= _options.MaxViewAge;
+                return writers[i].Allowed && _clock.GetElapsedTime(snapshot.Stamp) <= _options.MaxViewAge && GateOpen(i, snapshot.Generation);
             }
         }
 
@@ -108,12 +117,21 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             _lastView = now;
             var allowed = new bool[_slots.Length];
             var previous = _snapshot.Writers;
+            var previousGeneration = _snapshot.Generation;
             for (var i = 0; i < _slots.Length; i++)
             {
                 // A node that joins ends what a departure held back: the format then waits for the hold like any other.
                 _suspended[i] &= !joined;
+                // Not cleared here: a closure ends with the snapshot it was seen against, which readers keep until the replacement is published.
+                var closed = _closedAt[i] >= previousGeneration;
+                if (closed)
+                {
+                    _suspended[i] = false;
+                    _candidateSince[i] = null;
+                }
+
                 _reasons[i] = Block(_slots[i], view);
-                allowed[i] = Decide(i, previous[i].Allowed, joined, grace, now);
+                allowed[i] = Decide(i, previous[i].Allowed && !closed, joined, grace, now);
             }
 
             Transition(previous, allowed);
@@ -178,12 +196,58 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             }
             : null;
 
+    // A closure seen here lasts until a view restarts the hold and publishes its snapshot, so reopening before that never resumes the write: the closure is recorded against the newest snapshot, under the lock the view takes, so it is either counted by that view or stands for the snapshot it publishes.
+    private bool GateOpen(int slot, long generation)
+    {
+        if (_writeGate is null)
+        {
+            return true;
+        }
+
+        if (Volatile.Read(ref _closedAt[slot]) >= generation)
+        {
+            return false;
+        }
+
+        if (HoldOf(_writeGate) is null)
+        {
+            return true;
+        }
+
+        lock (_gate)
+        {
+            _closedAt[slot] = Math.Max(_closedAt[slot], _snapshot.Generation);
+        }
+
+        return false;
+    }
+
+    // A gate that throws is a closed gate.
+    private string? HoldOf(IFormatWriteGate gate)
+    {
+        try
+        {
+            return gate.Hold();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogWarning(ex, "The format write gate threw; treated as closed.");
+            return "gate_error";
+        }
+    }
+
     private string? Block(Slot want, NodeListView view)
     {
         // What an advertisement says it cannot read comes first: no grace after an outage and no attestation excuses it.
         if (view.Ads.Any(stored => Unreadable(want, stored.Advertisement)))
         {
             return ReasonMissingFormat;
+        }
+
+        // An outside condition on the format, asked on every view and again on every write, so a gate that closes stops writes at once and one that opens still waits out the hold.
+        if (!want.IsEvent && _writeGate is not null && HoldOf(_writeGate) is not null)
+        {
+            return ReasonGated;
         }
 
         var attested = _options.AssumeAllNodesCanRead;
@@ -380,7 +444,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             writers[i] = new(_slots[i].Writer, allowed[i]);
         }
 
-        return new(writers, stamp);
+        return new(writers, stamp, ++_generation);
     }
 
     /// <summary>A serializer, or the event format when <paramref name="Writer"/> is <see langword="null"/>, with what a node must read to be sent it.</summary>
@@ -391,5 +455,5 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
 
     private sealed record WriterState(ICacheValueSerializer? Writer, bool Allowed);
 
-    private sealed record Snapshot(WriterState[] Writers, long Stamp);
+    private sealed record Snapshot(WriterState[] Writers, long Stamp, long Generation);
 }

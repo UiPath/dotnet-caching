@@ -100,11 +100,24 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
     internal void Start()
     {
+        // The switch state is read before the first call is admitted.
+        _core.Pins?.Initialize(_core.StartBound);
         _core.Start();
         if (Advertiser is { } advertiser)
         {
             _core.ModeChanged += (_, _) => advertiser.Nudge();
+            if (_core.Pins is { } changing)
+            {
+                changing.Changed += advertiser.Nudge;
+            }
+
             advertiser.Start();
+        }
+
+        if (_core.Pins is { } pins)
+        {
+            _core.ModeChanged += (_, _) => pins.RequestRefresh();
+            pins.Start();
         }
     }
 

@@ -9,10 +9,19 @@ internal sealed record RouterAdvertisement(string Instance, string Build, IReadO
     /// <summary>The router reports <see cref="RouterMode.BypassLibrary"/>.</summary>
     public const string Bypass = "byp";
 
+    public const string Pin = "pin=";
+
+    public const string SwitchedPrefix = "sw=";
+
+    public const string ScopePrefix = "ap=";
+
     /// <summary>Appended to the node id, so a process's router entry and its library advertisement are two fields.</summary>
     public const string FieldSuffix = "#router";
 
     private const string Kind = "router";
+
+    /// <summary>The application the entry belongs to, from its <c>ap</c> token; null for an entry that names none.</summary>
+    public string? Scope => Tokens.FirstOrDefault(token => token.StartsWith(ScopePrefix, StringComparison.Ordinal))?[ScopePrefix.Length..];
 
     public bool Has(string token) => Tokens.Contains(token, StringComparer.Ordinal);
 

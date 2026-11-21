@@ -41,6 +41,7 @@ public static class RouterServiceCollectionExtensions
         }
 
         var processId = builder.NodeIdentity ?? $"{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}";
+        var gate = builder.PinPredicate is null ? null : new PinFormatGate();
         var registered = services.Count;
         services
             .AddNamedCachingOnPrimaryConnection(
@@ -61,6 +62,10 @@ public static class RouterServiceCollectionExtensions
                 (stack, _) =>
                 {
                     stack.AddSingleton<ISerializerProxy<byte[]>>(envelope);
+                    if (gate is not null)
+                    {
+                        stack.AddSingleton<IFormatWriteGate>(gate);
+                    }
 
                     // After the stack's own `?stack=` post-configure, so the process id lands in the host part of the identity.
                     stack.PostConfigure<CacheOptions>(options => options.SourceUri = WithProcess(options.SourceUri ?? CacheOptions.MachineUri, processId));
@@ -80,7 +85,7 @@ public static class RouterServiceCollectionExtensions
         }
 
         var section = configuration.GetSection(sectionName);
-        services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId, section));
+        services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId, gate, section));
         services.AddHostedService<RouterHostedService>();
         return services;
     }
@@ -127,7 +132,7 @@ public static class RouterServiceCollectionExtensions
         return query < 0 ? new Uri($"{text}-p{processId}") : new Uri($"{text[..query]}-p{processId}{text[query..]}");
     }
 
-    private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, IConfigurationSection section)
+    private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, PinFormatGate? gate, IConfigurationSection section)
     {
         var logger = root.GetService<ILoggerFactory>()?.CreateLogger("UiPath.Caching.Migration") ?? NullLogger.Instance;
         var core = new RouterCore(root.GetRequiredService<TimeProvider>(), predicate, logger)
@@ -146,7 +151,24 @@ public static class RouterServiceCollectionExtensions
 
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
             core.UseLibrary(token => StartLibraryAsync(root, builder, token));
-            var advertiser = CreateAdvertiser(root, builder, core, processId, section, logger);
+            var setup = AdvertisementSetup.TryCreate(root, builder, processId, section, logger);
+            if (builder.PinPredicate is { } pinWhen)
+            {
+                ValidatePinSetup(section, setup, logger);
+
+                // Before the caches, which take their group's pin from it.
+                var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger);
+                core.Pins = pins;
+                gate!.Attach(pins);
+            }
+
+            var advertiser = setup is null ? null : CreateAdvertiser(setup, core, logger);
+            if (advertiser is not null && core.Pins is { } attached)
+            {
+                attached.OwnField = advertiser.Field;
+                attached.Fresh = advertiser.Fresh;
+            }
+
             var router = new Router(core, builder.Registrations) { Advertiser = advertiser };
 
             RouterBanner.Log(logger, builder, processId);
@@ -161,46 +183,40 @@ public static class RouterServiceCollectionExtensions
         }
     }
 
-    /// <summary>From the router's section and the process id, never from the library's container, so a library build that hangs or throws cannot hold or disable it.</summary>
-    private static RouterAdvertiser? CreateAdvertiser(IServiceProvider root, RouterBuilder builder, RouterCore core, string processId, IConfigurationSection section, ILogger logger)
+    private static void ValidatePinSetup(IConfigurationSection section, AdvertisementSetup? setup, ILogger logger)
     {
-        try
+        var negotiation = new FormatNegotiationOptions();
+        section.GetSection("Redis:FormatNegotiation").Bind(negotiation);
+        if (negotiation.Mode == FormatNegotiationMode.Force)
         {
-            var cacheOptions = new CacheOptions();
-            section.Bind(cacheOptions);
-            // The one timing source: the router's own section, which the stack does not bind for itself (its Redis options are set in code).
-            var negotiation = new FormatNegotiationOptions();
-            section.GetSection("Redis:FormatNegotiation").Bind(negotiation);
-            if (negotiation.AdvertiseInterval <= TimeSpan.Zero || negotiation.LivenessWindow <= TimeSpan.Zero)
-            {
-                logger.LogWarning("The router runs without a node advertisement: Redis:FormatNegotiation AdvertiseInterval and LivenessWindow must be positive.");
-                return null;
-            }
+            throw new InvalidOperationException("UsePinWhen cannot be combined with Redis:FormatNegotiation:Mode Force: Force writes the format without asking the pin gate. Use Auto.");
+        }
 
-            Func<CancellationToken, ValueTask<IDatabase>> database = builder.SourceDatabase is { } source
-                ? _ => ValueTask.FromResult(source())
-                : async token =>
-                {
-                    var connector = root.GetRequiredService<IRedisConnector>();
-                    await connector.ConnectAsync(token).ConfigureAwait(false);
-                    return connector.Database;
-                };
-            var build = typeof(Router).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
-            return new RouterAdvertiser(
-                new RouterAdvertisementStore(database, NodeListKey(new CacheOptions { Separator = cacheOptions.Separator }, new RedisCacheOptions { RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance })),
-                StackIdentity(cacheOptions.SourceUri ?? CacheOptions.MachineUri, processId).ToString().ToLowerInvariant(),
-                build,
-                [new BypassTokens(core)],
-                negotiation.AdvertiseInterval,
-                negotiation.LivenessWindow,
-                core.Clock,
-                logger);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
+        if (setup is null)
         {
-            logger.LogWarning(ex, "The router could not set up its node advertisement; it runs without one.");
-            return null;
+            throw new InvalidOperationException("UsePinWhen needs the router's pin store, and the node advertisement it lives in could not be set up (see the warning logged before this), so no group could ever be known unpinned.");
         }
+
+        var needed = negotiation.LivenessWindow + (negotiation.AdvertiseInterval * 2);
+        if (negotiation.UpgradeHold < needed)
+        {
+            throw new InvalidOperationException($"UsePinWhen needs Redis:FormatNegotiation:UpgradeHold of at least LivenessWindow + 2 x AdvertiseInterval ({needed}), so a node that joins while the switch is recorded is seen before a format is written; it is {negotiation.UpgradeHold}.");
+        }
+
+        if (setup.Scope is null)
+        {
+            logger.LogWarning("UsePinWhen is set but the application has no AppShortName, so the pin gate cannot attribute nodes to this application and stays closed.");
+        }
+    }
+    private static RouterAdvertiser CreateAdvertiser(AdvertisementSetup setup, RouterCore core, ILogger logger)
+    {
+        var sources = new List<IAdvertisementTokens> { new BypassTokens(core), new ScopeTokens(setup.Scope) };
+        if (core.Pins is { } pins)
+        {
+            sources.Add(pins);
+        }
+
+        return new RouterAdvertiser(setup.Store, setup.NodeId, setup.Build, sources, setup.RefreshInterval, setup.LivenessWindow, core.Clock, logger);
     }
 
     private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, CancellationToken cancellationToken)

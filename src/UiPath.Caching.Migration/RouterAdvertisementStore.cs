@@ -77,6 +77,29 @@ internal sealed class RouterAdvertisementStore(Func<CancellationToken, ValueTask
         return result;
     }
 
+    /// <summary>Every field of the hash, library advertisements included, with its server-stamped age; a field with no readable stamp is left out.</summary>
+    public async Task<IReadOnlyList<NodeEntry>> ReadAllAsync(CancellationToken cancellationToken)
+    {
+        var db = await AcquireAsync(cancellationToken).ConfigureAwait(false);
+        var now = await ServerMillisecondsAsync(db, cancellationToken).ConfigureAwait(false);
+        var entries = await db.HashGetAllAsync(Key, CommandFlags.DemandMaster).WaitAsync(cancellationToken).ConfigureAwait(false);
+        var result = new List<NodeEntry>(entries.Length);
+        foreach (var entry in entries)
+        {
+            var text = (string?)entry.Value;
+            var separator = text?.IndexOf(StampSeparator, StringComparison.Ordinal) ?? -1;
+            if (separator > 0 && long.TryParse(text![..separator], NumberStyles.None, CultureInfo.InvariantCulture, out var stamp))
+            {
+                result.Add(new NodeEntry(((string?)entry.Name)!, text[(separator + 1)..], TimeSpan.FromMilliseconds(Math.Max(0, now - stamp))));
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Acquires the database under the caller's token, as the entry reads and writes do.</summary>
+    public Task<IDatabase> DatabaseAsync(CancellationToken cancellationToken) => AcquireAsync(cancellationToken);
+
     /// <summary>Removes an entry only while it still holds the stamp it was read with, so a router that wrote again in between keeps its entry; nothing without scripts.</summary>
     public async Task PruneAsync(IReadOnlyCollection<(string Field, long Stamp)> stale, CancellationToken cancellationToken)
     {

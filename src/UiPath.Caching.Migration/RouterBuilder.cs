@@ -11,6 +11,8 @@ public sealed class RouterBuilder
 
     internal Func<string, bool>? LibraryPredicate { get; private set; }
 
+    internal Func<string, bool>? PinPredicate { get; private set; }
+
     internal ISerializerProxy<byte[]>? Envelope { get; private set; }
 
     internal TimeSpan? SettleBound { get; private set; }
@@ -80,6 +82,13 @@ public sealed class RouterBuilder
     public RouterBuilder UseLibraryWhen(Func<string, bool> predicate)
     {
         LibraryPredicate = predicate ?? throw new ArgumentNullException(nameof(predicate));
+        return this;
+    }
+
+    /// <summary>A live setting that pins groups to the library path, never the source; a group is switched once a format write needs it and every node has the pin. Group names hold none of <c>+ @ = { }</c>.</summary>
+    public RouterBuilder UsePinWhen(Func<string, bool> pinned)
+    {
+        PinPredicate = pinned ?? throw new ArgumentNullException(nameof(pinned));
         return this;
     }
 
