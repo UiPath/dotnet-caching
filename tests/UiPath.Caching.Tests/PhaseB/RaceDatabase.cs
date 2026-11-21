@@ -1,0 +1,36 @@
+using System.Reflection;
+using StackExchange.Redis;
+
+namespace UiPath.Caching.Tests.PhaseB;
+
+// A database that lets another actor act at a chosen point of a read: before the first call of a method, or after its first call completed and before the caller sees the result.
+internal static class RaceDatabase
+{
+    public static IDatabase Before(IDatabase real, string method, Action action)
+    {
+        var fired = 0;
+        return InterceptingProxy.Wrap(real, (m, _) =>
+        {
+            if (m.Name == method && Interlocked.Exchange(ref fired, 1) == 0)
+            {
+                action();
+            }
+
+            return InterceptingProxy.Proceed;
+        });
+    }
+
+    public static IDatabase AfterHashGetAll(IDatabase real, Func<Task> action)
+    {
+        var fired = 0;
+        return InterceptingProxy.Wrap(real, (m, args) =>
+            m.Name == nameof(IDatabase.HashGetAllAsync) && Interlocked.Exchange(ref fired, 1) == 0 ? ReadThenAct(real, m, args, action) : InterceptingProxy.Proceed);
+    }
+
+    private static async Task<HashEntry[]> ReadThenAct(IDatabase real, MethodInfo method, object?[] args, Func<Task> action)
+    {
+        var read = await (Task<HashEntry[]>)method.Invoke(real, args)!;
+        await action();
+        return read;
+    }
+}

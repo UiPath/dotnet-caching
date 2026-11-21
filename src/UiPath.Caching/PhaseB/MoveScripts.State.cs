@@ -21,11 +21,13 @@ internal sealed partial class MoveScripts
           if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
         elseif ep ~= ARGV[2] or id ~= ARGV[3] or redis.call('HGET', KEYS[1], 'dur') ~= ARGV[4] then
           return 0
+        elseif ARGV[12] == '1' and redis.call('HGET', KEYS[1], 'cmt') == id then
+          return 0
         end
         redis.call('HSET', KEYS[1], 'st', ARGV[5], 'dir', ARGV[6], 'nPop', ARGV[7], 'ep', ARGV[8], 'id', ARGV[9], 'dur', '0', 'prev', ARGV[10], 'upd', ARGV[11])
-        local n = tonumber(ARGV[12])
-        for i = 13, 12 + n do redis.call('HDEL', KEYS[1], ARGV[i]) end
-        for i = 13 + n, #ARGV, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
+        local n = tonumber(ARGV[13])
+        for i = 14, 13 + n do redis.call('HDEL', KEYS[1], ARGV[i]) end
+        for i = 14 + n, #ARGV, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
         return 1
         """;
 
@@ -35,6 +37,12 @@ internal sealed partial class MoveScripts
         if (not v[1]) or (not v[2]) or (not v[3]) or (not v[4]) then return 0 end
         redis.call('HSET', KEYS[1], 'dur', '1', 'prev', v[1] .. ':' .. v[2] .. ':' .. v[3] .. ':' .. v[4] .. ':' .. ARGV[1])
         if ARGV[2] ~= '' then redis.call('HSET', KEYS[1], 'rel', ARGV[2]) end
+        return 1
+        """;
+
+    private const string CommitBeginScript = """
+        if redis.call('HGET', KEYS[1], 'id') ~= ARGV[1] then return 0 end
+        redis.call('HSET', KEYS[1], 'cmt', ARGV[1])
         return 1
         """;
 
@@ -103,7 +111,7 @@ internal sealed partial class MoveScripts
         var args = new List<RedisValue>
         {
             expected.IsAbsent ? "c" : "u", expected.Ep ?? 0, expected.Id ?? string.Empty, expected.Durable,
-            target.State, target.Direction, target.NPop, target.Ep, target.Id, target.Prev, target.UpdatedAt, clear.Count,
+            target.State, target.Direction, target.NPop, target.Ep, target.Id, target.Prev, target.UpdatedAt, expected.Abandon ? 1 : 0, clear.Count,
         };
         args.AddRange(clear.Select(f => (RedisValue)f));
         foreach (var (field, value) in optional)
@@ -120,7 +128,7 @@ internal sealed partial class MoveScripts
 
         return await WatchedAsync(async () =>
         {
-            var held = await _db.HashGetAsync(state, [StateFields.Ep, StateFields.Id, StateFields.Durable], Master).ConfigureAwait(false);
+            var held = await _db.HashGetAsync(state, [StateFields.Ep, StateFields.Id, StateFields.Durable, StateFields.CommitBegun], Master).ConfigureAwait(false);
             var transaction = _db.CreateTransaction();
             var queued = new List<Task>();
             if (!held[0].IsNull && long.TryParse((string)held[0]!, NumberStyles.None, CultureInfo.InvariantCulture, out var stored) && stored == target.Ep && held[1] == target.Id)
@@ -141,7 +149,7 @@ internal sealed partial class MoveScripts
             }
             else
             {
-                if (held[0] != expected.Ep || held[1] != expected.Id || held[2] != expected.Durable)
+                if (held[0] != expected.Ep || held[1] != expected.Id || held[2] != expected.Durable || (expected.Abandon && held[3] == expected.Id))
                 {
                     return ExpectationFailed;
                 }
@@ -200,6 +208,34 @@ internal sealed partial class MoveScripts
             }
 
             queued.Add(transaction.HashSetAsync(state, [.. entries], Master));
+            return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// CMTBEGIN: marks on the state that the commit of this identity begins, before the first CTLCOMMIT. An abandon is refused from then on, and a begin is refused once the id is replaced, so the two
+    /// are arbitrated by the one key both write. A repeat writes the marker again.
+    /// </summary>
+    /// <returns>1 marked; 0 when the stored id differs.</returns>
+    public async Task<long> CommitBeginAsync(RedisKey state, string id)
+    {
+        var reply = await EvaluateAsync(CommitBeginScript, [state], [id]).ConfigureAwait(false);
+        if (reply is not null)
+        {
+            return (long)reply;
+        }
+
+        return await WatchedAsync(async () =>
+        {
+            if (await _db.HashGetAsync(state, StateFields.Id, Master).ConfigureAwait(false) != id)
+            {
+                return ExpectationFailed;
+            }
+
+            var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
+            transaction.AddCondition(Condition.HashEqual(state, StateFields.Id, id));
+            queued.Add(transaction.HashSetAsync(state, StateFields.CommitBegun, id, When.Always, Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
         }).ConfigureAwait(false);
     }

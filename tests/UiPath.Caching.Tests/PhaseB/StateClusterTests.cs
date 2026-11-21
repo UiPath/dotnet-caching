@@ -283,6 +283,59 @@ public class StateClusterTests
         monitor.RulesFor(kit.Group).Should().Match<GroupRules>(r => r.Writes == WriteRule.FailClosed && r.Alerts.Contains("identity_conflict") && r.Acting == null);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Records_at_the_highest_epoch_under_different_ids_on_two_masters_are_a_conflict_whichever_one_is_read_first(bool swap)
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true);
+        var layout = await kit.Real.ReadLayoutAsync(CancellationToken.None);
+        var (a, b) = (layout.Masters[0], layout.Masters[1]);
+        var ids = swap ? ("idY", "idX") : ("idX", "idY");
+        await WriteMasterAsync(kit, layout, a, 60, ids.Item1, durable: false);
+        await WriteMasterAsync(kit, layout, b, 60, ids.Item2, durable: false);
+
+        var sample = await kit.Sampler.SampleAsync(kit.Group, CancellationToken.None);
+        sample!.Conflicting.Should().BeTrue();
+        foreach (var peerId in new[] { "idX", "idY" })
+        {
+            var result = await kit.Recovery.RecreateAsync(kit.Group, [new PeerIdentity("S3", "fwd", 60, peerId)], [], null, CancellationToken.None);
+            result.Outcome.Should().Be(RecoveryOutcome.RecordsDisagree, peerId);
+        }
+
+        (await kit.Store.ReadAsync(kit.Group, CancellationToken.None)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_committed_record_on_one_master_counts_even_when_another_master_shows_the_same_epoch_uncommitted()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true);
+        var layout = await kit.Real.ReadLayoutAsync(CancellationToken.None);
+        await WriteMasterAsync(kit, layout, layout.Masters[0], 61, "same", durable: false);
+        await WriteMasterAsync(kit, layout, layout.Masters[1], 61, "same", durable: true);
+        var init = await kit.InitAsync("a");
+        await kit.Db.HashSetAsync(kit.StateKey, [new("ep", 61), new("id", "same"), new("dur", "0"), new("st", "S3"), new("dir", "fwd")]);
+        var monitor = new GroupStateMonitor(kit.Store, kit.Options, TimeProvider.System);
+        monitor.Register([new GroupRegistration(kit.Group, false, true)]);
+
+        var sample = await kit.Sampler.SampleAsync(kit.Group, CancellationToken.None);
+        await monitor.StepAsync(kit.Group, CancellationToken.None);
+
+        sample.Should().Match<ControlSample>(s => s.Durable && !s.Conflicting && s.Ep == 61);
+        monitor.RulesFor(kit.Group).Alerts.Should().ContainSingle().Which.Should().Be("commit_mismatch");
+        init.Should().NotBeNull();
+    }
+
+    private static async Task WriteMasterAsync(StateKit kit, ClusterLayout layout, MasterLayout master, long ep, string id, bool durable)
+    {
+        var slots = Enumerable.Range(0, 16384).Where(s => layout.OwnerOf(s).Equals(master.Endpoint)).ToArray();
+        await Task.WhenAll(slots.Select(s => kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, s), new ControlRecord(ep, id, "S3", "fwd", "1", "S1", "fwd", "0", "59", "before", [("a", "n")]))));
+        if (durable)
+        {
+            await Task.WhenAll(slots.Select(s => kit.Scripts.ControlCommitAsync(kit.Names.Control(kit.Group, s), ep, id)));
+        }
+    }
+
     private static ClusterLayout Merged(ClusterLayout real)
     {
         var masters = real.Masters.OrderBy(m => m.Endpoint.ToString(), StringComparer.Ordinal).ToArray();

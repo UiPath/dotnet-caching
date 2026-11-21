@@ -126,6 +126,7 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
     private static string? SampleConflict(StateRecord state, ControlSample? sample) => sample switch
     {
         null => null,
+        { Conflicting: true } => "identity_conflict",
         _ when sample.Ep > state.Ep => "identity_conflict",
         _ when sample.Ep == state.Ep && sample.Id != state.Id => "identity_conflict",
         _ when sample.Ep == state.Ep && sample.Durable && !state.Durable => "commit_mismatch",

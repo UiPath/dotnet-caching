@@ -28,7 +28,7 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
         }
 
         var sample = await sampler.SampleAsync(group, cancellationToken).ConfigureAwait(false);
-        if (sample is not null && (sample.Ep != identity.Ep || sample.Id != identity.Id || sample.State != identity.State || sample.Direction != identity.Direction))
+        if (sample is not null && (sample.Conflicting || sample.Ep != identity.Ep || sample.Id != identity.Id || sample.State != identity.State || sample.Direction != identity.Direction))
         {
             return new RecoveryResult(RecoveryOutcome.RecordsDisagree);
         }
@@ -44,8 +44,16 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
         }
         else
         {
-            var gates = await controlDatabase.HashKeysAsync(names.Control(group, sample.Slot), CommandFlags.DemandMaster).ConfigureAwait(false);
-            caches = StateRecord.EncodeCaches(gates.Select(g => (string)g!).Where(g => g.StartsWith("c:", StringComparison.Ordinal)).Select(g => g[2..]));
+            // The identity and the gates come from one read of one record; a record that vanished, changed or holds no gate never becomes an empty managed set.
+            var record = await controlDatabase.HashGetAllAsync(names.Control(group, sample.Slot), CommandFlags.DemandMaster).ConfigureAwait(false);
+            var fields = record.ToDictionary(e => (string)e.Name!, e => (string?)e.Value);
+            var gates = fields.Keys.Where(k => k.StartsWith("c:", StringComparison.Ordinal)).Select(k => k[2..]).ToArray();
+            if (fields.GetValueOrDefault(StateFields.Ep) != identity.Ep.ToString(CultureInfo.InvariantCulture) || fields.GetValueOrDefault(StateFields.Id) != identity.Id || gates.Length == 0)
+            {
+                return new RecoveryResult(RecoveryOutcome.NeedsReassert, Detail: "the record that named the managed set is gone, changed or holds no gate");
+            }
+
+            caches = StateRecord.EncodeCaches(gates);
         }
 
         var newEp = Math.Max(identity.Ep, sample?.Ep ?? 0) + 1;
@@ -74,8 +82,16 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
     public async Task<RecoveryResult> ReassertAsync(string group, string confirm, (string State, string Direction)? named, IReadOnlyList<string>? caches, ClaimFields? claim, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(confirm);
-        var found = (await records.ReadAllAsync(group, cancellationToken).ConfigureAwait(false)).Where(r => r.Fields.ContainsKey(StateFields.Ep)).Select(r => r.Fields).ToArray();
+
+        // The state is read first and is the CAS expectation: evidence read after it can only be older than a change the CAS then refuses.
         var stored = await store.ReadAsync(group, cancellationToken).ConfigureAwait(false);
+        var found = (await records.ReadAllAsync(group, cancellationToken).ConfigureAwait(false)).Where(r => r.Fields.ContainsKey(StateFields.Ep)).Select(r => r.Fields).ToArray();
+        var again = await store.ReadAsync(group, cancellationToken).ConfigureAwait(false);
+        if (again?.Identity != stored?.Identity || again?.Durable != stored?.Durable)
+        {
+            return new RecoveryResult(RecoveryOutcome.StateChanged, Detail: "the state changed while the records were read");
+        }
+
         string state;
         string direction;
         int nPop;
@@ -122,6 +138,11 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
             highest = Math.Max(stored?.Ep ?? 0, await store.ServerMicrosecondsAsync(group).ConfigureAwait(false));
             committedEp = highest;
             committedId = "0";
+        }
+
+        if (stored is not null && found.Length > 0 && highest < stored.Ep)
+        {
+            return new RecoveryResult(RecoveryOutcome.StateChanged, Detail: "the records are older than the state");
         }
 
         var newEp = Math.Max(highest, stored?.Ep ?? 0) + 1;

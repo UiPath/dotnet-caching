@@ -18,6 +18,7 @@ internal static class StateFields
     public const string Release = "rel";
     public const string Updated = "upd";
     public const string Move = "mv";
+    public const string CommitBegun = "cmt";
     public const string HoldOp = "hold:op";
     public const string HoldAuto = "hold:auto";
     public const string ResiduePrefix = "res:";

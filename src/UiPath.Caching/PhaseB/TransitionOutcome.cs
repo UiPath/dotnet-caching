@@ -19,4 +19,7 @@ internal enum TransitionOutcome
 
     /// <summary>The abandon was asked for a transition that is past step 4, that a node acknowledged, or that does not exist.</summary>
     AbandonRefused,
+
+    /// <summary>The controller no longer holds its lease; nothing further was written.</summary>
+    LeaseLost,
 }

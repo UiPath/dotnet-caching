@@ -14,7 +14,7 @@ internal sealed class ControlSampler(IDatabase controlDatabase, MoveKeyNames nam
     public async Task<ControlSample?> ProbeAsync(string group, CancellationToken cancellationToken) =>
         ControlSample.Parse(await controlDatabase.HashGetAsync(names.Control(group, names.SlotSet()[0]), ControlSample.Fields, Master).WaitAsync(cancellationToken).ConfigureAwait(false));
 
-    /// <summary>The record with the highest <c>ep</c> among four slots of the slot set owned by each master, read again when the slot map changed during the read.</summary>
+    /// <summary>The records with the highest <c>ep</c> among four slots of the slot set owned by each master, read again when the slot map changed during the read.</summary>
     public async Task<ControlSample?> SampleAsync(string group, CancellationToken cancellationToken)
     {
         var set = names.SlotSet();
@@ -27,9 +27,27 @@ internal sealed class ControlSampler(IDatabase controlDatabase, MoveKeyNames nam
             var after = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
             if (after.MovedSince(before, sampled).Count == 0 || attempt + 1 == Attempts)
             {
-                return sampled.Zip(reads, (slot, r) => ControlSample.Parse(r.Result) is { } found ? found with { Slot = slot } : null).OfType<ControlSample>().MaxBy(s => s.Ep);
+                return Aggregate([.. sampled.Zip(reads, (slot, r) => ControlSample.Parse(r.Result) is { } found ? found with { Slot = slot } : null).OfType<ControlSample>()]);
             }
         }
+    }
+
+    // Every record at the highest epoch counts: another id, state or direction there is a conflict, and one committed record is enough for the epoch to count as committed.
+    private static ControlSample? Aggregate(ControlSample[] found)
+    {
+        if (found.Length == 0)
+        {
+            return null;
+        }
+
+        var top = found.Max(s => s.Ep);
+        var atTop = found.Where(s => s.Ep == top).ToArray();
+        var first = atTop[0];
+        return first with
+        {
+            Durable = atTop.Any(s => s.Durable),
+            Conflicting = atTop.Any(s => s.Id != first.Id || s.State != first.State || s.Direction != first.Direction),
+        };
     }
 
     private static IEnumerable<int> Pick(IReadOnlyList<int> set, MasterLayout master)

@@ -24,6 +24,9 @@ internal sealed class HookedTopology(IStateTopology inner) : IStateTopology
 
     public Func<EndPoint, RedisKey, int, EndPoint?>? StateOwner { get; set; }
 
+    // Runs once after the first control record read that goes through a dedicated connection, before its caller sees the result.
+    public Func<Task>? AfterControlRead { get; set; }
+
     // What a master reports (replicas, eviction policy); null asks the real server.
     public Func<EndPoint, MasterProbe?>? Probe { get; set; }
 
@@ -52,7 +55,7 @@ internal sealed class HookedTopology(IStateTopology inner) : IStateTopology
 
         public MoveScripts Control => channel.Control;
 
-        public IDatabase ControlDatabase => channel.ControlDatabase;
+        public IDatabase ControlDatabase => owner.AfterControlRead is { } after ? RaceControl(after) : channel.ControlDatabase;
 
         public MoveScripts State => channel.State;
 
@@ -68,5 +71,21 @@ internal sealed class HookedTopology(IStateTopology inner) : IStateTopology
             owner.Wait?.Invoke(Endpoint, Interlocked.Increment(ref owner._waits)) ?? await channel.WaitAsync(replicas, timeout, cancellationToken);
 
         public ValueTask DisposeAsync() => channel.DisposeAsync();
+
+        private static async Task<RedisValue[]> ReadThenAct(IDatabase real, System.Reflection.MethodInfo method, object?[] args, Func<Task> after)
+        {
+            var read = await (Task<RedisValue[]>)method.Invoke(real, args)!;
+            await after();
+            return read;
+        }
+
+        private IDatabase RaceControl(Func<Task> after)
+        {
+            var fired = 0;
+            return InterceptingProxy.Wrap(channel.ControlDatabase, (method, args) =>
+                method.Name == nameof(IDatabase.HashGetAsync) && method.ReturnType == typeof(Task<RedisValue[]>) && Interlocked.Exchange(ref fired, 1) == 0
+                    ? ReadThenAct(channel.ControlDatabase, method, args, after)
+                    : InterceptingProxy.Proceed);
+        }
     }
 }

@@ -17,6 +17,11 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
     public async Task<TransitionResult> RunAsync(string group, StateExpectation expected, StateTarget target, SequenceOptions? sequence, CancellationToken cancellationToken)
     {
         await using var episode = new Episode(topology, sequence ?? new SequenceOptions());
+        if (LeaseLost(episode) is { } lost)
+        {
+            return lost;
+        }
+
         var key = names.State(group);
         var (confirmed, _) = await StateStepAsync(episode, key, channel => channel.State.TransitAsync(key, expected, target), code => code != MoveScripts.ExpectationFailed, cancellationToken).ConfigureAwait(false);
         if (confirmed == BarrierResult.Refused)
@@ -56,7 +61,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
 
         var prev = state.Prev.Split(':');
         var target = new StateTarget(prev[0], prev[1], int.Parse(prev[2], System.Globalization.CultureInfo.InvariantCulture), state.Ep + 1, MoveScripts.NewNonce(), state.Prev, updatedAt);
-        return await RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 0), target, (sequence ?? new SequenceOptions()) with { SkipAtOnce = true, WayBack = true }, cancellationToken).ConfigureAwait(false);
+        return await RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 0, abandon: true), target, (sequence ?? new SequenceOptions()) with { SkipAtOnce = true, WayBack = true }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Steps 2 to 6 for the transition the stored state shows at <c>dur=0</c>; a state that is already durable has its DURABLE write and WAIT repeated.</summary>
@@ -92,6 +97,9 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         return IssueResult.Done;
     }
 
+    private static TransitionResult? LeaseLost(Episode episode) =>
+        episode.Sequence.HoldsLease is { } holds && !holds() ? new TransitionResult(TransitionOutcome.LeaseLost, Detail: "the controller no longer holds the lease") : null;
+
     private static int ConfiguredReplicas(ClusterLayout layout, EndPoint master) =>
         layout.Masters.FirstOrDefault(m => m.Endpoint.Equals(master))?.ConfiguredReplicas ?? throw new RedisException($"The topology does not list the master {master}.");
 
@@ -120,15 +128,30 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         // A durable state may be one whose DURABLE reply or WAIT was lost: the write and its WAIT are repeated, never trusted.
         if (state.Durable)
         {
-            return await DurableStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false);
+            return LeaseLost(episode) ?? await DurableStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false);
         }
 
         var committed = false;
         for (var attempt = 0; attempt < options.BarrierRetries && !committed; attempt++)
         {
+            if (LeaseLost(episode) is { } beforeSync)
+            {
+                return beforeSync;
+            }
+
             if (await SyncStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false) is { } syncFailure)
             {
                 return syncFailure;
+            }
+
+            if (LeaseLost(episode) is { } beforeCommit)
+            {
+                return beforeCommit;
+            }
+
+            if (await CommitBeginStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false) is { } begun)
+            {
+                return begun;
             }
 
             var commit = await CommitStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false);
@@ -147,7 +170,18 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
             return new TransitionResult(TransitionOutcome.CommitIncomplete, Detail: "a control record would not take the commit marker");
         }
 
-        return await DurableStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false);
+        return LeaseLost(episode) ?? await DurableStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false);
+    }
+
+    // Marks on the state that the commit of this identity begins, so an abandon of it is refused from here on; refused itself when the identity was replaced.
+    private async Task<TransitionResult?> CommitBeginStepAsync(string group, StateRecord state, Episode episode, CancellationToken cancellationToken)
+    {
+        var key = names.State(group);
+        var (master, _) = await StateMasterAsync(key, cancellationToken).ConfigureAwait(false);
+        var channel = await episode.Channels.GetAsync(master, cancellationToken).ConfigureAwait(false);
+        return await channel.State.CommitBeginAsync(key, state.Id).ConfigureAwait(false) == MoveScripts.Written
+            ? null
+            : new TransitionResult(TransitionOutcome.StateChanged, Detail: "the identity was replaced before its commit began");
     }
 
     // Steps 2 and 3. Null when every slot holds the target identity and its master confirmed the writes.

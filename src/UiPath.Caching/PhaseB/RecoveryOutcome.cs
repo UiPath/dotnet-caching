@@ -13,6 +13,9 @@ internal enum RecoveryOutcome
 
     PeersDisagree,
 
+    /// <summary>The state changed while the evidence was collected, or is newer than the records: nothing is written over it.</summary>
+    StateChanged,
+
     /// <summary>The sampled control record is not the identity the peers run.</summary>
     RecordsDisagree,
 

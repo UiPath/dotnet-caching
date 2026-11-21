@@ -8,7 +8,7 @@ namespace UiPath.Caching.Tests.PhaseB;
 [Trait("Category", "Integration")]
 public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
 {
-    public static TheoryData<string> Commands => ["holdset", "holdclear", "lease-acquire", "lease-renew", "lease-release", "transit-extras"];
+    public static TheoryData<string> Commands => ["holdset", "holdclear", "lease-acquire", "lease-renew", "lease-release", "transit-extras", "commitbegin"];
 
     [Theory]
     [InlineData(true)]
@@ -73,6 +73,25 @@ public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
         var record = StateRecord.Parse(await env.Db.HashGetAllAsync(state))!;
         record.Move.Should().Be("fmt:1>2");
         record.KeepsSourceFallback("a").Should().BeTrue("an absent residue count is unknown");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Once_the_commit_has_begun_an_abandon_of_that_identity_is_refused_and_a_transition_is_not(bool useScripts)
+    {
+        await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, openControl: false);
+        var state = env.Make("state");
+        await env.Scripts.TransitAsync(state, StateExpectation.Absent, new StateTarget("S1", "fwd", 0, 6, "id-6", "S0:none:0:5:id-5", 1));
+        var back = new StateTarget("S0", "none", 0, 7, "id-7", "S0:none:0:5:id-5", 2);
+
+        (await env.Scripts.CommitBeginAsync(state, "other")).Should().Be(0);
+        (await env.Scripts.CommitBeginAsync(state, "id-6")).Should().Be(1);
+        (await env.Scripts.CommitBeginAsync(state, "id-6")).Should().Be(1, "a repeat writes the marker again");
+
+        (await env.Scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 0, abandon: true), back)).Should().Be(MoveScripts.ExpectationFailed);
+        (await env.Db.HashGetAsync(state, "id")).Should().Be("id-6");
+        (await env.Scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 0), back)).Should().Be(MoveScripts.Written);
     }
 
     [Fact]
@@ -165,6 +184,9 @@ public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
             case "lease-release":
                 await env.Db.StringSetAsync(key, "a", TimeSpan.FromSeconds(30));
                 break;
+            case "commitbegin":
+                await env.Db.HashSetAsync(key, [new("st", "S1"), new("ep", 5), new("id", "id-5"), new("dur", "0")]);
+                break;
             case "transit-extras":
                 await env.Db.HashSetAsync(key, [new("st", "S1"), new("dir", "fwd"), new("nPop", "0"), new("ep", 5), new("id", "id-5"), new("dur", "1"), new("res:a", "1")]);
                 break;
@@ -187,6 +209,8 @@ public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
                 return await scripts.LeaseAsync(key, "a", 30_000);
             case "lease-release":
                 return await scripts.LeaseReleaseAsync(key, "a") ? 1 : 0;
+            case "commitbegin":
+                return await scripts.CommitBeginAsync(key, "id-5");
             case "transit-extras":
                 return await scripts.TransitAsync(key, StateExpectation.Holding(5, "id-5", 1), new StateTarget("S1", "fwd", 0, 6, "id-6", "p", 1, Move: "m", Clear: ["res:a"]));
             default:

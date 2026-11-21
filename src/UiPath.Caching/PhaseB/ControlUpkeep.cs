@@ -73,7 +73,7 @@ internal sealed class ControlUpkeep(ControlRecordReader records, TransitionSeque
                 await Task.Delay(options.UpkeepInterval, time, cancellationToken).ConfigureAwait(false);
                 if (lease.HoldsLease)
                 {
-                    await CheckOnceAsync(group, cancellationToken).ConfigureAwait(false);
+                    await CheckOnceAsync(group, cancellationToken, lease).ConfigureAwait(false);
                 }
             }
         }
@@ -83,7 +83,7 @@ internal sealed class ControlUpkeep(ControlRecordReader records, TransitionSeque
         }
     }
 
-    internal async Task CheckOnceAsync(string group, CancellationToken cancellationToken)
+    internal async Task CheckOnceAsync(string group, CancellationToken cancellationToken, LeaderLease? lease = null)
     {
         try
         {
@@ -99,7 +99,7 @@ internal sealed class ControlUpkeep(ControlRecordReader records, TransitionSeque
                     break;
                 case UpkeepVerdict.Rebuild:
                     report?.Invoke("rebuild", group);
-                    await RebuildAsync(group, state, null, null, cancellationToken).ConfigureAwait(false);
+                    await RebuildAsync(group, state, null, lease is null ? null : new SequenceOptions(HoldsLease: () => lease.HoldsLease), cancellationToken).ConfigureAwait(false);
                     break;
             }
         }
