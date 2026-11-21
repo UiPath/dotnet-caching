@@ -211,6 +211,29 @@ internal sealed partial class RouterCore
         }
     }
 
+    /// <summary>Waits for the pending windows at most <see cref="CleanupBound"/>; the keys still pending then are logged with their deadlines and left.</summary>
+    /// <remarks>
+    /// Only the window is waited for: no I/O of a pending key borrows caller memory, the cache-level invalidation of the bounded stop is already published, and the
+    /// flush that follows announces every key again. A stop that cannot wait for a write of unknown outcome must not hold the host for the whole window.
+    /// </remarks>
+    public async Task SettlePendingAsync(IRouterParticipant[] participants)
+    {
+        if (await BoundedStop.CompletesAsync(Task.WhenAll(participants.Select(p => p.WhenPendingSettledAsync())), CleanupBound).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _unfinishedCleanup);
+        RouterTelemetry.CountCleanupTimedOut();
+        foreach (var participant in participants)
+        {
+            foreach (var (cache, key, until) in participant.PendingKeys())
+            {
+                LogPendingLeft(cache, key, until);
+            }
+        }
+    }
+
     private void ExitActive()
     {
         if (Interlocked.Decrement(ref _active) == 0 && IsStopped)
@@ -629,6 +652,9 @@ internal sealed partial class RouterCore
             LogCleanupTimedOut(name);
         }
     }
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The router stopped without waiting for pending key {Key} of cache {Cache}, whose write may still land until {Until}; peers were told to drop the cache.")]
+    private partial void LogPendingLeft(string cache, string key, DateTimeOffset until);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Router mode is {Mode} ({Reason}).")]
     private partial void LogMode(RouterMode mode, RouterModeReason reason);
 

@@ -18,6 +18,9 @@ internal interface IRouterParticipant
 
     Task WhenPendingSettledAsync();
 
+    /// <summary>The cache's pending keys with the time each window ends, for the log of a stop that could not wait for them.</summary>
+    IReadOnlyList<(string Cache, string Key, DateTimeOffset Until)> PendingKeys();
+
     /// <summary>Drops this node's local copies and joins to loads that began before.</summary>
     void ResetLocal();
 

@@ -211,6 +211,32 @@ public sealed class StopAndFenceTests : RouterTestBase
     }
 
     [Fact]
+    public async Task A_dispose_leaves_a_pending_window_past_the_cleanup_bound_and_counts_it()
+    {
+        var node = NewNode(pendingWindow: TimeSpan.FromMinutes(10), cleanupBound: TimeSpan.FromMilliseconds(300));
+        node.LibraryBackend.WriteOutcome = WriteOutcome.Unknown;
+        await node.Cache.SetAsync("k", new Item("v"), default, Ct);
+        var started = Clock.GetUtcNow();
+
+        // Dispose waits for the whole cleanup, not only the bounded stop; the clock moves on while it runs.
+        var dispose = node.StartDispose();
+        while (!dispose.IsCompleted)
+        {
+            await Task.WhenAny(dispose, Task.Delay(20, Ct));
+            if (!dispose.IsCompleted)
+            {
+                Clock.Advance(TimeSpan.FromSeconds(1));
+            }
+        }
+
+        await dispose;
+
+        (Clock.GetUtcNow() - started).Should().BeLessThan(TimeSpan.FromMinutes(10), "a write of unknown outcome does not hold the dispose for its whole window");
+        node.Core.UnfinishedCleanup.Should().BeGreaterThan(0, "the window left is counted and logged");
+        Bus.Events.Should().Contain(ev => ev.Type == KnownEventTypes.TopicInvalidated, "peers were told to drop the cache instead");
+    }
+
+    [Fact]
     public async Task A_cancelled_first_stop_does_not_cancel_the_cleanup_or_hide_it_from_the_next_caller()
     {
         var node = NewNode(pendingWindow: TimeSpan.FromMinutes(5));

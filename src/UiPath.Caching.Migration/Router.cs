@@ -161,8 +161,10 @@ internal sealed class Router : IRouter, IAsyncDisposable
             await WithinAsync(invalidate).ConfigureAwait(false);
             foreground.TrySetResult();
             await invalidate.ConfigureAwait(false);
+
+            // Calls still running use the router's resources, so they are waited for; a pending window is not, past the cleanup bound.
             await _core.OperationsDrained.ConfigureAwait(false);
-            await PendingSettled(stoppables).ConfigureAwait(false);
+            await _core.SettlePendingAsync(stoppables).ConfigureAwait(false);
         }
 
         var flush = Task.WhenAll(stoppables.Select(stoppable => stoppable.FlushAsync()));

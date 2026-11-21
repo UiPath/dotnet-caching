@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using UiPath.Caching.Config;
 using UiPath.Caching.Migration.Tests.Support;
+using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Migration.Tests;
 
@@ -137,6 +138,18 @@ public sealed class PinHostTests
         try
         {
             var router = provider.GetRequiredService<IRouter>();
+
+            // Written only once the connector knows Redis cannot be reached: before that a first write may be sent and end unknown.
+            var connector = provider.GetRequiredService<IRedisConnector>();
+            await Task.Run(
+                async () =>
+                {
+                    while (connector.IsConnected)
+                    {
+                        await Task.Delay(20, Ct);
+                    }
+                },
+                Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
             var write = await router.Get<Item>("items").SetAsync("k", new Item("v"), default, Ct);
             write.Should().Be(WriteOutcome.NotSent);

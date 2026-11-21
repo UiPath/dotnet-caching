@@ -174,6 +174,8 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
     public Task WhenPendingSettledAsync() => _pending.WhenEmptyAsync();
 
+    public IReadOnlyList<(string Cache, string Key, DateTimeOffset Until)> PendingKeys() => [.. _pending.Snapshot().Select(p => (_registration.Name, p.Key, p.Until))];
+
     public async Task InvalidateAsync()
     {
         ClearLocal();

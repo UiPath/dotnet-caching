@@ -1,3 +1,5 @@
+using StackExchange.Redis;
+
 namespace UiPath.Caching.Redis;
 
 internal sealed class SendTrace
@@ -19,7 +21,18 @@ internal sealed class SendTrace
 
     public async ValueTask<bool> AcknowledgeAsync(Task<bool> pending)
     {
-        var result = await pending.ConfigureAwait(false);
+        bool result;
+        try
+        {
+            result = await pending.ConfigureAwait(false);
+        }
+        catch (RedisConnectionException ex) when (NeverWritten(ex))
+        {
+            // The client never wrote the command: this attempt was not sent after all, so it cannot leave the outcome unknown.
+            Interlocked.Decrement(ref _sent);
+            throw;
+        }
+
         MarkAnswered(result);
         return result;
     }
@@ -42,4 +55,9 @@ internal sealed class SendTrace
 
         return answered < sent ? StoreOutcome.Unknown : StoreOutcome.Failed;
     }
+
+    /// <summary>Only what proves the command never reached a socket; a status of unknown is ambiguous and stays a send.</summary>
+    private static bool NeverWritten(RedisConnectionException ex) =>
+        ex.CommandStatus == CommandStatus.WaitingToBeSent
+        || ex.Message.StartsWith("No connection is active/available", StringComparison.Ordinal);
 }
