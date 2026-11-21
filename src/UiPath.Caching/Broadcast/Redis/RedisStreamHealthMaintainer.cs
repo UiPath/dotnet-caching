@@ -82,9 +82,8 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     internal void Initialize()
     {
         _timer = new PeriodicTimer(_streamOptions.MaintainerCheckInterval);
-        var keyFactory = _redisOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory();
-        var stringKeyStrategy = keyFactory.Create(_cacheOptions, RedisKeyspaces.String);
-        var hashKeyStrategy = keyFactory.Create(_cacheOptions, RedisKeyspaces.Hash);
+        var stringKeyStrategy = RedisKeyStrategies.Resolve(_redisOptions, _cacheOptions, RedisKeyspaces.String, _redisOptions.PinnedKeyFormat);
+        var hashKeyStrategy = RedisKeyStrategies.Resolve(_redisOptions, _cacheOptions, RedisKeyspaces.Hash, _redisOptions.PinnedKeyFormat);
         if (string.IsNullOrWhiteSpace(_streamOptions.MaintainerSearchPattern))
         {
             var redisStreamKeyStrategy = _streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, _cacheOptions);
@@ -96,9 +95,9 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             _streamsSearchPattern = _streamOptions.MaintainerSearchPattern;
         }
 
-        _lockKey = stringKeyStrategy.GetRedisKey(EscapeBraces(string.Join(_cacheOptions.Separator, nameof(RedisStreamHealthMaintainer), "Lock2")));
+        _lockKey = stringKeyStrategy.GetRedisKey(LibraryKeyNames.MaintainerLock(_cacheOptions.Separator));
         _hashKeyStrategy = hashKeyStrategy;
-        _quarantineMarker = string.Join(_cacheOptions.Separator, "caching", "meta", "stream") + "$";
+        _quarantineMarker = LibraryKeyNames.QuarantineMarker(_cacheOptions.Separator);
         _supportsXtrimMinId = new Lazy<bool>(() => _redis.Version >= Version.Parse("6.2.0"));
     }
 

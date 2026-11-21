@@ -383,6 +383,25 @@ public class DistributedCacheRegistrationTests
     }
 
     [Fact]
+    public void A_key_format_on_the_redis_tier_is_refused_with_a_message_naming_the_distributed_cache()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(
+            b =>
+            {
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
+                b.AddRedis(o => o.KeyFormat = RedisKeyFormat.Dollar);
+                b.AddDistributedCache(KnownCacheProviderNames.Redis);
+            },
+            o => o.AppShortName = "app");
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IDistributedCache>();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*distributed cache*KeyFormat*");
+    }
+
+    [Fact]
     public void Key_strategy_that_rejects_another_packages_keyspace_does_not_fail_the_probe()
     {
         var services = new ServiceCollection();

@@ -16,6 +16,9 @@ public class RedisCacheOptions : ICacheOptions
 
     public IRedisKeyStrategyFactory? RedisKeyStrategyFactory { get; set; }
 
+    /// <summary>Joins app, keyspace and name with this format instead of <see cref="CacheOptions.Separator"/>; null keeps today's keys. Names are composed as before.</summary>
+    public RedisKeyFormat? KeyFormat { get; set; }
+
     public bool? ConnectionMonitorEnabled { get; set; }
 
     public bool CacheNullValues { get; set; }
@@ -64,6 +67,9 @@ public class RedisCacheOptions : ICacheOptions
     public bool RemoveUnreadable { get; set; } = true;
 
     public FormatNegotiationOptions FormatNegotiation { get; set; } = new();
+
+    /// <summary>The format of the node list and the stream maintainer's keys while a format move runs; null follows <see cref="KeyFormat"/>.</summary>
+    internal RedisKeyFormat? PinnedKeyFormat { get; set; }
 
     /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
     internal RedisCacheOptions ShallowCopy()

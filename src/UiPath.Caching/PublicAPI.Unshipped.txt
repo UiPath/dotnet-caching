@@ -44,3 +44,17 @@ UiPath.Caching.Cache<T>.SetIfChangedAsync(UiPath.Caching.CacheKey cacheKey, T? v
 UiPath.Caching.Cache<T>.SetIfChangedAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
 UiPath.Caching.Cache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 UiPath.Caching.Cache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.Redis.RedisKeyFormat
+UiPath.Caching.Redis.RedisKeyFormat.Build(string! app, string! keyspace, string! name) -> StackExchange.Redis.RedisKey
+UiPath.Caching.Redis.RedisKeyFormat.Id.get -> string!
+UiPath.Caching.Redis.RedisKeyFormat.Separator.get -> char
+UiPath.Caching.Redis.RedisKeyFormat.ShardKey.get -> bool
+UiPath.Caching.Redis.RedisKeyFormat.TryParse(StackExchange.Redis.RedisKey key, string! app, string! keyspace, out string? name) -> bool
+static UiPath.Caching.Redis.RedisKeyFormat.Colon.get -> UiPath.Caching.Redis.RedisKeyFormat!
+static UiPath.Caching.Redis.RedisKeyFormat.Create(char separator, bool shardKey) -> UiPath.Caching.Redis.RedisKeyFormat!
+static UiPath.Caching.Redis.RedisKeyFormat.Dollar.get -> UiPath.Caching.Redis.RedisKeyFormat!
+UiPath.Caching.Redis.RedisCacheOptions.KeyFormat.get -> UiPath.Caching.Redis.RedisKeyFormat?
+UiPath.Caching.Redis.RedisCacheOptions.KeyFormat.set -> void
+UiPath.Caching.Redis.RedisKeyFormat.CreateStrategy(string! app, string! keyspace) -> UiPath.Caching.Redis.IRedisKeyStrategy!
+override UiPath.Caching.Redis.RedisKeyFormat.Equals(object? obj) -> bool
+override UiPath.Caching.Redis.RedisKeyFormat.GetHashCode() -> int
