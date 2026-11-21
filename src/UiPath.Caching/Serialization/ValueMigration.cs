@@ -46,7 +46,7 @@ internal sealed class ValueMigration(FormatMigrator migrator, ValueRewriter rewr
         if (!ValueHeader.TryRead(stored, out var formatId, out _))
         {
             // JSON that cannot be compared would only be looked at and left, every window.
-            return rewriter.ComparesJson;
+            return rewriter.ComparesHeaderless;
         }
 
         return registry.TryGetByFormat(formatId, out var source) && !ReferenceEquals(source, target);

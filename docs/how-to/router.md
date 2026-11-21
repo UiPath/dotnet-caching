@@ -25,7 +25,7 @@ var folders = provider.GetRequiredService<IRouter>().Get<Folders>("folders");
 var value = await folders.GetOrAddAsync(key, token => LoadAsync(key, token), CacheExpiry.After(TimeSpan.FromMinutes(5)));
 ```
 
-The router builds a Redis-only named stack on the application's connector (`AddNamedCachingOnPrimaryConnection`) with a pass-through key strategy, your envelope as the only serializer and `RemoveUnreadable = false`. It compiles against the public `UiPath.Caching` API only.
+The router builds a Redis-only named stack on the application's connector (`AddNamedCachingOnPrimaryConnection`) with a pass-through key strategy, your envelope as the only serializer and `RemoveUnreadable = false`. The stack marks the envelope header-free (`IHeaderFreeSerializerProxy`), so it must never start a value with a byte from 0x01 to 0x1F other than tab, line feed or carriage return; a write that would fails with `InvalidOperationException`. It compiles against the public `UiPath.Caching` API only.
 
 ## Behaviour
 

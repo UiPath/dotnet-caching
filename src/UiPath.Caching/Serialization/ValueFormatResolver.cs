@@ -19,15 +19,15 @@ internal sealed class ValueFormatResolver
         _registry = registry;
         _defaultPolicy = defaultPolicy;
         _effective = effective;
-        // A header is told from JSON only when the proxy is the default one; a custom proxy keeps its own bytes.
-        Reader = !registry.IsEmpty || (classifyHeadersWithNoRegistry && proxy.GetType() == typeof(SystemJsonByteSerializerProxy)) ? new ValueReader(proxy, registry) : null;
+        // A header is told from the proxy's bytes only when the proxy is header-free; another custom proxy keeps its own bytes.
+        Reader = !registry.IsEmpty || (classifyHeadersWithNoRegistry && ValueReader.IsHeaderFree(proxy)) ? new ValueReader(proxy, registry) : null;
     }
 
     /// <summary>Null while no serializer is registered, unless the default JSON proxy was asked to classify headers anyway.</summary>
     public ValueReader? Reader { get; }
 
-    // A custom proxy is held back only when an outside gate asked for it: what the proxy writes then stands in for the held format.
-    private bool HoldsBack => _effective is not null && (_effective.Gated || Reader is { JsonProxyIsDefault: true });
+    // An unmarked custom proxy is held back only when an outside gate asked for it: what the proxy writes then stands in for the held format.
+    private bool HoldsBack => _effective is not null && (_effective.Gated || Reader is { ProxyIsHeaderFree: true });
 
     /// <summary>A write the node node list does not yet allow is JSON. A call without a policy takes the default policy's, and a policy that sets no write serializer falls back to the default's. A write that names a serializer nobody registered throws. A write that does not also read takes no read list, so a bad one fails the read, not the write.</summary>
     public ValueFormat For(CachePolicy? policy, bool forWrite, bool alsoReads = false)

@@ -61,7 +61,7 @@ public static class RouterServiceCollectionExtensions
                 sectionName,
                 (stack, _) =>
                 {
-                    stack.AddSingleton<ISerializerProxy<byte[]>>(envelope);
+                    AddEnvelope(stack, envelope);
                     if (gate is not null)
                     {
                         stack.AddSingleton<IFormatWriteGate>(gate);
@@ -89,6 +89,9 @@ public static class RouterServiceCollectionExtensions
         services.AddHostedService<RouterHostedService>();
         return services;
     }
+
+    /// <summary>The envelope in the stack's container, marked header-free so the stack reads it beside a registered format.</summary>
+    internal static void AddEnvelope(IServiceCollection stack, ISerializerProxy<byte[]> envelope) => stack.AddSingleton(HeaderFreeEnvelope.Wrap(envelope));
 
     internal static Func<TimeSpan> LibrarySettleWithin(IServiceProvider root, TimeSpan? explicitBound)
     {

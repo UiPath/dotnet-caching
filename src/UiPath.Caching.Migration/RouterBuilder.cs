@@ -92,7 +92,7 @@ public sealed class RouterBuilder
         return this;
     }
 
-    /// <summary>The serializer that writes and reads the older client's value envelope.</summary>
+    /// <summary>The serializer of the older client's value envelope; it must never start a value with a format header byte, and a write that does fails.</summary>
     public RouterBuilder UseEnvelope(ISerializerProxy<byte[]> envelope)
     {
         Envelope = envelope ?? throw new ArgumentNullException(nameof(envelope));

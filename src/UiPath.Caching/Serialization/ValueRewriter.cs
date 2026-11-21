@@ -3,12 +3,13 @@ namespace UiPath.Caching.Serialization;
 /// <summary>Writes a value that was read in one format in another, only if it comes out the same.</summary>
 internal sealed class ValueRewriter(ISerializerProxy<byte[]> json, ValueSerializerRegistry registry)
 {
-    // A subclass or another proxy may store bytes that are not JSON, so they cannot be compared as JSON.
+    // Only the default proxy's bytes compare as JSON; a marked proxy's compare byte for byte, and any other proxy's cannot be compared.
     private readonly bool _jsonProxyIsDefault = json.GetType() == typeof(SystemJsonByteSerializerProxy);
+    private readonly bool _proxyIsHeaderFree = ValueReader.IsHeaderFree(json);
     private readonly ValueReader _reader = new(json, registry);
 
-    /// <summary>Whether a headerless value can be checked at all; with a custom JSON proxy none can.</summary>
-    public bool ComparesJson => _jsonProxyIsDefault;
+    /// <summary>Whether a headerless value can be checked at all; with an unmarked custom proxy none can.</summary>
+    public bool ComparesHeaderless => _proxyIsHeaderFree;
 
     /// <summary>
     /// False, with an empty <paramref name="payload"/>, for a value that is not one to rewrite or that would change; otherwise the value in the target's format,
@@ -64,7 +65,9 @@ internal sealed class ValueRewriter(ISerializerProxy<byte[]> json, ValueSerializ
     {
         if (!ValueHeader.TryRead(original, out var formatId, out _))
         {
-            return _jsonProxyIsDefault && LosslessCheck.Json(original, json.Serialize(value)!);
+            return _jsonProxyIsDefault
+                ? LosslessCheck.Json(original, json.Serialize(value)!)
+                : _proxyIsHeaderFree && json.Serialize(value) is { } rewritten && rewritten.AsSpan().SequenceEqual(original);
         }
 
         if (!registry.TryGetByFormat(formatId, out var source) || ReferenceEquals(source, target))
