@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using StackExchange.Redis;
 using UiPath.Caching.Redis;
@@ -91,6 +91,13 @@ internal sealed class MoveKeyNames
 
     /// <summary>The staging key of a reverse hash promotion, in the in-place key's slot.</summary>
     public RedisKey ReverseStaging(string inPlaceKey, string nonce) => InSlotOf(inPlaceKey, "s:" + nonce);
+
+    /// <summary>The state hash of the group, tagged by the group name so it sits in one slot.</summary>
+    public RedisKey State(string group)
+    {
+        ValidateName(group, nameof(group));
+        return $"{LibraryPrefix}{Keyspace}:{{{group}}}:state";
+    }
 
     /// <summary>The control record of <paramref name="group"/> in the slot of <paramref name="dataKey"/>.</summary>
     public RedisKey ControlFor(string group, string dataKey) => Control(group, SlotOf(dataKey));

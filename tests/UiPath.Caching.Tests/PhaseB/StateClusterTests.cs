@@ -1,0 +1,174 @@
+using StackExchange.Redis;
+using UiPath.Caching.PhaseB;
+
+namespace UiPath.Caching.Tests.PhaseB;
+
+[Trait("Category", "Integration")]
+public class StateClusterTests
+{
+    private static readonly PhaseBStateOptions WithReplica = new() { ExpectedReplicasPerMaster = 1, BarrierWait = TimeSpan.FromMilliseconds(50) };
+
+    public static TheoryData<bool, string> Runs() => new()
+    {
+        { true, string.Empty },
+        { true, "app:" },
+        { true, "{shard}:" },
+        { false, string.Empty },
+    };
+
+    [Theory]
+    [MemberData(nameof(Runs))]
+    public async Task A_run_syncs_and_commits_the_control_record_of_every_slot_of_the_set_on_every_master(bool useScripts, string prefix)
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts, prefix: prefix);
+        var init = await kit.InitAsync("a", "b");
+        var target = StateKit.TargetFrom(init, "S1", "fwd", 0);
+
+        var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), target, null, CancellationToken.None);
+
+        result.Should().Be(new TransitionResult(TransitionOutcome.Completed));
+        var slots = kit.Names.SlotSet();
+        slots.Count.Should().Be(prefix == "{shard}:" ? 1 : 16384);
+        await AssertEveryRecordAsync(kit, slots, target, durable: true);
+        (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Durable.Should().BeTrue();
+        kit.Reports.Count(r => r.Kind == "no_replica").Should().BeInRange(1, 3);
+    }
+
+    [Theory]
+    [InlineData("epsync")]
+    [InlineData("commit")]
+    public async Task A_run_that_stopped_with_half_of_the_slots_written_is_resumed_on_every_slot(string stoppedIn)
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true);
+        var init = await kit.InitAsync("a");
+        var target = StateKit.TargetFrom(init, "S3", "fwd", 1);
+        await kit.Scripts.TransitAsync(kit.StateKey, StateKit.Expecting(init), target);
+        var stored = (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!;
+        var record = stored.ToControlRecord([("a", "n-before")]);
+        var slots = kit.Names.SlotSet();
+        var half = slots.Where(s => s % 2 == 0).ToArray();
+        await Task.WhenAll(half.Select(s => kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, s), record)));
+        if (stoppedIn == "commit")
+        {
+            await Task.WhenAll(slots.Where(s => s % 4 == 0).Select(s => kit.Scripts.ControlCommitAsync(kit.Names.Control(kit.Group, s), stored.Ep, stored.Id)));
+        }
+
+        var result = await kit.Sequence.ResumeAsync(kit.Group, null, CancellationToken.None);
+
+        result.Outcome.Should().Be(TransitionOutcome.Completed);
+        await AssertEveryRecordAsync(kit, slots, target, durable: true);
+        (await kit.ControlAsync(half[0])).Should().Contain(e => e.Name == "c:a" && e.Value == "OPEN:n-before");
+    }
+
+    [Fact]
+    public async Task A_slot_map_that_changed_during_the_barrier_has_the_moved_slots_issued_and_confirmed_on_their_new_owner()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true, WithReplica);
+        var init = await kit.InitAsync("a");
+        var lie = true;
+
+        // Until the first barrier of the control records answers, the topology claims the second master owns the first master's slots too.
+        var waits = new List<string>();
+        kit.Topology.Layout = (real, _) => lie ? Merged(real) : real;
+        kit.Topology.Wait = (endpoint, _) =>
+        {
+            lock (waits)
+            {
+                waits.Add(endpoint.ToString()!);
+                lie = waits.Count < 2;
+            }
+
+            return 1;
+        };
+        var target = StateKit.TargetFrom(init, "S1", "fwd", 0);
+        var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), target, null, CancellationToken.None);
+
+        result.Should().Be(new TransitionResult(TransitionOutcome.Completed));
+        var names = (await kit.Real.ReadLayoutAsync(CancellationToken.None)).Masters.Select(m => m.Endpoint.ToString()!).Order(StringComparer.Ordinal).ToArray();
+        waits.Skip(1).Take(2).Should().BeEquivalentTo(names.Skip(1), "the claimed owners are confirmed first");
+        waits[3].Should().Be(names[0], "the slots that moved are confirmed again on their true owner");
+        await AssertEveryRecordAsync(kit, kit.Names.SlotSet(), target, durable: true);
+    }
+
+    [Fact]
+    public async Task A_run_whose_topology_never_settles_on_the_owner_of_a_record_is_stuck_not_confirmed()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true, WithReplica);
+        var init = await kit.InitAsync("a");
+        var readings = 0;
+
+        // The record of every slot of the first master is deleted right after each barrier, so no verification ever finds it.
+        kit.Topology.Wait = (_, n) =>
+        {
+            if (n > 1)
+            {
+                Interlocked.Increment(ref readings);
+                foreach (var r in kit.Names.ControlRecords(kit.Group).Take(64))
+                {
+                    kit.ControlDb.KeyDelete(r.Key);
+                }
+            }
+
+            return 1;
+        };
+        var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), new SequenceOptions(SkipBarriers: true), CancellationToken.None);
+
+        result.Outcome.Should().Be(TransitionOutcome.BarrierStuck);
+        readings.Should().BeGreaterThan(0);
+        (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Durable.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task The_sample_covers_every_master_so_a_record_that_only_one_master_holds_is_found()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true);
+        var layout = await kit.Real.ReadLayoutAsync(CancellationToken.None);
+        layout.Masters.Count.Should().BeGreaterThan(1);
+        var small = layout.Masters[^1];
+        var held = Enumerable.Range(0, 16384).Where(s => layout.OwnerOf(s).Equals(small.Endpoint)).ToArray();
+        await Task.WhenAll(held.Select(s => kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, s), MoveTestEnvironment.Record(41, "idz", ("a", "n")))));
+
+        var sample = await kit.Sampler.SampleAsync(kit.Group, CancellationToken.None);
+
+        sample.Should().Match<ControlSample>(s => s.Ep == 41 && s.Id == "idz");
+        (await kit.Sampler.ProbeAsync(kit.Group, CancellationToken.None)).Should().Be(layout.OwnerOf(0).Equals(small.Endpoint) ? sample : null);
+    }
+
+    [Fact]
+    public async Task Init_after_a_sample_takes_an_epoch_above_the_highest_record_of_any_master()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true);
+        var layout = await kit.Real.ReadLayoutAsync(CancellationToken.None);
+        var high = long.MaxValue / 4;
+        var held = Enumerable.Range(0, 16384).Where(s => layout.OwnerOf(s).Equals(layout.Masters[1].Endpoint)).Take(2000).ToArray();
+        await Task.WhenAll(held.Select(s => kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, s), MoveTestEnvironment.Record(high, "idz", ("a", "n")))));
+
+        var result = await kit.Store.InitAsync(kit.Group, ["a"], CancellationToken.None);
+
+        result.Ep.Should().Be(high + 1);
+    }
+
+    private static ClusterLayout Merged(ClusterLayout real)
+    {
+        var masters = real.Masters.OrderBy(m => m.Endpoint.ToString(), StringComparer.Ordinal).ToArray();
+        return new ClusterLayout(
+        [
+            masters[0] with { Slots = [] },
+            masters[1] with { Slots = [.. masters[0].Slots, .. masters[1].Slots] },
+            .. masters.Skip(2),
+        ]);
+    }
+
+    private static async Task AssertEveryRecordAsync(StateKit kit, IReadOnlyList<int> slots, StateTarget target, bool durable)
+    {
+        var reads = slots.Select(s => kit.ControlDb.HashGetAsync(kit.Names.Control(kit.Group, s), [StateFields.Ep, StateFields.Id, StateFields.Durable])).ToArray();
+        await Task.WhenAll(reads);
+        foreach (var read in reads)
+        {
+            var held = read.Result;
+            held[0].Should().Be(target.Ep);
+            held[1].Should().Be(target.Id);
+            held[2].Should().Be(durable ? "1" : "0");
+        }
+    }
+}
