@@ -4,8 +4,21 @@ namespace UiPath.Caching.PhaseB;
 internal sealed class ClaimOperator(ClaimStore store, IClaimEvidence evidence)
 {
     /// <summary>Deletes a field that still holds <paramref name="expected"/>; an open field whose group shows a terminal state needs <see cref="CertifyAsync"/> instead.</summary>
+    /// <remarks>
+    /// A <c>prv:</c> pointer is refused while its group has a move field, whose later idle would restore it: only <see cref="RemoveGroupAsync"/> drops it then.
+    /// The evidence and record reads are not atomic with the drop, which is fenced by the field's value alone.
+    /// </remarks>
     public async Task<ClaimCommandOutcome> ReleaseAsync(string field, string expected, string confirm, CancellationToken cancellationToken)
     {
+        if (ClaimGrammar.ValidField(field) is { } pointer && pointer.Kind == "prv")
+        {
+            var record = await store.ReadAsync().ConfigureAwait(false);
+            if (record.Raw.Any(e => ClaimGrammar.ValidField(e.Key) is { } other && other.Group == pointer.Group && ClaimGrammar.IsMove(other.Kind)))
+            {
+                return ClaimCommandOutcome.Refused;
+            }
+        }
+
         if (ClaimGrammar.ValidField(field) is { } parsed && ClaimGrammar.IsMove(parsed.Kind)
             && ClaimGrammar.Parse(expected) is { IsMalformed: false, Status: ClaimGrammar.Open }
             && await evidence.ShowsTerminalAsync(parsed.Group, cancellationToken).ConfigureAwait(false))
@@ -57,7 +70,10 @@ internal sealed class ClaimOperator(ClaimStore store, IClaimEvidence evidence)
     }
 
     /// <summary>Drops the group's move fields, then its <c>prv:</c> pointer, each by its current value; <c>cur:fm</c> stays, so admission keeps protecting the final format.</summary>
-    /// <remarks>Refused while a field of the group is live or the group is not removable (SO14 and <c>lswept</c>); a field that changed stops it before the pointer is touched.</remarks>
+    /// <remarks>
+    /// Refused while a field of the group is live or the group is not removable (SO14 and <c>lswept</c>); a field that changed stops it before the pointer is touched.
+    /// The removable check is not atomic with the drops; each drop is fenced by the value read.
+    /// </remarks>
     public async Task<ClaimCommandOutcome> RemoveGroupAsync(string group, string confirm, CancellationToken cancellationToken)
     {
         var record = await store.ReadAsync().ConfigureAwait(false);

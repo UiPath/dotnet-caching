@@ -1,6 +1,6 @@
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>The scripts' return codes.</summary>
+/// <summary>The Lua return values of design section 4, shared by the fallback; negative codes name why a step was refused.</summary>
 internal static class ClaimCodes
 {
     public const long Done = 1;

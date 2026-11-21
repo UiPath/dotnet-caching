@@ -1,6 +1,6 @@
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>One write of a claim script: set a field, or delete it.</summary>
+/// <summary>A null <see cref="Value"/> deletes the field; the fallback queues all writes of a decision in one watched transaction.</summary>
 internal readonly record struct ClaimWrite(string Field, string? Value)
 {
     public static ClaimWrite Set(string field, string value) => new(field, value);

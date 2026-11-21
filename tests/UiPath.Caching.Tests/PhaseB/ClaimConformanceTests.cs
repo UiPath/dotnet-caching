@@ -57,6 +57,17 @@ public sealed class ClaimConformanceTests(RedisContainerFixture fixture)
             [("fm:g1", $"open|{T1}|{Fmt}|9:S5")],
             [Rel("fm:g1", T1, "closed", "", "", 1), Rel("fm:g1", T1, "closed", "", "", 2)],
             [("fm:g1", $"closed|{T1}|{Fmt}|9:S5"), ("cur:fm", Ptr1), ("prv:g1", "-")]),
+        new(
+            "REL idle with the pointer on another group keeps the pointer and prv",
+            [("fm:g1", $"open|{T1}|{Fmt}|7:S0"), ("cur:fm", $"g0|{T2}|1|0"), ("prv:g1", "-")],
+            [Rel("fm:g1", T1, "idle", "", "", 1)],
+            [("fm:g1", $"idle|{T1}|{Fmt}|7:S0"), ("cur:fm", $"g0|{T2}|1|0"), ("prv:g1", "-")]),
+        new(
+            "REL closed with the pointer on another group saves it in prv",
+            [("fm:g1", $"open|{T1}|{Fmt}|9:S5"), ("cur:fm", $"g0|{T2}|1|0")],
+            [Rel("fm:g1", T1, "closed", "", "", 1)],
+            [("fm:g1", $"closed|{T1}|{Fmt}|9:S5"), ("cur:fm", Ptr1), ("prv:g1", $"g0|{T2}|1|0")]),
+        new("REL closed of an fm field with descriptor inst", [("fm:g1", $"open|{T1}|inst|9:S5")], [Rel("fm:g1", T1, "closed", "", "", -8)]),
         new("DROP of the pointer", [("cur:fm", Ptr1)], [Drop("cur:fm", Ptr1, "n", -8)], [("cur:fm", Ptr1)]),
         new("DROP of a closed field", [("rt:a", $"closed|{T1}|rt|4:S5")], [Drop("rt:a", $"closed|{T1}|rt|4:S5", "n", 1), Drop("rt:a", "x", "n", 2)], []),
         new("DROP of a changed value", [("rt:a", $"open|{T1}|rt|")], [Drop("rt:a", $"pend|{T1}|rt|", "n", 0)], [("rt:a", $"open|{T1}|rt|")]),

@@ -141,6 +141,73 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
         (await Db.HashExistsAsync(_key, "fm:g1")).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Each_repeat_rewrites_the_field_so_its_wait_has_a_write_to_confirm(bool scripts)
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var admin = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
+        var config = admin.GetServer(admin.GetEndPoints()[0]);
+        var before = (await config.ConfigGetAsync("notify-keyspace-events")).Single().Value;
+        await config.ConfigSetAsync("notify-keyspace-events", "Kh");
+        await Db.HashSetAsync(_key, "rt:a", $"pend|{T1}|rt|");
+        try
+        {
+            var events = 0;
+            await admin.GetSubscriber().SubscribeAsync(RedisChannel.Literal($"__keyspace@0__:{_key}"), (_, message) =>
+            {
+                if (message == "hset")
+                {
+                    Interlocked.Increment(ref events);
+                }
+            });
+
+            // The master answers ROLE with one replica and WAIT with 0, so every attempt repeats the step against the real server.
+            var real = _mux!.GetServer(Db.IdentifyEndpoint(_key)!);
+            var server = InterceptingProxy.Wrap(real, (method, _) => method.Name switch
+            {
+                nameof(IServer.RoleAsync) => Task.FromResult(FakeRoles.Master(1)),
+                nameof(IServer.ExecuteAsync) => Task.FromResult(RedisResult.Create(0)),
+                _ => InterceptingProxy.Proceed,
+            });
+            var mux = InterceptingProxy.Wrap<IConnectionMultiplexer>(_mux, (method, _) => method.Name == nameof(IConnectionMultiplexer.GetServer) ? server : InterceptingProxy.Proceed);
+            var db = InterceptingProxy.Wrap(Db, (method, _) => method.Name == "get_Multiplexer" ? mux : InterceptingProxy.Proceed);
+
+            var result = await new ClaimStore(db, _key, scripts, fixture.ServerVersion) { BarrierRetries = 2 }.OpenAsync("rt:a", T1, "rt", restore: false);
+
+            result.Should().Be(new ClaimResult(1, ClaimDurability.NotConfirmed));
+            var until = DateTime.UtcNow.AddSeconds(5);
+            while (Volatile.Read(ref events) < 3 && DateTime.UtcNow < until)
+            {
+                await Task.Delay(20, TestContext.Current.CancellationToken);
+            }
+
+            await Task.Delay(200, TestContext.Current.CancellationToken);
+            Volatile.Read(ref events).Should().Be(3, "the step writes once and each of the 2 repeats rewrites the field");
+        }
+        finally
+        {
+            await config.ConfigSetAsync("notify-keyspace-events", before);
+        }
+    }
+
+    [Fact]
+    public async Task ReleaseClaim_refuses_a_prv_pointer_while_its_group_has_a_move_field()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var previous = $"g0|{T1}|1|0";
+        await Db.HashSetAsync(_key, [new("fm:g1", $"open|{T1}|{Fmt}|"), new("prv:g1", previous)]);
+        var claim = new ClaimOperator(Store(), new FakeEvidence());
+
+        (await claim.ReleaseAsync("prv:g1", previous, "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Refused, "the later idle of fm:g1 restores it");
+        (await Db.HashGetAsync(_key, "prv:g1")).Should().Be(previous);
+
+        await Db.HashDeleteAsync(_key, "fm:g1");
+        (await claim.ReleaseAsync("prv:g1", previous, "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Done);
+        (await Db.HashExistsAsync(_key, "prv:g1")).Should().BeFalse();
+    }
+
     [Fact]
     public async Task CertifyClaim_closes_an_open_field_on_S5_evidence_and_sets_the_pointer()
     {

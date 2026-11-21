@@ -1,4 +1,4 @@
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>What a durable step returned and whether WAIT confirmed it.</summary>
+/// <summary><see cref="Code"/> is the first attempt's code; a repeat never replaces it.</summary>
 internal readonly record struct ClaimResult(long Code, ClaimDurability Durability);

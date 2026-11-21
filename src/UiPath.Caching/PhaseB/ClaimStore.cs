@@ -14,6 +14,7 @@ internal sealed class ClaimStore
     private readonly IDatabase _db;
     private readonly Version? _serverVersion;
     private int _useScripts;
+    private int _sawReplicas;
 
     /// <param name="db">A database on a connection used for nothing else, since WAIT blocks it.</param>
     /// <param name="key">The claim key, from <see cref="MoveKeyNames.Claim"/>.</param>
@@ -31,11 +32,12 @@ internal sealed class ClaimStore
     /// <summary>How many times an unconfirmed WAIT is retried by running the step again; 3 by default.</summary>
     public int BarrierRetries { get; init; } = 3;
 
+    /// <summary>The WAIT timeout, 5 s by default; keep the connection's asyncTimeout above it, or a full-length WAIT fails as a client timeout.</summary>
     public TimeSpan BarrierTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     public bool UsesScripts => Volatile.Read(ref _useScripts) == 1;
 
-    /// <summary>The record from the master, parsed by the shared grammar: what admission reads.</summary>
+    /// <summary>Admission's read: HGETALL on the master, never a replica, so a confirmed step is always visible.</summary>
     public async Task<ClaimRecord> ReadAsync()
     {
         var entries = await _db.HashGetAllAsync(Key, Master).ConfigureAwait(false);
@@ -73,51 +75,90 @@ internal sealed class ClaimStore
     private static List<KeyValuePair<string, string>> ToPairs(HashEntry[] entries) =>
         [.. entries.Select(e => new KeyValuePair<string, string>((string)e.Name!, (string)e.Value!))];
 
-    /// <summary>A step, then WAIT on the master its write reached; 0, a timeout, an error, a role change or a moved master repeat it up to <see cref="BarrierRetries"/> times.</summary>
-    /// <remarks>
-    /// Each attempt resolves the claim's master and its role first, writes (the first attempt is the step, the others repeat it; a repeat returns 2 and
-    /// rewrites the field), checks the master did not change, and only then waits on that server. A node that is no longer a master never counts as a
-    /// master without replicas, and a failure to resolve it or read its role is "not confirmed", as a 0 is.
-    /// </remarks>
+    private static bool Transient(Exception ex) => ex is RedisException or RedisTimeoutException;
+
+    /// <returns>True when the repeat rewrote the field, false when it no longer succeeds, null when it failed and may be tried again.</returns>
+    private static async Task<bool?> RepeatAsync(Func<Task<long>> step)
+    {
+        try
+        {
+            return await step().ConfigureAwait(false) is ClaimCodes.Done or ClaimCodes.AlreadyDone;
+        }
+        catch (Exception ex) when (Transient(ex))
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A step, then WAIT on the master its write reached; anything short of a confirmation repeats it, up to <see cref="BarrierRetries"/> times.</summary>
+    /// <remarks>A repeat returns 2 and rewrites the field. After a success, a repeat that throws or no longer succeeds leaves the first code, not confirmed.</remarks>
     private async Task<ClaimResult> DurableAsync(Func<Task<long>> step)
     {
         long? first = null;
         for (var attempt = 0; ; attempt++)
         {
             var target = await MasterAsync().ConfigureAwait(false);
-            var code = await step().ConfigureAwait(false);
-            first ??= code;
-            if (code is not (ClaimCodes.Done or ClaimCodes.AlreadyDone))
+            if (first is null)
             {
-                return new ClaimResult(code, ClaimDurability.NotApplicable);
+                first = await step().ConfigureAwait(false);
+                if (first is not (ClaimCodes.Done or ClaimCodes.AlreadyDone))
+                {
+                    return new ClaimResult(first.Value, ClaimDurability.NotApplicable);
+                }
+            }
+            else
+            {
+                var repeated = await RepeatAsync(step).ConfigureAwait(false);
+                if (repeated == false)
+                {
+                    return new ClaimResult(first.Value, ClaimDurability.NotConfirmed);
+                }
+
+                if (repeated is null)
+                {
+                    target = null;
+                }
             }
 
-            if (target is { } master)
+            if (await BarrierAsync(target).ConfigureAwait(false) is { } durability)
             {
-                if (master.Replicas == 0)
-                {
-                    return new ClaimResult(first.Value, ClaimDurability.NoReplica);
-                }
-
-                try
-                {
-                    var now = await _db.IdentifyEndpointAsync(Key, Master).ConfigureAwait(false);
-                    if (Equals(now, master.Server.EndPoint)
-                        && (long)await master.Server.ExecuteAsync("WAIT", 1, (long)BarrierTimeout.TotalMilliseconds).ConfigureAwait(false) >= 1)
-                    {
-                        return new ClaimResult(first.Value, ClaimDurability.Confirmed);
-                    }
-                }
-                catch (RedisException)
-                {
-                    // Not confirmed; the step runs again below.
-                }
+                return new ClaimResult(first.Value, durability);
             }
 
             if (attempt >= BarrierRetries)
             {
                 return new ClaimResult(first.Value, ClaimDurability.NotConfirmed);
             }
+        }
+    }
+
+    /// <summary>Confirmed or NoReplica while the master is the one resolved before the write; null, which is not confirmed, otherwise.</summary>
+    /// <remarks>A master whose replicas dropped to 0 after this store saw one is not confirmed, so the caller raises <c>wait_skipped{claim}</c>.</remarks>
+    private async Task<ClaimDurability?> BarrierAsync((IServer Server, int Replicas)? target)
+    {
+        if (target is not { } master)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!Equals(await _db.IdentifyEndpointAsync(Key, Master).ConfigureAwait(false), master.Server.EndPoint))
+            {
+                return null;
+            }
+
+            if (master.Replicas == 0)
+            {
+                return Volatile.Read(ref _sawReplicas) == 1 ? null : ClaimDurability.NoReplica;
+            }
+
+            Volatile.Write(ref _sawReplicas, 1);
+            return (long)await master.Server.ExecuteAsync("WAIT", 1, (long)BarrierTimeout.TotalMilliseconds).ConfigureAwait(false) >= 1 ? ClaimDurability.Confirmed : null;
+        }
+        catch (Exception ex) when (Transient(ex))
+        {
+            return null;
         }
     }
 
@@ -135,7 +176,7 @@ internal sealed class ClaimStore
             var server = _db.Multiplexer.GetServer(endpoint);
             return await server.RoleAsync().ConfigureAwait(false) is Role.Master master ? (server, master.Replicas.Count) : null;
         }
-        catch (RedisException)
+        catch (Exception ex) when (Transient(ex))
         {
             return null;
         }
@@ -163,19 +204,19 @@ internal sealed class ClaimStore
 
         for (var attempt = 0; attempt < FallbackAttempts; attempt++)
         {
-            var record = ToPairs(await _db.HashGetAllAsync(Key, Master).ConfigureAwait(false));
-            var decision = decide(record);
+            var entries = await _db.HashGetAllAsync(Key, Master).ConfigureAwait(false);
+            var decision = decide(ToPairs(entries));
             if (decision.Writes.Count == 0)
             {
                 return decision.Code;
             }
 
-            // The whole record as read: its length and every field's value, so a change anywhere in it aborts the writes.
+            // The whole record as read, in raw bytes so a value that is not UTF-8 still compares equal: a change anywhere in it aborts the writes.
             var transaction = _db.CreateTransaction();
-            transaction.AddCondition(Condition.HashLengthEqual(Key, record.Count));
-            foreach (var (field, value) in record)
+            transaction.AddCondition(Condition.HashLengthEqual(Key, entries.Length));
+            foreach (var entry in entries)
             {
-                transaction.AddCondition(Condition.HashEqual(Key, field, value));
+                transaction.AddCondition(Condition.HashEqual(Key, entry.Name, entry.Value));
             }
 
             var queued = new List<Task>(decision.Writes.Count);
