@@ -3,12 +3,21 @@ using StackExchange.Redis;
 namespace UiPath.Caching.PhaseB;
 
 /// <summary>
-/// The barrier on one master, on a connection of its own (WAIT blocks it): one replica or more confirms; 0, a timeout or an error re-issue the writes
-/// up to <see cref="Retries"/> times with no extra backoff. A way-back transition skips at once for a master that failed within <see cref="Episode"/>.
+/// The barrier on the master that holds one owner key: one replica or more confirms; 0, a timeout or an error re-issue the writes up to
+/// <see cref="Retries"/> times with no extra backoff. A way-back transition skips at once for a master that failed within <see cref="Episode"/>.
 /// </summary>
-internal sealed class ServerBarrier(IServer server, TimeProvider clock)
+/// <remarks>
+/// <c>NoReplica</c> needs three facts: the deployment is configured without replicas, ROLE shows none, and this instance never saw one. ROLE lists
+/// connected replicas only, so a replica that dropped, or a demoted master, is not confirmed: that is the case WAIT exists for.
+/// </remarks>
+/// <param name="database">The view the owner key is routed through; WAIT runs on the master's own server connection.</param>
+/// <param name="owner">A key routed to the server the barrier covers, for example a control record.</param>
+/// <param name="clock">The monotonic clock of the episode.</param>
+/// <param name="replicaFree">Configured: the deployment runs without replicas. Never inferred from ROLE.</param>
+internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProvider clock, bool replicaFree)
 {
     private long _failedAt = long.MinValue;
+    private int _sawReplicas;
 
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(5);
 
@@ -26,23 +35,17 @@ internal sealed class ServerBarrier(IServer server, TimeProvider clock)
             return BarrierOutcome.SkippedAfterRecentFailure;
         }
 
-        if (await ReplicasAsync().ConfigureAwait(false) == 0)
-        {
-            return BarrierOutcome.NoReplica;
-        }
-
         for (var attempt = 0; ; attempt++)
         {
-            try
+            var target = await MasterAsync().ConfigureAwait(false);
+            if (attempt > 0)
             {
-                if ((long)await server.ExecuteAsync("WAIT", 1, (long)Timeout.TotalMilliseconds).ConfigureAwait(false) >= 1)
-                {
-                    return BarrierOutcome.Confirmed;
-                }
+                target = await ReissueAsync(reissue).ConfigureAwait(false) ? await UnchangedAsync(target).ConfigureAwait(false) : null;
             }
-            catch (RedisException)
+
+            if (await ConfirmAsync(target).ConfigureAwait(false) is { } outcome)
             {
-                // Not confirmed, as a 0 is.
+                return outcome;
             }
 
             if (attempt >= Retries)
@@ -50,20 +53,82 @@ internal sealed class ServerBarrier(IServer server, TimeProvider clock)
                 Interlocked.Exchange(ref _failedAt, clock.GetTimestamp());
                 return BarrierOutcome.NotConfirmed;
             }
-
-            await reissue().ConfigureAwait(false);
         }
     }
 
-    private async Task<int?> ReplicasAsync()
+    private static bool Transient(Exception ex) => ex is RedisException or RedisTimeoutException;
+
+    /// <summary>False when the reissue failed on the server or the connection (a failover), which is not confirmed, never an exception.</summary>
+    private static async Task<bool> ReissueAsync(Func<Task> reissue)
     {
         try
         {
-            return await server.RoleAsync().ConfigureAwait(false) is Role.Master master ? master.Replicas.Count : 0;
+            await reissue().ConfigureAwait(false);
+            return true;
         }
-        catch (RedisException)
+        catch (Exception ex) when (Transient(ex))
         {
-            // A server that refuses ROLE is waited on; WAIT itself tells.
+            return false;
+        }
+    }
+
+    /// <summary>The master of the owner key and its replica count; null when it cannot be resolved, its role cannot be read, or it is not a master.</summary>
+    private async Task<(IServer Server, int Replicas)?> MasterAsync()
+    {
+        try
+        {
+            var endpoint = await database.IdentifyEndpointAsync(owner, CommandFlags.DemandMaster).ConfigureAwait(false);
+            if (endpoint is null)
+            {
+                return null;
+            }
+
+            var server = database.Multiplexer.GetServer(endpoint);
+            return await server.RoleAsync().ConfigureAwait(false) is Role.Master master ? (server, master.Replicas.Count) : null;
+        }
+        catch (Exception ex) when (Transient(ex))
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The target while the owner key still routes to it after the writes were sent again; null, which is not confirmed, otherwise.</summary>
+    private async Task<(IServer Server, int Replicas)?> UnchangedAsync((IServer Server, int Replicas)? target)
+    {
+        if (target is not { } master)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Equals(await database.IdentifyEndpointAsync(owner, CommandFlags.DemandMaster).ConfigureAwait(false), master.Server.EndPoint) ? master : null;
+        }
+        catch (Exception ex) when (Transient(ex))
+        {
+            return null;
+        }
+    }
+
+    private async Task<BarrierOutcome?> ConfirmAsync((IServer Server, int Replicas)? target)
+    {
+        if (target is not { } master)
+        {
+            return null;
+        }
+
+        if (master.Replicas == 0)
+        {
+            return replicaFree && Volatile.Read(ref _sawReplicas) == 0 ? BarrierOutcome.NoReplica : null;
+        }
+
+        Volatile.Write(ref _sawReplicas, 1);
+        try
+        {
+            return (long)await master.Server.ExecuteAsync("WAIT", 1, (long)Timeout.TotalMilliseconds).ConfigureAwait(false) >= 1 ? BarrierOutcome.Confirmed : null;
+        }
+        catch (Exception ex) when (Transient(ex))
+        {
             return null;
         }
     }

@@ -1,24 +1,31 @@
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>What one server of a move can do, as probed (section 3.8); each side picks script or fallback alone.</summary>
-/// <param name="Replicas">Null when the server refused ROLE.</param>
+/// <summary>What one side of a move can do, as probed on each of its masters (section 3.8); each side picks script or fallback alone.</summary>
+/// <param name="Masters">Every primary the side's view reaches, each probed alone: one older or restricted master decides for the side.</param>
 /// <param name="SlotEnforced">A cross-slot two-key script is refused, so the side uses per-slot records and the tag table whatever its server type says.</param>
-/// <param name="EvictionPolicy">Null when the server refused to tell.</param>
 /// <param name="Denied">Commands a probe found refused (NOPERM or blocked), reported for the operator; each already shows in the capability it probed.</param>
 internal sealed record SideCaps(
-    Version Version,
-    bool Scripts,
-    bool Wait,
+    IReadOnlyList<MasterCaps> Masters,
     ScanMode Scan,
     bool SlotEnforced,
-    string? EvictionPolicy,
-    int? Replicas,
     IReadOnlyList<string> Denied)
 {
-    public bool FallbackAllowed => Version >= MoveScripts.FallbackMinimum;
+    /// <summary>The oldest master's version.</summary>
+    public Version Version => Masters.Min(static m => m.Version)!;
 
-    /// <summary>Control records are never evicted: <c>noeviction</c> or a <c>volatile-*</c> policy; unknown needs the operator's attestation (G12).</summary>
-    public bool? EvictionSafe => EvictionPolicy is null ? null : EvictionPolicy == "noeviction" || EvictionPolicy.StartsWith("volatile-", StringComparison.Ordinal);
+    /// <summary>Every master runs scripts.</summary>
+    public bool Scripts => Masters.All(static m => m.Scripts);
+
+    /// <summary>Every master answered a WAIT.</summary>
+    public bool Wait => Masters.All(static m => m.Wait);
+
+    /// <summary>The fewest replicas of any master; null when one refused ROLE.</summary>
+    public int? Replicas => Masters.Any(static m => m.Replicas is null) ? null : Masters.Min(static m => m.Replicas);
+
+    /// <summary>The first policy that can evict control records; else null when any master did not tell; else the shared value.</summary>
+    public string? EvictionPolicy =>
+        Masters.FirstOrDefault(static m => m.EvictionSafe == false)?.EvictionPolicy
+        ?? (Masters.Any(static m => m.EvictionPolicy is null) ? null : Masters.FirstOrDefault()?.EvictionPolicy);
 
     /// <summary>S3-G6 for both servers: every reason one side fails, named by side. WAIT is not required here; a side without it needs <c>Approve(barrier_unavailable_dst)</c>.</summary>
     public static IReadOnlyList<string> Gate(SideCaps source, SideCaps destination) =>
@@ -26,22 +33,20 @@ internal sealed record SideCaps(
 
     public IEnumerable<string> Failures(string side)
     {
-        if (!Scripts && !FallbackAllowed)
+        foreach (var master in Masters)
         {
-            yield return $"{side}: scripts are refused and Redis {Version} is older than {MoveScripts.FallbackMinimum}, so neither scripts nor the fallback run";
+            foreach (var failure in master.Failures(side))
+            {
+                yield return failure;
+            }
         }
 
         if (Scan == ScanMode.None)
         {
             yield return $"{side}: the scan probe failed";
         }
-
-        if (EvictionSafe == false)
-        {
-            yield return $"{side}: maxmemory-policy {EvictionPolicy} can evict control records";
-        }
     }
 
-    /// <summary>The move scripts for this side: scripts when it runs them, the fallback otherwise.</summary>
+    /// <summary>The move scripts for this side: scripts when every master runs them, the fallback otherwise.</summary>
     public MoveScripts MoveScriptsOn(StackExchange.Redis.IDatabase database) => new(database, Scripts, Version);
 }
