@@ -115,3 +115,5 @@ UiPath.Caching.Migration.RouterModeReason.Flag = 1 -> UiPath.Caching.Migration.R
 UiPath.Caching.Migration.RouterModeReason.LibraryUnavailable = 3 -> UiPath.Caching.Migration.RouterModeReason
 UiPath.Caching.Migration.RouterModeReason.Requested = 2 -> UiPath.Caching.Migration.RouterModeReason
 UiPath.Caching.Migration.RouterBuilder.UsePinWhen(System.Func<string!, bool>! pinned) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.UseValueSerializers(System.Action<UiPath.Caching.Config.ICachingBuilder!>! register) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.UseWriteFormatWhen(System.Func<string!, string?>! format) -> UiPath.Caching.Migration.RouterBuilder!

@@ -40,6 +40,16 @@ public static class RouterServiceCollectionExtensions
             throw new InvalidOperationException("The router has no registered cache.");
         }
 
+        if (builder.WriteFormatPredicate is not null && builder.PinPredicate is null)
+        {
+            throw new InvalidOperationException("UseWriteFormatWhen needs UsePinWhen: a group writes MessagePack only while it is pinned and switched.");
+        }
+
+        if (builder.WriteFormatPredicate is not null && builder.ValueSerializers is null)
+        {
+            throw new InvalidOperationException("UseWriteFormatWhen needs UseValueSerializers: the router's stack must register the format its groups write.");
+        }
+
         var processId = builder.NodeIdentity ?? $"{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}";
         var gate = builder.PinPredicate is null ? null : new PinFormatGate();
         var registered = services.Count;
@@ -53,7 +63,11 @@ public static class RouterServiceCollectionExtensions
                     {
                         options.RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance;
                         options.RemoveUnreadable = false;
+
+                        // The stack's negotiation takes the timings the pin was validated against, so the hold the pin checks is the hold the stack applies.
+                        configuration.GetSection(sectionName).GetSection("Redis:FormatNegotiation").Bind(options.FormatNegotiation);
                     });
+                    builder.ValueSerializers?.Invoke(chain);
                     chain.AddBroadcast();
                     chain.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
                     chain.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
@@ -160,8 +174,12 @@ public static class RouterServiceCollectionExtensions
                 ValidatePinSetup(section, setup, logger);
 
                 // Before the caches, which take their group's pin from it.
-                var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger);
+                var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger) { WriteFormat = builder.WriteFormatPredicate };
                 core.Pins = pins;
+                if (builder.WriteFormatPredicate is { } writeFormat)
+                {
+                    core.WriteFormats = new WriteFormatSelector(writeFormat, pins, logger);
+                }
                 gate!.Attach(pins);
             }
 

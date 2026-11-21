@@ -13,6 +13,7 @@ internal sealed class GroupPin(string group)
     private int _sourceCalls;
     private int _switched;
     private int _durable;
+    private int _wanted;
     private bool _pinned;
     private long _knownAt;
     private int _known;
@@ -31,6 +32,9 @@ internal sealed class GroupPin(string group)
 
     /// <summary>The switch is recorded in Redis, as far as this node last saw.</summary>
     public bool Durable => Volatile.Read(ref _durable) == 1;
+
+    /// <summary>The group's write format setting asked for MessagePack at its last answer.</summary>
+    public bool Wanted => Volatile.Read(ref _wanted) == 1;
 
     /// <summary>Counts the withdrawals of an acknowledged pin; a state read confirms only the withdrawal that began before it.</summary>
     public long Withdrawals => Volatile.Read(ref _withdrawals);
@@ -110,6 +114,9 @@ internal sealed class GroupPin(string group)
             return Recompute();
         }
     }
+
+    /// <summary>Records the group's answer; returns whether it changed.</summary>
+    public bool SetWanted(bool wanted) => Interlocked.Exchange(ref _wanted, wanted ? 1 : 0) != (wanted ? 1 : 0);
 
     public void SetDurable(bool durable) => Volatile.Write(ref _durable, durable ? 1 : 0);
 

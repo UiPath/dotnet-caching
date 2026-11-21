@@ -30,6 +30,9 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
 
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(1);
 
+    /// <summary>The per-group write format setting; with it the gate covers the groups that want MessagePack, without it every group, as soon as the gate is asked.</summary>
+    public Func<string, string?>? WriteFormat { get; init; }
+
     public string? Scope { get; } = scope;
 
     /// <summary>The field of this node's router entry; the gate needs it in the node list.</summary>
@@ -80,9 +83,10 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     }
 
     /// <summary>Null when MessagePack writes may go ahead. Asking is what makes the pin a switch: the state is written only once a format write is wanted.</summary>
+    /// <remarks>With a write format setting, the groups that asked for MessagePack are the ones that count; otherwise every group does, from the first ask.</remarks>
     public string? Hold()
     {
-        if (Volatile.Read(ref _wanted) == 0 && Interlocked.Exchange(ref _wanted, 1) == 0)
+        if (WriteFormat is null && Volatile.Read(ref _wanted) == 0 && Interlocked.Exchange(ref _wanted, 1) == 0)
         {
             RequestRefresh();
         }
@@ -103,9 +107,20 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
             return "view_stale";
         }
 
-        // Every group of the router, not the ones that were pinned when the gate opened: one that lost its pin since closes it.
-        foreach (var group in _groups)
+        // Every group that wants it, not the ones that were pinned when the gate opened: one that lost its pin since closes it.
+        var wanted = Wanted(_groups);
+        if (wanted.Length == 0)
         {
+            return NotWanted;
+        }
+
+        foreach (var group in wanted)
+        {
+            if (!snapshot.Covers(group.Group))
+            {
+                return "group_not_evaluated";
+            }
+
             if (!group.Acked || !group.Durable)
             {
                 return "pin_lost";
@@ -113,6 +128,15 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
         }
 
         return null;
+    }
+
+    /// <summary>Records what the group's write format setting asked for on this call; a group that newly asks starts a pass at once.</summary>
+    public void Want(GroupPin group, bool wanted)
+    {
+        if (group.SetWanted(wanted) && wanted)
+        {
+            RequestRefresh();
+        }
     }
 
     public void RequestRefresh() => Volatile.Write(ref _refreshRequested, 1);
@@ -161,6 +185,7 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
 
             _failedPredicate.Remove(group.Group);
             changed |= group.SetPinned(pinned);
+            ClearWanted(group);
         }
 
         if (changed)
@@ -200,6 +225,33 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
         var separator = record.LastIndexOf(":", StringComparison.Ordinal);
         return separator > 0 && long.TryParse(record.AsSpan(separator + 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var generation) && generation % 2 == 1;
     }
+
+    // A group whose setting went back to JSON or null stops counting at once, without waiting for a write; asking again is what makes it count, so this never starts a switch.
+    private void ClearWanted(GroupPin group)
+    {
+        if (WriteFormat is not { } format || !group.Wanted)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!WriteFormats.WantsMessagePack(format(group.Group)))
+            {
+                group.SetWanted(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Left as it was: the write path already sends the envelope for an answer that throws.
+            _ = ex;
+        }
+    }
+
+    private GroupPin[] Wanted(GroupPin[] groups) =>
+        WriteFormat is null
+            ? (Volatile.Read(ref _wanted) == 1 ? groups : [])
+            : [.. groups.Where(group => group.Wanted)];
 
     private async Task<bool> RefreshGroupAsync(GroupPin group, NodeCache nodes, CancellationToken cancellationToken)
     {
@@ -315,14 +367,15 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
 
     private async Task<bool> EvaluateGateAsync(GroupPin[] groups, NodeCache nodes, CancellationToken cancellationToken)
     {
-        var reason = await GateReasonAsync(groups, nodes, cancellationToken).ConfigureAwait(false);
+        var wanted = Wanted(groups);
+        var reason = await GateReasonAsync(wanted, nodes, cancellationToken).ConfigureAwait(false);
         if (reason == NodeListUnreadable && _snapshot is not null)
         {
             // As the format negotiation does: the last view stands until it is too old.
             return false;
         }
 
-        var snapshot = new GateSnapshot(reason, core.Clock.GetTimestamp());
+        var snapshot = new GateSnapshot(reason, core.Clock.GetTimestamp(), [.. wanted.Select(group => group.Group)]);
         var wasOpen = _snapshot is { Reason: null };
         _snapshot = snapshot;
         if (wasOpen != (reason is null))
@@ -333,17 +386,12 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
         return reason is not (NodeListUnreadable or StateNotWritten or AckNotRecorded or AckChanged);
     }
 
-    // The format is written by one serializer for every cache of the router, which knows nothing of groups: the gate opens only when all of them are pinned.
+    // The gate is one for the whole stack while the choice is per group: it opens only when every group that wants MessagePack is pinned, acknowledged and switched, so one closed group holds them all and a group that does not want it never does.
     private async Task<string?> GateReasonAsync(GroupPin[] pinned, NodeCache nodes, CancellationToken cancellationToken)
     {
-        if (Volatile.Read(ref _wanted) == 0)
-        {
-            return NotWanted;
-        }
-
         if (pinned.Length == 0)
         {
-            return NoPin;
+            return WriteFormat is null && Volatile.Read(ref _wanted) == 1 ? NoPin : NotWanted;
         }
 
         if (pinned.Any(group => !group.Applied))
@@ -493,7 +541,10 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     [LoggerMessage(Level = LogLevel.Warning, Message = "The node list could not be read for the pin; the gate stays closed and the state of an absent key cannot be told from a lost one.")]
     private partial void LogNodesFailed(Exception exception);
 
-    private sealed record GateSnapshot(string? Reason, long Stamp);
+    private sealed record GateSnapshot(string? Reason, long Stamp, string[] Groups)
+    {
+        public bool Covers(string group) => Array.IndexOf(Groups, group) >= 0;
+    }
 
     /// <summary>One read of the node hash per pass, shared by the groups; null when it failed.</summary>
     private sealed class NodeCache(IPinStore? store, CancellationToken cancellationToken, Action<Exception> onFailure)

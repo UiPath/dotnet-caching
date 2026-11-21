@@ -151,6 +151,20 @@ public sealed class LibraryPathClientTests : RouterTestBase
         (await client.RemoveAsync("k", Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
     }
 
+    [Fact]
+    public async Task A_write_takes_the_policy_asked_at_that_write_and_none_when_no_policy_is_given()
+    {
+        var policies = new Queue<CachePolicy>([WriteFormats.Envelope, WriteFormats.MessagePackPolicy]);
+        var picking = new LibraryPathClient<Item>(_store, _connection, key => key, () => Settle, policies.Dequeue);
+
+        await Client().SetAsync("k", new Item("v"), null, Ct);
+        await picking.SetAsync("k", new Item("v"), null, Ct);
+        await picking.SetAsync("k", new Item("v"), null, Ct);
+        await picking.RemoveAsync("k", Ct);
+
+        _store.WritePolicies.Should().Equal(null, WriteFormats.Envelope, WriteFormats.MessagePackPolicy);
+    }
+
     private LibraryPathClient<Item> Client(Func<string, string>? redisKey = null) =>
         new(_store, _connection, redisKey ?? (key => key), Settle);
 }

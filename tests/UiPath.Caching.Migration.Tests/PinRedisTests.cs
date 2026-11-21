@@ -149,6 +149,51 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
         (await Pins("app1").ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Switched);
     }
 
+    [Theory]
+    [InlineData("no_pin", "node_without_pin")]
+    [InlineData("bypass", "node_without_pin")]
+    [InlineData("silent", "unattributed_node")]
+    public async Task A_node_without_the_pin_in_bypass_or_not_advertising_keeps_the_group_writing_the_envelope_and_the_hold_names_it(string kind, string reason)
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var first = await NodeAsync("app1", "urn:one", pin: true, format: _ => "messagepack");
+        var second = await NodeAsync("app1", "urn:two", pin: true);
+        var pin = first.Pins.GroupFor("g");
+        var selector = new WriteFormatSelector(_ => "messagepack", first.Pins, NullLogger.Instance);
+        string[] fields = kind switch
+        {
+            "no_pin" => ["urn:late#router", "urn:late"],
+            "bypass" => ["urn:byp#router"],
+            _ => ["urn:silent"],
+        };
+        switch (kind)
+        {
+            case "no_pin":
+                await NodeAsync("app1", "urn:late", pin: false);
+                break;
+            case "bypass":
+                await new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), NodeHash).WriteAsync("urn:byp#router", new RouterAdvertisement("urn:byp", "b", ["byp", "ap=app1"]), Ct);
+                break;
+            default:
+                await Db.HashSetAsync(NodeHash, "urn:silent", $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}|lib=3;inst=x;vr=json");
+                break;
+        }
+
+        selector.PolicyFor(pin);
+        await second.Pins.RefreshAsync(Ct);
+        await first.Pins.RefreshAsync(Ct);
+
+        first.Pins.Hold().Should().Be(reason);
+        selector.PolicyFor(pin).Should().BeSameAs(WriteFormats.Envelope);
+        (await Pins("app1").ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Unswitched, "no switch is recorded while a node holds the gate");
+
+        await Db.HashDeleteAsync(NodeHash, [.. fields.Select(field => (RedisValue)field)]);
+        await first.Pins.RefreshAsync(Ct);
+
+        first.Pins.Hold().Should().BeNull();
+        selector.PolicyFor(pin).Should().BeSameAs(WriteFormats.MessagePackPolicy);
+    }
+
     [Fact]
     public async Task A_switch_recorded_against_an_acknowledgement_that_was_withdrawn_in_between_is_refused()
     {
@@ -227,11 +272,11 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
     private RedisPinStore Pins(string? scope, string? prefix = null) =>
         new(new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), NodeHash), prefix ?? _run + ":", scope);
 
-    private async Task<(PinCoordinator Pins, RouterAdvertiser Advertiser)> NodeAsync(string app, string node, bool pin)
+    private async Task<(PinCoordinator Pins, RouterAdvertiser Advertiser)> NodeAsync(string app, string node, bool pin, Func<string, string?>? format = null)
     {
         var core = new RouterCore(TimeProvider.System, _ => false, NullLogger.Instance);
         var nodes = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), NodeHash);
-        var pins = new PinCoordinator(core, _ => pin, new RedisPinStore(nodes, _run + ":", app), app, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance) { OwnField = node + RouterAdvertisement.FieldSuffix };
+        var pins = new PinCoordinator(core, _ => pin, new RedisPinStore(nodes, _run + ":", app), app, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance) { OwnField = node + RouterAdvertisement.FieldSuffix, WriteFormat = format };
         core.Pins = pins;
         pins.GroupFor("g");
         pins.EvaluatePins();

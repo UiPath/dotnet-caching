@@ -38,6 +38,9 @@ internal sealed class FakeMigrationCache : IMigrationCache
 
     public List<CacheKey> Keys { get; } = [];
 
+    /// <summary>The policy each write was given, in order.</summary>
+    public List<CachePolicy?> WritePolicies { get; } = [];
+
     public async ValueTask<SnapshotRead<T>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         Keys.Add(cacheKey);
@@ -52,6 +55,7 @@ internal sealed class FakeMigrationCache : IMigrationCache
     public async ValueTask<StoreOutcome> WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
     {
         Keys.Add(cacheKey);
+        WritePolicies.Add(policy);
         return await Write(cacheKey, token);
     }
 
