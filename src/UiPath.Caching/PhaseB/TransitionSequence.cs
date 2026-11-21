@@ -154,6 +154,11 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
                 return beforeCommit;
             }
 
+            if (episode.Sequence.BeforeCommit is { } hook && await hook(cancellationToken).ConfigureAwait(false) is { } stopped)
+            {
+                return stopped;
+            }
+
             if (await CommitBeginStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false) is { } begun)
             {
                 return begun;
@@ -173,6 +178,11 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         if (!committed)
         {
             return new TransitionResult(TransitionOutcome.CommitIncomplete, Detail: "a control record would not take the commit marker");
+        }
+
+        if (episode.Sequence.BeforeDurable is { } beforeDurable && await beforeDurable(cancellationToken).ConfigureAwait(false) is { } halted)
+        {
+            return halted;
         }
 
         return LeaseLost(episode) ?? await DurableStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false);

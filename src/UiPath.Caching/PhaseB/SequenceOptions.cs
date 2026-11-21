@@ -7,4 +7,15 @@ namespace UiPath.Caching.PhaseB;
 /// <param name="HoldsLease">Asked before every step that writes; false stops the sequence with <c>LeaseLost</c>, so a controller that outlived its lease writes nothing more.</param>
 /// <param name="Fence">The lease the state mutations of the sequence (TRANSIT, the commit marker) carry, so a controller that was paused past its lease is refused by the server.</param>
 /// <param name="Ledger">Remembers failed barriers across transitions; required for the way-back rule.</param>
-internal sealed record SequenceOptions(bool SkipBarriers = false, string Release = "", bool SkipAtOnce = false, bool WayBack = false, BarrierLedger? Ledger = null, Func<bool>? HoldsLease = null, LeaseFence? Fence = null);
+/// <param name="BeforeCommit">Runs after barrier 1 and its verification and before step 4 begins; a result other than null ends the sequence with it (the claim open of an X1).</param>
+/// <param name="BeforeDurable">Runs after barrier 2 and before DURABLE; a result other than null ends the sequence with it (the claim certificate of a transition into S0).</param>
+internal sealed record SequenceOptions(
+    bool SkipBarriers = false,
+    string Release = "",
+    bool SkipAtOnce = false,
+    bool WayBack = false,
+    BarrierLedger? Ledger = null,
+    Func<bool>? HoldsLease = null,
+    LeaseFence? Fence = null,
+    Func<CancellationToken, Task<TransitionResult?>>? BeforeCommit = null,
+    Func<CancellationToken, Task<TransitionResult?>>? BeforeDurable = null);

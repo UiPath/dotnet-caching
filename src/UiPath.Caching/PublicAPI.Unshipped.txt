@@ -46,3 +46,9 @@ UiPath.Caching.Cache<T>.SetIfChangedAsync(UiPath.Caching.CacheKey cacheKey, T? v
 UiPath.Caching.Cache<T>.SetIfChangedAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
 UiPath.Caching.Cache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 UiPath.Caching.Cache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.PhaseB.IMigrationStageSource
+UiPath.Caching.PhaseB.IMigrationStageSource.GetStageAsync(string! group, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<int?>
+UiPath.Caching.PhaseB.IntFlagStageSource
+UiPath.Caching.PhaseB.IntFlagStageSource.GetStageAsync(string! group, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<int?>
+UiPath.Caching.PhaseB.IntFlagStageSource.IntFlagStageSource(System.Func<string!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<int>>! getInt) -> void
+const UiPath.Caching.PhaseB.IntFlagStageSource.Sentinel = -1 -> int

@@ -25,13 +25,17 @@ internal sealed record StateRecord(
     string HoldOp = "",
     string HoldAuto = "",
     IReadOnlyDictionary<string, long>? Residue = null,
-    IReadOnlyList<string>? FieldNames = null)
+    IReadOnlyList<string>? FieldNames = null,
+    IReadOnlyDictionary<string, string>? Values = null)
 {
     private const char CacheSeparator = '+';
 
     public string Identity => $"{Ep}:{Id}";
 
     public IReadOnlyList<string> CacheIds => Caches.Length == 0 ? [] : Caches.Split(CacheSeparator);
+
+    /// <summary>A field of the hash by name, empty when it is absent.</summary>
+    public string Field(string name) => Values is not null && Values.TryGetValue(name, out var value) ? value : string.Empty;
 
     /// <summary>A cache whose residue count is above zero or unknown keeps the source fallback read; an absent count is unknown.</summary>
     public bool KeepsSourceFallback(string cacheId) => Residue is null || !Residue.TryGetValue(cacheId, out var count) || count > 0;
@@ -95,7 +99,8 @@ internal sealed record StateRecord(
             Text(StateFields.HoldAuto),
             fields.Where(f => f.Key.StartsWith(StateFields.ResiduePrefix, StringComparison.Ordinal) && long.TryParse(f.Value, NumberStyles.None, CultureInfo.InvariantCulture, out _))
                 .ToDictionary(f => f.Key[StateFields.ResiduePrefix.Length..], f => long.Parse(f.Value!, CultureInfo.InvariantCulture), StringComparer.Ordinal),
-            [.. fields.Keys]);
+            [.. fields.Keys],
+            fields.Where(f => f.Value is not null).ToDictionary(f => f.Key, f => f.Value!, StringComparer.Ordinal));
     }
 
     /// <summary>The control record this state asks every slot to hold, with a fresh open gate per managed cache.</summary>

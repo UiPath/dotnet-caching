@@ -26,4 +26,5 @@ internal static class StateFields
     public const string DrainedAt = "drainedAt";
     public const string ClosedAt = "closedAt";
     public const string DryRun = "dry";
+    public const string ColdStart = "x11";
 }
