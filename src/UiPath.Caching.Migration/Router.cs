@@ -6,6 +6,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
     private readonly RouterCore _core;
     private readonly Dictionary<string, (Type Type, object Cache)> _caches = new(StringComparer.Ordinal);
+    private readonly IReadOnlyDictionary<string, string> _excluded;
 #if NET9_0_OR_GREATER
     private readonly Lock _stopGate = new();
 #else
@@ -14,14 +15,15 @@ internal sealed class Router : IRouter, IAsyncDisposable
     private TaskCompletionSource? _stop;
     private TaskCompletionSource? _cleaned;
 
-    public Router(RouterCore core, IEnumerable<Func<RouterCore, (string Name, Type Type, object Cache)>> registrations)
-        : this(core, registrations.Select(create => create(core)))
+    public Router(RouterCore core, IEnumerable<Func<RouterCore, (string Name, Type Type, object Cache)>> registrations, IReadOnlyDictionary<string, string>? excluded = null)
+        : this(core, registrations.Select(create => create(core)), excluded)
     {
     }
 
-    public Router(RouterCore core, IEnumerable<(string Name, Type Type, object Cache)> caches)
+    public Router(RouterCore core, IEnumerable<(string Name, Type Type, object Cache)> caches, IReadOnlyDictionary<string, string>? excluded = null)
     {
         _core = core;
+        _excluded = excluded ?? new Dictionary<string, string>();
         foreach (var (name, type, cache) in caches)
         {
             _caches.Add(name, (type, cache));
@@ -40,6 +42,8 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
     internal RouterAdvertiser? Advertiser { get; init; }
 
+    internal ISerializerProxy<byte[]>? Envelope { get; init; }
+
     public Task EnterBypassAsync(CancellationToken cancellationToken = default)
     {
         _core.ThrowIfStopped();
@@ -57,6 +61,11 @@ internal sealed class Router : IRouter, IAsyncDisposable
         where T : class
     {
         _core.ThrowIfStopped();
+        if (_excluded.TryGetValue(cacheName, out var reason))
+        {
+            throw new InvalidOperationException($"Cache '{cacheName}' is excluded from the router and stays on the application's own client: {reason}");
+        }
+
         if (!_caches.TryGetValue(cacheName, out var entry))
         {
             throw new KeyNotFoundException($"No cache named '{cacheName}' is registered with the router.");
@@ -97,6 +106,10 @@ internal sealed class Router : IRouter, IAsyncDisposable
         await StopAsync(CancellationToken.None).ConfigureAwait(false);
         await _cleaned!.Task.ConfigureAwait(false);
     }
+
+    internal RoutedCache<T>? Find<T>(string cacheName)
+        where T : class =>
+        _caches.TryGetValue(cacheName, out var entry) ? entry.Cache as RoutedCache<T> : null;
 
     internal void Start()
     {

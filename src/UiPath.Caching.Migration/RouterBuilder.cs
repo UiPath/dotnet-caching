@@ -6,8 +6,11 @@ public sealed class RouterBuilder
 {
     private readonly List<Func<RouterCore, (string Name, Type Type, object Cache)>> _registrations = [];
     private readonly HashSet<string> _names = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _excluded = new(StringComparer.Ordinal);
 
     internal IReadOnlyList<Func<RouterCore, (string Name, Type Type, object Cache)>> Registrations => _registrations;
+
+    internal IReadOnlyDictionary<string, string> Excluded => _excluded;
 
     internal Func<string, bool>? LibraryPredicate { get; private set; }
 
@@ -34,6 +37,11 @@ public sealed class RouterBuilder
         ArgumentOutOfRangeException.ThrowIfLessThan(registration.LocalCap, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(registration.PendingWindow, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(registration.PendingWindow, LibrarySettleBound.Horizon);
+        if (_excluded.ContainsKey(registration.Name))
+        {
+            throw new ArgumentException($"Cache '{registration.Name}' is listed as excluded, so it cannot also be registered.", nameof(registration));
+        }
+
         if (!_names.Add(registration.Name))
         {
             throw new ArgumentException($"A cache named '{registration.Name}' is already registered.", nameof(registration));
@@ -45,6 +53,28 @@ public sealed class RouterBuilder
             new RoutedCache<T>(
                 core,
                 registration)));
+        return this;
+    }
+
+    /// <summary>
+    /// Lists a cache that stays on the application's own client, outside the router: one the library cannot match, such as a lock or another
+    /// primitive the two stacks implement differently, or a map cache with field semantics the library does not keep. The startup log names it,
+    /// and asking the router for it fails with <paramref name="reason"/>.
+    /// </summary>
+    public RouterBuilder Exclude(string cacheName, string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cacheName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (_names.Contains(cacheName))
+        {
+            throw new ArgumentException($"Cache '{cacheName}' is registered, so it cannot also be excluded.", nameof(cacheName));
+        }
+
+        if (!_excluded.TryAdd(cacheName, reason))
+        {
+            throw new ArgumentException($"Cache '{cacheName}' is already excluded.", nameof(cacheName));
+        }
+
         return this;
     }
 

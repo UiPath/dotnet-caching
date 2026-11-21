@@ -48,11 +48,7 @@ public static class RouterServiceCollectionExtensions
                 configuration,
                 chain =>
                 {
-                    chain.AddRedis(options =>
-                    {
-                        options.RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance;
-                        options.RemoveUnreadable = false;
-                    });
+                    chain.AddRedis(ConfigureStackRedis);
                     chain.AddBroadcast();
                     chain.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
                     chain.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
@@ -127,6 +123,13 @@ public static class RouterServiceCollectionExtensions
         return query < 0 ? new Uri($"{text}-p{processId}") : new Uri($"{text[..query]}-p{processId}{text[query..]}");
     }
 
+    /// <summary>The stack's Redis options: set here only, never bound from configuration, so the validator can check them without building the stack.</summary>
+    internal static void ConfigureStackRedis(RedisCacheOptions options)
+    {
+        options.RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance;
+        options.RemoveUnreadable = false;
+    }
+
     private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, IConfigurationSection section)
     {
         var logger = root.GetService<ILoggerFactory>()?.CreateLogger("UiPath.Caching.Migration") ?? NullLogger.Instance;
@@ -144,10 +147,19 @@ public static class RouterServiceCollectionExtensions
                 ThrowIfSettleBeyondHorizon(root);
             }
 
+            // The other check that fails the host: settings that would make the library write what the source cannot read.
+            // Bound as the named stack binds them, without building it: a stack that cannot be built must not fail the host here.
+            var stackCache = new CacheOptions();
+            section.Bind(stackCache);
+            var stackRedis = new RedisCacheOptions();
+            ConfigureStackRedis(stackRedis);
+            RegistrationValidator.ThrowIfInvalid(stackCache, stackRedis);
+            logger.LogInformation("Caching router library options: {Options}", RegistrationValidator.Describe(stackCache, stackRedis));
+
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
             core.UseLibrary(token => StartLibraryAsync(root, builder, token));
             var advertiser = CreateAdvertiser(root, builder, core, processId, section, logger);
-            var router = new Router(core, builder.Registrations) { Advertiser = advertiser };
+            var router = new Router(core, builder.Registrations, builder.Excluded) { Advertiser = advertiser, Envelope = builder.Envelope };
 
             RouterBanner.Log(logger, builder, processId);
             router.Start();

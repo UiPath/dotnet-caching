@@ -52,6 +52,8 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
     internal CacheEpoch Epoch => _epoch;
 
+    internal RouterCacheRegistration<T> Registration => _registration;
+
     internal InvalidationRetrier Retrier => _retrier;
 
     internal int HeldKeys => _keys.Count;

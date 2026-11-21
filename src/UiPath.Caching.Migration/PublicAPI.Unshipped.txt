@@ -114,3 +114,11 @@ UiPath.Caching.Migration.RouterModeReason.Default = 0 -> UiPath.Caching.Migratio
 UiPath.Caching.Migration.RouterModeReason.Flag = 1 -> UiPath.Caching.Migration.RouterModeReason
 UiPath.Caching.Migration.RouterModeReason.LibraryUnavailable = 3 -> UiPath.Caching.Migration.RouterModeReason
 UiPath.Caching.Migration.RouterModeReason.Requested = 2 -> UiPath.Caching.Migration.RouterModeReason
+UiPath.Caching.Migration.RouterBuilder.Exclude(string! cacheName, string! reason) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.ConformanceReport
+UiPath.Caching.Migration.ConformanceReport.Failures.get -> System.Collections.Generic.IReadOnlyList<string!>!
+UiPath.Caching.Migration.ConformanceReport.Passed.get -> bool
+UiPath.Caching.Migration.ConformanceReport.Samples.get -> int
+override UiPath.Caching.Migration.ConformanceReport.ToString() -> string!
+UiPath.Caching.Migration.RouterConformance
+static UiPath.Caching.Migration.RouterConformance.CheckAsync<T>(System.IServiceProvider! services, string! cacheName, System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<string!, T!>>! samples, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Migration.ConformanceReport!>!
