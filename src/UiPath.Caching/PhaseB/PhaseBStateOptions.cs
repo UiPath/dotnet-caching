@@ -24,6 +24,18 @@ internal sealed class PhaseBStateOptions
 
     public TimeSpan TransitionWait { get; init; } = TimeSpan.FromSeconds(10);
 
+    public TimeSpan LeaseTtl { get; init; } = TimeSpan.FromSeconds(30);
+
+    public TimeSpan LeaseRenewInterval { get; init; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan UpkeepInterval { get; init; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>How long a master that failed a barrier counts as failing for the way back.</summary>
+    public TimeSpan BarrierFailureWindow { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>The operator states in configuration that the eviction policy is <c>noeviction</c> or a <c>volatile-*</c> one.</summary>
+    public bool EvictionPolicyAttested { get; init; }
+
     /// <summary>The age beyond which a snapshot is stale: <see cref="MaxSnapshotAge"/>, or three polls when that is longer.</summary>
     public TimeSpan StaleAfter(TimeSpan pollInterval) => TimeSpan.FromTicks(Math.Max(MaxSnapshotAge.Ticks, pollInterval.Ticks * 3));
 }

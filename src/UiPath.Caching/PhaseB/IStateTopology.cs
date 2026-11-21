@@ -7,5 +7,8 @@ internal interface IStateTopology
 {
     Task<ClusterLayout> ReadLayoutAsync(CancellationToken cancellationToken);
 
+    /// <summary>The replicas connected to the master now, and its eviction policy where the connection can read it.</summary>
+    Task<MasterProbe> ProbeAsync(EndPoint master, CancellationToken cancellationToken);
+
     Task<IMasterChannel> OpenAsync(EndPoint master, CancellationToken cancellationToken);
 }

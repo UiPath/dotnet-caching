@@ -12,6 +12,11 @@ internal sealed class StateStore(IDatabase stateDatabase, MoveKeyNames names, Mo
 
     public Task<ControlSample?> ProbeAsync(string group, CancellationToken cancellationToken) => sampler.ProbeAsync(group, cancellationToken);
 
+    public Task<ControlSample?> SampleAsync(string group, CancellationToken cancellationToken) => sampler.SampleAsync(group, cancellationToken);
+
+    /// <summary>The clock of the server that holds the state, in microseconds, for an epoch no record can exceed.</summary>
+    public Task<long> ServerMicrosecondsAsync(string group) => scripts.ServerMicrosecondsAsync(names.State(group));
+
     /// <summary>X0 for the managed cache ids <paramref name="cacheIds"/>: creates the S0 state, or refreshes the set of an S0 state; any later stage is refused.</summary>
     public async Task<InitResult> InitAsync(string group, IEnumerable<string> cacheIds, CancellationToken cancellationToken)
     {
@@ -23,4 +28,17 @@ internal sealed class StateStore(IDatabase stateDatabase, MoveKeyNames names, Mo
     /// <summary>ALLACK: stores that every fresh node acknowledged <paramref name="id"/>, when it is still the stored identity.</summary>
     public async Task<bool> AllAckAsync(string group, string id) =>
         await scripts.AllAckAsync(names.State(group), id).ConfigureAwait(false) == MoveScripts.Written;
+
+    /// <summary>Stores a hold with its reason on an existing state; false when the group has no hash.</summary>
+    public async Task<bool> SetHoldAsync(string group, HoldKind kind, string reason)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(reason);
+        return await scripts.HoldSetAsync(names.State(group), HoldField(kind), reason).ConfigureAwait(false) == MoveScripts.Written;
+    }
+
+    /// <summary>Deletes the operator hold, the automatic hold, or both (<c>Resume</c>); false when the group has no hash.</summary>
+    public async Task<bool> ClearHoldAsync(string group, params HoldKind[] kinds) =>
+        await scripts.HoldClearAsync(names.State(group), [.. kinds.Select(HoldField)]).ConfigureAwait(false) == MoveScripts.Written;
+
+    private static string HoldField(HoldKind kind) => kind == HoldKind.Operator ? StateFields.HoldOp : StateFields.HoldAuto;
 }

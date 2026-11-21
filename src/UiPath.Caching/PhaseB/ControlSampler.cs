@@ -27,7 +27,7 @@ internal sealed class ControlSampler(IDatabase controlDatabase, MoveKeyNames nam
             var after = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
             if (after.MovedSince(before, sampled).Count == 0 || attempt + 1 == Attempts)
             {
-                return reads.Select(r => ControlSample.Parse(r.Result)).OfType<ControlSample>().MaxBy(s => s.Ep);
+                return sampled.Zip(reads, (slot, r) => ControlSample.Parse(r.Result) is { } found ? found with { Slot = slot } : null).OfType<ControlSample>().MaxBy(s => s.Ep);
             }
         }
     }

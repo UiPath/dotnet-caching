@@ -99,6 +99,13 @@ internal sealed class MoveKeyNames
         return $"{LibraryPrefix}{Keyspace}:{{{group}}}:state";
     }
 
+    /// <summary>The leader lease of the group, in the slot of its state hash.</summary>
+    public RedisKey Lead(string group)
+    {
+        ValidateName(group, nameof(group));
+        return $"{LibraryPrefix}{Keyspace}:{{{group}}}:lead";
+    }
+
     /// <summary>The control record of <paramref name="group"/> in the slot of <paramref name="dataKey"/>.</summary>
     public RedisKey ControlFor(string group, string dataKey) => Control(group, SlotOf(dataKey));
 

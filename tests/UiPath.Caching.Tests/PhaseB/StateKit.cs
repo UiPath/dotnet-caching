@@ -23,6 +23,11 @@ internal sealed class StateKit : IAsyncDisposable
         Sampler = new ControlSampler(ControlDb, names, Topology);
         Store = new StateStore(database, names, Scripts, Sampler, TimeProvider.System);
         Sequence = new TransitionSequence(Topology, names, options, (kind, detail) => Reports.Add((kind, detail)));
+        Records = new ControlRecordReader(ControlDb, names);
+        Recovery = new StateRecovery(Store, Sampler, Records, ControlDb, Sequence, names, TimeProvider.System);
+        Upkeep = new ControlUpkeep(Records, Sequence, Store, options, Time, (kind, detail) => Reports.Add((kind, detail)));
+        Preflight = new PreflightChecker(Topology, options);
+        Ledger = new BarrierLedger(options, Time);
     }
 
     public ConnectionMultiplexer Mux { get; }
@@ -46,6 +51,18 @@ internal sealed class StateKit : IAsyncDisposable
     public ControlSampler Sampler { get; }
 
     public StateStore Store { get; }
+
+    public ControlRecordReader Records { get; }
+
+    public StateRecovery Recovery { get; }
+
+    public ControlUpkeep Upkeep { get; }
+
+    public PreflightChecker Preflight { get; }
+
+    public BarrierLedger Ledger { get; }
+
+    public ManualTimeProvider Time { get; } = new(DateTimeOffset.UnixEpoch);
 
     public TransitionSequence Sequence { get; }
 

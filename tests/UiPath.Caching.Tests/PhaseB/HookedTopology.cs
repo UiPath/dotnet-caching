@@ -24,6 +24,9 @@ internal sealed class HookedTopology(IStateTopology inner) : IStateTopology
 
     public Func<EndPoint, RedisKey, int, EndPoint?>? StateOwner { get; set; }
 
+    // What a master reports (replicas, eviction policy); null asks the real server.
+    public Func<EndPoint, MasterProbe?>? Probe { get; set; }
+
     public int Opened => Volatile.Read(ref _opened);
 
     public int Waits => Volatile.Read(ref _waits);
@@ -33,6 +36,9 @@ internal sealed class HookedTopology(IStateTopology inner) : IStateTopology
         var real = await inner.ReadLayoutAsync(cancellationToken);
         return Layout is { } hook ? hook(real, Interlocked.Increment(ref _reads)) : real;
     }
+
+    public async Task<MasterProbe> ProbeAsync(EndPoint master, CancellationToken cancellationToken) =>
+        Probe?.Invoke(master) ?? await inner.ProbeAsync(master, cancellationToken);
 
     public async Task<IMasterChannel> OpenAsync(EndPoint master, CancellationToken cancellationToken)
     {

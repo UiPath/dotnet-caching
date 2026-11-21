@@ -213,6 +213,76 @@ public class StateClusterTests
         result.Ep.Should().Be(high + 1);
     }
 
+    [Fact]
+    public async Task Upkeep_finds_one_missing_record_among_every_slot_and_the_rebuild_restores_all_of_them()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true);
+        var init = await kit.InitAsync("a");
+        var target = StateKit.TargetFrom(init, "S1", "fwd", 0);
+        await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), target, null, CancellationToken.None);
+        var state = (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!;
+        (await kit.Upkeep.CheckAsync(kit.Group, state, CancellationToken.None)).Should().Be(UpkeepVerdict.Healthy);
+        await kit.ControlDb.KeyDeleteAsync(kit.Names.Control(kit.Group, 9001));
+
+        (await kit.Upkeep.CheckAsync(kit.Group, state, CancellationToken.None)).Should().Be(UpkeepVerdict.Rebuild);
+        var result = await kit.Upkeep.RebuildAsync(kit.Group, state, null, null, CancellationToken.None);
+
+        result.Outcome.Should().Be(TransitionOutcome.Completed);
+        var rebuilt = (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!;
+        rebuilt.Ep.Should().Be(state.Ep + 1);
+        (await kit.Upkeep.CheckAsync(kit.Group, rebuilt, CancellationToken.None)).Should().Be(UpkeepVerdict.Healthy);
+    }
+
+    [Fact]
+    public async Task Reassert_reads_every_record_and_refuses_committed_records_that_disagree_on_direction()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true);
+        var record = (string dir) => new ControlRecord(70, "same", "S3", dir, "1", "S1", "fwd", "0", "69", "before", [("a", "n")]);
+        await kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, 5), record("fwd"));
+        await kit.Scripts.ControlCommitAsync(kit.Names.Control(kit.Group, 5), 70, "same");
+        await kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, 12000), record("rev"));
+        await kit.Scripts.ControlCommitAsync(kit.Names.Control(kit.Group, 12000), 70, "same");
+
+        var result = await kit.Recovery.ReassertAsync(kit.Group, "confirmed", null, null, null, CancellationToken.None);
+
+        result.Outcome.Should().Be(RecoveryOutcome.RecordsDisagreeOnDirection);
+        (await kit.Store.ReadAsync(kit.Group, CancellationToken.None)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Reassert_after_a_lost_state_shard_rewrites_every_slot_and_a_node_restart_sees_the_rollback_through_the_smallest_master()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true);
+        var init = await kit.InitAsync("a");
+        var target = StateKit.TargetFrom(init, "S3", "fwd", 1);
+        await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), target, null, CancellationToken.None);
+        await kit.Db.KeyDeleteAsync(kit.StateKey);
+
+        var result = await kit.Recovery.ReassertAsync(kit.Group, "confirmed", null, null, null, CancellationToken.None);
+
+        result.Transition!.Outcome.Should().Be(TransitionOutcome.Completed);
+        var state = (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!;
+        state.Should().Match<StateRecord>(s => s.State == "S3" && s.NPop == 1 && s.Ep == target.Ep + 1 && s.HoldOp == "reassert");
+        await AssertEveryRecordAsync(kit, kit.Names.SlotSet(), new StateTarget("S3", "fwd", 1, state.Ep, state.Id, string.Empty, 0), durable: true);
+    }
+
+    [Fact]
+    public async Task A_restart_finds_a_rolled_back_hash_from_the_record_of_one_master_alone()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true);
+        var init = await kit.InitAsync("a");
+        var layout = await kit.Real.ReadLayoutAsync(CancellationToken.None);
+        var small = layout.Masters[^1];
+        var held = Enumerable.Range(0, 16384).Where(s => layout.OwnerOf(s).Equals(small.Endpoint)).ToArray();
+        await Task.WhenAll(held.Select(s => kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, s), MoveTestEnvironment.Record(init.Ep + 5, "newer", ("a", "n")))));
+        var monitor = new GroupStateMonitor(kit.Store, kit.Options, TimeProvider.System);
+        monitor.Register([new GroupRegistration(kit.Group, false, true)]);
+
+        await monitor.StepAsync(kit.Group, CancellationToken.None);
+
+        monitor.RulesFor(kit.Group).Should().Match<GroupRules>(r => r.Writes == WriteRule.FailClosed && r.Alerts.Contains("identity_conflict") && r.Acting == null);
+    }
+
     private static ClusterLayout Merged(ClusterLayout real)
     {
         var masters = real.Masters.OrderBy(m => m.Endpoint.ToString(), StringComparer.Ordinal).ToArray();

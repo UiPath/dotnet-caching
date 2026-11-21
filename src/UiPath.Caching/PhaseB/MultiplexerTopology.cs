@@ -35,6 +35,21 @@ internal sealed class MultiplexerTopology(
         return new ClusterLayout(masters);
     }
 
+    public async Task<MasterProbe> ProbeAsync(EndPoint master, CancellationToken cancellationToken)
+    {
+        var server = application.GetServer(master);
+        var replicas = await ConnectedReplicasAsync(server).WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var policy = (await server.ConfigGetAsync("maxmemory-policy").WaitAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault().Value;
+            return new MasterProbe(replicas, policy);
+        }
+        catch (Exception ex) when (ex is RedisCommandException or RedisServerException)
+        {
+            return new MasterProbe(replicas, null);
+        }
+    }
+
     public async Task<IMasterChannel> OpenAsync(EndPoint master, CancellationToken cancellationToken)
     {
         var options = ConfigurationOptions.Parse(application.Configuration);

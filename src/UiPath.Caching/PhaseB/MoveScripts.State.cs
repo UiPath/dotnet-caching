@@ -23,7 +23,9 @@ internal sealed partial class MoveScripts
           return 0
         end
         redis.call('HSET', KEYS[1], 'st', ARGV[5], 'dir', ARGV[6], 'nPop', ARGV[7], 'ep', ARGV[8], 'id', ARGV[9], 'dur', '0', 'prev', ARGV[10], 'upd', ARGV[11])
-        for i = 12, #ARGV, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
+        local n = tonumber(ARGV[12])
+        for i = 13, 12 + n do redis.call('HDEL', KEYS[1], ARGV[i]) end
+        for i = 13 + n, #ARGV, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
         return 1
         """;
 
@@ -81,11 +83,29 @@ internal sealed partial class MoveScripts
             optional.Add((StateFields.CacheSet, caches.CacheSet));
         }
 
+        if (target.Move is { } move)
+        {
+            optional.Add((StateFields.Move, move));
+        }
+
+        if (target.Release is { } release)
+        {
+            optional.Add((StateFields.Release, release));
+        }
+
+        if (target.HoldOp is { } hold)
+        {
+            optional.Add((StateFields.HoldOp, hold));
+        }
+
+        var clear = target.Clear ?? [];
+
         var args = new List<RedisValue>
         {
             expected.IsAbsent ? "c" : "u", expected.Ep ?? 0, expected.Id ?? string.Empty, expected.Durable,
-            target.State, target.Direction, target.NPop, target.Ep, target.Id, target.Prev, target.UpdatedAt,
+            target.State, target.Direction, target.NPop, target.Ep, target.Id, target.Prev, target.UpdatedAt, clear.Count,
         };
+        args.AddRange(clear.Select(f => (RedisValue)f));
         foreach (var (field, value) in optional)
         {
             args.Add(field);
@@ -137,6 +157,11 @@ internal sealed partial class MoveScripts
                 new(StateFields.Updated, target.UpdatedAt),
             };
             entries.AddRange(optional.Select(o => new HashEntry(o.Field, o.Value)));
+            if (clear.Count > 0)
+            {
+                queued.Add(transaction.HashDeleteAsync(state, [.. clear.Where(f => optional.All(o => o.Field != f)).Select(f => (RedisValue)f)], Master));
+            }
+
             queued.Add(transaction.HashSetAsync(state, [.. entries], Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
         }).ConfigureAwait(false);
@@ -252,7 +277,7 @@ internal sealed partial class MoveScripts
         return new InitResult(code, ep, id);
     }
 
-    private async Task<long> ServerMicrosecondsAsync(RedisKey key)
+    internal async Task<long> ServerMicrosecondsAsync(RedisKey key)
     {
         var endpoint = await _db.IdentifyEndpointAsync(key, Master).ConfigureAwait(false)
             ?? throw new RedisException($"No server holds the slot of '{key}'.");

@@ -17,6 +17,8 @@ internal sealed class FakeStateReader : IStateReader
 
     public int Reads => Volatile.Read(ref _reads);
 
+    public int Samples { get; private set; }
+
     public int Probes => Volatile.Read(ref _probes);
 
     public static StateRecord Record(string state, long ep, string id = "id", bool durable = true, string direction = "fwd", int nPop = 0, string swept = "") =>
@@ -26,6 +28,12 @@ internal sealed class FakeStateReader : IStateReader
     {
         Interlocked.Increment(ref _reads);
         return Fail ? Task.FromException<StateRecord?>(new TimeoutException("state shard down")) : Task.FromResult(State);
+    }
+
+    public Task<ControlSample?> SampleAsync(string group, CancellationToken cancellationToken)
+    {
+        Samples++;
+        return ProbeAsync(group, cancellationToken);
     }
 
     public Task<ControlSample?> ProbeAsync(string group, CancellationToken cancellationToken)

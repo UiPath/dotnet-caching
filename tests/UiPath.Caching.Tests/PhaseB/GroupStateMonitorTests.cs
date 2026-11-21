@@ -278,6 +278,40 @@ public class GroupStateMonitorTests
     }
 
     [Fact]
+    public async Task A_listed_or_present_group_is_reconciled_with_a_sample_of_every_master_and_an_unlisted_absent_one_only_probed()
+    {
+        var listed = Monitor(listed: true);
+        _reader.State = FakeStateReader.Record("S1", 5);
+        await listed.StepAsync(Group, CancellationToken.None);
+        _reader.Samples.Should().Be(1);
+
+        var other = new GroupStateMonitor(_reader, _options, _time);
+        other.Register([new GroupRegistration("g2", false, false)]);
+        _reader.State = null;
+        await other.StepAsync("g2", CancellationToken.None);
+
+        _reader.Samples.Should().Be(1, "an unlisted group with no hash only asks whether a record exists");
+        _reader.Probes.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task While_a_conflict_stands_every_step_samples_again_and_it_clears_when_the_state_catches_up()
+    {
+        var monitor = Monitor(listed: true);
+        _reader.State = FakeStateReader.Record("S1", 5);
+        _reader.Sample = new ControlSample(7, "newer", "S3", "fwd", true);
+        await monitor.StepAsync(Group, CancellationToken.None);
+        await monitor.StepAsync(Group, CancellationToken.None);
+        _reader.Samples.Should().Be(2);
+        monitor.RulesFor(Group).Alerts.Should().Contain("identity_conflict");
+
+        _reader.State = FakeStateReader.Record("S3", 7, "newer");
+        await monitor.StepAsync(Group, CancellationToken.None);
+
+        monitor.RulesFor(Group).Should().Match<GroupRules>(r => r.Writes == WriteRule.Follow && r.Alerts.Count == 0);
+    }
+
+    [Fact]
     public async Task A_group_that_once_showed_a_state_stays_relevant_when_a_flush_makes_it_absent()
     {
         var monitor = Monitor(listed: false);

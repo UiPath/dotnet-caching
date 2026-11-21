@@ -62,9 +62,13 @@ internal sealed class GroupStateMonitor(IStateReader reader, PhaseBStateOptions 
         try
         {
             var record = await reader.ReadAsync(group, cancellationToken).ConfigureAwait(false);
-            if (first || record is null)
+            if (first || record is null || tracker.View().Conflict is not null)
             {
-                tracker.Probed(await reader.ProbeAsync(group, cancellationToken).ConfigureAwait(false));
+                // A present or listed group is reconciled with a sample of every master; an unlisted absent one needs only to know whether any record exists.
+                var sample = record is not null || tracker.Registration.Listed
+                    ? await reader.SampleAsync(group, cancellationToken).ConfigureAwait(false)
+                    : await reader.ProbeAsync(group, cancellationToken).ConfigureAwait(false);
+                tracker.Probed(sample);
             }
 
             tracker.Read(record);

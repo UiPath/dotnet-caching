@@ -24,12 +24,39 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
             return new TransitionResult(TransitionOutcome.StateChanged, Detail: "the stored state is not the one this transition replaces");
         }
 
-        if (confirmed == BarrierResult.Failed && !SkipOrStuck(episode, "the TRANSIT write of the state"))
+        if (confirmed == BarrierResult.Skipped)
+        {
+            NoteSkipped(episode, "the TRANSIT write of the state");
+        }
+        else if (confirmed == BarrierResult.Failed && !SkipOrStuck(episode, "the TRANSIT write of the state"))
         {
             return new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "the state write is not on a replica");
         }
 
         return await CompleteAsync(group, episode, target.Id, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// X12 toward the last committed state (<c>prev</c>), legal only before step 4: refused when the state is durable, a node acknowledged it, or any record at its <c>ep</c> shows <c>dur=1</c>.
+    /// Nothing was acted on, so the barriers are skipped at once.
+    /// </summary>
+    public async Task<TransitionResult> AbandonAsync(string group, bool advertAcknowledges, long updatedAt, SequenceOptions? sequence, CancellationToken cancellationToken)
+    {
+        await using var probe = new Episode(topology, new SequenceOptions());
+        var state = await ReadStateAsync(group, probe, cancellationToken).ConfigureAwait(false);
+        if (state is null || state.Durable || advertAcknowledges)
+        {
+            return new TransitionResult(TransitionOutcome.AbandonRefused, Detail: "the transition is committed, acknowledged or absent");
+        }
+
+        if (await AnyCommittedAsync(group, probe, state.Ep, cancellationToken).ConfigureAwait(false))
+        {
+            return new TransitionResult(TransitionOutcome.AbandonRefused, Detail: "a control record already shows dur=1 at this ep");
+        }
+
+        var prev = state.Prev.Split(':');
+        var target = new StateTarget(prev[0], prev[1], int.Parse(prev[2], System.Globalization.CultureInfo.InvariantCulture), state.Ep + 1, MoveScripts.NewNonce(), state.Prev, updatedAt);
+        return await RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 0), target, (sequence ?? new SequenceOptions()) with { SkipAtOnce = true, WayBack = true }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Steps 2 to 6 for the transition the stored state shows at <c>dur=0</c>; a state that is already durable has its DURABLE write and WAIT repeated.</summary>
@@ -140,6 +167,11 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
             return new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "a control record does not hold the target identity");
         }
 
+        if (result.BarrierSkipped)
+        {
+            NoteSkipped(episode, "barrier 1");
+        }
+
         if (result.BarrierFailed && !SkipOrStuck(episode, "barrier 1"))
         {
             return new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "a master did not confirm the control records");
@@ -163,10 +195,9 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
             return new TransitionResult(TransitionOutcome.CommitIncomplete);
         }
 
-        if (result.BarrierFailed)
+        if (result.BarrierFailed || result.BarrierSkipped)
         {
-            episode.WaitSkipped = true;
-            report?.Invoke("wait_skipped", "barrier 2");
+            NoteSkipped(episode, "barrier 2");
         }
 
         return null;
@@ -182,10 +213,9 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
             return new TransitionResult(TransitionOutcome.StateChanged, Detail: "the stored id changed before DURABLE");
         }
 
-        if (confirmed == BarrierResult.Failed)
+        if (confirmed is BarrierResult.Failed or BarrierResult.Skipped)
         {
-            episode.WaitSkipped = true;
-            report?.Invoke("wait_skipped", "the DURABLE write of the state");
+            NoteSkipped(episode, "the DURABLE write of the state");
         }
 
         return new TransitionResult(TransitionOutcome.Completed, episode.WaitSkipped);
@@ -200,6 +230,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         IReadOnlyList<int> unverified = slots;
         var failedMasters = new HashSet<EndPoint>();
         var owners = new Dictionary<int, EndPoint>();
+        var skipped = false;
         var flags = new PhaseFlags();
         for (var round = 0; round < options.BarrierRetries && pending.Count > 0; round++)
         {
@@ -217,9 +248,10 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
                 return (owned.Key, result);
             })).ConfigureAwait(false);
             failedMasters.UnionWith(confirmations.Where(c => c.result == BarrierResult.Failed).Select(c => c.Key));
+            skipped |= confirmations.Any(c => c.result == BarrierResult.Skipped);
             if (flags.Conflict || flags.Refused)
             {
-                return new SlotPhaseResult(flags.Conflict, flags.Refused, 0, false);
+                return new SlotPhaseResult(flags.Conflict, flags.Refused, 0, false, false);
             }
 
             var next = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
@@ -227,7 +259,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
             var verified = await VerifyAsync(group, episode, next, slots, phase, cancellationToken).ConfigureAwait(false);
             if (verified.Conflict)
             {
-                return new SlotPhaseResult(true, false, 0, false);
+                return new SlotPhaseResult(true, false, 0, false, false);
             }
 
             layout = next;
@@ -245,7 +277,22 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
             pending = [.. verified.Pending.Union(moved).Union(misrouted.Keys).Where(slot => !failedMasters.Contains(owners.GetValueOrDefault(slot) ?? next.OwnerOf(slot)))];
         }
 
-        return new SlotPhaseResult(false, false, unverified.Union(pending).Count(), failedMasters.Count > 0);
+        return new SlotPhaseResult(false, false, unverified.Union(pending).Count(), failedMasters.Count > 0, skipped);
+    }
+
+    private async Task<bool> AnyCommittedAsync(string group, Episode episode, long ep, CancellationToken cancellationToken)
+    {
+        var layout = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
+        var slots = names.SlotSet();
+        var databases = new Dictionary<EndPoint, IDatabase>();
+        foreach (var owner in slots.Select(layout.OwnerOf).Distinct())
+        {
+            databases[owner] = (await episode.Channels.GetAsync(owner, cancellationToken).ConfigureAwait(false)).ControlDatabase;
+        }
+
+        var reads = slots.Select(slot => databases[layout.OwnerOf(slot)].HashGetAsync(names.Control(group, slot), [StateFields.Ep, StateFields.Durable], Master)).ToArray();
+        await Task.WhenAll(reads).ConfigureAwait(false);
+        return reads.Any(r => r.Result[1] == "1" && r.Result[0] == ep);
     }
 
     private async Task<(IReadOnlyList<int> Pending, bool Conflict)> VerifyAsync(string group, Episode episode, ClusterLayout layout, IReadOnlyList<int> slots, SlotPhase phase, CancellationToken cancellationToken)
@@ -306,6 +353,18 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
             };
         }
 
+        var seq = episode.Sequence;
+        if (seq.SkipAtOnce || (seq.WayBack && seq.Ledger?.FailedRecently(master) == true))
+        {
+            var unwaited = await episode.Channels.GetAsync(master, cancellationToken).ConfigureAwait(false);
+            return await issue(unwaited).ConfigureAwait(false) switch
+            {
+                IssueResult.Done => BarrierResult.Skipped,
+                IssueResult.Refused => BarrierResult.Refused,
+                _ => BarrierResult.Misrouted,
+            };
+        }
+
         for (var attempt = 0; attempt < options.BarrierRetries; attempt++)
         {
             var channel = await episode.Channels.GetAsync(master, cancellationToken).ConfigureAwait(false);
@@ -333,6 +392,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
             }
         }
 
+        seq.Ledger?.Record(master);
         report?.Invoke("barrier_failed", master.ToString()!);
         return BarrierResult.Failed;
     }
@@ -381,9 +441,15 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         return (BarrierResult.Failed, code);
     }
 
+    private void NoteSkipped(Episode episode, string what)
+    {
+        episode.WaitSkipped = true;
+        report?.Invoke("wait_skipped", what);
+    }
+
     private bool SkipOrStuck(Episode episode, string what)
     {
-        if (episode.Sequence.SkipBarriers)
+        if (episode.Sequence.SkipBarriers || episode.Sequence.WayBack)
         {
             episode.WaitSkipped = true;
             report?.Invoke("wait_skipped", what);
@@ -411,7 +477,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
 
     private sealed record SlotPhase(long TargetEp, string TargetId, bool NeedDurable, Func<IMasterChannel, RedisKey, Task<long>> Issue, Func<long, bool> Accepts);
 
-    private sealed record SlotPhaseResult(bool Conflict, bool Refused, int Unverified, bool BarrierFailed);
+    private sealed record SlotPhaseResult(bool Conflict, bool Refused, int Unverified, bool BarrierFailed, bool BarrierSkipped);
 
     private sealed class PhaseFlags
     {

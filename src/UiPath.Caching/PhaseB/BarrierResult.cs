@@ -7,6 +7,9 @@ internal enum BarrierResult
     /// <summary>The replicas did not acknowledge in every try.</summary>
     Failed,
 
+    /// <summary>The writes were issued and no WAIT was: the master is skipped by the options or by the ledger.</summary>
+    Skipped,
+
     /// <summary>A script refused the write, so there is nothing to confirm.</summary>
     Refused,
 

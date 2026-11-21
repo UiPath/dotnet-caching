@@ -2,8 +2,8 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>The identity and state one control record holds.</summary>
-internal sealed record ControlSample(long Ep, string Id, string State, string Direction, bool Durable)
+/// <summary>The identity and state one control record holds, and its slot when it came from a sample.</summary>
+internal sealed record ControlSample(long Ep, string Id, string State, string Direction, bool Durable, int Slot = -1)
 {
     public static RedisValue[] Fields { get; } = [StateFields.Ep, StateFields.Id, StateFields.State, StateFields.Direction, StateFields.Durable];
 
