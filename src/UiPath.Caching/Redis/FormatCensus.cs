@@ -78,6 +78,14 @@ internal sealed class FormatCensus(
         return (next, keys);
     }
 
+    /// <summary>Every reason a census can give: the fixed ones, and a format reason for json, unknown and each registered format, so a reading that has gone to zero can still be told.</summary>
+    internal IReadOnlyCollection<string> KnownReasons() =>
+    [
+        .. new[] { EmptyReason, OversizeReason, NoTtlReason, HashSampledReason, FormatReason(CacheValueFormats.JsonName), FormatReason(CacheValueFormats.UnknownName) }
+            .Concat(registry.Entries.Select(static entry => FormatReason(entry.Name)))
+            .Distinct(StringComparer.Ordinal),
+    ];
+
     /// <summary>The databases, patterns and primaries a pass over a key pattern looks at, the primaries in a fixed order so a cursor can name one.</summary>
     internal async Task<ScanPlan> PlanAsync(CacheKey keyPattern, CancellationToken token)
     {

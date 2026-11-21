@@ -151,7 +151,7 @@ public sealed class FormatSweeperTests : IDisposable
     }
 
     [Fact]
-    public async Task A_cursor_of_a_primary_that_is_gone_continues_with_the_next_one_and_a_bad_cursor_is_refused()
+    public async Task A_cursor_of_a_primary_that_is_gone_starts_the_pass_again_and_a_bad_cursor_is_refused()
     {
         var keys = new Keyspace();
         keys.Add(0, "a0", Json);
@@ -160,9 +160,88 @@ public sealed class FormatSweeperTests : IDisposable
         var report = await Sweep(keys, new FormatSweepOptions { Cursor = "10.0.0.1:7000|7" });
         var bad = () => Sweep(keys, new FormatSweepOptions { Cursor = "nonsense" });
 
-        _rewritten.Should().Equal("b0");
+        _rewritten.Should().Equal("a0", "b0");
         report.Completed.Should().BeTrue();
         await bad.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Theory]
+    [InlineData("10.0.0.2:6379|bbb|0", "bbb", new[] { "b0" })]
+    [InlineData("10.0.0.2:6379|bbb|0", "ccc", new[] { "a0", "b0" })]
+    [InlineData("10.0.0.2:6379|0", "ccc", new[] { "a0", "b0" })]
+    [InlineData("10.0.0.2:6379|bbb|0", null, new[] { "a0", "b0" })]
+    [InlineData("10.0.0.2:6379|0", null, new[] { "b0" })]
+    public async Task A_cursor_goes_on_only_on_the_server_it_named(string cursor, string? runId, string[] expected)
+    {
+        var keys = new Keyspace();
+        keys.Add(0, "a0", Json);
+        keys.Add(1, "b0", Json);
+        keys.RunIds[0] = "aaa";
+        keys.RunIds[1] = runId;
+
+        var report = await Sweep(keys, new FormatSweepOptions { Cursor = cursor });
+
+        _rewritten.Should().Equal(expected);
+        report.Completed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_cursor_carries_the_run_id_of_the_server_it_stopped_on()
+    {
+        var keys = new Keyspace();
+        keys.Add(0, "a0", Json);
+        keys.Add(0, "a1", Json);
+        keys.Add(1, "b0", Json);
+        keys.Add(1, "b1", Json);
+        keys.RunIds[0] = "aaa";
+        keys.RunIds[1] = "bbb";
+
+        var report = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1, PageSize = 2, Budget = TimeSpan.FromSeconds(1) });
+
+        report.NextCursor.Should().Be("10.0.0.2:6379|bbb|0");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_key_that_changed_type_meanwhile_is_counted_as_changed_and_the_pass_goes_on(bool atRead)
+    {
+        var keys = new Keyspace { Claimed = () => _migrator.ClaimedBytes };
+        keys.Add(0, "a", Json);
+        keys.Add(0, "b", Json);
+        keys.Add(0, "c", Json);
+        (atRead ? keys.WrongTypeAtRead : keys.WrongTypeAtLength).Add("b");
+
+        var report = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1000 });
+
+        report.Changed.Should().Be(1);
+        report.Failed.Should().Be(0);
+        report.Converted.Should().Be(2);
+        report.Completed.Should().BeTrue();
+        report.NextCursor.Should().BeNull();
+        _rewritten.Should().Equal("a", "c");
+        _migrator.ClaimedBytes.Should().Be(0, "the claim of the key that changed type was given back");
+    }
+
+    [Theory]
+    [InlineData(100, 10_000_000, true)]
+    [InlineData(100, 101, true)]
+    [InlineData(100, 100, false)]
+    public async Task A_value_replaced_by_a_larger_one_after_its_length_was_read_is_never_fetched_past_the_limit(int limit, int replacement, bool oversize)
+    {
+        var keys = new Keyspace { Claimed = () => _migrator.ClaimedBytes };
+        keys.Add(0, "k", Json);
+        keys.AfterLength = key => keys.Replace(key, [.. "\""u8, .. new byte[replacement - 1]]);
+
+        var report = await Sweep(keys, new FormatSweepOptions { MaxValueBytes = limit });
+
+        keys.MaxFetched.Should().BeLessThanOrEqualTo(limit + 1, "the read asks for the limit and one byte more, not the value");
+        keys.ClaimedAtRead.Should().ContainSingle().Which.Should().Be(limit + 1L, "the bound of the read is what the budget holds, not the length that was seen");
+        keys.ClaimedAtRead.Max().Should().BeLessThanOrEqualTo(FormatMigrator.DefaultMaxQueuedBytes);
+        report.Oversize.Should().Be(oversize ? 1 : 0);
+        report.Converted.Should().Be(oversize ? 0 : 1);
+        _rewritten.Should().HaveCount(oversize ? 0 : 1);
+        _migrator.ClaimedBytes.Should().Be(0);
     }
 
     [Fact]
@@ -395,9 +474,8 @@ public sealed class FormatSweeperTests : IDisposable
             var multiplexer = Substitute.For<IConnectionMultiplexer>();
             multiplexer.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Database);
             Database.Multiplexer.Returns(multiplexer);
-            Database.StringGetRangeAsync(Arg.Any<RedisKey>(), 0, 1, Arg.Any<CommandFlags>()).Returns(ci => Task.FromResult(Head(ci.Arg<RedisKey>().ToString())));
-            Database.StringLengthAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(ci => Task.FromResult((long)(Find(ci.Arg<RedisKey>().ToString())?.Length ?? 0)));
-            Database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(ci => Task.FromResult(Whole(ci.Arg<RedisKey>().ToString())));
+            Database.StringGetRangeAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<long>(), Arg.Any<CommandFlags>()).Returns(ci => Range(ci.Arg<RedisKey>().ToString(), ci.ArgAt<long>(2)));
+            Database.StringLengthAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(ci => Length(ci.Arg<RedisKey>().ToString()));
             Database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(ci => Task.FromResult(Find(ci.Arg<RedisKey>().ToString()) is not null));
             Database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(ci => Task.FromResult(_keys.FirstOrDefault(k => k.Key == ci.Arg<RedisKey>().ToString()).Ttl));
             Connector = Substitute.For<IRedisConnector>();
@@ -406,6 +484,7 @@ public sealed class FormatSweeperTests : IDisposable
             for (var i = 0; i < _primaries.Length; i++)
             {
                 var index = i;
+                _primaries[i].ExecuteAsync(Arg.Any<int>(), "INFO", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>()).Returns(_ => Task.FromResult(Info(index)));
                 _primaries[i].ExecuteAsync(Arg.Any<int>(), "SCAN", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>()).Returns(ci => Task.FromResult(Page(index, ci.ArgAt<ICollection<object>>(2).ToArray())));
             }
         }
@@ -413,6 +492,31 @@ public sealed class FormatSweeperTests : IDisposable
         public IDatabase Database { get; }
 
         public IRedisConnector Connector { get; }
+
+        /// <summary>The run id each primary answers to INFO server; null answers none.</summary>
+        public string?[] RunIds { get; } = new string?[2];
+
+        /// <summary>The largest answer to a read past the two-byte one.</summary>
+        public int MaxFetched { get; private set; }
+
+        /// <summary>Asked for the bytes the migrator holds claimed at each read past the two-byte one.</summary>
+        public Func<long>? Claimed { get; set; }
+
+        public List<long> ClaimedAtRead { get; } = [];
+
+        /// <summary>The keys whose STRLEN, or whose read past the two-byte one, answers WRONGTYPE.</summary>
+        public HashSet<string> WrongTypeAtLength { get; } = [];
+
+        public HashSet<string> WrongTypeAtRead { get; } = [];
+
+        /// <summary>Told the key once its STRLEN has been answered, so a writer can come in between.</summary>
+        public Action<string>? AfterLength { get; set; }
+
+        public void Replace(string key, byte[] value)
+        {
+            var at = _keys.FindIndex(k => k.Key == key);
+            _keys[at] = (_keys[at].Primary, key, value, _keys[at].Ttl);
+        }
 
         public void Add(int primary, string key, byte[]? value, TimeSpan? ttl = null) => _keys.Add((primary, key, value, ttl));
 
@@ -428,9 +532,42 @@ public sealed class FormatSweeperTests : IDisposable
 
         private byte[]? Find(string key) => _keys.FirstOrDefault(k => k.Key == key).Value;
 
-        private RedisValue Head(string key) => Find(key) is { } value ? (RedisValue)value[..Math.Min(2, value.Length)] : RedisValue.Null;
+        private RedisResult Info(int primary) =>
+            RedisResult.Create((RedisValue)("# Server\r\nredis_version:7.2.0\r\n" + (RunIds[primary] is { } id ? $"run_id:{id}\r\n" : string.Empty)), ResultType.BulkString);
 
-        private RedisValue Whole(string key) => Find(key) is { } value ? (RedisValue)value : RedisValue.Null;
+        private Task<long> Length(string key)
+        {
+            if (WrongTypeAtLength.Contains(key))
+            {
+                return Task.FromException<long>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "WRONGTYPE Operation against a key holding the wrong kind of value"));
+            }
+
+            var length = (long)(Find(key)?.Length ?? 0);
+            AfterLength?.Invoke(key);
+            return Task.FromResult(length);
+        }
+
+        // As GETRANGE: the bytes from the start to the end given, both ends counted, never more than the value has.
+        private Task<RedisValue> Range(string key, long end)
+        {
+            if (end > 1)
+            {
+                if (WrongTypeAtRead.Contains(key))
+                {
+                    return Task.FromException<RedisValue>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "WRONGTYPE Operation against a key holding the wrong kind of value"));
+                }
+
+                ClaimedAtRead.Add(Claimed?.Invoke() ?? 0);
+            }
+
+            var answer = Find(key) is { } value ? (RedisValue)value[..(int)Math.Min(end + 1, value.Length)] : RedisValue.Null;
+            if (end > 1)
+            {
+                MaxFetched = Math.Max(MaxFetched, answer.IsNull ? 0 : ((byte[])answer!).Length);
+            }
+
+            return Task.FromResult(answer);
+        }
 
         private RedisResult Page(int primary, object[] arguments)
         {

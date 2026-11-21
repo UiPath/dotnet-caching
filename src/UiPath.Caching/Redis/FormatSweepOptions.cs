@@ -15,7 +15,7 @@ public sealed class FormatSweepOptions
     /// <summary>The SCAN <c>COUNT</c> hint, the keys looked at a page; 500 by default.</summary>
     public int PageSize { get; init; } = 500;
 
-    /// <summary>The <see cref="FormatSweepReport.NextCursor"/> of an earlier pass to continue from; null starts at the beginning.</summary>
+    /// <summary>The <see cref="FormatSweepReport.NextCursor"/> of an earlier pass to continue from; null starts at the beginning, and so does a cursor of a server that is no longer the one it named.</summary>
     public string? Cursor { get; init; }
 
     /// <summary>The <c>group</c> tag of the sweep's metrics, so a pass over one set of keys is told from another; <c>default</c> if not set.</summary>

@@ -99,6 +99,18 @@ internal sealed partial class FormatMigrator : IDisposable
     /// <summary>How many claims took the gate; for a test that pins the lock-free refusal.</summary>
     internal long GatedClaims => Volatile.Read(ref _gated);
 
+    /// <summary>The bytes claimed and not yet given back; for a test of the byte budget.</summary>
+    internal long ClaimedBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _bytes;
+            }
+        }
+    }
+
     /// <summary>How many keys are held back as lossy; for a test of the bookkeeping.</summary>
     internal int LossyKeys => Volatile.Read(ref _lossyKeys);
 

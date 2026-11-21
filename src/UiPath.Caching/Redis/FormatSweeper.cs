@@ -23,12 +23,14 @@ internal sealed class FormatSweeper(
 {
     private const char CursorSeparator = '|';
     private const int HeadLength = 2;
+    private const string RunIdField = "run_id:";
 
     public async Task<FormatSweepReport> SweepAsync(CacheKey keyPattern, FormatSweepOptions options, CancellationToken token)
     {
         Validate(options);
         var plan = await census.PlanAsync(keyPattern, token).ConfigureAwait(false);
-        var (primaryIndex, cursor) = Resume(options.Cursor, plan.Primaries);
+        var identities = await IdentitiesAsync(plan.Primaries, plan.Database.Database, token).ConfigureAwait(false);
+        var (primaryIndex, cursor) = Resume(options.Cursor, identities);
         var limit = Math.Min(options.MaxValueBytes, ValueMigration.MaxValueBytes);
         var pacer = new Pacer(clock, options.RatePerSecond);
         var started = clock.GetTimestamp();
@@ -47,7 +49,7 @@ internal sealed class FormatSweeper(
             // Between pages, so a page is never left half-done: the cursor names the start of one.
             if (options.Budget is { } budget && clock.GetElapsedTime(started) >= budget && pages > 0)
             {
-                next = Position(plan.Primaries[primaryIndex], cursor);
+                next = Position(identities[primaryIndex], cursor);
                 break;
             }
 
@@ -56,7 +58,7 @@ internal sealed class FormatSweeper(
             var (after, keys) = await FormatCensus.ScanPageAsync(primary, plan.Database.Database, plan.StringPattern, "string", cursor, options.PageSize, token).ConfigureAwait(false);
             if (!await SweepPageAsync(keys, plan, limit, pacer, tally, token).ConfigureAwait(false))
             {
-                next = Position(primary, cursor);
+                next = Position(identities[primaryIndex], cursor);
                 break;
             }
 
@@ -89,11 +91,14 @@ internal sealed class FormatSweeper(
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Group);
     }
 
-    private static string Position(IServer primary, ulong cursor) =>
-        primary.EndPoint + CursorSeparator.ToString() + cursor.ToString(CultureInfo.InvariantCulture);
+    private static bool IsWrongType(RedisServerException ex) => ex.Message.StartsWith("WRONGTYPE", StringComparison.OrdinalIgnoreCase);
 
-    // A cursor names a primary and a SCAN cursor on it; a primary that is gone since continues with the next one in order.
-    private static (int Primary, ulong Cursor) Resume(string? text, IReadOnlyList<IServer> primaries)
+    private static string Position(string identity, ulong cursor) =>
+        identity + CursorSeparator.ToString() + cursor.ToString(CultureInfo.InvariantCulture);
+
+    // A cursor names a primary and a SCAN cursor on it. Only that same server, by endpoint and run id, goes on from it; a primary that is gone, or an endpoint another
+    // server took over, makes the pass start again, since a cursor of one keyspace means nothing in another.
+    private static (int Primary, ulong Cursor) Resume(string? text, IReadOnlyList<string> identities)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -106,22 +111,46 @@ internal sealed class FormatSweeper(
             throw new ArgumentException("The cursor is not one a sweep reported.", nameof(text));
         }
 
-        var endpoint = text[..at];
-        for (var i = 0; i < primaries.Count; i++)
+        var identity = text[..at];
+        for (var i = 0; i < identities.Count; i++)
         {
-            var order = string.CompareOrdinal(primaries[i].EndPoint?.ToString(), endpoint);
-            if (order == 0)
+            if (string.Equals(identities[i], identity, StringComparison.Ordinal))
             {
                 return (i, cursor);
             }
-
-            if (order > 0)
-            {
-                return (i, 0);
-            }
         }
 
-        return (primaries.Count, 0);
+        return (0, 0);
+    }
+
+    // The endpoint, and the server's run id where INFO gives one: a cursor is only continued on the server that made it.
+    private static async Task<string[]> IdentitiesAsync(IReadOnlyList<IServer> primaries, int database, CancellationToken token)
+    {
+        var identities = new string[primaries.Count];
+        for (var i = 0; i < identities.Length; i++)
+        {
+            identities[i] = await IdentityAsync(primaries[i], database, token).ConfigureAwait(false);
+        }
+
+        return identities;
+    }
+
+    // Asked as a plain command, as SCAN is, because the typed INFO call needs admin mode and a cache's connection has none; a server that does not answer is known by its endpoint alone.
+    private static async Task<string> IdentityAsync(IServer primary, int database, CancellationToken token)
+    {
+        var endpoint = primary.EndPoint?.ToString() ?? string.Empty;
+        try
+        {
+            var reply = await primary.ExecuteAsync(database, "INFO", ["server"], CommandFlags.DemandMaster).WaitAsync(token).ConfigureAwait(false);
+            var runId = reply?.ToString()?
+                .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault(static line => line.StartsWith(RunIdField, StringComparison.Ordinal))?[RunIdField.Length..];
+            return string.IsNullOrEmpty(runId) ? endpoint : endpoint + CursorSeparator + runId;
+        }
+        catch (Exception ex) when (ex is RedisException or RedisCommandException && !token.IsCancellationRequested)
+        {
+            return endpoint;
+        }
     }
 
     // The key as the cache holds it: the connector's prefix, which its database adds again, is taken off.
@@ -179,7 +208,7 @@ internal sealed class FormatSweeper(
                 ? (byte[]?)await database.StringGetRangeAsync(key, 0, HeadLength - 1, CommandFlags.DemandMaster).ConfigureAwait(false)
                 : null;
         }
-        catch (RedisServerException ex) when (ex.Message.StartsWith("WRONGTYPE", StringComparison.OrdinalIgnoreCase))
+        catch (RedisServerException ex) when (IsWrongType(ex))
         {
             return null;
         }
@@ -222,7 +251,18 @@ internal sealed class FormatSweeper(
             return false;
         }
 
-        var length = await database.StringLengthAsync(key, CommandFlags.DemandMaster).ConfigureAwait(false);
+        long length;
+        try
+        {
+            length = await database.StringLengthAsync(key, CommandFlags.DemandMaster).ConfigureAwait(false);
+        }
+        catch (RedisServerException ex) when (IsWrongType(ex))
+        {
+            // The key changed type since the two-byte read: it is another writer's now, as a rewrite that lost a race would find it.
+            tally.Changed++;
+            return true;
+        }
+
         if (length == 0)
         {
             return await CountEmptyAsync(database, key, tally).ConfigureAwait(false);
@@ -234,7 +274,7 @@ internal sealed class FormatSweeper(
             return true;
         }
 
-        return await ConvertAsync(database, key, (int)length, tally, token).ConfigureAwait(false);
+        return await ConvertAsync(database, key, limit, tally, token).ConfigureAwait(false);
     }
 
     private async Task<bool> CountEmptyAsync(IDatabase database, RedisKey key, Tally tally)
@@ -252,10 +292,12 @@ internal sealed class FormatSweeper(
         return true;
     }
 
-    private async Task<bool> ConvertAsync(IDatabase database, RedisKey key, int length, Tally tally, CancellationToken token)
+    // The value is read with a bound, so what a writer put there since STRLEN cannot be fetched past it, and the bound is what the byte budget is asked for.
+    private async Task<bool> ConvertAsync(IDatabase database, RedisKey key, int limit, Tally tally, CancellationToken token)
     {
         var migrator = migration.Migrator;
-        switch (migrator.TryClaimDirect(owner, key, length, out var heldLossy))
+        var bound = limit + 1;
+        switch (migrator.TryClaimDirect(owner, key, bound, out var heldLossy))
         {
             case FormatMigrator.ClaimResult.Recent:
                 if (heldLossy)
@@ -276,7 +318,7 @@ internal sealed class FormatSweeper(
         var lossy = false;
         try
         {
-            var stored = (byte[]?)await database.StringGetAsync(key, CommandFlags.DemandMaster).ConfigureAwait(false);
+            var stored = (byte[]?)await database.StringGetRangeAsync(key, 0, limit, CommandFlags.DemandMaster).ConfigureAwait(false);
             if (stored is null)
             {
                 tally.Scanned--;
@@ -289,7 +331,7 @@ internal sealed class FormatSweeper(
                 return true;
             }
 
-            if (stored.Length > ValueMigration.MaxValueBytes)
+            if (stored.Length > limit)
             {
                 tally.Oversize++;
                 return true;
@@ -317,6 +359,11 @@ internal sealed class FormatSweeper(
         {
             throw;
         }
+        catch (RedisServerException ex) when (IsWrongType(ex))
+        {
+            tally.Changed++;
+            return true;
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             migrator.NoteFailure(ex);
@@ -325,7 +372,7 @@ internal sealed class FormatSweeper(
         }
         finally
         {
-            migrator.Finish(owner, key, length, lossy);
+            migrator.Finish(owner, key, bound, lossy);
         }
     }
 

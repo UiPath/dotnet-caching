@@ -113,8 +113,17 @@ public sealed class RedisCacheProvider : ICacheProvider
     /// </summary>
     public async Task<FormatCensusReport> CountFormatsByReasonAsync(CacheKey keyPattern, CancellationToken token = default)
     {
-        var report = await NewCensus().CountByReasonAsync(keyPattern, ValueMigration.MaxValueBytes, token).ConfigureAwait(false);
+        var census = NewCensus();
+        var report = await census.CountByReasonAsync(keyPattern, ValueMigration.MaxValueBytes, token).ConfigureAwait(false);
+
+        // Every known reason is published, the absent ones as zero, so a reading that drained to nothing replaces the count the last census gave.
+        var published = census.KnownReasons().ToDictionary(static reason => reason, static _ => 0L, StringComparer.Ordinal);
         foreach (var (reason, count) in report.ByReason)
+        {
+            published[reason] = count;
+        }
+
+        foreach (var (reason, count) in published)
         {
             try
             {

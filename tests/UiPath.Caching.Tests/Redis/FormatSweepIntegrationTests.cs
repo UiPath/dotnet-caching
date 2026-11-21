@@ -237,7 +237,74 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*JSON*");
     }
 
+    [Fact]
+    public async Task A_value_replaced_by_a_huge_one_after_its_length_was_read_is_not_fetched_past_the_limit()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = raw.GetDatabase();
+        using var rig = Rig.Build(fixture.ConnectionString, envelope: false);
+        await rig.SetAsync(db, "k", Json(new Item("small")), TimeSpan.FromMinutes(5));
+        var huge = new byte[8 * 1024 * 1024];
+        huge[0] = (byte)'"';
+        var fetched = new List<int>();
+        var connector = new InterceptingConnector(
+            rig.ConnectorOf(),
+            after: (method, args, result) => (method.Name, result, args) switch
+            {
+                (nameof(IDatabase.StringLengthAsync), Task<long> length, _) => ReplaceAfter(length, () => rig.SetAsync(db, "k", huge, TimeSpan.FromMinutes(5))),
+                (nameof(IDatabase.StringGetRangeAsync), Task<RedisValue> read, [_, _, long end, _]) when end > 1 => Measure(read, fetched),
+                _ => result,
+            });
+
+        var report = await rig.ProviderOver(connector).SweepFormatsAsync<Item>(rig.Pattern, new FormatSweepOptions { RatePerSecond = 1000, MaxValueBytes = 1024 }, Ct);
+
+        fetched.Should().ContainSingle().Which.Should().Be(1025, "the read asked for the limit and one byte, and got exactly that of an eight megabyte value");
+        report.Oversize.Should().Be(1);
+        report.Converted.Should().Be(0);
+        (await rig.GetAsync(db, "k")).Should().HaveCount(huge.Length, "the writer's value stands");
+    }
+
+    [Fact]
+    public async Task A_census_publishes_every_known_reason_so_a_count_can_drain_to_zero()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.ServerVersion >= new Version(7, 0), "PEXPIRETIME needs Redis 7.");
+        await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = raw.GetDatabase();
+        using var rig = Rig.Build(fixture.ConnectionString, envelope: false);
+        await rig.SetAsync(db, "a", Json(new Item("a")), TimeSpan.FromMinutes(5));
+        await rig.SetAsync(db, "b", Json(new Item("b")), TimeSpan.FromMinutes(5));
+
+        await rig.Provider.CountFormatsByReasonAsync(rig.Pattern, Ct);
+        var first = rig.Telemetry.Metrics.Where(m => m.Name == Metrics.FormatCensus).ToList();
+        await rig.Provider.SweepFormatsAsync<Item>(rig.Pattern, new FormatSweepOptions { RatePerSecond = 1000 }, Ct);
+        await rig.Provider.CountFormatsByReasonAsync(rig.Pattern, Ct);
+        var second = rig.Telemetry.Metrics.Where(m => m.Name == Metrics.FormatCensus).Skip(first.Count).ToList();
+
+        first.Single(m => m.Properties!["reason"] == "format_json").Value.Should().Be(2);
+        second.Single(m => m.Properties!["reason"] == "format_json").Value.Should().Be(0, "nothing is left in json, and the gauge says so");
+        second.Single(m => m.Properties!["reason"] == "format_fast").Value.Should().Be(2);
+        second.Select(m => m.Properties!["reason"]).Should().BeEquivalentTo(
+            "empty", "oversize", "no_ttl", "hash_sampled", "format_json", "format_unknown", "format_fast", "format_other");
+        second.Where(m => m.Properties!["reason"] is not "format_fast").Should().OnlyContain(m => m.Value == 0);
+    }
+
     private static byte[] Json(Item item) => JsonSerializer.SerializeToUtf8Bytes(item);
+
+    private static async Task<long> ReplaceAfter(Task<long> length, Func<Task> replace)
+    {
+        var seen = await length.ConfigureAwait(false);
+        await replace().ConfigureAwait(false);
+        return seen;
+    }
+
+    private static async Task<RedisValue> Measure(Task<RedisValue> read, List<int> fetched)
+    {
+        var value = await read.ConfigureAwait(false);
+        fetched.Add(((byte[]?)value)?.Length ?? 0);
+        return value;
+    }
 
     private static async Task<long> ScriptRefusalsAsync(IServer server, string user)
     {
@@ -381,7 +448,7 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
         }
 
         private object? After(MethodInfo method, object?[] args, object? result) =>
-            method.Name == nameof(IDatabase.StringGetAsync) && args is [RedisKey key, _] && result is Task<RedisValue> read && Interlocked.Exchange(ref _done, 1) == 0
+            method.Name == nameof(IDatabase.StringGetRangeAsync) && args is [RedisKey key, _, long end, _] && end > 1 && result is Task<RedisValue> read && Interlocked.Exchange(ref _done, 1) == 0
                 ? Then(key, read)
                 : result;
 
