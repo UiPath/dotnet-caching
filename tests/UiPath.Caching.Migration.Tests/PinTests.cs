@@ -142,6 +142,7 @@ public sealed class PinTests : RouterTestBase
         await node.Cache.TryGetAsync("k", Ct);
 
         node.SourceBackend.Reads.Should().Be(1, "the durable state was read after the withdrawal and holds no switch");
+        _store.AckOf("g", "n1#router").Should().EndWith(":2", "the withdrawal reached the store with the read that confirmed it");
     }
 
     [Fact]
@@ -265,6 +266,64 @@ public sealed class PinTests : RouterTestBase
 
         (node.SourceBackend.Reads, node.SourceBackend.Writes).Should().Be((1, 1));
     }
+
+    [Fact]
+    public async Task A_write_made_after_a_factory_that_outlived_the_state_is_not_sent_to_the_source()
+    {
+        var node = NewNode(useLibrary: _ => false, pinWhen: _ => false, pinStore: _store);
+        var pins = node.Core.Pins!;
+        await Settled(node);
+        var release = new TaskCompletionSource();
+        var running = node.Cache.GetOrAddAsync("k", async _ => { await release.Task; return new Item("made"); }, default, Ct).AsTask();
+        await UntilAsync(() => node.SourceBackend.Reads == 1);
+
+        _store.Down = true;
+        Clock.Advance(pins.StateValidity + TimeSpan.FromSeconds(1));
+        release.SetResult();
+
+        (await running).Should().Be(new Item("made"), "the caller still gets the value its factory made");
+        node.SourceBackend.Writes.Should().Be(0, "the state that let the call in is too old to tell whether the group was switched meanwhile");
+        node.LibraryBackend.Writes.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_write_made_after_a_factory_that_outlived_a_fallback_to_the_source_is_not_sent_once_the_state_expired()
+    {
+        var node = NewNode(useLibrary: _ => true, pinWhen: _ => false, pinStore: _store);
+        var pins = node.Core.Pins!;
+        await Settled(node);
+        node.LibraryBackend.ReadOverride = ReadOutcome.Unavailable;
+        var release = new TaskCompletionSource();
+        var running = node.Cache.GetOrAddAsync("k", async _ => { await release.Task; return new Item("made"); }, default, Ct).AsTask();
+        await UntilAsync(() => node.SourceBackend.Reads == 1);
+
+        _store.Down = true;
+        Clock.Advance(pins.StateValidity + TimeSpan.FromSeconds(1));
+        release.SetResult();
+
+        await running;
+        node.SourceBackend.Writes.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_write_made_after_a_factory_that_outlived_a_pin_goes_to_the_library_and_not_the_source()
+    {
+        var node = NewNode(useLibrary: _ => false, pinWhen: _ => _pinned, pinStore: _store);
+        var pins = node.Core.Pins!;
+        await Settled(node);
+        var release = new TaskCompletionSource();
+        var running = node.Cache.GetOrAddAsync("k", async _ => { await release.Task; return new Item("made"); }, default, Ct).AsTask();
+        await UntilAsync(() => node.SourceBackend.Reads == 1);
+
+        _pinned = true;
+        pins.EvaluatePins();
+        release.SetResult();
+
+        await running;
+        node.SourceBackend.Writes.Should().Be(0, "the group is pinned now");
+        node.LibraryBackend.Writes.Should().Be(1);
+    }
+
     [Fact]
     public async Task A_setting_that_throws_leaves_the_group_as_it_was()
     {
@@ -521,7 +580,13 @@ public sealed class PinTests : RouterTestBase
     {
         public Task<SwitchRead> ReadStateAsync(string group, CancellationToken cancellationToken) => inner.ReadStateAsync(group, cancellationToken);
 
-        public Task MarkSwitchedAsync(string group, CancellationToken cancellationToken) => inner.MarkSwitchedAsync(group, cancellationToken);
+        public Task RestoreSwitchAsync(string group, CancellationToken cancellationToken) => inner.RestoreSwitchAsync(group, cancellationToken);
+
+        public Task<AckPublish> PublishAckAsync(string group, string field, string incarnation, long generation, CancellationToken cancellationToken) => inner.PublishAckAsync(group, field, incarnation, generation, cancellationToken);
+
+        public Task<IReadOnlyDictionary<string, string>> ReadAcksAsync(string group, CancellationToken cancellationToken) => inner.ReadAcksAsync(group, cancellationToken);
+
+        public Task<bool> CommitSwitchAsync(string group, IReadOnlyList<KeyValuePair<string, string>> acknowledgements, CancellationToken cancellationToken) => inner.CommitSwitchAsync(group, acknowledgements, cancellationToken);
 
         public Task<IReadOnlyList<NodeEntry>> ReadNodesAsync(CancellationToken cancellationToken) => throw new StackExchange.Redis.RedisException("down");
     }

@@ -21,6 +21,8 @@ internal sealed class GroupPin(string group)
     private int _known;
     private int _unconfirmed;
     private long _withdrawals;
+    private long _ackGeneration;
+    private long _publishedGeneration;
 
     public string Group { get; } = group;
 
@@ -35,6 +37,16 @@ internal sealed class GroupPin(string group)
 
     /// <summary>Counts the withdrawals of an acknowledged pin; a state read confirms only the withdrawal that began before it.</summary>
     public long Withdrawals => Volatile.Read(ref _withdrawals);
+
+    /// <summary>Counts every change of the acknowledgement: odd while acknowledged, even otherwise. Redis holds the last one this node published.</summary>
+    public long AckGeneration => Volatile.Read(ref _ackGeneration);
+
+    /// <summary>The generation the store last took from this node, or an earlier one; never ahead of <see cref="AckGeneration"/>.</summary>
+    public long PublishedGeneration
+    {
+        get => Volatile.Read(ref _publishedGeneration);
+        set => Volatile.Write(ref _publishedGeneration, value);
+    }
 
     internal int SourceCalls => Volatile.Read(ref _sourceCalls);
 
@@ -65,14 +77,14 @@ internal sealed class GroupPin(string group)
         Volatile.Read(ref _unconfirmed) == 0 && Volatile.Read(ref _known) == 1 && clock.GetElapsedTime(Volatile.Read(ref _knownAt)) <= validity;
 
     /// <summary>
-    /// A read of the durable state, begun after withdrawal number <paramref name="withdrawals"/>, found no switch: a peer that read the old acknowledgement
-    /// can no longer have recorded one, so the source may be used again.
+    /// A read of the durable state, begun after the withdrawal of generation <paramref name="generation"/> was recorded in the store as number <paramref name="withdrawals"/>,
+    /// found no switch: no peer can record one against the old acknowledgement any more, so the source may be used again.
     /// </summary>
-    public void ConfirmUnswitched(long withdrawals)
+    public void ConfirmUnswitched(long withdrawals, long generation)
     {
         lock (_gate)
         {
-            if (withdrawals == _withdrawals && !Switched)
+            if (withdrawals == _withdrawals && generation == _ackGeneration && !Switched)
             {
                 Volatile.Write(ref _unconfirmed, 0);
             }
@@ -132,6 +144,11 @@ internal sealed class GroupPin(string group)
         // The drain reads the counter after the flag is published; a call that counts after that sees the flag and never counts.
         var acked = applied && (before || Volatile.Read(ref _sourceCalls) == 0);
         Volatile.Write(ref _acked, acked ? 1 : 0);
+        if (acked != before)
+        {
+            Interlocked.Increment(ref _ackGeneration);
+        }
+
         return acked != before;
     }
 }

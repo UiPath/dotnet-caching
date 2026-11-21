@@ -16,13 +16,13 @@ internal static class PinGateEvaluator
         var ours = routers.Where(pair => InScope(pair.Value, scope)).ToList();
         if (!ours.Any(pair => pair.Key == ownField))
         {
-            return new PinVerdict(new HashSet<string>(), OwnEntryMissing);
+            return new PinVerdict(new HashSet<string>(), OwnEntryMissing, []);
         }
 
         // What names no application may be ours or anyone's: it holds the gate, and its pin, if it has one, approves nothing.
         if (ours.Any(pair => pair.Value.Scope is null))
         {
-            return new PinVerdict(new HashSet<string>(), UnattributedNode);
+            return new PinVerdict(new HashSet<string>(), UnattributedNode, []);
         }
 
         foreach (var node in nodes)
@@ -32,7 +32,7 @@ internal static class PinGateEvaluator
                 // A library advertisement is judged through the router entry of its node, whoever it belongs to; with none, it may be ours and has no pin.
                 if (!routers.ContainsKey(node.Field + RouterAdvertisement.FieldSuffix))
                 {
-                    return new PinVerdict(new HashSet<string>(), UnattributedNode);
+                    return new PinVerdict(new HashSet<string>(), UnattributedNode, []);
                 }
             }
         }
@@ -46,7 +46,7 @@ internal static class PinGateEvaluator
             }
         }
 
-        return new PinVerdict(satisfied, null);
+        return new PinVerdict(satisfied, null, [.. ours.Select(pair => pair.Key)]);
     }
 
     /// <summary>A fresh router entry of this application that reports the group switched.</summary>

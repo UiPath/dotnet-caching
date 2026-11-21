@@ -447,8 +447,9 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         }
     }
 
-    private async ValueTask<WriteOutcome> SendAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, KeyState state, Announcement announcement, CancellationToken cancellationToken)
+    private async ValueTask<WriteOutcome> SendAsync(string key, Route captured, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, KeyState state, Announcement announcement, CancellationToken cancellationToken)
     {
+        var route = _core.Revalidate(_pin, captured);
         var result = await CommandAsync(Client(route), key, route, command, state, announcement, cancellationToken).ConfigureAwait(false);
         if (result.Outcome == WriteOutcome.NotSent && !route.Bypass && !route.NoFallback && MayFallBack(route))
         {

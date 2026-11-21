@@ -14,11 +14,15 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     private const string UnpinnedGroup = "unpinned_group";
     private const string NodeListUnreadable = "node_list_unreadable";
     private const string StateNotWritten = "state_not_written";
+    private const string AckNotRecorded = "ack_not_recorded";
+    private const string AckChanged = "ack_changed";
 
     private static readonly char[] ForbiddenInGroup = ['+', '@', '=', '{', '}'];
 
     private readonly Dictionary<string, GroupPin> _byName = new(StringComparer.Ordinal);
     private readonly HashSet<string> _failedPredicate = [];
+    private readonly SemaphoreSlim _refreshing = new(1, 1);
+    private readonly string _incarnation = Guid.NewGuid().ToString("N");
     private volatile GroupPin[] _groups = [];
     private volatile GateSnapshot? _snapshot;
     private int _wanted;
@@ -173,26 +177,49 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     /// <summary>One pass over the switch state, the node list and the gate; false when something could not be read, which the next pass retries.</summary>
     public async Task<bool> RefreshAsync(CancellationToken cancellationToken)
     {
-        var nodes = new NodeCache(store, cancellationToken, LogNodesFailed);
-        var healthy = true;
-        var groups = _groups;
-        foreach (var group in groups)
+        // One pass at a time: acknowledgements reach the store in the order they were made.
+        await _refreshing.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            healthy &= await RefreshGroupAsync(group, nodes, cancellationToken).ConfigureAwait(false);
-        }
+            var nodes = new NodeCache(store, cancellationToken, LogNodesFailed);
+            var healthy = true;
+            var groups = _groups;
+            foreach (var group in groups)
+            {
+                healthy &= await RefreshGroupAsync(group, nodes, cancellationToken).ConfigureAwait(false);
+            }
 
-        healthy &= await EvaluateGateAsync(groups, nodes, cancellationToken).ConfigureAwait(false);
-        return healthy;
+            healthy &= await EvaluateGateAsync(groups, nodes, cancellationToken).ConfigureAwait(false);
+            return healthy;
+        }
+        finally
+        {
+            _refreshing.Release();
+        }
+    }
+
+    private static bool IsAcknowledgement(string record)
+    {
+        var separator = record.LastIndexOf(":", StringComparison.Ordinal);
+        return separator > 0 && long.TryParse(record.AsSpan(separator + 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var generation) && generation % 2 == 1;
     }
 
     private async Task<bool> RefreshGroupAsync(GroupPin group, NodeCache nodes, CancellationToken cancellationToken)
     {
         // The withdrawal this read can confirm: one that happened after it began would not be covered by what it finds.
         var withdrawals = group.Withdrawals;
+        var generation = group.AckGeneration;
         SwitchRead read;
         try
         {
-            read = await (store ?? throw new InvalidOperationException("The router has no connection to keep the pin state on.")).ReadStateAsync(group.Group, cancellationToken).ConfigureAwait(false);
+            var step = await ReadOrPublishAsync(group, generation, cancellationToken).ConfigureAwait(false);
+            if (!step.Applied)
+            {
+                LogAckSuperseded(group.Group);
+                return false;
+            }
+
+            read = step.State;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException && !cancellationToken.IsCancellationRequested)
         {
@@ -215,12 +242,35 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
                     return false;
                 }
 
-                group.ConfirmUnswitched(withdrawals);
+                group.ConfirmUnswitched(withdrawals, generation);
                 break;
         }
 
         group.StateRead(core.Clock);
         return true;
+    }
+
+    // Every change of the acknowledgement goes to the store before the state is read with it, so a withdrawal and the read that confirms it are one step there.
+    private async Task<AckPublish> ReadOrPublishAsync(GroupPin group, long generation, CancellationToken cancellationToken)
+    {
+        var pinStore = store ?? throw new InvalidOperationException("The router has no connection to keep the pin state on.");
+        if (generation == 0 || (generation % 2 == 0 && group.PublishedGeneration == generation))
+        {
+            return new AckPublish(true, await pinStore.ReadStateAsync(group.Group, cancellationToken).ConfigureAwait(false));
+        }
+
+        if (OwnField.Length == 0)
+        {
+            throw new InvalidOperationException("The router has no node field to record its acknowledgement under.");
+        }
+
+        var published = await pinStore.PublishAckAsync(group.Group, OwnField, _incarnation, generation, cancellationToken).ConfigureAwait(false);
+        if (published.Applied)
+        {
+            group.PublishedGeneration = generation;
+        }
+
+        return published;
     }
 
     // No key: never switched, or lost. A node that saw the switch, or a peer that reports it, restores the key; with neither, the group is not switched.
@@ -255,7 +305,7 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     {
         try
         {
-            await store!.MarkSwitchedAsync(group.Group, cancellationToken).ConfigureAwait(false);
+            await store!.RestoreSwitchAsync(group.Group, cancellationToken).ConfigureAwait(false);
             group.SetDurable(true);
             return true;
         }
@@ -283,7 +333,7 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
             LogGate(reason ?? "open");
         }
 
-        return reason is not (NodeListUnreadable or StateNotWritten);
+        return reason is not (NodeListUnreadable or StateNotWritten or AckNotRecorded or AckChanged);
     }
 
     // The format is written by one serializer for every cache of the router, which knows nothing of groups: the gate opens only when all of them are pinned.
@@ -326,18 +376,51 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
             return "node_without_pin";
         }
 
-        // The point of no return is recorded before any write can use it.
+        // The point of no return is recorded before any write can use it, and only against the acknowledgements as they are in the store at that moment.
         foreach (var group in pinned.Where(group => !group.Durable))
         {
-            Notify(group.LatchSwitched(durable: false));
-            if (!await WriteStateAsync(group, cancellationToken).ConfigureAwait(false))
+            var refused = await CommitAsync(group, verdict.Required, cancellationToken).ConfigureAwait(false);
+            if (refused is not null)
             {
-                return StateNotWritten;
+                return refused;
             }
         }
 
         return null;
     }
+
+    // Not latched until the store has taken it: a commit that is refused, or whose answer never came, is validated again when it runs, so a node that withdrew meanwhile is not bound by it, and a later read finds it if it did run.
+    private async Task<string?> CommitAsync(GroupPin group, IReadOnlyList<string> required, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var records = await store!.ReadAcksAsync(group.Group, cancellationToken).ConfigureAwait(false);
+            var expected = new List<KeyValuePair<string, string>>(required.Count);
+            foreach (var field in required)
+            {
+                if (!records.TryGetValue(field, out var record) || !IsAcknowledgement(record))
+                {
+                    return AckNotRecorded;
+                }
+
+                expected.Add(new(field, record));
+            }
+
+            if (!await store.CommitSwitchAsync(group.Group, expected, cancellationToken).ConfigureAwait(false))
+            {
+                return AckChanged;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException && !cancellationToken.IsCancellationRequested)
+        {
+            LogStateWriteFailed(ex, group.Group);
+            return StateNotWritten;
+        }
+
+        Notify(group.LatchSwitched(durable: true));
+        return null;
+    }
+
 
     private void Notify(bool changed)
     {
@@ -397,6 +480,9 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The switch state of group {Group} could not be written; MessagePack writes stay held.")]
     private partial void LogStateWriteFailed(Exception exception, string group);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The store holds a later acknowledgement of this node for group {Group}; the group stays unconfirmed until the next pass.")]
+    private partial void LogAckSuperseded(string group);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "The format gate is {State}.")]
     private partial void LogGate(string state);

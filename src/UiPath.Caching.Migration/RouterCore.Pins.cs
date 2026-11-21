@@ -11,6 +11,25 @@ internal sealed partial class RouterCore
     public bool MaySourceFallback(GroupPin? pin) => pin is null || (!pin.Applied && pin.StateKnown(Clock, Pins!.StateValidity));
 
     /// <summary>
+    /// The route a captured source write may still take: asked again right before it is sent, as a factory or a lock can hold it past the pin and the state it was admitted under.
+    /// A pin that applied since sends it to the library, and a state too old to tell leaves it unanswered.
+    /// </summary>
+    public Route Revalidate(GroupPin? pin, Route route)
+    {
+        if (pin is null || route.Path != RoutePath.Source)
+        {
+            return route;
+        }
+
+        if (pin.Applied)
+        {
+            return RoutePrecedence.Pinned(route.Tier);
+        }
+
+        return pin.StateKnown(Clock, Pins!.StateValidity) ? route : RoutePrecedence.Unknown;
+    }
+
+    /// <summary>
     /// Admits a call of a group that can be pinned. A group the pin applies to goes to the library and never the source; one that is not known to be
     /// unswitched is answered unavailable; any other keeps its usual path, and is counted until it ends so the pin can tell when the old path has drained.
     /// </summary>

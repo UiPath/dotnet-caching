@@ -83,6 +83,7 @@ public static class RouterServiceCollectionExtensions
                 services.RemoveAt(index);
             }
         }
+
         var section = configuration.GetSection(sectionName);
         services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId, gate, section));
         services.AddHostedService<RouterHostedService>();

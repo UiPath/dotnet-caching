@@ -475,6 +475,29 @@ public class FormatNegotiatorTests
     }
 
     [Fact]
+    public void A_write_that_asks_while_a_view_restarts_the_hold_never_sees_the_old_decision_with_the_gate_open_again()
+    {
+        var gate = new FakeGate(null);
+        var sut = Negotiator(gate);
+        var view = View(Node("a", Binary));
+        Settle(sut, view);
+        sut.Allows(_writer).Should().BeTrue();
+        gate.Reason = "node_without_pin";
+        sut.Allows(_writer).Should().BeFalse();
+        gate.Reason = null;
+        var duringView = new List<bool>();
+        gate.OnHold = () => duringView.Add(sut.Allows(_writer));
+
+        sut.Observe(view);
+
+        duringView.Should().NotBeEmpty("the view asks the gate while it builds the replacement snapshot").And.OnlyContain(allowed => !allowed, "the previous snapshot stays closed until the replacement is published");
+        sut.Allows(_writer).Should().BeFalse();
+        _clock.Advance(_options.UpgradeHold);
+        sut.Observe(view);
+        sut.Allows(_writer).Should().BeTrue();
+    }
+
+    [Fact]
     public void A_decision_behind_an_open_gate_is_read_without_allocating()
     {
         var sut = Negotiator(new FakeGate(null));
@@ -522,5 +545,14 @@ file sealed class FakeGate(string? reason) : IFormatWriteGate
 {
     public string? Reason { get; set; } = reason;
 
-    public string? Hold() => Reason;
+    /// <summary>Runs once, inside the next <see cref="Hold"/>, to let a reader in while a view is being applied.</summary>
+    public Action? OnHold { get; set; }
+
+    public string? Hold()
+    {
+        var callback = OnHold;
+        OnHold = null;
+        callback?.Invoke();
+        return Reason;
+    }
 }

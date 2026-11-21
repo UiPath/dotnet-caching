@@ -32,11 +32,12 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
     private readonly Lock _gate = new();
     private readonly long?[] _candidateSince;
     private readonly bool[] _suspended;
-    private readonly int[] _gateClosed;
+    private readonly long[] _closedAt;
     private readonly string?[] _reasons;
     private HashSet<string> _readers = [];
     private volatile Snapshot _snapshot;
     private long _lastView;
+    private long _generation;
     private long? _graceStart;
     private bool _hasView;
     private bool _failed;
@@ -62,7 +63,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         _logger = logger ?? NullLogger.Instance;
         _candidateSince = new long?[_slots.Length];
         _suspended = new bool[_slots.Length];
-        _gateClosed = new int[_slots.Length];
+        _closedAt = new long[_slots.Length];
         _reasons = new string?[_slots.Length];
         Array.Fill(_reasons, ReasonNoView);
         _snapshot = Publish(new bool[_slots.Length], 0);
@@ -89,7 +90,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             if (ReferenceEquals(writers[i].Writer, writer))
             {
                 // A view that stopped refreshing, without failing, decays on its own: the age is checked here, off the cached stamp and the injected clock.
-                return writers[i].Allowed && _clock.GetElapsedTime(snapshot.Stamp) <= _options.MaxViewAge && GateOpen(i);
+                return writers[i].Allowed && _clock.GetElapsedTime(snapshot.Stamp) <= _options.MaxViewAge && GateOpen(i, snapshot.Generation);
             }
         }
 
@@ -116,11 +117,13 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             _lastView = now;
             var allowed = new bool[_slots.Length];
             var previous = _snapshot.Writers;
+            var previousGeneration = _snapshot.Generation;
             for (var i = 0; i < _slots.Length; i++)
             {
                 // A node that joins ends what a departure held back: the format then waits for the hold like any other.
                 _suspended[i] &= !joined;
-                var closed = Interlocked.Exchange(ref _gateClosed[i], 0) == 1;
+                // Not cleared here: a closure ends with the snapshot it was seen against, which readers keep until the replacement is published.
+                var closed = _closedAt[i] >= previousGeneration;
                 if (closed)
                 {
                     _suspended[i] = false;
@@ -193,15 +196,15 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             }
             : null;
 
-    // A closure seen here is kept until the next view, which restarts the hold, so reopening before it never resumes the write.
-    private bool GateOpen(int slot)
+    // A closure seen here lasts until a view restarts the hold and publishes its snapshot, so reopening before that never resumes the write: the closure is recorded against the newest snapshot, under the lock the view takes, so it is either counted by that view or stands for the snapshot it publishes.
+    private bool GateOpen(int slot, long generation)
     {
         if (_writeGate is null)
         {
             return true;
         }
 
-        if (Volatile.Read(ref _gateClosed[slot]) == 1)
+        if (Volatile.Read(ref _closedAt[slot]) >= generation)
         {
             return false;
         }
@@ -211,7 +214,11 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             return true;
         }
 
-        Volatile.Write(ref _gateClosed[slot], 1);
+        lock (_gate)
+        {
+            _closedAt[slot] = Math.Max(_closedAt[slot], _snapshot.Generation);
+        }
+
         return false;
     }
 
@@ -423,7 +430,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             writers[i] = new(_slots[i].Writer, allowed[i]);
         }
 
-        return new(writers, stamp);
+        return new(writers, stamp, ++_generation);
     }
 
     /// <summary>A serializer, or the event format when <paramref name="Writer"/> is <see langword="null"/>, with what a node must read to be sent it.</summary>
@@ -434,5 +441,5 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
 
     private sealed record WriterState(ICacheValueSerializer? Writer, bool Allowed);
 
-    private sealed record Snapshot(WriterState[] Writers, long Stamp);
+    private sealed record Snapshot(WriterState[] Writers, long Stamp, long Generation);
 }

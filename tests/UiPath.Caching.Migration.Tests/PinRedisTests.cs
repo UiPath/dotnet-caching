@@ -46,9 +46,10 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
     {
         var store = Pins("app1", prefix: "svc:");
 
-        store.StateKey("orders").ToString().Should().Be("svc:mg:sw:app1:orders");
-        store.StateKey("a{b}").ToString().Should().Be("svc:mg:sw:app1:a%7Bb%7D").And.NotContain("{").And.NotContain("}");
-        Pins(null, prefix: string.Empty).StateKey("g").ToString().Should().Be("mg:sw:_:g");
+        store.StateKey("orders").ToString().Should().Be("svc:mg:{app1:orders}:sw");
+        store.AckKey("orders").ToString().Should().Be("svc:mg:{app1:orders}:ack", "both keys carry one hash tag, so a script reaches them in one slot");
+        store.StateKey("a{b}").ToString().Should().Be("svc:mg:{app1:a%7Bb%7D}:sw");
+        Pins(null, prefix: string.Empty).StateKey("g").ToString().Should().Be("mg:{_:g}:sw");
     }
 
     [Fact]
@@ -58,7 +59,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
         var store = Pins("app1");
 
         (await store.ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Unswitched);
-        await store.MarkSwitchedAsync("g", Ct);
+        await store.RestoreSwitchAsync("g", Ct);
         (await store.ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Switched);
         (await Db.KeyTimeToLiveAsync(store.StateKey("g"))).Should().BeNull("the switch has no expiry");
         await Db.StringSetAsync(store.StateKey("odd"), "maybe");
@@ -71,7 +72,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
         Assert.SkipUnless(fixture.Enabled, Skip);
         var one = Pins("app1");
 
-        await one.MarkSwitchedAsync("g", Ct);
+        await one.RestoreSwitchAsync("g", Ct);
 
         (await Pins("app2").ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Unswitched);
         (await Pins("app1", prefix: _run + ":other:").ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Unswitched);
@@ -116,6 +117,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
         var second = await NodeAsync("app1", "urn:two", pin: true);
         await NodeAsync("app2", "urn:foreign", pin: false);
         first.Pins.Hold().Should().NotBeNull();
+        await second.Pins.RefreshAsync(Ct);
 
         await first.Pins.RefreshAsync(Ct);
 
@@ -132,8 +134,9 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
         var first = await NodeAsync("app1", "urn:one", pin: true);
-        await NodeAsync("app1", "urn:two", pin: true);
+        var second = await NodeAsync("app1", "urn:two", pin: true);
         first.Pins.Hold();
+        await second.Pins.RefreshAsync(Ct);
         await first.Pins.RefreshAsync(Ct);
         first.Pins.Hold().Should().BeNull();
 
@@ -144,6 +147,81 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
         await Db.KeyDeleteAsync(Pins("app1").StateKey("g"));
         await first.Pins.RefreshAsync(Ct);
         (await Pins("app1").ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Switched);
+    }
+
+    [Fact]
+    public async Task A_switch_recorded_against_an_acknowledgement_that_was_withdrawn_in_between_is_refused()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var store = Pins("app1");
+        await store.PublishAckAsync("g", "a#router", "inc-a", 1, Ct);
+        await store.PublishAckAsync("g", "b#router", "inc-b", 1, Ct);
+        var observed = (await store.ReadAcksAsync("g", Ct)).ToList();
+
+        var withdrawal = await store.PublishAckAsync("g", "a#router", "inc-a", 2, Ct);
+        var committed = await store.CommitSwitchAsync("g", observed, Ct);
+
+        withdrawal.Should().Be(new AckPublish(true, SwitchRead.Unswitched));
+        committed.Should().BeFalse();
+        (await store.ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Unswitched, "the withdrawal and the read that confirms it are one step, and nothing can be recorded after it");
+        await store.PublishAckAsync("g", "a#router", "inc-a", 3, Ct);
+        (await store.CommitSwitchAsync("g", [.. (await store.ReadAcksAsync("g", Ct))], Ct)).Should().BeTrue();
+        (await store.ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Switched);
+    }
+
+    [Fact]
+    public async Task A_commit_is_refused_for_a_missing_record_an_empty_list_and_a_changed_value_and_a_late_acknowledgement_does_not_replace_a_newer_one()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var store = Pins("app1");
+        await store.PublishAckAsync("g", "a#router", "inc", 3, Ct);
+
+        (await store.CommitSwitchAsync("g", [new("b#router", "inc:1")], Ct)).Should().BeFalse("no record for that node");
+        (await store.CommitSwitchAsync("g", [], Ct)).Should().BeFalse("a switch needs an acknowledgement to rest on");
+        (await store.CommitSwitchAsync("g", [new("a#router", "inc:1")], Ct)).Should().BeFalse("the record is not the one that was read");
+        var late = await store.PublishAckAsync("g", "a#router", "inc", 1, Ct);
+
+        late.Applied.Should().BeFalse();
+        (await store.ReadAcksAsync("g", Ct))["a#router"].Should().Be("inc:3");
+        (await store.PublishAckAsync("g", "a#router", "restarted", 1, Ct)).Applied.Should().BeTrue("a new incarnation of the node starts again");
+        (await store.ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Unswitched);
+        (await Db.KeyTimeToLiveAsync(store.AckKey("g"))).Should().BeLessThanOrEqualTo(TimeSpan.FromDays(1)).And.NotBeNull();
+    }
+
+    [Fact]
+    public async Task Publishing_an_acknowledgement_reports_a_recorded_switch()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var store = Pins("app1");
+        await store.RestoreSwitchAsync("g", Ct);
+
+        var published = await store.PublishAckAsync("g", "a#router", "inc", 2, Ct);
+
+        published.Should().Be(new AckPublish(true, SwitchRead.Switched));
+    }
+
+    [Fact]
+    public async Task A_withdrawal_through_the_coordinator_reaches_redis_and_a_commit_made_from_the_old_acknowledgement_is_refused()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var pinned = true;
+        var core = new RouterCore(TimeProvider.System, _ => false, NullLogger.Instance);
+        var nodes = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), NodeHash);
+        var store = new RedisPinStore(nodes, _run + ":", "app1");
+        var pins = new PinCoordinator(core, _ => pinned, store, "app1", TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance) { OwnField = "urn:a#router" };
+        core.Pins = pins;
+        var pin = pins.GroupFor("g");
+        pins.EvaluatePins();
+        await pins.RefreshAsync(Ct);
+        var observed = (await store.ReadAcksAsync("g", Ct)).ToList();
+
+        pinned = false;
+        pins.EvaluatePins();
+        await pins.RefreshAsync(Ct);
+
+        pin.StateKnown(TimeProvider.System, pins.StateValidity).Should().BeTrue();
+        (await store.CommitSwitchAsync("g", observed, Ct)).Should().BeFalse();
+        (await store.ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Unswitched);
     }
 
     private RedisPinStore Pins(string? scope, string? prefix = null) =>

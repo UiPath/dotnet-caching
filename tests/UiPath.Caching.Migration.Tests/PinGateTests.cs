@@ -23,7 +23,7 @@ public sealed class PinGateTests
         await pins.RefreshAsync(Ct);
 
         _store.StateOf("g").Should().Be(SwitchRead.Unswitched, "nobody has asked to write a format that needs the switch");
-        _store.Log.Should().NotContain("mark:g");
+        _store.Log.Should().NotContain("commit:g");
         pins.Hold().Should().NotBeNull();
     }
 
@@ -37,7 +37,7 @@ public sealed class PinGateTests
 
         await pins.RefreshAsync(Ct);
 
-        _store.Log.Should().ContainInOrder("nodes", "mark:g");
+        _store.Log.Should().ContainInOrder("nodes", "commit:g");
         _store.StateOf("g").Should().Be(SwitchRead.Switched);
         pins.Hold().Should().BeNull();
     }
@@ -55,6 +55,7 @@ public sealed class PinGateTests
 
         pins.Hold().Should().Be("state_not_written");
         _store.StateOf("g").Should().Be(SwitchRead.Unswitched);
+        pins.GroupFor("g").Switched.Should().BeFalse("a commit the store did not take binds nobody");
     }
 
     [Fact]
@@ -356,6 +357,72 @@ public sealed class PinGateTests
         read!.Scope.Should().Be(scope);
         scope.Should().NotContain("+").And.NotContain(";").And.NotContain("=");
         ScopeTokens.For(" ").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_peer_that_read_an_acknowledgement_cannot_record_the_switch_after_its_owner_withdrew_and_took_the_source_again()
+    {
+        var aPinned = true;
+        var a = Coordinator("a", _ => aPinned);
+        var b = Coordinator("b", _ => true);
+        a.EvaluatePins();
+        b.EvaluatePins();
+        _store.Nodes.AddRange([Node("a", "pin=g", "ap=app"), Node("b", "pin=g", "ap=app")]);
+        await a.RefreshAsync(Ct);
+        b.Hold();
+        _store.BeforeCommit = async () =>
+        {
+            aPinned = false;
+            a.EvaluatePins();
+            (await a.RefreshAsync(Ct)).Should().BeTrue();
+        };
+
+        await b.RefreshAsync(Ct);
+
+        var pin = a.GroupFor("g");
+        pin.Applied.Should().BeFalse();
+        pin.StateKnown(_clock, a.StateValidity).Should().BeTrue("a read made after the withdrawal found no switch, so a uses the source again");
+        _store.StateOf("g").Should().Be(SwitchRead.Unswitched, "b read the acknowledgement before it was withdrawn");
+        _store.Log.Should().Contain("refused:g").And.NotContain("commit:g");
+        b.Hold().Should().Be("ack_changed");
+        b.GroupFor("g").Switched.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_withdrawn_acknowledgement_in_the_store_keeps_the_gate_closed_and_the_switch_unrecorded()
+    {
+        var pins = Coordinator("a", _ => true);
+        pins.EvaluatePins();
+        _store.Nodes.AddRange([Node("a", "pin=g", "ap=app"), Node("b", "pin=g", "ap=app")]);
+        _store.SetAck("g", "b#router", "peer:2");
+        pins.Hold();
+
+        (await pins.RefreshAsync(Ct)).Should().BeFalse("a peer that has not recorded its acknowledgement yet is retried soon");
+
+        pins.Hold().Should().Be("ack_not_recorded");
+        _store.StateOf("g").Should().Be(SwitchRead.Unswitched);
+        _store.Log.Should().NotContain("commit:g");
+    }
+
+    [Fact]
+    public async Task A_switch_whose_commit_was_refused_is_tried_again_against_the_acknowledgements_as_they_are_then()
+    {
+        var pins = Coordinator("a", _ => true);
+        pins.EvaluatePins();
+        _store.Nodes.AddRange([Node("a", "pin=g", "ap=app"), Node("b", "pin=g", "ap=app")]);
+        _store.BeforeCommit = () =>
+        {
+            _store.SetAck("g", "b#router", "peer:3");
+            return Task.CompletedTask;
+        };
+        pins.Hold();
+
+        await pins.RefreshAsync(Ct);
+        pins.Hold().Should().Be("ack_changed");
+        await pins.RefreshAsync(Ct);
+
+        pins.Hold().Should().BeNull();
+        _store.StateOf("g").Should().Be(SwitchRead.Switched);
     }
 
     private static NodeEntry Node(string node, params string[] tokens) => Entry(node, tokens, TimeSpan.Zero, left: false);
