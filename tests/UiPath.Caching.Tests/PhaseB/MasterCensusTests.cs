@@ -1,4 +1,5 @@
 using System.Globalization;
+using StackExchange.Redis;
 using UiPath.Caching.PhaseB;
 using UiPath.Caching.Tests.Redis;
 
@@ -52,7 +53,7 @@ public class MasterCensusTests(RedisContainerFixture fixture)
 
         var state = await kit.StateAsync();
         var t3 = kit.Kit.Time.GetUtcNow().AddMinutes(-2).ToUnixTimeMilliseconds();
-        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, t3.ToString(CultureInfo.InvariantCulture))], []);
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, t3.ToString(CultureInfo.InvariantCulture)), (StateFields.AllAck, state.Id)], []);
 
         (await kit.Census.RunAsync(kit.Group, Ct))!.Canary.Should().Be(1, "an hour of life and two minutes since S3 beats the longest source life; thirty seconds does not; no expiry is not seen");
     }
@@ -62,13 +63,13 @@ public class MasterCensusTests(RedisContainerFixture fixture)
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
         var state = await kit.StateAsync();
-        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1")], []);
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
         await kit.SetAsync(MoveSide.Legacy, "a", "k1");
 
-        (await new CensusMoverStatus(kit.Census).DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("only the mover can say its pass finished");
-        (await new CensusMoverStatus(kit.Census, (_, _, _) => Task.FromResult(true)).DrainAsync(kit.Group, "fwd", Ct))!.Should().Match<DrainReport>(r => r.Passed && r.Residue["a"] == 1 && r.Canary == 0);
+        (await new CensusMoverStatus(kit.Census, kit.Kit.Time).DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("only the mover can say its pass finished");
+        (await new CensusMoverStatus(kit.Census, kit.Kit.Time, (_, _, _) => Task.FromResult(true)).DrainAsync(kit.Group, "fwd", Ct))!.Should().Match<DrainReport>(r => r.Passed && r.Residue["a"] == 1 && r.Canary == 0);
         await kit.SetAsync(MoveSide.Legacy, "a", "mv2");
-        (await new CensusMoverStatus(kit.Census, (_, _, _) => Task.FromResult(true)).DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("a movable key is left");
+        (await new CensusMoverStatus(kit.Census, kit.Kit.Time, (_, _, _) => Task.FromResult(true)).DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("a movable key is left");
     }
 
     [Fact]
@@ -76,10 +77,60 @@ public class MasterCensusTests(RedisContainerFixture fixture)
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
         await kit.SetAsync(MoveSide.Legacy, "b", "k1");
-        var status = new CensusMoverStatus(kit.Census);
+        var status = new CensusMoverStatus(kit.Census, kit.Kit.Time);
 
         (await status.DrainAsync(kit.Group, "fwd", Ct)).Should().BeNull();
         (await status.ResidueCensusAsync(kit.Group, Ct))["b"].Should().Be(1);
         (await status.ResidueCensusAsync("g" + Guid.NewGuid().ToString("N")[..8], Ct)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_time_of_S3_that_no_acknowledgement_of_the_current_identity_stands_behind_is_no_time()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        kit.Space.MaxTtl["a"] = TimeSpan.FromMinutes(10);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, "an-older-identity")], []);
+
+        (await kit.Census.RunAsync(kit.Group, Ct))!.Canary.Should().BeNull("the time is an older move's");
+    }
+
+    [Fact]
+    public async Task The_drain_report_reuses_one_census_for_thirty_seconds_and_asks_the_mover_first()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        await kit.SetAsync(MoveSide.Legacy, "a", "k1");
+        var events = new List<string>();
+        kit.Space.OnOwnerOf = _ => events.Add("scan");
+        var status = new CensusMoverStatus(kit.Census, kit.Kit.Time, (_, _, _) =>
+        {
+            events.Add("mover");
+            return Task.FromResult(false);
+        });
+
+        await status.DrainAsync(kit.Group, "fwd", Ct);
+        await status.DrainAsync(kit.Group, "fwd", Ct);
+        events.Count(e => e == "scan").Should().Be(1, "the second report reuses the census");
+        events.First().Should().Be("mover");
+        kit.Kit.Time.Advance(TimeSpan.FromSeconds(31));
+        await status.DrainAsync(kit.Group, "fwd", Ct);
+
+        events.Count(e => e == "scan").Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_census_that_fails_on_Redis_is_no_evidence_for_the_drain_and_an_error_for_the_residue()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        kit.Kit.Topology.Layout = (_, _) => throw new RedisException("the topology is unreadable");
+        var status = new CensusMoverStatus(kit.Census, kit.Kit.Time);
+
+        (await status.DrainAsync(kit.Group, "fwd", Ct)).Should().BeNull();
+        var act = () => status.ResidueCensusAsync(kit.Group, Ct);
+        await act.Should().ThrowAsync<RedisException>();
     }
 }

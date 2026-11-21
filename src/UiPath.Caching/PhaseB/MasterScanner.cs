@@ -4,8 +4,8 @@ using StackExchange.Redis;
 namespace UiPath.Caching.PhaseB;
 
 /// <summary>SCAN on every master through the server API, which does not apply the connector prefix: the pattern starts with it and each result has it stripped.</summary>
-/// <remarks>A scan needs every slot owned by a connected master and no change of ownership while it ran, otherwise it is repeated, and it fails when that never settles.</remarks>
-internal sealed class MasterScanner(Func<IEnumerable<IServer>> servers, IStateTopology topology, int database, string connectorPrefix, int pageSize = 500, int attempts = 3)
+/// <remarks>The patterns must not overlap, or a key is seen twice. A scan needs every slot owned by a connected master and no change of ownership while it ran, otherwise it is repeated, and it fails when that never settles.</remarks>
+internal sealed class MasterScanner(Func<IEnumerable<IServer>> servers, IStateTopology topology, int database, string connectorPrefix, TimeProvider time, TimeSpan retryDelay, int pageSize = 500, int attempts = 3)
 {
     private const CommandFlags Master = CommandFlags.DemandMaster;
 
@@ -15,6 +15,12 @@ internal sealed class MasterScanner(Func<IEnumerable<IServer>> servers, IStateTo
     {
         for (var attempt = 0; attempt < attempts; attempt++)
         {
+            if (attempt > 0)
+            {
+                // A slot map that is still moving needs time; the next read may then come from a node that has caught up.
+                await Task.Delay(retryDelay, time, cancellationToken).ConfigureAwait(false);
+            }
+
             var before = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
             if (before.Unsettled.Count == 0)
             {
@@ -67,7 +73,6 @@ internal sealed class MasterScanner(Func<IEnumerable<IServer>> servers, IStateTo
 
     private async IAsyncEnumerable<string> KeysAsync(IReadOnlyList<IServer> masters, IReadOnlyList<string> patterns, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var seen = patterns.Count > 1 ? new HashSet<string>(StringComparer.Ordinal) : null;
         foreach (var server in masters)
         {
             foreach (var pattern in patterns)
@@ -80,11 +85,7 @@ internal sealed class MasterScanner(Func<IEnumerable<IServer>> servers, IStateTo
                         continue;
                     }
 
-                    var logical = text[connectorPrefix.Length..];
-                    if (seen is null || seen.Add(logical))
-                    {
-                        yield return logical;
-                    }
+                    yield return text[connectorPrefix.Length..];
                 }
             }
         }

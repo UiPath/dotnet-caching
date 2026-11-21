@@ -96,12 +96,22 @@ public class SnapshotAgeTests
     }
 
     [Fact]
-    public async Task G7_reads_the_stale_age_of_the_node_s_own_poll_interval()
+    public async Task A_slow_polled_group_does_not_age_the_node_while_a_fast_one_still_counts()
     {
-        var state = ReadyOff();
-        var input = Input(state, [Advert("n1", snap: 100), Advert("n2")]) with { StaleAfter = TimeSpan.FromSeconds(180) };
+        var reader = new PerGroupReader(new Dictionary<string, StateRecord>
+        {
+            ["fast"] = FakeStateReader.Record("S1", 5, "id1"),
+            ["closed"] = FakeStateReader.Record("S5", 6, "id2", swept: "id2"),
+        });
+        var monitor = new GroupStateMonitor(reader, new PhaseBStateOptions(), _time);
+        monitor.Register([new GroupRegistration("fast", false, true), new GroupRegistration("closed", false, true)]);
+        await monitor.StepAsync("closed", CancellationToken.None);
+        _time.Advance(TimeSpan.FromSeconds(50));
+        monitor.SnapshotAge().Should().BeNull("the fast group has not read yet");
+        await monitor.StepAsync("fast", CancellationToken.None);
+        _time.Advance(TimeSpan.FromSeconds(4));
 
-        (await StepPlanner.DecideAsync(input, Defaults)).AlertList.Select(a => a.Code).Should().NotContain("start_blocked");
+        monitor.SnapshotAge().Should().Be(TimeSpan.FromSeconds(4), "the closed group's 54 s is within its own 180 s limit and is left out");
     }
 
     private static Task<StepPlan> Decide(StateRecord state, IReadOnlyList<NodeAdvert> fresh) => StepPlanner.DecideAsync(Input(state, fresh), Defaults);
@@ -116,5 +126,14 @@ public class SnapshotAgeTests
     private sealed class FixedStage : IMigrationStageSource
     {
         public ValueTask<int?> GetStageAsync(string group, CancellationToken cancellationToken) => ValueTask.FromResult<int?>(3);
+    }
+
+    private sealed class PerGroupReader(Dictionary<string, StateRecord> states) : IStateReader
+    {
+        public Task<StateRecord?> ReadAsync(string group, CancellationToken cancellationToken) => Task.FromResult(states.GetValueOrDefault(group));
+
+        public Task<ControlSample?> ProbeAsync(string group, CancellationToken cancellationToken) => Task.FromResult<ControlSample?>(null);
+
+        public Task<ControlSample?> SampleAsync(string group, CancellationToken cancellationToken) => Task.FromResult<ControlSample?>(null);
     }
 }

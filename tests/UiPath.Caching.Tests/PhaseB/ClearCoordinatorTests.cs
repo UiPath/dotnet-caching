@@ -229,6 +229,19 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task A_clear_suspended_past_the_life_of_its_lock_fails_on_the_clock_even_when_no_renewal_failed()
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, true, new PhaseBStateOptions { ExpectedReplicasPerMaster = 0, ClearLockRenewInterval = TimeSpan.FromHours(1) });
+        var init = await kit.InitAsync("a", "b");
+        (await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, Ct)).Outcome.Should().Be(TransitionOutcome.Completed);
+        var hooks = new ClearHooks(_ => Task.CompletedTask, _ => Task.Run(() => kit.Time.Advance(kit.Options.ClearLockTtl + TimeSpan.FromSeconds(1))), _ => Task.CompletedTask);
+
+        (await Coordinator(kit).ClearAsync(kit.Group, "a", hooks, Ct)).Should().Be(ClearOutcome.Failed);
+
+        (await Gate(kit, "a")).Should().StartWith("OPEN:");
+    }
+
+    [Fact]
     public async Task The_leader_reopens_a_gate_left_closed_once_its_lock_has_expired_and_not_before()
     {
         await using var kit = await StartedAsync();

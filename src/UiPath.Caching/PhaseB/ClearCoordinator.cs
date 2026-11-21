@@ -46,7 +46,15 @@ internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScript
         {
             await sweepStop.CancelAsync().ConfigureAwait(false);
             await renewing.ConfigureAwait(false);
-            await stateScripts.LeaseReleaseAsync(lockKey, token).ConfigureAwait(false);
+            try
+            {
+                await stateScripts.LeaseReleaseAsync(lockKey, token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is RedisException or TimeoutException)
+            {
+                // The lock lapses by its own lifetime; a failed release must not hide how the Clear ended.
+                _ = ex;
+            }
         }
     }
 

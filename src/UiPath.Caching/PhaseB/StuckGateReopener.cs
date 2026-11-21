@@ -3,7 +3,8 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>The leader's repair of a gate left closed by a Clear whose node crashed: a <c>CLOSED</c> gate with no <c>clrlock</c> is reopened, expecting the value it read; one closed for too long raises <c>gate_stuck</c>.</summary>
+/// <summary>The leader's repair of a gate left closed by a Clear whose node crashed.</summary>
+/// <remarks>A <c>CLOSED</c> gate with no <c>clrlock</c> is reopened, expecting the value it read; one closed for too long raises <c>gate_stuck</c>.</remarks>
 internal sealed class StuckGateReopener(ControlRecordReader records, MoveScripts controlScripts, IDatabase stateDatabase, MoveKeyNames names, PhaseBStateOptions options, TimeProvider time)
 {
     private const int Batch = 512;

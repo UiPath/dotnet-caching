@@ -75,4 +75,19 @@ public class AllAckT3Tests(RedisContainerFixture fixture)
         (await kit.Scripts.GuardAsync(key, s0.Id, null, neverStarted: true)).Should().Be(MoveScripts.GroupStarted, "S0 again, but moveId stays");
         (await kit.Scripts.GuardAsync(key, s0.Id, null)).Should().Be(1);
     }
+
+    [Fact]
+    public async Task A_reassert_does_not_carry_the_time_of_an_older_S3()
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, true);
+        var init = await kit.InitAsync("a");
+        await kit.Store.AllAckAsync(kit.Group, init.Id, null, 1000);
+        var control = kit.Names.Control(kit.Group, 0);
+        await kit.Scripts.ControlSyncAsync(control, new ControlRecord(init.Ep + 10, "rid", "S3", "fwd", "1", "S2", "fwd", "0", "1", "before", [("a", "n")]));
+        await kit.Scripts.ControlCommitAsync(control, init.Ep + 10, "rid");
+
+        (await kit.Recovery.ReassertAsync(kit.Group, "operator confirmed", null, null, null, CancellationToken.None)).Transition!.Outcome.Should().Be(TransitionOutcome.Completed);
+
+        (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Field(StateFields.T3At).Should().BeEmpty();
+    }
 }

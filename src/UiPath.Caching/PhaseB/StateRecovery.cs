@@ -6,7 +6,7 @@ namespace UiPath.Caching.PhaseB;
 /// <summary>Recreation of a flushed state from fresh peers and the operator's <c>Reassert</c>; both write the state with the create-if-absent or replacing TRANSIT and run the standard sequence.</summary>
 internal sealed class StateRecovery(StateStore store, ControlSampler sampler, ControlRecordReader records, IDatabase controlDatabase, TransitionSequence sequence, MoveKeyNames names, TimeProvider time)
 {
-    private static readonly string[] AlwaysCleared = [StateFields.AllAck, StateFields.Swept, StateFields.DrainedAt, StateFields.ClosedAt, StateFields.DryRun, StateFields.HoldAuto];
+    private static readonly string[] AlwaysCleared = [StateFields.AllAck, StateFields.T3At, StateFields.Swept, StateFields.DrainedAt, StateFields.ClosedAt, StateFields.DryRun, StateFields.HoldAuto];
 
     /// <param name="registeredCaches">The caches the nodes registered (<c>ca</c>), used only for S0; S1 to S5 take the set from the surviving records.</param>
     public async Task<RecoveryResult> RecreateAsync(string group, IReadOnlyList<PeerIdentity> peers, IReadOnlyList<string> registeredCaches, ClaimFields? claim, CancellationToken cancellationToken, SequenceOptions? sequenceOptions = null)

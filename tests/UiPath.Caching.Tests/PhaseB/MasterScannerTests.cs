@@ -68,6 +68,30 @@ public class MasterScannerTests(RedisContainerFixture fixture)
         (await kit.Data.CountNativeAsync(kit.Group, Ct)).Should().Be(1);
     }
 
+    [Fact]
+    public async Task The_attempts_are_apart_by_the_retry_delay()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, true);
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var scanner = new MasterScanner(() => kit.Kit.Mux.GetServers(), kit.Kit.Topology, 0, string.Empty, time, TimeSpan.FromSeconds(5));
+        kit.Kit.Topology.Layout = (real, n) => n == 2 ? Moved(real) : real;
+        var attempts = 0;
+
+        Task<int> Consume(IAsyncEnumerable<string> keys)
+        {
+            attempts++;
+            return Task.FromResult(0);
+        }
+
+        var run = scanner.RunAsync(["nothing-*"], Consume, Ct);
+        await TimeSteps.ArmedAsync(time);
+        attempts.Should().Be(1, "the second attempt waits for the delay");
+        time.Advance(TimeSpan.FromSeconds(5));
+        await run;
+
+        attempts.Should().Be(2);
+    }
+
     private static ClusterLayout Moved(ClusterLayout real) => new(
         [new MasterLayout(real.Masters[0].Endpoint, [new SlotRange(0, HashSlot.Count - 2)], 0), new MasterLayout(new DnsEndPoint("other.invalid", 1), [new SlotRange(HashSlot.Count - 1, HashSlot.Count - 1)], 0)]);
 }

@@ -152,6 +152,21 @@ public class GroupDataOpsTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task The_legacy_purge_ends_with_the_first_complete_pass_even_when_Phase_A_keeps_refilling_L()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        await kit.SetAsync(MoveSide.Legacy, "a", "k0");
+        var n = 0;
+        kit.Space.OnOwnerOf = _ => kit.Kit.Db.StringSet(kit.Prefix + kit.Space.PrefixOf(MoveSide.Legacy) + "a:refill" + Interlocked.Increment(ref n), "v");
+        var id = (await kit.StateAsync()).Id;
+
+        await kit.Data.PurgeLegacyAsync(kit.Group, new DataGuard(id, null), Ct);
+
+        (await kit.ExistsAsync(kit.Space.PrefixOf(MoveSide.Legacy) + "a:k0")).Should().BeFalse();
+        await kit.Kit.Db.KeyDeleteAsync([.. Enumerable.Range(1, n + 1).Select(i => (RedisKey)(kit.Space.PrefixOf(MoveSide.Legacy) + "a:refill" + i))]);
+    }
+
+    [Fact]
     public async Task The_operator_purge_runs_in_a_group_that_never_started_without_any_control_record_and_never_touches_the_state()
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true, started: false);

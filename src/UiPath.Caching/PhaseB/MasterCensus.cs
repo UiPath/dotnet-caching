@@ -75,7 +75,7 @@ internal sealed class MasterCensus(MasterScanner scanner, IGroupKeySpace space, 
         return await scanner.RunAsync(space.Patterns(group, side), Count, cancellationToken).ConfigureAwait(false);
     }
 
-    // S3 is when every node acknowledged the S3 identity; the leader stores the time next to the acknowledgement.
+    // S3 is when every node acknowledged the S3 identity; the leader stores the time with that acknowledgement, and a time that no acknowledgement of the current identity stands behind is an older move's.
     private static long? T3Of(StateRecord state) =>
-        long.TryParse(state.Field(StateFields.T3At), NumberStyles.None, CultureInfo.InvariantCulture, out var at) ? at : null;
+        state.AllAck == state.Id && long.TryParse(state.Field(StateFields.T3At), NumberStyles.None, CultureInfo.InvariantCulture, out var at) ? at : null;
 }

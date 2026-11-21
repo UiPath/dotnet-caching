@@ -17,7 +17,7 @@ internal sealed class DataOpsKit : IAsyncDisposable
         Prefix = prefix;
         var tag = "pb3c" + Guid.NewGuid().ToString("N")[..10];
         Space = new FakeKeySpace(tag + ":n:", tag + ":l:");
-        Scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, prefix);
+        Scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, prefix, TimeProvider.System, TimeSpan.Zero);
         DataScripts = new MoveScripts(kit.ControlDb, true, kit.Mux.GetServers().Min(s => s.Version)!);
         Data = new GroupDataOps(Scanner, Space, kit.Store, kit.Scripts, DataScripts, kit.Names, batch);
         Census = new MasterCensus(Scanner, Space, kit.Store, kit.Db, prefix, kit.Time);

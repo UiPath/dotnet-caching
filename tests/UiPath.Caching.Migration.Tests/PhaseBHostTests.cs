@@ -145,6 +145,23 @@ public sealed class PhaseBHostTests(RedisFixture fixture) : IAsyncLifetime
         (await UntilAsync(async () => (await Tokens(router, provider)).Any(t => t is "snap=0" or "snap=5"))).Should().BeTrue("the snapshot loop reads through the new connection");
     }
 
+    [Fact]
+    public async Task A_lease_release_that_throws_does_not_keep_the_node_from_stopping_all_of_its_parts()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var provider = Provider(phaseB: true);
+        var router = (Router)provider.GetRequiredService<IRouter>();
+        var connector = provider.GetRequiredService<IRedisConnector>();
+        (await UntilAsync(() => router.PhaseB!.Runtime is not null)).Should().BeTrue();
+
+        // Every command of the node now fails, the lease release included.
+        await connector.Database.Multiplexer.DisposeAsync();
+        await router.PhaseB!.StopAsync();
+
+        router.PhaseB.Runtime.Should().BeNull();
+        await router.PhaseB.StopAsync();
+    }
+
     private static async Task<bool> UntilAsync(Func<bool> condition) => await UntilAsync(() => Task.FromResult(condition()));
 
     private static async Task<bool> UntilAsync(Func<Task<bool>> condition)

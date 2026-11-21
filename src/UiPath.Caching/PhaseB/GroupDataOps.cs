@@ -77,9 +77,12 @@ internal sealed class GroupDataOps(MasterScanner scanner, IGroupKeySpace space, 
         await EnsureAsync(group, guard).ConfigureAwait(false);
         for (var pass = 0; pass < maxPasses; pass++)
         {
-            if (await DeletePassAsync(group, side, state.CacheIds, guard, cancellationToken).ConfigureAwait(false) == 0)
+            var seen = await DeletePassAsync(group, side, state.CacheIds, guard, cancellationToken).ConfigureAwait(false);
+
+            // N must end empty, so a pass on the masters that found no owned key is the confirming pass. L is Phase A data again once the nodes ack S0
+            // (H38: AcceptRefill allows what a refill rewrites), so the first complete pass that deleted everything it saw is the last.
+            if (seen == 0 || side == MoveSide.Legacy)
             {
-                // A pass on the masters that found no owned key is the confirming pass.
                 return;
             }
         }

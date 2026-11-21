@@ -6,9 +6,10 @@ using UiPath.Caching.Redis;
 namespace UiPath.Caching.PhaseB;
 
 /// <summary>The Phase B parts of one node: snapshot loop, flag poller, acknowledgements, leases, leader driver and control upkeep.</summary>
-/// <remarks>The advert tokens exist from construction; everything that needs Redis starts with <c>StartAsync</c> and is rebuilt when the connection is replaced. A setup with no group runs nothing.</remarks>
+/// <remarks>The advert tokens exist from construction; everything that needs Redis starts with <c>StartAsync</c> and is rebuilt when the connection is replaced, which also restarts the driver, so its view and stability waits begin again and a <c>Runtime</c> an app kept goes stale. A setup with no group runs nothing.</remarks>
 internal sealed class PhaseBNode
 {
+    private static readonly TimeSpan ScanRetryDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan RewireCheckInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly PhaseBSetup _setup;
@@ -108,25 +109,44 @@ internal sealed class PhaseBNode
 
     public async Task StopAsync()
     {
-        if (_stop is null)
+        var stop = _stop;
+        if (stop is null)
         {
             return;
         }
 
-        await _stop.CancelAsync().ConfigureAwait(false);
-        await Task.WhenAll(_loops).ConfigureAwait(false);
-        await _monitor.StopAsync().ConfigureAwait(false);
-        await _poller.StopAsync().ConfigureAwait(false);
-        if (_driver is not null)
+        try
         {
-            await _driver.StopAsync().ConfigureAwait(false);
+            await stop.CancelAsync().ConfigureAwait(false);
+            await Task.WhenAll(_loops).ConfigureAwait(false);
         }
-
-        _stop.Dispose();
-        _stop = null;
-        _driver = null;
-        _loops = [];
-        Runtime = null;
+        finally
+        {
+            // Whatever the loops threw, every part is stopped and the node can be started again.
+            try
+            {
+                await _monitor.StopAsync().ConfigureAwait(false);
+                await _poller.StopAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                try
+                {
+                    if (_driver is not null)
+                    {
+                        await _driver.StopAsync().ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    stop.Dispose();
+                    _stop = null;
+                    _driver = null;
+                    _loops = [];
+                    Runtime = null;
+                }
+            }
+        }
     }
 
     // Everything that holds a connection, built over the connector's current one; rebuilt when the connector replaces it.
@@ -148,7 +168,7 @@ internal sealed class PhaseBNode
         var report = (string kind, string detail) => _setup.Alert?.Invoke(string.Empty, kind, detail);
         var sequence = new TransitionSequence(topology, names, state, report);
         var records = new ControlRecordReader(control, names);
-        var scanner = new MasterScanner(connector.GetPrimaries, topology, database.Database, prefix);
+        var scanner = new MasterScanner(connector.GetPrimaries, topology, database.Database, prefix, _time, ScanRetryDelay);
         return new Wiring(
             database.Multiplexer,
             store,
@@ -181,7 +201,7 @@ internal sealed class PhaseBNode
                 _setup.Facts,
                 _setup.Claim,
                 wiring.Data,
-                new CensusMoverStatus(wiring.Census, _setup.MoverFinishedPass),
+                new CensusMoverStatus(wiring.Census, _time, _setup.MoverFinishedPass),
                 g => _leases[g].HoldsLease,
                 _monitor,
                 _ownScope,
@@ -197,7 +217,7 @@ internal sealed class PhaseBNode
     }
 
     private PhaseBRuntime RuntimeOf(Wiring w) =>
-        new(w.Store, new StageCommands(w.Store, w.StateScripts, w.Names, _setup.Driver), w.Data, w.Clear, w.Removal, w.Recovery, _driver!);
+        new(w.Store, new StageCommands(w.Store, w.StateScripts, w.Names, _setup.Driver), w.Data, w.Clear, w.Removal, w.Recovery, _driver);
 
     // The connector replaces its connection after a failure and on a forced reconnect, and disposes the old one: the services are rebuilt over the new one, keeping the leases and their tokens.
     private async Task RunRewireAsync(string[] names, CancellationToken cancellationToken)
@@ -217,7 +237,8 @@ internal sealed class PhaseBNode
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    // The connection is not up yet; the next check looks again.
+                    // The connection is not up yet, or the services could not start over it; the next check looks again.
+                    _setup.Alert?.Invoke(string.Empty, "rewire_failed", ex.Message);
                 }
             }
         }
@@ -231,19 +252,19 @@ internal sealed class PhaseBNode
     {
         var wiring = Wire();
         _reader.Attach(wiring.Store);
-        foreach (var (group, lease) in _leases)
+        foreach (var lease in _leases.Values)
         {
             lease.Rebind(wiring.StateScripts);
-            _ = group;
         }
 
-        _wiring = wiring;
         if (_driver is not null)
         {
             await _driver.StopAsync().ConfigureAwait(false);
             StartDriver(wiring, names, _stop!.Token);
         }
 
+        // Set last, so a restart that failed is tried again: the connection still differs from the one wired.
+        _wiring = wiring;
         Runtime = RuntimeOf(wiring);
     }
 
@@ -306,7 +327,15 @@ internal sealed class PhaseBNode
         {
             foreach (var lease in _leases.Values)
             {
-                await lease.ReleaseAsync().ConfigureAwait(false);
+                try
+                {
+                    await lease.ReleaseAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // The lease then lapses by its own lifetime; a failed release must not keep the node from stopping.
+                    _ = ex;
+                }
             }
         }
     }

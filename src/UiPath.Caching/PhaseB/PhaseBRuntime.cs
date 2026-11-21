@@ -8,4 +8,4 @@ internal sealed record PhaseBRuntime(
     ClearCoordinator Clear,
     GroupRemoval Removal,
     StateRecovery Recovery,
-    StageDriver Driver);
+    StageDriver? Driver);

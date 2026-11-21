@@ -2,10 +2,8 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// <c>RemoveGroup</c>, the one command that deletes control records and the state: only for an S0 group or an S5 group whose sweep completed. The claim field goes first, the records next,
-/// and the state last, so a command that stopped half way is repeated from the state it left.
-/// </summary>
+/// <summary><c>RemoveGroup</c>, the one command that deletes control records and the state, for an S0 group or an S5 group whose sweep completed.</summary>
+/// <remarks>The claim field goes first, the records next and the state last, so a command that stopped half way is repeated from the state it left.</remarks>
 /// <param name="dropClaim">CLAIMDROP of the move claim, which another change owns; null when the group takes no claim.</param>
 internal sealed class GroupRemoval(StateStore store, MoveScripts stateScripts, MoveScripts controlScripts, MoveKeyNames names, Func<string, LeaseFence?, CancellationToken, Task<ClaimOutcome>>? dropClaim = null)
 {
