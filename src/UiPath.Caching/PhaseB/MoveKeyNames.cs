@@ -1,0 +1,168 @@
+using System.Security.Cryptography;
+using System.Text;
+using StackExchange.Redis;
+
+namespace UiPath.Caching.PhaseB;
+
+/// <summary>
+/// Names of the fences, control records and staging keys of a move, for one connection view.
+/// Names are logical (the connection adds its prefix); slots are physical (prefix included), so a name always lands in its data key's slot.
+/// </summary>
+internal sealed class MoveKeyNames
+{
+    public const string Keyspace = "mg";
+
+    private static readonly char[] ForbiddenNameCharacters = ['+', '@', '=', '{', '}'];
+
+    private readonly int? _prefixSlot;
+
+    /// <param name="connectorPrefix">The prefix the connection prepends to every key; empty for none.</param>
+    /// <param name="cluster">False names one control record per group, with no tags.</param>
+    public MoveKeyNames(string connectorPrefix, bool cluster)
+    {
+        ConnectorPrefix = connectorPrefix ?? throw new ArgumentNullException(nameof(connectorPrefix));
+        Cluster = cluster;
+        if (cluster && PrefixTag(connectorPrefix))
+        {
+            _prefixSlot = HashSlot.Of(connectorPrefix);
+        }
+    }
+
+    public string ConnectorPrefix { get; }
+
+    public bool Cluster { get; }
+
+    /// <summary>Group and cache names may not hold the characters the names and gate fields are built with.</summary>
+    public static void ValidateName(string name, string paramName)
+    {
+        if (string.IsNullOrEmpty(name) || name.IndexOfAny(ForbiddenNameCharacters) >= 0)
+        {
+            throw new ArgumentException($"'{name}' cannot take part in a move: a name must be non-empty and hold none of + @ = {{ }}.", paramName);
+        }
+    }
+
+    /// <summary>A key text may not hold an empty brace pair, nor, on a cluster, an unmatched brace.</summary>
+    public static bool IsValidKeyText(string key, bool cluster)
+    {
+        if (key.Contains("{}", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!cluster)
+        {
+            return true;
+        }
+
+        var depth = 0;
+        foreach (var c in key)
+        {
+            if (c == '{')
+            {
+                depth++;
+            }
+            else if (c == '}' && --depth < 0)
+            {
+                return false;
+            }
+        }
+
+        return depth == 0;
+    }
+
+    /// <summary>The slot of the physical key.</summary>
+    public int SlotOf(string logicalKey) => HashSlot.Of(ConnectorPrefix, logicalKey);
+
+    /// <summary>G(K): the forward fence, in the native key's slot.</summary>
+    public RedisKey ForwardFence(string nativeKey) => SameSlot(nativeKey, Keyspace + ":" + nativeKey);
+
+    /// <summary>GL(K): the reverse fence, in the in-place key's slot.</summary>
+    public RedisKey ReverseFence(string inPlaceKey) => InSlotOf(inPlaceKey, "l:" + ShortHash(inPlaceKey));
+
+    /// <summary>The staging key of a forward hash promotion, in the native key's slot.</summary>
+    public RedisKey ForwardStaging(string nativeKey, string nonce) => SameSlot(nativeKey, nativeKey + ":stg:" + nonce);
+
+    /// <summary>The staging key of a reverse hash promotion, in the in-place key's slot.</summary>
+    public RedisKey ReverseStaging(string inPlaceKey, string nonce) => InSlotOf(inPlaceKey, "s:" + nonce);
+
+    /// <summary>The control record of <paramref name="group"/> in the slot of <paramref name="dataKey"/>.</summary>
+    public RedisKey ControlFor(string group, string dataKey) => Control(group, SlotOf(dataKey));
+
+    /// <summary>The control record of <paramref name="group"/> in a slot of the slot set.</summary>
+    public RedisKey Control(string group, int slot)
+    {
+        ValidateName(group, nameof(group));
+        return Cluster ? $"{Keyspace}:{{{SlotTags.For(_prefixSlot ?? slot)}}}:ctl:{group}" : $"{Keyspace}:ctl:{group}";
+    }
+
+    /// <summary>The slots that hold the group's control records: one under a tagged prefix or without a cluster, otherwise every slot.</summary>
+    public IReadOnlyList<int> SlotSet()
+    {
+        if (!Cluster)
+        {
+            return [0];
+        }
+
+        if (_prefixSlot is { } only)
+        {
+            return [only];
+        }
+
+        var all = new int[HashSlot.Count];
+        for (var i = 0; i < all.Length; i++)
+        {
+            all[i] = i;
+        }
+
+        return all;
+    }
+
+    /// <summary>The control records of the group, one per slot of <see cref="SlotSet"/>.</summary>
+    public IReadOnlyList<(int Slot, RedisKey Key)> ControlRecords(string group) =>
+        [.. SlotSet().Select(slot => (slot, Control(group, slot)))];
+
+    // True for a prefix that tags every key; false for one with no braces; throws for one whose braces would take part of the key into the tag.
+    private static bool PrefixTag(string prefix)
+    {
+        var open = prefix.IndexOf('{');
+        if (open < 0)
+        {
+            return false;
+        }
+
+        var close = prefix.IndexOf('}', open + 1);
+        if (close > open + 1)
+        {
+            return true;
+        }
+
+        throw new ArgumentException($"The connection prefix '{prefix}' has an empty or unmatched brace, so the slot of a key would depend on the key's own text.", nameof(prefix));
+    }
+
+    private static string ShortHash(string key)
+    {
+        Span<byte> digest = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(key), digest);
+        return Convert.ToBase64String(digest[..8]).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    private RedisKey InSlotOf(string dataKey, string rest)
+    {
+        if (!Cluster)
+        {
+            return $"{Keyspace}:{rest}";
+        }
+
+        return $"{Keyspace}:{{{SlotTags.For(SlotOf(dataKey))}}}:{rest}";
+    }
+
+    private string SameSlot(string dataKey, string name)
+    {
+        if (Cluster && SlotOf(name) != SlotOf(dataKey))
+        {
+            throw new ArgumentException($"The key '{dataKey}' carries no hash tag, so a name built on it would leave its slot.", nameof(dataKey));
+        }
+
+        return name;
+    }
+}

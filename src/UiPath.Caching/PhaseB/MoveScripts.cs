@@ -1,0 +1,119 @@
+using System.Security.Cryptography;
+using StackExchange.Redis;
+using UiPath.Caching.Redis;
+
+namespace UiPath.Caching.PhaseB;
+
+/// <summary>
+/// The scripts of a move and their watched-transaction fallbacks. Every data-changing call first checks the control record and refuses with
+/// <see cref="IdentityMismatch"/> unless it holds the identity the node acts under. Once the server refuses a script, every later call takes
+/// the fallback, which needs Redis 6.0.9 (an older server does not abort a transaction when a watched key expires).
+/// </summary>
+internal sealed partial class MoveScripts
+{
+    public const long NoExpiry = -1;
+    public const long IdentityMismatch = -1;
+    public const long GateRefused = -2;
+    public const long PastDeadline = -3;
+    public const long IdentityConflict = -5;
+
+    /// <summary>How often a transaction is sent again when every condition still holds after it aborted: another field of a watched key changed.</summary>
+    internal const int MaxWatchAborts = 16;
+
+    internal static readonly Version FallbackMinimum = new(6, 0, 9);
+
+    private const CommandFlags Master = CommandFlags.DemandMaster;
+
+    private readonly IDatabase _db;
+    private readonly Version? _serverVersion;
+    private readonly Action<Exception>? _scriptRefused;
+    private volatile bool _useScripts;
+
+    /// <param name="serverVersion">The oldest server version of the deployment; the fallback runs only on 6.0.9 or later, and never when this is unknown.</param>
+    /// <param name="scriptRefused">Told once, when the server first refuses a script.</param>
+    public MoveScripts(IDatabase db, bool useScripts, Version? serverVersion, Action<Exception>? scriptRefused = null)
+    {
+        _db = db ?? throw new ArgumentNullException(nameof(db));
+        _serverVersion = serverVersion;
+        _scriptRefused = scriptRefused;
+        _useScripts = useScripts;
+        if (!useScripts)
+        {
+            EnsureFallbackAllowed();
+        }
+    }
+
+    public bool UsesScripts => _useScripts;
+
+    /// <summary>A fresh 128-bit nonce in hex, for fences, gates and staging keys.</summary>
+    public static string NewNonce() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
+    private static RedisValue Ttl(long px) => px == NoExpiry ? "-1" : px;
+
+    private static void CheckLife(long px, string paramName)
+    {
+        if (px != NoExpiry && px < 1)
+        {
+            throw new ArgumentOutOfRangeException(paramName, px, "A remaining life is -1 for none or at least 1 ms; a shorter one is an expired value and is never sent.");
+        }
+    }
+
+    private static bool IsWrongType(Exception ex) =>
+        ex is RedisServerException && ex.Message.Contains("WRONGTYPE", StringComparison.OrdinalIgnoreCase);
+
+    private static DateTime At(long unixMilliseconds) => DateTimeOffset.FromUnixTimeMilliseconds(unixMilliseconds).UtcDateTime;
+
+    private static async Task<long> WatchedAsync(Func<Task<long?>> attempt)
+    {
+        for (var i = 0; i < MaxWatchAborts; i++)
+        {
+            if (await attempt().ConfigureAwait(false) is { } result)
+            {
+                return result;
+            }
+        }
+
+        throw new RedisException($"A move transaction aborted {MaxWatchAborts} times while its conditions held; the outcome is unknown.");
+    }
+
+    private void EnsureFallbackAllowed()
+    {
+        if (_serverVersion is null || _serverVersion < FallbackMinimum)
+        {
+            throw new NotSupportedException(
+                $"The server refuses scripts and runs Redis {_serverVersion?.ToString() ?? "of an unknown version"}; a move without scripts needs {FallbackMinimum} or later, where a watched key that expires aborts the transaction.");
+        }
+    }
+
+    /// <summary>The script's reply, or null once scripts are off and the caller takes the fallback.</summary>
+    private async Task<RedisResult?> EvaluateAsync(string script, RedisKey[] keys, RedisValue[] args)
+    {
+        if (_useScripts)
+        {
+            try
+            {
+                return await _db.ScriptEvaluateAsync(script, keys, args, Master).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (RedisUtils.RefusesScript(ex))
+            {
+                _useScripts = false;
+                _scriptRefused?.Invoke(ex);
+            }
+        }
+
+        EnsureFallbackAllowed();
+        return null;
+    }
+
+    /// <summary>The clock of the server that holds <paramref name="key"/>, in Unix milliseconds.</summary>
+    private async Task<long> ServerTimeAsync(RedisKey key)
+    {
+        var endpoint = await _db.IdentifyEndpointAsync(key, Master).ConfigureAwait(false)
+            ?? throw new RedisException($"No server holds the slot of '{key}'.");
+        var time = await _db.Multiplexer.GetServer(endpoint).TimeAsync(Master).ConfigureAwait(false);
+        return new DateTimeOffset(DateTime.SpecifyKind(time, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+    }
+
+    private async Task<bool> HoldsIdentityAsync(RedisKey control, string id) =>
+        await _db.HashGetAsync(control, "id", Master).ConfigureAwait(false) == id;
+}
