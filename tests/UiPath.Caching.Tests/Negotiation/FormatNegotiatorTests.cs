@@ -432,6 +432,24 @@ public class FormatNegotiatorTests
     }
 
     [Fact]
+    public void A_gate_that_throws_counts_as_closed()
+    {
+        var gate = new FakeGate(null);
+        var sut = Negotiator(gate);
+        var view = View(Node("a", Binary));
+        Settle(sut, view);
+        sut.Allows(_writer).Should().BeTrue();
+
+        gate.OnHold = () => throw new InvalidOperationException("gate broke");
+
+        sut.Allows(_writer).Should().BeFalse();
+        gate.OnHold = () => throw new InvalidOperationException("gate broke");
+        sut.Observe(view);
+        gate.OnHold = null;
+        sut.Allows(_writer).Should().BeFalse("the closure stands until a view restarts the hold");
+    }
+
+    [Fact]
     public void A_gate_that_closes_stops_writes_at_once_without_a_new_view_and_reopening_restarts_the_hold()
     {
         var gate = new FakeGate(null);

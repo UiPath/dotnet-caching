@@ -1,10 +1,6 @@
 namespace UiPath.Caching.Migration;
 
-/// <summary>
-/// Reads the node hash for the pin: which nodes belong to this application, whether each has acknowledged the group, and whether a peer reports it switched.
-/// Entries of another application sharing the hash are told apart by the <c>ap</c> token of their router entry, and a library advertisement by the router
-/// entry of the same node; an entry that names no application counts as ours, so it can only hold a gate, never open one.
-/// </summary>
+/// <summary>Reads the node hash for the pin; an entry naming no application counts as ours, so it can only hold a gate, never open one.</summary>
 internal static class PinGateEvaluator
 {
     public const string UnattributedNode = "unattributed_node";

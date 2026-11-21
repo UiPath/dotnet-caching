@@ -1,9 +1,6 @@
 namespace UiPath.Caching.Migration;
 
-/// <summary>
-/// One group's pin on this node. Applied (the setting says pin, or the group is switched) it means the library path and never the source; acknowledged
-/// once the calls that were admitted before it applied have ended. A switch seen once is kept for the life of the process.
-/// </summary>
+/// <summary>One group's pin on this node: applied means the library path and never the source, acknowledged once earlier calls have ended.</summary>
 internal sealed class GroupPin(string group)
 {
 #if NET9_0_OR_GREATER
@@ -76,10 +73,7 @@ internal sealed class GroupPin(string group)
     public bool StateKnown(TimeProvider clock, TimeSpan validity) =>
         Volatile.Read(ref _unconfirmed) == 0 && Volatile.Read(ref _known) == 1 && clock.GetElapsedTime(Volatile.Read(ref _knownAt)) <= validity;
 
-    /// <summary>
-    /// A read of the durable state, begun after the withdrawal of generation <paramref name="generation"/> was recorded in the store as number <paramref name="withdrawals"/>,
-    /// found no switch: no peer can record one against the old acknowledgement any more, so the source may be used again.
-    /// </summary>
+    /// <summary>Confirms a withdrawal: a state read begun after it was recorded found no switch, so the source may be used again.</summary>
     public void ConfirmUnswitched(long withdrawals, long generation)
     {
         lock (_gate)

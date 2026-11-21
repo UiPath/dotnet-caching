@@ -8,11 +8,7 @@ using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>
-/// What the router's entry in the node hash and the pin state need, built from the router's configuration section, bound as the named stack binds it, and the process id, never from the library's
-/// container, so a library build that hangs or throws cannot hold or disable them. The router's stack binds the same configuration section, so the identity
-/// and the node-list key agree with it.
-/// </summary>
+/// <summary>The router's node entry and pin state, built from its configuration section and never the library's container, so a failed library build cannot hold them.</summary>
 internal sealed record AdvertisementSetup(
     RouterAdvertisementStore Store,
     IPinStore PinStore,

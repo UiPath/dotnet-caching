@@ -154,7 +154,9 @@ public static class RouterServiceCollectionExtensions
             var setup = AdvertisementSetup.TryCreate(root, builder, processId, section, logger);
             if (builder.PinPredicate is { } pinWhen)
             {
-                // Before the caches, which take their group's pin from it. Without a store the groups cannot be known, so they fail closed.
+                ValidatePinSetup(section, setup, logger);
+
+                // Before the caches, which take their group's pin from it.
                 var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger);
                 core.Pins = pins;
                 gate!.Attach(pins);
@@ -181,6 +183,31 @@ public static class RouterServiceCollectionExtensions
         }
     }
 
+    private static void ValidatePinSetup(IConfigurationSection section, AdvertisementSetup? setup, ILogger logger)
+    {
+        var negotiation = new FormatNegotiationOptions();
+        section.GetSection("Redis:FormatNegotiation").Bind(negotiation);
+        if (negotiation.Mode == FormatNegotiationMode.Force)
+        {
+            throw new InvalidOperationException("UsePinWhen cannot be combined with Redis:FormatNegotiation:Mode Force: Force writes the format without asking the pin gate. Use Auto.");
+        }
+
+        if (setup is null)
+        {
+            throw new InvalidOperationException("UsePinWhen needs the router's pin store, and the node advertisement it lives in could not be set up (see the warning logged before this), so no group could ever be known unpinned.");
+        }
+
+        var needed = negotiation.LivenessWindow + (negotiation.AdvertiseInterval * 2);
+        if (negotiation.UpgradeHold < needed)
+        {
+            throw new InvalidOperationException($"UsePinWhen needs Redis:FormatNegotiation:UpgradeHold of at least LivenessWindow + 2 x AdvertiseInterval ({needed}), so a node that joins while the switch is recorded is seen before a format is written; it is {negotiation.UpgradeHold}.");
+        }
+
+        if (setup.Scope is null)
+        {
+            logger.LogWarning("UsePinWhen is set but the application has no AppShortName, so the pin gate cannot attribute nodes to this application and stays closed.");
+        }
+    }
     private static RouterAdvertiser CreateAdvertiser(AdvertisementSetup setup, RouterCore core, ILogger logger)
     {
         var sources = new List<IAdvertisementTokens> { new BypassTokens(core), new ScopeTokens(setup.Scope) };

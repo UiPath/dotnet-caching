@@ -63,6 +63,52 @@ public sealed class PinHostTests
     }
 
     [Fact]
+    public async Task A_pin_setting_with_an_upgrade_hold_shorter_than_the_advertisement_lifetime_fails_router_creation()
+    {
+        var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+        var hold = new Dictionary<string, string?> { ["Caching:Redis:FormatNegotiation:UpgradeHold"] = "00:02:29" };
+        await using var provider = Build(source, "g", router => router.UsePinWhen(_ => false), hold);
+
+        var create = () => provider.GetRequiredService<IRouter>();
+
+        create.Should().Throw<InvalidOperationException>().WithMessage("*UpgradeHold*LivenessWindow + 2 x AdvertiseInterval*");
+    }
+
+    [Fact]
+    public async Task A_pin_setting_with_an_upgrade_hold_of_exactly_the_advertisement_lifetime_is_accepted()
+    {
+        var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+        var hold = new Dictionary<string, string?> { ["Caching:Redis:FormatNegotiation:UpgradeHold"] = "00:02:30" };
+        await using var provider = Build(source, "g", router => router.UsePinWhen(_ => false), hold);
+
+        provider.GetRequiredService<IRouter>().Should().NotBeNull();
+        await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
+    }
+
+    [Fact]
+    public async Task A_pin_setting_in_force_mode_fails_router_creation()
+    {
+        var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+        var force = new Dictionary<string, string?> { ["Caching:Redis:FormatNegotiation:Mode"] = "Force" };
+        await using var provider = Build(source, "g", router => router.UsePinWhen(_ => false), force);
+
+        var create = () => provider.GetRequiredService<IRouter>();
+
+        create.Should().Throw<InvalidOperationException>().WithMessage("*Force*");
+    }
+
+    [Fact]
+    public async Task A_pin_setting_without_a_pin_store_fails_router_creation_naming_the_advertisement()
+    {
+        var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+        var broken = new Dictionary<string, string?> { ["Caching:Redis:FormatNegotiation:AdvertiseInterval"] = "00:00:00" };
+        await using var provider = Build(source, "g", router => router.UsePinWhen(_ => false), broken);
+
+        var create = () => provider.GetRequiredService<IRouter>();
+
+        create.Should().Throw<InvalidOperationException>().WithMessage("*pin store*advertisement*");
+    }
+    [Fact]
     public void The_pin_setting_must_not_be_null()
     {
         var set = () => new RouterBuilder().UsePinWhen(null!);
@@ -78,7 +124,7 @@ public sealed class PinHostTests
         banner.Should().Contain("pin=UsePinWhen").And.Contain("precedence, first wins: pin");
     }
 
-    private static ServiceProvider Build(FakeBackend source, string group, Action<RouterBuilder> configure)
+    private static ServiceProvider Build(FakeBackend source, string group, Action<RouterBuilder> configure, Dictionary<string, string?>? extra = null)
     {
         var settings = new Dictionary<string, string?>
         {
@@ -89,6 +135,11 @@ public sealed class PinHostTests
             ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
             ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
         };
+        foreach (var (key, value) in extra ?? [])
+        {
+            settings[key] = value;
+        }
+
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var services = new ServiceCollection().AddLogging();
         services.AddCaching(configuration, builder => builder.AddRedisConnection());

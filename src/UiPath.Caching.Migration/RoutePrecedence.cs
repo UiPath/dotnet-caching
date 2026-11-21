@@ -5,8 +5,6 @@ internal static class RoutePrecedence
 {
     public static IReadOnlyList<string> Order { get; } = ["pin (UsePinWhen, or a switched group)", "bypass (flag, explicit request, library not started)", "group predicate"];
 
-
-
     /// <summary>No read of the switch state is recent enough to tell whether the group is switched: the call is not answered by either client.</summary>
     public static Route Unknown { get; } = new(RoutePath.Library, Route.PinStateUnknown, Tier: false, NoFallback: true, Hold: true);
 

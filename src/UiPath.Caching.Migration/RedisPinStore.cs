@@ -2,11 +2,7 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>
-/// The switch state, <c>{prefix}mg:{app:group}:sw</c> (a string, no expiry), and the acknowledgement records, <c>{prefix}mg:{app:group}:ack</c> (a hash by node field),
-/// per application and group. The braces make both one cluster slot, so one script covers them. The prefix is the library's key prefix when the database adds
-/// none of its own; a database that does add it already carries it. The scripts make a switch and a withdrawal atomic against each other.
-/// </summary>
+/// <summary>The switch state and acknowledgement records in Redis, one cluster slot per application and group, changed by atomic scripts.</summary>
 internal sealed class RedisPinStore(RouterAdvertisementStore nodes, string keyPrefix, string? scope) : IPinStore
 {
     private const string Switched = "1";

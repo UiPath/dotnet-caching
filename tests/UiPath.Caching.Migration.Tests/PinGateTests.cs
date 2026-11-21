@@ -425,6 +425,26 @@ public sealed class PinGateTests
         _store.StateOf("g").Should().Be(SwitchRead.Switched);
     }
 
+    [Fact]
+    public async Task A_node_that_joins_between_the_list_read_and_the_commit_is_not_in_the_switch_and_closes_the_gate_at_the_next_view()
+    {
+        var pins = Coordinator("a", _ => true);
+        pins.EvaluatePins();
+        _store.Nodes.AddRange([Node("a", "pin=g", "ap=app")]);
+        _store.BeforeCommit = () =>
+        {
+            _store.Nodes.Add(Node("late", "ap=app"));
+            return Task.CompletedTask;
+        };
+        pins.Hold();
+
+        await pins.RefreshAsync(Ct);
+
+        _store.Log.Should().Contain("commit:g", "the joiner was not in the list the switch was checked against");
+        pins.Hold().Should().BeNull("this window is what UpgradeHold, validated at router build to outlast an advertisement, covers");
+        await pins.RefreshAsync(Ct);
+        pins.Hold().Should().Be("node_without_pin");
+    }
     private static NodeEntry Node(string node, params string[] tokens) => Entry(node, tokens, TimeSpan.Zero, left: false);
 
     private static NodeEntry Entry(string node, string[] tokens, TimeSpan age, bool left) =>

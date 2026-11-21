@@ -209,7 +209,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             return false;
         }
 
-        if (_writeGate.Hold() is null)
+        if (HoldOf(_writeGate) is null)
         {
             return true;
         }
@@ -222,6 +222,20 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         return false;
     }
 
+    // A gate that throws is a closed gate.
+    private string? HoldOf(IFormatWriteGate gate)
+    {
+        try
+        {
+            return gate.Hold();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogWarning(ex, "The format write gate threw; treated as closed.");
+            return "gate_error";
+        }
+    }
+
     private string? Block(Slot want, NodeListView view)
     {
         // What an advertisement says it cannot read comes first: no grace after an outage and no attestation excuses it.
@@ -231,7 +245,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         }
 
         // An outside condition on the format, asked on every view and again on every write, so a gate that closes stops writes at once and one that opens still waits out the hold.
-        if (!want.IsEvent && _writeGate?.Hold() is not null)
+        if (!want.IsEvent && _writeGate is not null && HoldOf(_writeGate) is not null)
         {
             return ReasonGated;
         }

@@ -3,10 +3,7 @@ using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>
-/// Runs the pin of a node: applies the setting to each group, acknowledges it once the calls that started on the old path have drained, keeps each group's
-/// durable switch state and the application's view of the node list, and answers the format gate. Nothing here throws to a caller.
-/// </summary>
+/// <summary>Runs the pin of a node and answers the format gate; nothing here throws to a caller.</summary>
 internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool> pinWhen, IPinStore? store, string? scope, TimeSpan refreshInterval, TimeSpan maxViewAge, ILogger logger) : IFormatWriteGate, IAdvertisementTokens
 {
     private const string NotWanted = "format_not_wanted";

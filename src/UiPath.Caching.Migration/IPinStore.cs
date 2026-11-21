@@ -1,9 +1,6 @@
 namespace UiPath.Caching.Migration;
 
-/// <summary>
-/// What the pin keeps in Redis: the switch state and the acknowledgement record of each group, and the node hash it reads the entries from. Every call may throw.
-/// An acknowledgement record is <c>{incarnation}:{generation}</c> per node; an odd generation is an acknowledgement and an even one a withdrawal.
-/// </summary>
+/// <summary>What the pin keeps in Redis; every call may throw. A record is <c>{incarnation}:{generation}</c>, odd for an acknowledgement and even for a withdrawal.</summary>
 internal interface IPinStore
 {
     Task<SwitchRead> ReadStateAsync(string group, CancellationToken cancellationToken);

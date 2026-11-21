@@ -85,12 +85,7 @@ public sealed class RouterBuilder
         return this;
     }
 
-    /// <summary>
-    /// A live setting that says which groups are pinned to the library path, polled about once a second. A pinned group takes the library path whatever
-    /// <see cref="UseBypassWhen"/> and <see cref="UseLibraryWhen"/> say, and never falls to the source: it fails unavailable instead. The node tells the others
-    /// it is pinned once the calls that started on the source have ended. A group is switched, and stays so, once a format write that needs it is wanted and
-    /// every node of the application has the pin; a switched group is pinned whatever the setting says. Group names then hold none of <c>+ @ = { }</c>.
-    /// </summary>
+    /// <summary>A live setting that pins groups to the library path, never the source; a group is switched once a format write needs it and every node has the pin. Group names hold none of <c>+ @ = { }</c>.</summary>
     public RouterBuilder UsePinWhen(Func<string, bool> pinned)
     {
         PinPredicate = pinned ?? throw new ArgumentNullException(nameof(pinned));
