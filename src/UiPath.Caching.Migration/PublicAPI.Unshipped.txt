@@ -113,3 +113,4 @@ UiPath.Caching.Migration.RouterModeReason.Default = 0 -> UiPath.Caching.Migratio
 UiPath.Caching.Migration.RouterModeReason.Flag = 1 -> UiPath.Caching.Migration.RouterModeReason
 UiPath.Caching.Migration.RouterModeReason.LibraryUnavailable = 3 -> UiPath.Caching.Migration.RouterModeReason
 UiPath.Caching.Migration.RouterModeReason.Requested = 2 -> UiPath.Caching.Migration.RouterModeReason
+UiPath.Caching.Migration.RouterBuilder.UseSourceConnection(System.Func<StackExchange.Redis.IDatabase!>! database) -> UiPath.Caching.Migration.RouterBuilder!

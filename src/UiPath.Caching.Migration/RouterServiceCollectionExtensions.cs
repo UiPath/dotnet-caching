@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -104,6 +105,16 @@ public static class RouterServiceCollectionExtensions
         LibrarySettleBound.ThrowIfBeyondHorizon(LibrarySettleBound.Join(connection?.ConnectionString, connection?.ConnectionStringExtraParams));
     }
 
+    /// <summary>The key the stack's node list store uses: the same name, with braces escaped, through the stack's key strategy.</summary>
+    internal static RedisKey NodeListKey(CacheOptions cacheOptions, RedisCacheOptions redisOptions)
+    {
+        var name = string.Join(cacheOptions.Separator, "Caching", "Nodes")
+            .Replace("%", "%25", StringComparison.Ordinal)
+            .Replace("{", "%7B", StringComparison.Ordinal)
+            .Replace("}", "%7D", StringComparison.Ordinal);
+        return (redisOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, RedisKeyspaces.String).GetRedisKey(name);
+    }
+
     internal static Uri WithProcess(Uri source, string processId)
     {
         var text = source.AbsoluteUri;
@@ -130,7 +141,9 @@ public static class RouterServiceCollectionExtensions
 
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
             core.UseLibrary(token => StartLibraryAsync(root, builder, token));
-            var router = new Router(core, builder.Registrations);
+            var advertiser = CreateAdvertiser(root, builder, core, logger);
+            var router = new Router(core, builder.Registrations) { Advertiser = advertiser };
+
             RouterBanner.Log(logger, builder, processId);
             router.Start();
             return router;
@@ -140,6 +153,32 @@ public static class RouterServiceCollectionExtensions
             core.CancelBackground();
             core.DisposeResources();
             throw;
+        }
+    }
+
+    /// <summary>Reads only the stack's options, so it needs no started library; a failure leaves the router without an advertisement, never the host down.</summary>
+    private static RouterAdvertiser? CreateAdvertiser(IServiceProvider root, RouterBuilder builder, RouterCore core, ILogger logger)
+    {
+        try
+        {
+            var cacheOptions = root.GetRequiredKeyedService<IOptions<CacheOptions>>(StackName).Value;
+            var redisOptions = root.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(StackName).Value;
+            var database = builder.SourceDatabase ?? (() => root.GetRequiredService<IRedisConnector>().Database);
+            var build = typeof(Router).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
+            return new RouterAdvertiser(
+                new RouterAdvertisementStore(database, NodeListKey(cacheOptions, redisOptions)),
+                (cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString().ToLowerInvariant(),
+                build,
+                [new BypassTokens(core)],
+                redisOptions.FormatNegotiation.AdvertiseInterval,
+                redisOptions.FormatNegotiation.LivenessWindow,
+                core.Clock,
+                logger);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogWarning(ex, "The router could not set up its node advertisement; it runs without one.");
+            return null;
         }
     }
 
