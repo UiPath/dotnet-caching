@@ -86,9 +86,9 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         });
     }
 
-    // Without a connector there is no node list, and a custom proxy has no JSON to fall back to: the writer then writes what its policy says, as in Force.
+    // Without a connector there is no node list, and an unmarked custom proxy has no bytes to fall back to: the writer then writes what its policy says, as in Force.
     private static FormatNegotiationMode NegotiationMode(IServiceProvider sp) =>
-        sp.GetService<IRedisConnector>() is not null && sp.GetRequiredService<ISerializerProxy<byte[]>>().GetType() == typeof(SystemJsonByteSerializerProxy)
+        sp.GetService<IRedisConnector>() is not null && ValueReader.IsHeaderFree(sp.GetRequiredService<ISerializerProxy<byte[]>>())
             ? sp.GetService<IOptions<RedisCacheOptions>>()?.Value.FormatNegotiation.Mode ?? FormatNegotiationMode.Auto
             : FormatNegotiationMode.Force;
 

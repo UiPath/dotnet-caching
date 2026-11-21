@@ -41,7 +41,7 @@ internal sealed class ValueFormatResolver
         var writer = forWrite ? WriterOf(effective) : null;
 
         // The policy still names the format, so a read still looks for headers; only the write is held to what every node reads.
-        // A custom proxy has no JSON to fall back to: what it writes can read back as a header, so such a policy always writes its own format.
+        // An unmarked custom proxy has no JSON to fall back to: what it writes can read back as a header, so such a policy always writes its own format.
         if (writer is not null && _effective is { } gate && HoldsBack && !gate.Allows(writer))
         {
             writer = null;

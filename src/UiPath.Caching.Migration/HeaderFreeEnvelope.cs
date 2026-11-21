@@ -1,16 +1,16 @@
 namespace UiPath.Caching.Migration;
 
-/// <summary>The router's envelope, marked header-free so the stack reads it beside a registered format; a write whose bytes would read as a header fails.</summary>
+/// <summary>The router's envelope, marked header-free; a write whose first byte would read as a format header fails.</summary>
 /// <remarks>
-/// The envelope plays the role of JSON for the in-place keys (design 21.11): a value starting with a header byte would be read by a registered serializer, or kept
-/// as unreadable, instead of reaching the envelope. The check mirrors the library's header rule: 0x01 to 0x1F except tab, line feed and carriage return.
+/// The envelope plays the role of JSON for the in-place keys: a value starting with a header byte would be read by a registered serializer, or kept as
+/// unreadable, instead of reaching the envelope. The check mirrors the library's header rule: 0x01 to 0x1F except tab, line feed and carriage return.
 /// </remarks>
 internal class HeaderFreeEnvelope(ISerializerProxy<byte[]> inner) : ISerializerProxy<byte[]>, IHeaderFreeSerializerProxy
 {
-    /// <summary>The envelope as given when it is already marked, else wrapped, keeping the memory path of an envelope that has one.</summary>
+    /// <summary>The envelope wrapped once, keeping its memory path; a proxy marked by someone else is wrapped too, so the guard always runs.</summary>
     public static ISerializerProxy<byte[]> Wrap(ISerializerProxy<byte[]> envelope) => envelope switch
     {
-        IHeaderFreeSerializerProxy => envelope,
+        HeaderFreeEnvelope => envelope,
         IMemorySerializerProxy memory => new HeaderFreeMemoryEnvelope(memory),
         _ => new HeaderFreeEnvelope(envelope),
     };

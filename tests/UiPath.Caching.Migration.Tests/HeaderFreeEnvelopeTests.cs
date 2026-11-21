@@ -54,6 +54,18 @@ public sealed class HeaderFreeEnvelopeTests
     }
 
     [Fact]
+    public void A_proxy_marked_by_someone_else_is_still_wrapped_so_its_writes_are_checked()
+    {
+        var array = HeaderFreeEnvelope.Wrap(new MarkedEnvelope([0x0F, 0x7B]));
+        var memory = HeaderFreeEnvelope.Wrap(new MarkedMemoryEnvelope([0x0F, 0x7B]));
+
+        array.Should().BeOfType<HeaderFreeEnvelope>();
+        array.Invoking(p => p.Serialize("x")).Should().Throw<InvalidOperationException>().WithMessage("*0x0F*");
+        memory.Should().BeOfType<HeaderFreeMemoryEnvelope>();
+        ((IMemorySerializerProxy)memory).Invoking(p => p.SerializeToMemory("x")).Should().Throw<InvalidOperationException>().WithMessage("*0x0F*");
+    }
+
+    [Fact]
     public void The_router_stack_registers_the_envelope_as_header_free()
     {
         var stack = new ServiceCollection();
@@ -62,6 +74,46 @@ public sealed class HeaderFreeEnvelopeTests
 
         using var provider = stack.BuildServiceProvider();
         provider.GetRequiredService<ISerializerProxy<byte[]>>().Should().BeOfType<HeaderFreeEnvelope>();
+    }
+
+    private sealed class MarkedEnvelope(byte[] bytes) : ISerializerProxy<byte[]>, IHeaderFreeSerializerProxy
+    {
+        public byte[]? Serialize(object? value) => bytes;
+
+        public T? Deserialize<T>(byte[]? value) => default;
+
+        public bool TryDeserialize<T>(string? value, out T? result)
+        {
+            result = default;
+            return false;
+        }
+
+        public bool TryDeserialize<T>(object? value, out T? result)
+        {
+            result = default;
+            return false;
+        }
+    }
+
+    private sealed class MarkedMemoryEnvelope(byte[] bytes) : IMemorySerializerProxy, IHeaderFreeSerializerProxy
+    {
+        public byte[]? Serialize(object? value) => bytes;
+
+        public ReadOnlyMemory<byte> SerializeToMemory<T>(T? value) => bytes;
+
+        public T? Deserialize<T>(byte[]? value) => default;
+
+        public bool TryDeserialize<T>(string? value, out T? result)
+        {
+            result = default;
+            return false;
+        }
+
+        public bool TryDeserialize<T>(object? value, out T? result)
+        {
+            result = default;
+            return false;
+        }
     }
 
     private sealed class MemoryEnvelope(byte[] bytes) : IMemorySerializerProxy

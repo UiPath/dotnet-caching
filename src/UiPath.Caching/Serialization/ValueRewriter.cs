@@ -3,8 +3,10 @@ namespace UiPath.Caching.Serialization;
 /// <summary>Writes a value that was read in one format in another, only if it comes out the same.</summary>
 internal sealed class ValueRewriter(ISerializerProxy<byte[]> json, ValueSerializerRegistry registry)
 {
-    // Only the default proxy's bytes compare as JSON; a marked proxy's compare byte for byte, and any other proxy's cannot be compared.
+    // The default proxy's bytes compare as JSON.
     private readonly bool _jsonProxyIsDefault = json.GetType() == typeof(SystemJsonByteSerializerProxy);
+
+    // A marked proxy's bytes compare byte for byte; an unmarked custom proxy's cannot be compared at all.
     private readonly bool _proxyIsHeaderFree = ValueReader.IsHeaderFree(json);
     private readonly ValueReader _reader = new(json, registry);
 

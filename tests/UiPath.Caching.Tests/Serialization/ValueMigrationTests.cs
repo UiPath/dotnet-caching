@@ -159,6 +159,17 @@ public class ValueMigrationTests
     }
 
     [Fact]
+    public void Bytes_a_marked_proxy_wrote_are_wanted_and_an_unmarked_proxy_s_are_not()
+    {
+        var registry = Registry();
+        var migrator = new FormatMigrator(new RecordingTelemetryProvider(), TimeProvider.System, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        var envelope = new EnvelopeProxy().Serialize("x")!;
+
+        new ValueMigration(migrator, new ValueRewriter(new HeaderFreeProxy(), registry), registry, effective: null).Wants(_fast, envelope).Should().BeTrue();
+        new ValueMigration(migrator, new ValueRewriter(new EnvelopeProxy(), registry), registry, effective: null).Wants(_fast, envelope).Should().BeFalse();
+    }
+
+    [Fact]
     public void An_id_nobody_owns_an_empty_payload_and_a_cut_header_are_not_wanted()
     {
         var sut = Migration();

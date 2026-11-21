@@ -296,6 +296,8 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
 
         reader.SniffsFor(null).Should().BeTrue();
         advertised.Strict.Values.Should().NotContain(tokens => tokens.Contains(NodeAdvertisement.NoSniff), "its reads tell its bytes from a header");
+        NegotiationPlan.Advertisement(registry, policies, new ValueReader(new EnvelopeProxy(), registry), "3.2").Strict["plain"]
+            .Should().Equal(["json", NodeAdvertisement.NoSniff], "the same envelope unmarked is not known to stay clear of header bytes");
     }
 
     [Fact]
