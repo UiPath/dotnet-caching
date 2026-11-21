@@ -28,7 +28,7 @@ public sealed class ServerBarrierTests
         await fake.Barrier().WriteAndWaitAsync(Fake.Write, wayBack: false);
 
         fake.Transactions.Should().Equal(["CLIENT", "INFO", "SET", "EXEC"]);
-        fake.InfoSections.Should().Equal("server replication");
+        fake.InfoArguments.Should().Equal(0);
         fake.ExecFlags.Should().OnlyContain(flags => flags.HasFlag(CommandFlags.NoRedirect) && flags.HasFlag(CommandFlags.DemandMaster));
     }
 
@@ -317,6 +317,27 @@ public sealed class ServerBarrierTests
         fake.Writes.Should().Be(writes + 1, "the writes are sent once, without a WAIT");
     }
 
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(0, 1)]
+    public async Task An_info_that_answers_busy_once_is_not_applied_and_the_next_attempt_confirms(int transactionBusy, int postBusy)
+    {
+        var fake = new Fake { TransactionInfoBusy = transactionBusy, PostInfoBusy = postBusy };
+
+        (await fake.Barrier().WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
+        fake.Writes.Should().Be(2, "the busy attempt was repeated");
+    }
+
+    [Fact]
+    public async Task An_info_that_stays_busy_is_not_confirmed_once_the_retries_are_spent_and_never_throws()
+    {
+        var fake = new Fake { TransactionInfoBusy = int.MaxValue };
+
+        (await fake.Barrier(retries: 2).WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
+        fake.Writes.Should().Be(3);
+        fake.Waits.Should().Be(0);
+    }
+
     /// <summary>A database, multiplexer, transaction and server whose answers come from delegates, each given its call number.</summary>
     private sealed class Fake
     {
@@ -361,7 +382,14 @@ public sealed class ServerBarrierTests
 
         public List<string> Transactions { get; } = [];
 
-        public List<string> InfoSections { get; } = [];
+        /// <summary>How many INFO replies in the transaction answer BUSY before they succeed.</summary>
+        public int TransactionInfoBusy { get; set; }
+
+        /// <summary>How many INFO replies after the WAIT answer BUSY before they succeed.</summary>
+        public int PostInfoBusy { get; set; }
+
+        /// <summary>The number of arguments of every INFO sent in the transaction.</summary>
+        public List<int> InfoArguments { get; } = [];
 
         public static Task Write(ITransaction transaction) => transaction.StringSetAsync("barriertest:{fake}", "v");
 
@@ -385,6 +413,9 @@ public sealed class ServerBarrierTests
                 ? new ServerBarrier(db, "barriertest:{fake}", TimeProvider.System, replicaFree) { Retries = retries, Timeout = explicitTimeout }
                 : new ServerBarrier(db, "barriertest:{fake}", TimeProvider.System, replicaFree) { Retries = retries };
         }
+
+        private static Task<RedisResult> Busy() =>
+            Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE."));
 
         private static Task<RedisResult> Info(string runId, string replicationId) =>
             Task.FromResult(RedisResult.Create((RedisValue)$"# Server\r\nredis_version:7.4.0\r\nrun_id:{runId}\r\n# Replication\r\nrole:master\r\nmaster_replid:{replicationId}\r\n"));
@@ -412,8 +443,8 @@ public sealed class ServerBarrierTests
                         return Task.FromResult(RedisResult.Create(7));
                     case nameof(ITransaction.ExecuteAsync) when args[0] is "INFO":
                         Transactions.Add("INFO");
-                        InfoSections.Add(string.Join(' ', (object[])args[1]!));
-                        return Info(Run, Repl);
+                        InfoArguments.Add(((object[])args[1]!).Length);
+                        return TransactionInfoBusy-- > 0 ? Busy() : Info(Run, Repl);
                     case nameof(ITransaction.StringSetAsync):
                         Transactions.Add("SET");
                         return Task.FromResult(true);
@@ -431,7 +462,7 @@ public sealed class ServerBarrierTests
             {
                 "WAIT" => AsResult(Wait(Waits++), WaitTimeouts, ((object[])args[1]!)[1]),
                 "CLIENT" => Task.FromResult(RedisResult.Create(PostClientId(_posts))),
-                "INFO" => Info(PostRunId(_posts), PostReplicationId(_posts++)),
+                "INFO" => PostInfoBusy-- > 0 ? Busy() : Info(PostRunId(_posts), PostReplicationId(_posts++)),
                 var other => throw new NotSupportedException(other),
             },
             _ => throw new NotSupportedException(method.Name),

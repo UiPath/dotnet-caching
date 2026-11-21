@@ -5,8 +5,8 @@ namespace UiPath.Caching.PhaseB;
 /// <summary>The barrier on the master that holds one owner key: it sends the writes and proves on the server that its WAIT ran on the connection that carried them.</summary>
 /// <remarks>
 /// <para>
-/// Each attempt resolves the owner's master and its ROLE, then runs the writes in one transaction that begins with <c>CLIENT ID</c> and <c>INFO server replication</c>,
-/// sent to that master only (no redirect). WAIT, then <c>CLIENT ID</c>, <c>INFO server replication</c> and ROLE run on the same server object afterwards. The
+/// Each attempt resolves the owner's master and its ROLE, then runs the writes in one transaction that begins with <c>CLIENT ID</c> and <c>INFO</c>,
+/// sent to that master only (no redirect). WAIT, then <c>CLIENT ID</c>, <c>INFO</c> and ROLE run on the same server object afterwards. The
 /// attempt is confirmed only for the same client id, the same run id, the same replication id and a master: WAIT counts the offset of the connection it
 /// runs on, so a reconnect, a restart, or a demotion that resyncs and promotes again between the write and the WAIT shows in the proof, whatever events
 /// the client has or has not delivered yet.
@@ -19,7 +19,7 @@ namespace UiPath.Caching.PhaseB;
 /// <para>
 /// <c>NoReplica</c> needs four facts: the deployment is configured without replicas, ROLE shows none, this instance never saw one, and the proof matches.
 /// A ROLE that is denied leaves the replicas unknown: WAIT of 1 or more with a matching proof confirms, and it is never <c>NoReplica</c>. INFO needs a
-/// connection with allowAdmin, and a server that takes several sections in one INFO (Redis 7.0 or later). Without allowAdmin nothing can be proven, so the
+/// connection with allowAdmin, and is sent without sections, since Redis 6 refuses more than one. Without allowAdmin nothing can be proven, so the
 /// writes run once, unbound, and the outcome is <c>NotConfirmed</c>.
 /// </para>
 /// </remarks>
@@ -88,6 +88,18 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
                 return BarrierOutcome.NotConfirmed;
             }
         }
+    }
+
+    private static string? FieldOf(string? info, string name) =>
+        info?.Split('\n').FirstOrDefault(l => l.StartsWith(name, StringComparison.Ordinal))?[name.Length..].Trim();
+
+    /// <summary>The proof from the replies of <c>CLIENT ID</c> and <c>INFO</c>; null when INFO lacks the run id or the replication id. A failed reply throws.</summary>
+    private static async Task<ConnectionProof?> ProofOfAsync(Task<RedisResult> clientId, Task<RedisResult> info)
+    {
+        var text = (string?)await info.ConfigureAwait(false);
+        return FieldOf(text, "run_id:") is { } runId && FieldOf(text, "master_replid:") is { } replicationId
+            ? new ConnectionProof((long)await clientId.ConfigureAwait(false), runId, replicationId)
+            : null;
     }
 
     private static bool Transient(Exception ex) => ex is RedisException or RedisTimeoutException;
@@ -195,18 +207,18 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
 
     /// <summary>The proof of the connection the writes ran on; null when the transaction did not commit.</summary>
     /// <remarks>CLIENT ID and INFO are queued first, so they run in the transaction of the writes: the connection that answers them is the one that wrote.</remarks>
-    private async Task<BarrierProof?> WriteAsync(Func<ITransaction, Task> queueWrites)
+    private async Task<ConnectionProof?> WriteAsync(Func<ITransaction, Task> queueWrites)
     {
         var transaction = database.CreateTransaction();
         var clientId = transaction.ExecuteAsync("CLIENT", "ID");
-        var info = transaction.ExecuteAsync("INFO", BarrierProof.InfoSections);
+        var info = transaction.ExecuteAsync("INFO");
         var queued = queueWrites(transaction);
         var committed = await transaction.ExecuteAsync(Pinned).ConfigureAwait(false);
         await SettleAsync(queued, committed).ConfigureAwait(false);
-        return committed ? await BarrierProof.OfAsync(clientId, info).ConfigureAwait(false) : null;
+        return committed ? await ProofOfAsync(clientId, info).ConfigureAwait(false) : null;
     }
 
-    private async Task<BarrierOutcome?> ConfirmAsync(Target target, BarrierProof sent)
+    private async Task<BarrierOutcome?> ConfirmAsync(Target target, ConnectionProof sent)
     {
         if (target.Replicas == 0)
         {
@@ -228,10 +240,10 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
     }
 
     // The same client id and run id as the write's transaction, and still a master (unless ROLE is denied).
-    private async Task<bool> StillBoundAsync(Target target, BarrierProof sent)
+    private async Task<bool> StillBoundAsync(Target target, ConnectionProof sent)
     {
         var server = target.Server;
-        var now = await BarrierProof.OfAsync(server.ExecuteAsync("CLIENT", "ID"), server.ExecuteAsync("INFO", BarrierProof.InfoSections)).ConfigureAwait(false);
+        var now = await ProofOfAsync(server.ExecuteAsync("CLIENT", "ID"), server.ExecuteAsync("INFO")).ConfigureAwait(false);
         return now == sent && (target.Replicas is null || await server.RoleAsync().ConfigureAwait(false) is Role.Master);
     }
 

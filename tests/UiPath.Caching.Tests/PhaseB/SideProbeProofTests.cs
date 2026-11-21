@@ -47,6 +47,21 @@ public sealed class SideProbeProofTests(RedisContainerFixture fixture)
         caps.Failures("src").Should().ContainSingle().Which.Should().Be("src: the move connection needs allowAdmin");
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_busy_info_or_client_id_is_inconclusive_and_reports_no_denial(bool info)
+    {
+        var busy = new RedisServerException(RedisErrorKind.None, CommandFlags.None, "BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.");
+        var side = new FakeSide(info ? new FakePrimary(A, Info: busy) : new FakePrimary(A, Client: busy), new FakePrimary(B));
+
+        var caps = await SideProbe.ProbeAsync(side.Database, "side:", "side:*", cancellationToken: TestContext.Current.CancellationToken);
+
+        caps.Failures("src").Should().BeEmpty();
+        caps.Failures("dst").Should().BeEmpty();
+        caps.Denied.Should().NotContain(d => d.StartsWith("INFO@", StringComparison.Ordinal) || d.StartsWith("CLIENT ID@", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task A_master_that_answers_both_adds_no_failure()
     {
@@ -68,7 +83,9 @@ public sealed class SideProbeProofTests(RedisContainerFixture fixture)
         await using var adminMux = await ConnectionMultiplexer.ConnectAsync(options);
         var server = adminMux.GetServer(adminMux.GetEndPoints()[0]);
         var user = $"noproof{Guid.NewGuid():N}";
-        await server.ExecuteAsync("ACL", "SETUSER", user, "on", ">noproofpw", "~*", "&*", "+@all", denial);
+        // A subcommand rule needs Redis 7; before it, denying the whole command still denies CLIENT ID.
+        var rule = denial == "-client|id" && fixture.ServerVersion < new Version(7, 0) ? "-client" : denial;
+        await server.ExecuteAsync("ACL", "SETUSER", user, "on", ">noproofpw", "~*", "&*", "+@all", rule);
         try
         {
             var limited = ConfigurationOptions.Parse(fixture.ConnectionString);

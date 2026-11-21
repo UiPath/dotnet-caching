@@ -396,50 +396,39 @@ internal static class SideProbe
         }
     }
 
-    /// <summary><c>CLIENT ID</c> and <c>INFO server replication</c> on the master's own server: what proves a WAIT ran on the connection that sent the write.</summary>
-    /// <remarks>A server denial of either, or a client that refuses them without allowAdmin, means no WAIT of this side can be confirmed. A client timeout proves nothing either way.</remarks>
+    /// <summary><c>CLIENT ID</c> and plain <c>INFO</c> on the master's own server: what proves a WAIT ran on the connection that sent the write.</summary>
+    /// <remarks>
+    /// Only an explicit refusal fails the gate: a client without allowAdmin, an ACL denial or a command the server does not know. BUSY, LOADING, a client
+    /// timeout or a dropped connection proves nothing either way. INFO has no section argument, because Redis 6 refuses more than one.
+    /// </remarks>
     private static async Task<(bool ClientIdDenied, bool InfoDenied, bool NeedsAdmin)> ProofAsync(IServer server, List<string> denied)
     {
-        var clientIdDenied = false;
-        var infoDenied = false;
-        var needsAdmin = false;
+        var (clientIdDenied, clientIdNeedsAdmin) = await ProofCommandAsync(server, "CLIENT ID", denied, "CLIENT", "ID").ConfigureAwait(false);
+        var (infoDenied, infoNeedsAdmin) = await ProofCommandAsync(server, "INFO", denied, "INFO").ConfigureAwait(false);
+        return (clientIdDenied, infoDenied, clientIdNeedsAdmin || infoNeedsAdmin);
+    }
+
+    private static async Task<(bool Denied, bool NeedsAdmin)> ProofCommandAsync(IServer server, string name, List<string> denied, string command, params object[] args)
+    {
         try
         {
-            await server.ExecuteAsync("CLIENT", "ID").ConfigureAwait(false);
+            await server.ExecuteAsync(command, args).ConfigureAwait(false);
+            return (false, false);
         }
         catch (RedisCommandException ex) when (ex.Message.Contains("admin", StringComparison.OrdinalIgnoreCase))
         {
-            needsAdmin = true;
+            return (false, true);
         }
-        catch (RedisTimeoutException)
+        catch (Exception ex) when (Denies(ex) || RedisUtils.IsDenied(ex) || RedisUtils.IsUnsupportedCommand(ex))
         {
-            // Inconclusive, like every other client timeout of the probe.
+            denied.Add(Denial(name, server.EndPoint));
+            return (true, false);
         }
-        catch (Exception ex) when (Denies(ex) || ex is RedisCommandException)
+        catch (Exception ex) when (ex is RedisException or RedisTimeoutException)
         {
-            clientIdDenied = true;
-            denied.Add(Denial("CLIENT ID", server.EndPoint));
+            // Inconclusive, like every other transient error of the probe: BUSY, LOADING, a timeout or a dropped connection.
+            return (false, false);
         }
-
-        try
-        {
-            await server.ExecuteAsync("INFO", BarrierProof.InfoSections).ConfigureAwait(false);
-        }
-        catch (RedisCommandException ex) when (ex.Message.Contains("admin", StringComparison.OrdinalIgnoreCase))
-        {
-            needsAdmin = true;
-        }
-        catch (RedisTimeoutException)
-        {
-            // Inconclusive, like every other client timeout of the probe.
-        }
-        catch (Exception ex) when (Denies(ex) || ex is RedisCommandException)
-        {
-            infoDenied = true;
-            denied.Add(Denial("INFO", server.EndPoint));
-        }
-
-        return (clientIdDenied, infoDenied, needsAdmin);
     }
 
     /// <summary>Five writes, each followed by <c>WAIT 1 3000</c>: any 1 or more means available; 0 or a timeout proves nothing alone.</summary>
