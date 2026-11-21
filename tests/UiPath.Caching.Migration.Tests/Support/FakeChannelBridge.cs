@@ -5,8 +5,22 @@ internal sealed class FakeChannelBridge : IChannelBridge
 {
     private readonly List<BridgeMessage> _published = [];
     private Action<BridgeMessage>? _subscriber;
+    private int _cancelled;
+    private int _subscribeCalls;
 
     public Exception? PublishFails { get; set; }
+
+    /// <summary>How many subscribe calls throw before one succeeds.</summary>
+    public int SubscribeFailures { get; set; }
+
+    public bool DisposeFails { get; set; }
+
+    /// <summary>Blocks the calling thread inside PublishAsync before it returns, as an adapter waiting on a lock does.</summary>
+    public ManualResetEventSlim? BlockBeforeReturn { get; set; }
+
+    public int Cancelled => Volatile.Read(ref _cancelled);
+
+    public int SubscribeCalls => Volatile.Read(ref _subscribeCalls);
 
     /// <summary>Holds every publish until it completes.</summary>
     public TaskCompletionSource? PublishGate { get; set; }
@@ -31,9 +45,18 @@ internal sealed class FakeChannelBridge : IChannelBridge
             _published.Add(message);
         }
 
+        BlockBeforeReturn?.Wait(TimeSpan.FromSeconds(30));
         if (PublishGate is { } gate)
         {
-            await gate.Task.WaitAsync(cancellationToken);
+            try
+            {
+                await gate.Task.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                Interlocked.Increment(ref _cancelled);
+                throw;
+            }
         }
 
         if (PublishFails is { } failure)
@@ -44,6 +67,11 @@ internal sealed class FakeChannelBridge : IChannelBridge
 
     public IDisposable Subscribe(Action<BridgeMessage> onMessage)
     {
+        if (Interlocked.Increment(ref _subscribeCalls) <= SubscribeFailures)
+        {
+            throw new InvalidOperationException("channel unavailable");
+        }
+
         _subscriber = onMessage;
         return new Unsubscriber(this);
     }
@@ -52,6 +80,13 @@ internal sealed class FakeChannelBridge : IChannelBridge
 
     private sealed class Unsubscriber(FakeChannelBridge owner) : IDisposable
     {
-        public void Dispose() => owner._subscriber = null;
+        public void Dispose()
+        {
+            owner._subscriber = null;
+            if (owner.DisposeFails)
+            {
+                throw new InvalidOperationException("dispose failed");
+            }
+        }
     }
 }

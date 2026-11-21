@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Caching.Config;
 using UiPath.Caching.Migration.Tests.Support;
 
@@ -178,15 +179,94 @@ public sealed class BridgeTests : RouterTestBase
         bridge.Published.Should().ContainSingle().Which.Origin.Should().Be("urn:bridge-host-pbridge1?stack=uipath.caching.migration");
     }
 
+    [Fact]
+    public async Task A_subscribe_that_throws_neither_fails_the_router_nor_stays_down()
+    {
+        var (node, bridge) = Bridged(bridge: new FakeChannelBridge { SubscribeFailures = 2 });
+        bridge.Subscribed.Should().BeFalse();
+        (await node.Cache.SetAsync("k", new Item("v"), default, Ct)).Should().Be(WriteOutcome.Committed);
+
+        await UntilAsync(() => Clock.HasTimers);
+        Clock.Advance(TimeSpan.FromSeconds(1));
+        await UntilAsync(() => bridge.SubscribeCalls == 2 && Clock.HasTimers);
+        Clock.Advance(TimeSpan.FromSeconds(2));
+
+        await UntilAsync(() => bridge.Subscribed);
+    }
+
+    [Fact]
+    public async Task An_adapter_that_blocks_before_it_returns_holds_a_write_no_longer_than_the_source_timeout()
+    {
+        using var block = new ManualResetEventSlim();
+        var (node, bridge) = Bridged(sourceTimeout: TimeSpan.FromSeconds(3), bridge: new FakeChannelBridge { BlockBeforeReturn = block });
+
+        var write = node.Cache.SetAsync("k", new Item("v"), default, Ct).AsTask();
+        await UntilAsync(() => bridge.Published.Count == 1 && Clock.HasTimers);
+        write.IsCompleted.Should().BeFalse();
+        Clock.Advance(TimeSpan.FromSeconds(3));
+
+        (await write.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().Be(WriteOutcome.Committed);
+        block.Set();
+    }
+
+    [Fact]
+    public async Task A_publish_past_the_timeout_is_cancelled_in_the_adapter()
+    {
+        var (node, bridge) = Bridged(sourceTimeout: TimeSpan.FromSeconds(3));
+        bridge.PublishGate = new TaskCompletionSource();
+
+        var write = node.Cache.SetAsync("k", new Item("v"), default, Ct).AsTask();
+        await UntilAsync(() => bridge.Published.Count == 1 && Clock.HasTimers);
+        Clock.Advance(TimeSpan.FromSeconds(3));
+        await write.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        await UntilAsync(() => bridge.Cancelled == 1);
+    }
+
+    [Fact]
+    public async Task Publishes_past_the_pending_limit_are_dropped_not_queued()
+    {
+        var bridge = new FakeChannelBridge { PublishGate = new TaskCompletionSource() };
+        var core = new RouterCore(Clock, _ => true, NullLogger.Instance) { SourceTimeout = TimeSpan.FromHours(1) };
+        var host = new BridgeHost(bridge, Me, core, NullLogger.Instance) { MaxPending = 2 };
+
+        var publishes = Enumerable.Range(0, 5).Select(i => host.PublishAsync(BridgeMessageKind.Key, "c", $"k{i}").AsTask()).ToArray();
+        await UntilAsync(() => bridge.Published.Count == 2);
+        await Task.WhenAll(publishes.Skip(2)).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        bridge.Published.Should().HaveCount(2, "three were dropped at once instead of waiting");
+        bridge.PublishGate.SetResult();
+        await Task.WhenAll(publishes).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await host.PublishAsync(BridgeMessageKind.Key, "c", "after");
+        bridge.Published.Should().HaveCount(3, "slots free up once the adapter's calls end");
+    }
+
+    [Fact]
+    public async Task A_subscription_that_throws_on_dispose_does_not_stop_the_cleanup()
+    {
+        var (node, bridge) = Bridged();
+        bridge.DisposeFails = true;
+
+        var dispose = async () => await node.StartDispose();
+
+        await dispose.Should().NotThrowAsync();
+        bridge.Subscribed.Should().BeFalse();
+    }
+
     private (TestNode Node, FakeChannelBridge Bridge) Bridged(
         Func<string, bool>? useLibrary = null,
         Func<CancellationToken, Task<LibraryParts>>? lazyLibraryAsync = null,
         TimeSpan? startBound = null,
-        TimeSpan? sourceTimeout = null)
+        TimeSpan? sourceTimeout = null,
+        FakeChannelBridge? bridge = null)
     {
-        var bridge = new FakeChannelBridge();
+        bridge ??= new FakeChannelBridge();
         var node = NewNode(useLibrary: useLibrary, lazyLibraryAsync: lazyLibraryAsync, startBound: startBound, sourceTimeout: sourceTimeout, bridge: bridge, bridgeOrigin: Me);
-        bridge.Subscribed.Should().BeTrue();
+        if (bridge.SubscribeFailures == 0)
+        {
+            bridge.Subscribed.Should().BeTrue();
+        }
+
         return (node, bridge);
     }
 }
