@@ -79,7 +79,8 @@ public static class RouterServiceCollectionExtensions
             }
         }
 
-        services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId));
+        var section = configuration.GetSection(sectionName);
+        services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId, section));
         services.AddHostedService<RouterHostedService>();
         return services;
     }
@@ -126,7 +127,7 @@ public static class RouterServiceCollectionExtensions
         return query < 0 ? new Uri($"{text}-p{processId}") : new Uri($"{text[..query]}-p{processId}{text[query..]}");
     }
 
-    private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId)
+    private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, IConfigurationSection section)
     {
         var logger = root.GetService<ILoggerFactory>()?.CreateLogger("UiPath.Caching.Migration") ?? NullLogger.Instance;
         var core = new RouterCore(root.GetRequiredService<TimeProvider>(), predicate, logger)
@@ -145,7 +146,7 @@ public static class RouterServiceCollectionExtensions
 
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
             core.UseLibrary(token => StartLibraryAsync(root, builder, token));
-            var advertiser = CreateAdvertiser(root, builder, core, processId, logger);
+            var advertiser = CreateAdvertiser(root, builder, core, processId, section, logger);
             var router = new Router(core, builder.Registrations) { Advertiser = advertiser };
 
             RouterBanner.Log(logger, builder, processId);
@@ -161,14 +162,15 @@ public static class RouterServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Built from the application's root options and the process id, never from the library's container, so a library build that hangs or throws
-    /// cannot hold or disable the entry. The router's stack binds the same configuration section, so the identity and node-list key agree with it.
+    /// Built from the router's configuration section, bound here as the named stack binds it, and the process id, never from the library's container,
+    /// so a library build that hangs or throws cannot hold or disable the entry, and the identity and node-list key are the stack's.
     /// </summary>
-    private static RouterAdvertiser? CreateAdvertiser(IServiceProvider root, RouterBuilder builder, RouterCore core, string processId, ILogger logger)
+    private static RouterAdvertiser? CreateAdvertiser(IServiceProvider root, RouterBuilder builder, RouterCore core, string processId, IConfigurationSection section, ILogger logger)
     {
         try
         {
-            var cacheOptions = root.GetRequiredService<IOptions<CacheOptions>>().Value;
+            var cacheOptions = new CacheOptions();
+            section.Bind(cacheOptions);
             var negotiation = root.GetService<IOptions<RedisCacheOptions>>()?.Value.FormatNegotiation ?? new FormatNegotiationOptions();
             Func<CancellationToken, ValueTask<IDatabase>> database = builder.SourceDatabase is { } source
                 ? _ => ValueTask.FromResult(source())

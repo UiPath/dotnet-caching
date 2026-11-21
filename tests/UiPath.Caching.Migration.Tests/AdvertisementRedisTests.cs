@@ -112,18 +112,26 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         await advertiser.StopAsync(TimeSpan.FromSeconds(1));
     }
 
-    [Fact]
-    public async Task The_source_database_reaches_the_stack_node_hash_under_the_stack_identity()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_source_database_reaches_the_stack_node_hash_under_the_stack_identity(bool ownSection)
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        await using var provider = Provider($"adv{Guid.NewGuid():N}"[..16]);
-        _ = provider.GetRequiredService<IRouter>();
+        await using var provider = Provider($"adv{Guid.NewGuid():N}"[..16], ownSection: ownSection);
+        var router = (Router)provider.GetRequiredService<IRouter>();
         var stackCache = provider.GetRequiredKeyedService<IOptions<CacheOptions>>(RouterServiceCollectionExtensions.StackName).Value;
         var stackRedis = provider.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(RouterServiceCollectionExtensions.StackName).Value;
         var key = RouterServiceCollectionExtensions.NodeListKey(stackCache, stackRedis);
         var field = stackCache.SourceUri!.ToString().ToLowerInvariant() + RouterAdvertisement.FieldSuffix;
 
-        (await UntilAsync(async () => await Db.HashExistsAsync(key, field))).Should().BeTrue("the entry built from root options lands where the stack's node list is");
+        (await UntilAsync(async () => await Db.HashExistsAsync(key, field))).Should().BeTrue("the entry lands where the stack's node list is, under the stack's identity");
+        router.Advertiser!.Fresh.Should().Be(stackRedis.FormatNegotiation.LivenessWindow + (stackRedis.FormatNegotiation.AdvertiseInterval * 2));
+        if (ownSection)
+        {
+            ((string)key!).Should().Be("caching$nodes", "the router's section sets '$', whatever the root says");
+        }
+
         await Db.HashDeleteAsync(key, field);
     }
 
@@ -181,9 +189,10 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         return false;
     }
 
-    private ServiceProvider Provider(string identity, Action<IServiceCollection>? after = null)
+    private ServiceProvider Provider(string identity, Action<IServiceCollection>? after = null, bool ownSection = false)
     {
         _identity = identity;
+        var section = ownSection ? "RouterCaching" : "Caching";
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Caching:AppShortName"] = "advtest",
@@ -191,16 +200,32 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
             ["Caching:Connections:Redis:ConnectionString"] = fixture.ConnectionString,
             ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
             ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
+            ["RouterCaching:AppShortName"] = "advrouter",
+            ["RouterCaching:Separator"] = "$",
+            ["RouterCaching:SourceUri"] = "urn:router-section",
+            ["RouterCaching:Redis:FormatNegotiation:LivenessWindow"] = "00:00:30",
         }).Build();
         var source = new LegacySource(_redis!, "advc");
         var services = new ServiceCollection().AddLogging();
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
-        services.AddCachingRouter(configuration, router => router
-            .UseLibraryWhen(_ => true)
-            .UseEnvelope(new LegacyEnvelopeProxy())
-            .UseNodeIdentity(identity)
-            .UseSourceConnection(() => Db)
-            .Add(new RouterCacheRegistration<List<long>> { Name = "advc", Group = "advg", Source = source, RedisKey = source.RedisKey }));
+        if (ownSection)
+        {
+            services.Configure<CacheOptions>(options =>
+            {
+                options.Separator = '|';
+                options.SourceUri = new Uri("urn:root-only");
+            });
+        }
+
+        services.AddCachingRouter(
+            configuration,
+            router => router
+                .UseLibraryWhen(_ => true)
+                .UseEnvelope(new LegacyEnvelopeProxy())
+                .UseNodeIdentity(identity)
+                .UseSourceConnection(() => Db)
+                .Add(new RouterCacheRegistration<List<long>> { Name = "advc", Group = "advg", Source = source, RedisKey = source.RedisKey }),
+            section);
         after?.Invoke(services);
         return services.BuildServiceProvider();
     }

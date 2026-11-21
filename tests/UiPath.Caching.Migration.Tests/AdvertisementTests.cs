@@ -106,6 +106,40 @@ public sealed class AdvertisementTests
     }
 
     [Fact]
+    public async Task An_abandoned_acquisition_is_reused_not_doubled_and_its_fault_is_observed()
+    {
+        using var release = new ManualResetEventSlim();
+        var calls = 0;
+        var store = new RouterAdvertisementStore(
+            _ =>
+            {
+                Interlocked.Increment(ref calls);
+                release.Wait(TimeSpan.FromSeconds(30));
+                throw new RedisException("released");
+            },
+            "caching:nodes");
+        var entry = new RouterAdvertisement("n", "b", []);
+
+        using (var first = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        {
+            var abandon = () => store.WriteAsync("f", entry, first.Token);
+            await abandon.Should().ThrowAsync<OperationCanceledException>();
+        }
+
+        using (var second = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        {
+            var again = () => store.WriteAsync("f", entry, second.Token);
+            await again.Should().ThrowAsync<OperationCanceledException>();
+        }
+
+        Volatile.Read(ref calls).Should().Be(1, "the running acquisition is reused while it is still running");
+        release.Set();
+        var after = () => store.WriteAsync("f", entry, Ct);
+        await after.Should().ThrowAsync<RedisException>();
+        Volatile.Read(ref calls).Should().BeLessThanOrEqualTo(2);
+    }
+
+    [Fact]
     public async Task Mode_change_nudges_keep_the_failure_backoff()
     {
         var attempts = 0;

@@ -29,6 +29,7 @@ internal sealed class RouterAdvertisementStore(Func<CancellationToken, ValueTask
         """;
 
     private volatile bool _scriptsRefused;
+    private Task<IDatabase>? _acquiring;
 
     public RedisKey Key { get; } = key;
 
@@ -110,8 +111,21 @@ internal sealed class RouterAdvertisementStore(Func<CancellationToken, ValueTask
                 || server.Message.Contains("unknown command", StringComparison.OrdinalIgnoreCase)
                 || server.Message.Contains("disabled", StringComparison.OrdinalIgnoreCase)));
 
-    private async Task<IDatabase> AcquireAsync(CancellationToken cancellationToken) =>
-        await Task.Run(() => database(cancellationToken).AsTask(), cancellationToken).WaitAsync(cancellationToken).ConfigureAwait(false);
+    /// <summary>One acquisition at a time: a caller that stops waiting leaves it running, retained and with its fault observed, for the next caller to reuse.</summary>
+    private async Task<IDatabase> AcquireAsync(CancellationToken cancellationToken)
+    {
+        var pending = Volatile.Read(ref _acquiring);
+        if (pending is null || pending.IsCompleted)
+        {
+            var started = Task.Run(() => database(cancellationToken).AsTask(), CancellationToken.None);
+            _ = started.ContinueWith(static task => _ = task.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            pending = Interlocked.CompareExchange(ref _acquiring, started, pending) == pending ? started : Volatile.Read(ref _acquiring)!;
+        }
+
+        var acquired = await pending.WaitAsync(cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return acquired;
+    }
 
     private async Task<long> ServerMillisecondsAsync(IDatabase db, CancellationToken cancellationToken)
     {
