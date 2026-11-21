@@ -110,6 +110,11 @@ internal sealed class Oracle
                 return new Violation(ViolationKinds.PartialHash, $"{spec.Name}: a read returned a partial hash {result}", final);
             }
 
+            if (producers.Count == 0 && !result.StartsWith("merged:", StringComparison.Ordinal))
+            {
+                return new Violation(ViolationKinds.Stale, $"{spec.Name}: a read returned '{result}', which no mutation wrote", final);
+            }
+
             return !replicaHit && producers.Count > 0 && producers.All(Superseded)
                 ? new Violation(ViolationKinds.Stale, $"{spec.Name}: a read returned '{result}', which a mutation that completed before the read started had replaced", final)
                 : null;

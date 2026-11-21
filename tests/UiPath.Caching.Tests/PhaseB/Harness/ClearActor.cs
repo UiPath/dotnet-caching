@@ -79,15 +79,17 @@ internal sealed record ClearActor(string Name, int Node, string Cid) : Actor(Nam
 
     private ClearActor Gave(World w)
     {
-        if (Swept)
-        {
-            return this;
-        }
-
         foreach (var m in Mutations.Split(','))
         {
             var parts = m.Split(':');
-            w.Oracle.AbortMutation(int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture), int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture));
+            var key = int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture);
+            w.Oracle.AbortMutation(key, int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture));
+
+            // A call that failed after its sweep may have removed the value, so a miss stays excused until a later write completes.
+            if (Swept)
+            {
+                w.Oracle.Disturb(key);
+            }
         }
 
         return this;

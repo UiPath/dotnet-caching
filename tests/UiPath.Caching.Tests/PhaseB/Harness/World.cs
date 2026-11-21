@@ -21,6 +21,8 @@ internal sealed class World
     // Failovers of the L server, which a client sees as a connection restore.
     public int LFailovers { get; set; }
 
+    public int NFailovers { get; set; }
+
     public ShardStore L { get; private set; }
 
     public ShardStore N { get; private set; }
@@ -69,6 +71,7 @@ internal sealed class World
     {
         Now = Now,
         LFailovers = LFailovers,
+        NFailovers = NFailovers,
         L = L.Clone(),
         N = N.Clone(),
         Auth = Auth,
@@ -97,6 +100,7 @@ internal sealed class World
         var h = new StateHasher();
         h.Add(Now);
         h.Add(LFailovers);
+        h.Add(NFailovers);
         L.Write(h);
         h.Add("|");
         N.Write(h);

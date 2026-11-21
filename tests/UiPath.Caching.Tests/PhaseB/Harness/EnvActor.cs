@@ -49,7 +49,7 @@ internal sealed record EnvActor(string Name, string Kind, int Key, ImmutableArra
     }
 
     private static string[] DataKeys(World w) =>
-        [.. w.Config.Keys.Select(k => $"{w.L.Exists(k.L)}{w.N.Exists(k.N)}")];
+        [.. w.Config.Keys.Select(k => $"{w.L.Get(k.L)?.Encode()}|{w.N.Get(k.N)?.Encode()}")];
 
     private void EvictKey(World w, KeySpec spec, string option)
     {
@@ -77,10 +77,19 @@ internal sealed record EnvActor(string Name, string Kind, int Key, ImmutableArra
         {
             w.LFailovers++;
         }
-
-        if (shard.Failover(int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture), w.Now) > 0)
+        else
         {
-            for (var i = 0; i < w.Config.Keys.Length; i++)
+            w.NFailovers++;
+        }
+
+        var before = DataKeys(w);
+        shard.Failover(int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture), w.Now);
+        var after = DataKeys(w);
+
+        // Only a key whose copies changed lost anything; a lost fence or staging write loses no value.
+        for (var i = 0; i < w.Config.Keys.Length; i++)
+        {
+            if (before[i] != after[i])
             {
                 w.Oracle.Lose(i);
             }

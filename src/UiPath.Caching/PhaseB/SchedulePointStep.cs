@@ -20,4 +20,10 @@ internal enum SchedulePointStep : byte
     GateVerify,
     GateReopen,
     Sweep,
+    SourceExpire,
+    HashWrite,
+    HashDelete,
+    HashExpire,
+    ControlSync,
+    ControlCommit,
 }

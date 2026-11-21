@@ -28,6 +28,9 @@ internal sealed record ReadActor(string Name, int Node, int Key, bool Mover = fa
 
     public long Tcap { get; init; }
 
+    // Failovers seen when the capture was taken: a client that sees a connection restore since then abandons the promotion (3.2a step 10).
+    public int Restores { get; init; }
+
     public long SentAt { get; init; }
 
     public long RecvAt { get; init; }
@@ -65,7 +68,7 @@ internal sealed record ReadActor(string Name, int Node, int Key, bool Mover = fa
             return Admitted(w) ? 1 : 0;
         }
 
-        return Pc == 0 && ReadsReplicaFirst(Plan) ? 2 : 1;
+        return Pc == 0 && ReadsReplicaFirst(Plan) ? 3 : 1;
     }
 
     public override Actor Step(World w, int choice)
@@ -133,6 +136,7 @@ internal sealed record ReadActor(string Name, int Node, int Key, bool Mover = fa
         return (unit.St, unit.Reverse) switch
         {
             ("S1", false) => unit.NPop ? "UnionFwd" : "S1",
+            ("S2", false) => "S1",
             ("S1", true) => "UnionRev",
             ("S3", false) => "Fwd",
             ("S3", true) => "Rev",
@@ -229,7 +233,7 @@ internal sealed record ReadActor(string Name, int Node, int Key, bool Mover = fa
                     return next.Fin(w, null);
                 }
 
-                next = next with { Token = cap.Token, Gate = cap.Gate, Tcap = cap.Tcap, RecvAt = w.Now };
+                next = next with { Token = cap.Token, Gate = cap.Gate, Tcap = cap.Tcap, RecvAt = w.Now, Restores = w.LFailovers + w.NFailovers };
                 if (w.Config.SplitCapReply)
                 {
                     return next.To(40);
@@ -300,7 +304,7 @@ internal sealed record ReadActor(string Name, int Node, int Key, bool Mover = fa
                     return next.Fin(w, Held);
                 }
 
-                next = next with { Token = cap.Token, Gate = cap.Gate, Tcap = cap.Tcap, RecvAt = w.Now };
+                next = next with { Token = cap.Token, Gate = cap.Gate, Tcap = cap.Tcap, RecvAt = w.Now, Restores = w.LFailovers + w.NFailovers };
                 return w.Config.SplitCapReply ? next.To(10) : next.To(2);
             }
 
@@ -338,6 +342,12 @@ internal sealed record ReadActor(string Name, int Node, int Key, bool Mover = fa
         }
 
         var version = entry.Version();
+        if (Token is not null && w.LFailovers + w.NFailovers != Restores)
+        {
+            Note(w, "abandons the promotion after a connection restore");
+            return reverse ? Fin(w, Held) : Fin(w, version);
+        }
+
         var next = this with { Snap = entry.Encode(), SnapHash = entry.IsHash, SnapPx = Remaining(entry, w.Now), SnapAt = w.Now, SnapVersion = version };
         if (swapped && Token is null)
         {
@@ -364,6 +374,12 @@ internal sealed record ReadActor(string Name, int Node, int Key, bool Mover = fa
     private ReadActor Publish(World w, KeySpec spec, Route route, bool reverse)
     {
         var faults = w.Config.Faults;
+        if (w.LFailovers + w.NFailovers != Restores)
+        {
+            Note(w, "abandons the promotion after a connection restore");
+            return Fin(w, reverse ? Held : SnapVersion);
+        }
+
         var mode = reverse && !faults.ReverseNx ? "set" : "nx";
         var next = this with { Seq = Seq + 1 };
         var px = SnapPx;

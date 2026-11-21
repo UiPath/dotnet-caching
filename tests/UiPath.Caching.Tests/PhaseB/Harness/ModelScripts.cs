@@ -1,10 +1,11 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace UiPath.Caching.Tests.PhaseB.Harness;
 
 // A C# model of each P-B1 script: the same argument order, return codes and check order as the Lua in MoveScripts*.cs.
 // A conformance test runs a shared table of scenarios against this model and against the real scripts.
-internal static class ModelScripts
+internal static partial class ModelScripts
 {
     public static CapResult Cap(ShardStore s, long now, string fence, string data, string ctl, long fenceTtl, string nonce, string id, string cid, ModelFaults f) =>
         s.Scripted(() =>
@@ -405,7 +406,7 @@ internal static class ModelScripts
                     s.HSet(key, versionField, versionSeed.ToString(CultureInfo.InvariantCulture));
                 }
 
-                if (long.TryParse(s.HGet(key, versionField), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n != long.MaxValue)
+                if (TryRedisInteger(s.HGet(key, versionField), out var n) && n != long.MaxValue)
                 {
                     s.HSet(key, versionField, (n + 1).ToString(CultureInfo.InvariantCulture));
                     result = n + 1;
@@ -448,7 +449,7 @@ internal static class ModelScripts
                     s.HSet(key, versionField, versionSeed.ToString(CultureInfo.InvariantCulture));
                 }
 
-                if (long.TryParse(s.HGet(key, versionField), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n != long.MaxValue)
+                if (TryRedisInteger(s.HGet(key, versionField), out var n) && n != long.MaxValue)
                 {
                     s.HSet(key, versionField, (n + 1).ToString(CultureInfo.InvariantCulture));
                 }
@@ -496,6 +497,16 @@ internal static class ModelScripts
 
             return 1;
         });
+
+    // Redis reads a counter only in canonical form: no sign but '-', no spaces, no leading zero.
+    private static bool TryRedisInteger(string? text, out long value)
+    {
+        value = 0;
+        return text is not null && CanonicalInteger().IsMatch(text) && long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+    }
+
+    [GeneratedRegex("^(0|-?[1-9][0-9]*)$")]
+    private static partial Regex CanonicalInteger();
 
     private static bool IdentityHolds(ShardStore s, string ctl, string id, ModelFaults f) =>
         s.HGet(ctl, "id") == id || (f.AbsentRecordIsOpen && !s.Exists(ctl));

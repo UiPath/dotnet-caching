@@ -64,6 +64,12 @@ internal static class ConformanceScenarios
         ["HDELC deletes fields and drops a lone count"] = [Setup, PutH("src", "a=1;b=2;ver=3"), new(HDelC) { Fields = "a=", VersionField = "ver" }, new(HDelC) { Fields = "b=", VersionField = "ver" }],
         ["HSETC leaves a counter at its maximum and answers 0"] = [Setup, PutH("src", "a=1;ver=9223372036854775807"), new(HSetC) { Fields = "a=2", VersionField = "ver" }],
         ["HDELC leaves a counter at its maximum"] = [Setup, PutH("src", "a=1;b=2;ver=9223372036854775807"), new(HDelC) { Fields = "a=", VersionField = "ver" }],
+        ["HSETC with a past expiry removes the key"] = [Setup, PutH("src", "x=1"), new(HSetC) { Fields = "a=1", AtOffset = -1_000 }],
+        ["HEXPC with a past expiry removes the key"] = [Setup, PutH("src", "a=1"), new(HExpC) { AtOffset = -1_000 }],
+        ["HDELC with a fence"] = [Setup, PutH("src", "a=1;b=2"), new(HDelC) { Fields = "a=", WithFence = true, Nonce = "h1" }],
+        ["HSETC on a string key with a fence"] = [Setup, PutS("src", "x"), new(HSetC) { Fields = "a=1", WithFence = true, Nonce = "h1" }],
+        ["HDELC on a string key with a fence"] = [Setup, PutS("src", "x"), new(HDelC) { Fields = "a=", WithFence = true, Nonce = "h1" }],
+        ["HSETC with a counter that is not canonical"] = [Setup, PutH("src", "a=1;ver=+5"), new(HSetC) { Fields = "a=2", VersionField = "ver" }, PutH("src", "ver=007"), new(HSetC) { Fields = "a=3", VersionField = "ver" }],
         ["HEXPC sets and clears an expiry"] = [Setup, PutH("src", "a=1"), new(HExpC) { AtOffset = 60_000, WithFence = true, Nonce = "e1" }, new(HExpC), new(Delete) { Key = "src" }, new(HExpC) { AtOffset = 60_000 }],
         ["with no record every script refuses"] = [PutS("src", "x"), new(SrcDel), new(SrcSet), new(CmpDel) { Value = "x" }, new(Bump) { Op = "del" }, new(Fill), new(Gate), new(HExpC), new(Pub) { Token = "t" }],
     };

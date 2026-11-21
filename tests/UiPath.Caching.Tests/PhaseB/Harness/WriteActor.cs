@@ -57,9 +57,11 @@ internal sealed record WriteActor(string Name, int Node, int Key, ImmutableArray
             var plan = PlanOf(w, spec, unit, op);
             if (Reruns + 1 > 3 || plan.Length == 0)
             {
-                if (!Touched)
+                w.Oracle.AbortMutation(Key, MutationId);
+                if (Touched)
                 {
-                    w.Oracle.AbortMutation(Key, MutationId);
+                    // A step committed before the call gave up, so the key may be gone; a miss stays excused until a later write completes.
+                    w.Oracle.Disturb(Key);
                 }
 
                 return this with { Done = true };
@@ -110,9 +112,15 @@ internal sealed record WriteActor(string Name, int Node, int Key, ImmutableArray
         }
 
         var del = op.IsDelete;
-        if (unit.St == "S1")
+        if (unit.St is "S1" or "S2")
         {
-            return unit.Reverse ? (spec.NoOrigin ? string.Empty : del ? "SrcDel,BumpDel" : "SrcSet,BumpDel") : del ? "SrcDel" : "SrcSet";
+            // S2 and S1(rev) close every write of a no-origin cache.
+            if (spec.NoOrigin && (unit.Reverse || unit.St == "S2"))
+            {
+                return string.Empty;
+            }
+
+            return unit.Reverse ? (del ? "SrcDel,BumpDel" : "SrcSet,BumpDel") : del ? "SrcDel" : "SrcSet";
         }
 
         if (unit.St == "S5")

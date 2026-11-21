@@ -10,5 +10,5 @@ public class InterleavingHarnessTests
 
     [Theory]
     [MemberData(nameof(Names))]
-    public void Every_ordering_keeps_the_invariants(string name) => HarnessRun.ShouldHold(Configurations.All[name]());
+    public void Every_ordering_keeps_the_invariants(string name) => HarnessRun.ShouldHold(Configurations.All[name](), Configurations.MayBlock.Contains(name));
 }

@@ -7,10 +7,15 @@ internal static class HarnessRun
 
     public static ExploreResult Explore(World world) => new Explorer(MaxStates).Run(world);
 
-    public static void ShouldHold(World world)
+    // mayBlock: the configuration evicts a control record, after which every script refuses until a Rebuild, which the harness does not model.
+    public static void ShouldHold(World world, bool mayBlock = false)
     {
         var result = Explore(world);
         result.Clean.Should().BeTrue(result.Describe());
         result.Terminals.Should().BeGreaterThan(0, "a search that never ends proves nothing");
+        if (!mayBlock)
+        {
+            result.BlockedTerminals.Should().Be(0, "an actor that waits for a state that never comes is not a finished one");
+        }
     }
 }

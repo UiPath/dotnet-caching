@@ -8,7 +8,7 @@ namespace UiPath.Caching.Tests.PhaseB;
 [Trait("Category", "Integration")]
 public class ModelConformanceTests(RedisContainerFixture fixture)
 {
-    private const long TtlTolerance = 5_000;
+    private const long TtlTolerance = 1_500;
 
     // The transaction fallback creates the fence before it checks the identity and the gate, where the script refuses first; the orphan fence only holds memory for FenceTtl.
     private static readonly HashSet<string> FallbackCreatesFenceBeforeRefusing =

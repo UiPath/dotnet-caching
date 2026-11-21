@@ -27,6 +27,9 @@ internal static class Configurations
         ["forward S3, two readers: P, P2, D2"] = () => Forward(NoOrigin(), Reader(), Reader("P2", 1), Deleter("D2", 1)),
         ["forward S3, unmanaged cache: P, W2, D2"] = () => Forward(Origin() with { Unmanaged = true }, new ReadActor("P", 0, 0, AdmittedView: true), Writer("W2", 1, "v1"), Deleter("D2", 1)),
         ["forward S3, two keys: P, Q, W2"] = () => Build(null, S3, Both(S3), [Origin(), NoOrigin()], Reader(), new ReadActor("Q", 1, 1), Write("W2", 1, 1, string.Empty, WriterOp.Set("v1"))),
+        ["forward S3, hash with a life: P, E, M"] = () => Forward(Origin(ttl: 10) with { Hash = true }, Reader(), Tick("1", "10"), Reader("M", 1, true)),
+        ["S2 freeze to S3, two keys: W, D, R, X"] = () => Build(null, S2, Both(S2), [Origin(), NoOrigin()], Write("W", 0, 0, string.Empty, WriterOp.Set("v1")), Write("D", 0, 1, string.Empty, WriterOp.Delete), new ReadActor("R", 1, 1), Transition(S2, S3, [1, 0])),
+        ["reverse S4, residue in N: R, W2, D2"] = () => Build(null, S4Rev, Both(S4Rev), [NoOrigin() with { InitialL = null, InitialN = "v0" }], Reader("R", 0), Writer("W2", 1, "v1"), Deleter("D2", 1)),
         ["forward S4, residue: R, W2, D2"] = () => Build(null, S4, Both(S4), [NoOrigin()], Reader("R", 0), Writer("W2", 1, "v1"), Deleter("D2", 1)),
         ["forward S4, residue and a newer N: R, D2"] = () => Build(null, S4, Both(S4), [NoOrigin() with { InitialN = "v1" }], Reader("R", 0), Deleter("D2", 1)),
         ["S1 forward, origin-backed: W1, D1, R"] = () => Build(null, S1, Both(S1), [Origin()], Reader("R", 1), Writer("W1", 0, "v1"), Deleter("D1", 0)),
@@ -52,6 +55,15 @@ internal static class Configurations
         ["S1 reverse hash: W, merge, R"] = () => Build(null, S1Rev, Both(S1Rev), [Origin() with { InitialL = "v0", Hash = true }], Reader("R", 1), Write("W", 0, 0, string.Empty, WriterOp.Set("v1")), new MergeActor("M", 1, 0, "f1", "vm")),
         ["S5 residue: D5, W5, union reader"] = () => Build(null, S5, [S5, S4], [Origin()], Reader("R", 1), Write("D5", 0, 0, string.Empty, WriterOp.Delete), Write("W5", 0, 0, string.Empty, WriterOp.Set("v1"))),
         ["S5 sweep: sweeper, F, delete then union read"] = () => Build(null, S5, [S5, S4], [Origin()], new SweepActor("S", 0, 0, 0), Fail("L:1"), Seq("DR", Write("D5", 0, 0, string.Empty, WriterOp.Delete), Reader("R", 1))),
+    };
+
+    // Configurations in which a control record is evicted: scripts refuse until a Rebuild, which the harness does not model, so an actor may stay blocked.
+    public static IReadOnlySet<string> MayBlock { get; } = new HashSet<string>
+    {
+        "forward S3, no origin: P, V, W2",
+        "forward S3, origin-backed: P, V, D2",
+        "S1 to S3 with the record evicted: W1, X, P",
+        "reverse S3, origin-backed: P, V, D2",
     };
 
     private static ReadActor Reader(string name = "P", int node = 0, bool mover = false, string needs = "") => new(name, node, 0, mover, needs);

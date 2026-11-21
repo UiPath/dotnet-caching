@@ -8,6 +8,7 @@ internal sealed class Explorer(long maxStates)
     private readonly List<(int Actor, int Choice)> _path = [];
     private World _initial = null!;
     private long _terminals;
+    private long _blocked;
     private bool _truncated;
     private Violation? _violation;
     private List<string> _schedule = [];
@@ -16,7 +17,7 @@ internal sealed class Explorer(long maxStates)
     {
         _initial = initial;
         var schedules = Visit(initial);
-        return new ExploreResult(_memo.Count, schedules, _terminals, _truncated, _violation, _schedule);
+        return new ExploreResult(_memo.Count, schedules, _terminals, _blocked, _truncated, _violation, _schedule);
     }
 
     // A read that starts when everything has finished sees the state the last completed mutations left.
@@ -82,6 +83,11 @@ internal sealed class Explorer(long maxStates)
         if (!any)
         {
             _terminals++;
+            if (w.Actors.Any(a => !a.Done))
+            {
+                _blocked++;
+            }
+
             paths = 1;
             if (Final(w) is { } violation)
             {

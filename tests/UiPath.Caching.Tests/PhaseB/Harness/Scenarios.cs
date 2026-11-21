@@ -6,10 +6,12 @@ namespace UiPath.Caching.Tests.PhaseB.Harness;
 internal static class Scenarios
 {
     public static readonly Identity S1 = Identity.Of(1, "S1", "fwd", false);
+    public static readonly Identity S2 = Identity.Of(2, "S2", "fwd", false);
     public static readonly Identity S3 = Identity.Of(2, "S3", "fwd", true);
     public static readonly Identity S1Rev = Identity.Of(3, "S1", "rev", true);
     public static readonly Identity S3Rev = Identity.Of(4, "S3", "rev", true);
     public static readonly Identity S4 = Identity.Of(3, "S4", "fwd", true);
+    public static readonly Identity S4Rev = Identity.Of(5, "S4", "rev", true);
     public static readonly Identity S5 = Identity.Of(4, "S5", "fwd", true);
 
     public static KeySpec Origin(string initialL = "v0", long ttl = -1) => new("a", "c1", InitialL: initialL, Ttl: ttl);
