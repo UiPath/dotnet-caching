@@ -723,6 +723,28 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
 
+    [Fact]
+    public async Task A_fill_whose_deadline_passed_deletes_nothing_a_peer_may_have_stored()
+    {
+        var values = new Dictionary<string, string?> { ["f"] = "v" };
+
+        var written = await Sut.FillVersionedAsync(_cacheKey, values, new HashCacheEntryOptions(ExpireTime: _now.AddMinutes(-1)), policy: null, new PeerFieldLimits(2, 1024), testContextAccessor.Current.CancellationToken);
+
+        written.Written.Should().BeFalse();
+        written.Existed.Should().BeFalse();
+        await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        _database.DidNotReceive().CreateTransaction();
+    }
+
+    [Fact]
+    public async Task A_write_whose_deadline_passed_still_deletes_the_key()
+    {
+        var values = new Dictionary<string, string?> { ["f"] = "v" };
+
+        await Sut.SetVersionedAsync(_cacheKey, values, new HashCacheEntryOptions(ExpireTime: _now.AddMinutes(-1)), policy: null, new PeerFieldLimits(2, 1024), testContextAccessor.Current.CancellationToken);
+
+        await _database.Received(1).KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

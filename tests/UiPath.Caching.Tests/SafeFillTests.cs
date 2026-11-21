@@ -422,6 +422,130 @@ public class SafeFillTests
         peers.Store.Values["k"].Should().Be("generated");
     }
 
+    [Fact]
+    public async Task A_background_fill_waiting_in_the_queue_sends_no_command_when_a_peer_removed_the_key_meanwhile()
+    {
+        using var peers = new CachePeers();
+        var a = peers.Add("a");
+        var b = peers.Add("b");
+        var background = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(10), LocalExpiration = TimeSpan.FromMinutes(10), BackgroundDistributedWrite = true };
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        a.Inner.AfterWrite = hold.Task;
+
+        await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("first"), background, Ct);
+        await CachePeers.Until(() => peers.Store.Values.ContainsKey("k"));
+        a.Local.Remove(Key.Name);
+        peers.Store.Values.TryRemove("k", out _).Should().BeTrue();
+        var fills = a.Inner.Fills;
+
+        await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("second"), background, Ct);
+        a.Cache.FillsWatched.Should().BeTrue("the queued fill keeps its watch past its generator");
+        await b.Cache.RemoveAsync<string>(Key, Ct);
+        hold.SetResult();
+        await a.Settled();
+
+        a.Inner.Fills.Should().Be(fills, "the key was removed after the generator and before the queued command, which the fill checks just before it");
+        peers.Store.Values.Should().BeEmpty("the removal stands");
+        a.Cache.FillsWatched.Should().BeFalse("the watch ends with the queued write");
+    }
+
+    [Fact]
+    public async Task A_background_fill_that_a_newer_one_replaces_in_the_queue_leaves_no_watch()
+    {
+        using var peers = new CachePeers();
+        var a = peers.Add("a");
+        var background = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(10), LocalExpiration = TimeSpan.FromMinutes(10), BackgroundDistributedWrite = true };
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        a.Inner.AfterWrite = hold.Task;
+
+        await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("first"), background, Ct);
+        await CachePeers.Until(() => peers.Store.Values.ContainsKey("k"));
+        a.Local.Remove(Key.Name);
+        peers.Store.Values.TryRemove("k", out _).Should().BeTrue();
+        var fills = a.Inner.Fills;
+        await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("second"), background, Ct);
+        a.Local.Remove(Key.Name);
+        await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("third"), background, Ct);
+        hold.SetResult();
+        await a.Settled();
+
+        a.Inner.Fills.Should().Be(fills + 1, "the second fill was replaced in the queue by the third");
+        peers.Store.Values["k"].Should().Be("third");
+        a.Cache.FillsWatched.Should().BeFalse("a fill that never ran gives its watch back");
+    }
+
+    [Fact]
+    public async Task A_fill_that_finds_an_unreadable_value_replaces_it_only_while_it_is_what_was_read()
+    {
+        using var peers = new CachePeers();
+        var a = peers.Add("a");
+        peers.Store.Values["k"] = CachePeers.SharedStore.Unreadable;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string?> Generate(CancellationToken _)
+        {
+            started.TrySetResult();
+            await release.Task;
+            return "generated";
+        }
+
+        var slow = a.Cache.GetOrAddAsync<string>(Key, Generate, Policy, Ct).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        a.Inner.AfterNextRead = landed.Task;
+        release.SetResult();
+
+        await CachePeers.Until(() => a.Inner.AfterNextRead is null || slow.IsCompleted);
+        slow.IsCompleted.Should().BeFalse("the fill reads the unreadable value before it replaces it");
+        peers.Store.WriteQuietly("k", "peer");
+        landed.SetResult();
+
+        (await slow).Should().Be("peer", "the write that landed since the read is the answer");
+        peers.Store.Values["k"].Should().Be("peer", "an unreadable value is replaced only while it is still what was read");
+    }
+
+    [Fact]
+    public async Task A_fill_that_finds_an_unreadable_value_replaces_it()
+    {
+        using var peers = new CachePeers();
+        var a = peers.Add("a");
+        peers.Store.Values["k"] = CachePeers.SharedStore.Unreadable;
+
+        (await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("generated"), Policy, Ct)).Should().Be("generated");
+
+        peers.Store.Values["k"].Should().Be("generated", "a fill that left the unreadable value would never heal it");
+        (await a.Cache.GetAsync<string>(Key, Policy, Ct)).Should().Be("generated");
+    }
+
+    [Fact]
+    public async Task A_rehydration_whose_adoption_read_failed_fills_only_an_absent_key()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var b = peers.Add("b", telemetry: telemetry);
+        var policy = Rehydrating();
+        peers.Store.WriteQuietly("k", "old");
+        peers.Store.Remaining["k"] = TimeSpan.FromMinutes(2);
+        (await b.Cache.GetAsync<string>(Key, policy, Ct)).Should().Be("old");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string?> Generate(CancellationToken _)
+        {
+            started.TrySetResult();
+            await release.Task;
+            return "generated";
+        }
+
+        b.Inner.ReadThrows = true;
+        await b.Cache.GetOrAddAsync<string>(Key, Generate, policy, Ct);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        peers.Store.WriteQuietly("k", "peer");
+        release.SetResult();
+        await CachePeers.Until(() => telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"));
+        await b.Settled();
+
+        peers.Store.Values["k"].Should().Be("peer", "with nothing read to compare against, the value fills an absent key only");
+    }
     private static double Superseded(RecordingTelemetryProvider telemetry) =>
         telemetry.Metrics.Where(m => m.Name == "cache.background_write.fill_refused" && m.Properties!["reason"] == "superseded").Sum(m => m.Value);
 

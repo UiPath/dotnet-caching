@@ -118,6 +118,89 @@ public class SafeHashFillTests
         (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("z", "0")), "the copy ahead of the write was dropped, so the read took the stored hash");
     }
 
+    [Fact]
+    public async Task A_background_fill_waiting_in_the_queue_sends_no_command_when_a_peer_removed_the_key_meanwhile()
+    {
+        using var c = new PeerCluster();
+        var (writer, other) = (c.Add("a"), c.Add("b"));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        writer.Inner.Hold = release.Task;
+
+        // The first write is held before the store, so the fill that follows waits behind it.
+        (await writer.Cache.SetAsync<string>("k", Fields(("s", "1")), Background, Ct)).Should().BeTrue();
+        writer.Local.Remove("k");
+        await writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Background, Ct);
+        writer.Cache.FillsWatched.Should().BeTrue("the queued fill keeps its watch past its generator");
+        await other.Cache.RemoveAsync<string>("k", Ct);
+
+        release.SetResult();
+        await writer.Settled();
+
+        writer.Inner.CountedWrites.Should().Be(1, "only the first write reached the store: the key was removed after the generator and before the queued command");
+        c.Redis.Fields().Should().BeEquivalentTo(Fields(("s", "1")));
+        writer.Cache.FillsWatched.Should().BeFalse("the watch ends with the queued write");
+    }
+
+    [Fact]
+    public async Task A_hash_fill_is_not_kept_locally_when_the_key_is_removed_after_its_write()
+    {
+        using var c = new PeerCluster();
+        var (writer, other) = (c.Add("a"), c.Add("b"));
+        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        writer.Inner.AfterWrite = _ => landed.Task;
+        var fill = writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Awaited, Ct).AsTask();
+        await CachePeers.Until(() => c.Redis.Fields() is not null);
+
+        await other.Cache.RemoveAsync<string>("k", Ct);
+        landed.SetResult();
+
+        (await fill).Should().BeEquivalentTo(Fields(("a", "1")), "the caller still gets what its generator made");
+        (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeNullOrEmpty("the keep was refused, so the read goes to the store");
+    }
+
+    [Fact]
+    public async Task A_fill_over_an_unreadable_hash_replaces_it()
+    {
+        using var c = new PeerCluster();
+        var writer = c.Add("a");
+        c.Redis.WriteUnreadableQuietly("k");
+
+        (await writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1")));
+
+        c.Redis.Fields().Should().BeEquivalentTo(Fields(("a", "1")), "a fill that left the unreadable hash would never heal it");
+    }
+
+    [Fact]
+    public async Task A_fill_that_found_an_unreadable_hash_leaves_what_a_peer_wrote_since()
+    {
+        using var c = new PeerCluster();
+        var writer = c.Add("a");
+        c.Redis.WriteUnreadableQuietly("k");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<IDictionary<string, string?>> Generate(CancellationToken _)
+        {
+            started.TrySetResult();
+            await release.Task;
+            return Fields(("a", "1"));
+        }
+
+        var call = writer.Cache.GetOrAddAsync<string>("k", Generate, Awaited, Ct).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        writer.Inner.ReadHold = landed.Task;
+        writer.Inner.HeldReadSnapshots = true;
+        var reads = writer.InnerReads;
+        release.SetResult();
+
+        await CachePeers.Until(() => writer.InnerReads > reads || call.IsCompleted);
+        call.IsCompleted.Should().BeFalse("the fill reads the unreadable hash before it replaces it");
+        c.Redis.Write("k", Fields(("z", "0")), new HashCacheEntryOptions(SetOption: HashCacheSetOption.KeyReplace), default, counted: false);
+        landed.SetResult();
+        await call;
+
+        c.Redis.Fields().Should().BeEquivalentTo(Fields(("z", "0")), "an unreadable hash is replaced only while it is still what was read");
+    }
     private static Dictionary<string, string?> Fields(params (string Field, string Value)[] fields) =>
         fields.ToDictionary(f => f.Field, f => (string?)f.Value);
 }

@@ -46,6 +46,9 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     private interface IJob
     {
         ValueTask RunAsync(CancellationToken token);
+
+        /// <summary>The job will never run: another took its place, or the cache closed first.</summary>
+        void Dropped();
     }
 
     /// <summary>Whether writes are ordered per key: from the first background write, or <see cref="Activate"/>.</summary>
@@ -125,21 +128,24 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
     /// <summary>Makes a reserved write's local write and starts its inner one; returns what <paramref name="local"/> returned. The write holds the whole value of the key, so a newer one may take its place while it waits. Null, and nothing done, when its place was reserved past the limit and the queued write it was to replace can no longer take it: the caller writes in the foreground, as after a refused reservation.</summary>
     public bool? Run<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work) =>
-        RunCore(key, state, local, work, true, true);
+        RunCore(key, state, local, work, true, true, null);
 
     /// <summary>As <see cref="Run{TState}(string, TState, Func{TState, bool}, Func{TState, CancellationToken, ValueTask})"/> for a write that sends no event: it never takes the place of one that does.</summary>
-    public bool? RunWithoutEvent<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work) =>
-        RunCore(key, state, local, work, true, false);
+    public bool? RunWithoutEvent<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, Action<TState>? dropped = null) =>
+        RunCore(key, state, local, work, true, false, dropped);
 
     /// <summary>As <see cref="Run{TState}(string, TState, Func{TState, bool}, Func{TState, CancellationToken, ValueTask})"/> for a write that is only part of the key's value, which every write of the key must reach the inner tier.</summary>
-    public bool RunAppending<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work) =>
-        // Its place is never reserved past the limit, so it is never refused.
-        RunCore(key, state, local, work, false, true) ?? false;
+    public bool RunAppending<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, Action<TState>? dropped = null, bool fill = false) =>
+        // Its place is never reserved past the limit, so it is never refused; a fill is no change of the key.
+        RunCore(key, state, local, work, false, !fill, dropped) ?? false;
 
     /// <summary>Starts watching the key for changes by anything but a fill; the token it returns is what <see cref="FillIntact"/> takes.</summary>
     public long BeginFill(string key) => _fills.Begin(key);
 
     public void EndFill(string key) => _fills.End(key);
+
+    /// <summary>Keeps a watch running past its fill, for a write that checks it later; each retain is ended by an <see cref="EndFill"/>.</summary>
+    public void RetainFill(string key) => _fills.Retain(key);
 
     /// <summary>True when nothing but a fill has changed the key since <paramref name="token"/> was taken; a token that was not taken stands for no watch.</summary>
     public bool FillIntact(string key, long token) => token == Untracked || _fills.Intact(key, token);
@@ -738,6 +744,8 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     private async Task ExecuteAsync(string key, Queued mine, Task? previous)
     {
         var drainCancelled = false;
+        var ran = false;
+        IJob? unrun = null;
         try
         {
             if (previous is not null)
@@ -769,6 +777,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
                 }
             }
 
+            ran = true;
             await job.RunAsync(_lifetime.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
@@ -787,6 +796,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
             lock (_gate)
             {
                 mine.Taken = true;
+                unrun = ran ? null : mine.Job;
                 if (_tails.TryGetValue(key, out var tail) && ReferenceEquals(tail.Background, mine))
                 {
                     tail.Background = null;
@@ -796,6 +806,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
                 ReleaseLocked();
             }
 
+            unrun?.Dropped();
             mine.TrySetResult();
         }
 
@@ -807,7 +818,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
-    private bool? RunCore<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, bool coalesce, bool publishes)
+    private bool? RunCore<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, bool coalesce, bool publishes, Action<TState>? dropped)
     {
         // A write that sends no event is a fill.
         if (publishes)
@@ -817,6 +828,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
         Queued? mine = null;
         Queued? replaced = null;
+        IJob? displaced = null;
         Task? previous = null;
         Tail started;
         long issued;
@@ -832,7 +844,8 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
             {
                 // Held until its local apply is done, so the inner write never starts before it.
                 replaced = tail.Background!;
-                replaced.Job = new Job<TState>(state, work);
+                displaced = replaced.Job;
+                replaced.Job = new Job<TState>(state, work, dropped);
                 replaced.Publishes = publishes;
                 replaced.Applying++;
                 ReleaseLocked();
@@ -847,7 +860,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
             }
             else
             {
-                mine = new Queued(new Job<TState>(state, work), coalesce, publishes);
+                mine = new Queued(new Job<TState>(state, work, dropped), coalesce, publishes);
                 previous = Chain(key, tail, mine);
             }
 
@@ -859,6 +872,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         if (replaced is not null)
         {
             Coalesced();
+            displaced!.Dropped();
         }
 
         try
@@ -1066,9 +1080,11 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         public HashSet<string>? Superseded;
     }
 
-    private sealed class Job<TState>(TState state, Func<TState, CancellationToken, ValueTask> work) : IJob
+    private sealed class Job<TState>(TState state, Func<TState, CancellationToken, ValueTask> work, Action<TState>? dropped = null) : IJob
     {
         public ValueTask RunAsync(CancellationToken token) => work(state, token);
+
+        public void Dropped() => dropped?.Invoke(state);
     }
 
     // A background write in the order; a newer write of the key replaces its job until Taken.

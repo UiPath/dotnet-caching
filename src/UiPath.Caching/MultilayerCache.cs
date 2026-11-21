@@ -1307,7 +1307,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             }
 
             // A peer that takes the distributed lock next must find the value; a late fail-safe value checks in its foreground turn that it is still current.
-            var detached = !innerCacheDisconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && !InLateStore && _background.TryReserve(cacheEntryOptions.CacheKey.Name, false) && FillInBackground(store, ret, policy, entry);
+            var detached = !innerCacheDisconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && !InLateStore && _background.TryReserve(cacheEntryOptions.CacheKey.Name, false) && FillInBackground(store, ret, policy, entry, scope.Fill);
             if (!detached)
             {
                 if (innerCacheDisconnected)

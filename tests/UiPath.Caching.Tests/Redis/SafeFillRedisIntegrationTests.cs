@@ -121,6 +121,20 @@ public sealed class SafeFillRedisIntegrationTests(RedisContainerFixture fixture)
         Server().Keys(pattern: $"*{_app}*stage*").Should().BeEmpty("the staging key of the lost fill is dropped");
     }
 
+    [Fact]
+    public async Task A_hash_fill_whose_deadline_passed_leaves_the_hash_a_peer_stored()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var inner = Tier();
+        var key = (CacheKey)$"it-{Guid.NewGuid():N}";
+        (await inner.SetVersionedAsync<string>(key, new Dictionary<string, string?> { ["z"] = "0" }, new HashCacheEntryOptions(ExpireTime: DateTimeOffset.UtcNow.AddMinutes(5)), null, new PeerFieldLimits(8, 1024), Ct)).Written.Should().BeTrue();
+
+        var filled = await inner.FillVersionedAsync<string>(key, new Dictionary<string, string?> { ["a"] = "1" }, new HashCacheEntryOptions(ExpireTime: DateTimeOffset.UtcNow.AddSeconds(-1)), null, new PeerFieldLimits(8, 1024), Ct);
+
+        filled.Written.Should().BeFalse();
+        (await Raw.HashExistsAsync(HashKey(key), "z")).Should().BeTrue("a fill of an absent key deletes nothing it did not find absent");
+    }
+
     public void Dispose()
     {
         foreach (var node in _nodes)
@@ -144,6 +158,9 @@ public sealed class SafeFillRedisIntegrationTests(RedisContainerFixture fixture)
 
     private ICache Node(string source, bool scripts) =>
         Provider(source, o => o.ReadScriptsEnabled = scripts).GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
+
+    private ISharedHashTier Tier() =>
+        (ISharedHashTier)Provider("t", o => o.HashFieldBatchSize = 3).GetRequiredService<ICacheFactory>().CreateHashCache(KnownCacheProviderNames.Redis);
 
     private IHashCache Hashes(string source) =>
         Provider(source, o => o.HashFieldBatchSize = 3).GetRequiredService<ICacheFactory>().CreateHashCache(KnownCacheProviderNames.InMemoryRedis);

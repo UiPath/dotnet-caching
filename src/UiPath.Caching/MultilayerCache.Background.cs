@@ -17,9 +17,28 @@ internal sealed partial class MultilayerCache : IAsyncDisposable
     }
 
     /// <summary>False when the reserved place went back: the caller writes in the foreground.</summary>
-    private bool FillInBackground<T>(CacheEntryOptions options, T? value, CachePolicy policy, ICacheEntry<T?> entry) =>
-        _background.RunWithoutEvent(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Policy: policy, Entry: entry), static s => s.Cache.MemorySet(s.Options, s.Value, s.Cache.DisconnectedLifetime(s.Policy), s.Entry, s.Policy), static (s, token) =>
-            s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.FillDetachedAsync(s.Options, s.Value, s.Policy, s.Entry, token), static s => s.Cache.PromoteDetached(s.Options, s.Value, s.Policy, s.Entry), publish: null, token)) is not null;
+    private bool FillInBackground<T>(CacheEntryOptions options, T? value, CachePolicy policy, ICacheEntry<T?> entry, long fill)
+    {
+        var name = options.CacheKey.Name;
+        var watched = fill != BackgroundWrites.Untracked;
+        if (watched)
+        {
+            _background.RetainFill(name);
+        }
+
+        var queued = _background.RunWithoutEvent(
+            name,
+            (Cache: this, Options: options, Value: value, Policy: policy, Entry: entry, Fill: fill),
+            static s => s.Cache.MemorySet(s.Options, s.Value, s.Cache.DisconnectedLifetime(s.Policy), s.Entry, s.Policy),
+            static (s, token) => s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.FillDetachedAsync(s.Options, s.Value, s.Policy, s.Entry, s.Fill, token), static s => s.Cache.PromoteDetached(s.Options, s.Value, s.Policy, s.Entry), publish: null, token),
+            static s => s.Cache.EndFill(s.Options.CacheKey.Name, s.Fill)) is not null;
+        if (!queued && watched)
+        {
+            EndFill(name, fill);
+        }
+
+        return queued;
+    }
 
     private ICacheEntry<T?> NewEntry<T>(CacheEntryOptions options, T? value)
     {

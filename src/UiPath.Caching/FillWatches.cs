@@ -31,6 +31,20 @@ internal sealed class FillWatches
         }
     }
 
+    /// <summary>Another hold on the running watch of the key, which <see cref="End"/> gives back; none when the key is not watched.</summary>
+    public void Retain(string key)
+    {
+        var shard = ShardOf(key);
+        lock (shard.Gate)
+        {
+            ref var watch = ref CollectionsMarshal.GetValueRefOrNullRef(shard.Watches, key);
+            if (!Unsafe.IsNullRef(ref watch))
+            {
+                watch.Count++;
+            }
+        }
+    }
+
     public void End(string key)
     {
         var shard = ShardOf(key);

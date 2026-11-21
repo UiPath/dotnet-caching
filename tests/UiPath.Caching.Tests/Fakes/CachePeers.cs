@@ -104,6 +104,9 @@ internal sealed class CachePeers : IDisposable
 
     internal sealed class SharedStore
     {
+        /// <summary>What a key holds when no serializer reads its bytes.</summary>
+        public static object Unreadable { get; } = new();
+
         public ConcurrentDictionary<string, object?> Values { get; } = new(StringComparer.Ordinal);
 
         /// <summary>The lifetime a read reports for a key, from the read; an hour for a key not listed.</summary>
@@ -471,7 +474,13 @@ internal sealed class CachePeers : IDisposable
 
         async ValueTask<(SnapshotRead<T> Snapshot, object? Stamp)> IStampedTier.ReadStampedAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
         {
-            var entry = await ReadOneAsync<T>(cacheKey, token);
+            var (entry, seen) = await ReadOneStampedAsync<T>(cacheKey, token);
+            if (ReferenceEquals(seen, SharedStore.Unreadable))
+            {
+                // What the read saw is what it stamps, whatever lands while its answer is held.
+                return (new SnapshotRead<T>(SnapshotOutcome.Unreadable, null), new Seen(seen));
+            }
+
             return entry.Found && Store.Values.TryGetValue(cacheKey.Name, out var held)
                 ? (new SnapshotRead<T>(SnapshotOutcome.Found, entry), new Seen(held))
                 : (new SnapshotRead<T>(SnapshotOutcome.Absent, null), null);
@@ -588,7 +597,7 @@ internal sealed class CachePeers : IDisposable
 
         private static TestCacheEntry<T?> EntryFor<T>(SharedStore store, CacheKey key)
         {
-            if (!store.Values.TryGetValue(key.Name, out var value))
+            if (!store.Values.TryGetValue(key.Name, out var value) || ReferenceEquals(value, SharedStore.Unreadable))
             {
                 return new TestCacheEntry<T?> { Expiration = DateTimeOffset.MinValue, Found = false };
             }
@@ -602,6 +611,11 @@ internal sealed class CachePeers : IDisposable
             Interlocked.Increment(ref _fills);
             if (!Store.Values.TryAdd(key.Name, value))
             {
+                if (ReferenceEquals(Store.Values[key.Name], SharedStore.Unreadable))
+                {
+                    return new(new FillResult<string>(FillOutcome.Unreadable, null));
+                }
+
                 var remaining = Store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
                 return new(new FillResult<string>(FillOutcome.Existed, (string?)Store.Values[key.Name], DateTimeOffset.UtcNow + remaining));
             }
@@ -617,6 +631,11 @@ internal sealed class CachePeers : IDisposable
             // A write when the key is absent, as the store's NX is; one that finds it answers with the stored value.
             if (!Store.Values.TryAdd(key.Name, value))
             {
+                if (ReferenceEquals(Store.Values[key.Name], SharedStore.Unreadable))
+                {
+                    return new(new FillResult<T>(FillOutcome.Unreadable, default));
+                }
+
                 var remaining = Store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
                 return new(new FillResult<T>(FillOutcome.Existed, (T?)Store.Values[key.Name], DateTimeOffset.UtcNow + remaining));
             }
@@ -647,19 +666,22 @@ internal sealed class CachePeers : IDisposable
             }
         }
 
-        private async ValueTask<ICacheEntry<T?>> ReadOneAsync<T>(CacheKey key, CancellationToken token)
+        private async ValueTask<ICacheEntry<T?>> ReadOneAsync<T>(CacheKey key, CancellationToken token) => (await ReadOneStampedAsync<T>(key, token)).Entry;
+
+        private async ValueTask<(ICacheEntry<T?> Entry, object? Held)> ReadOneStampedAsync<T>(CacheKey key, CancellationToken token)
         {
             // The hold is chosen before the count a test waits on.
             var (hold, ignoresCancellation) = (Hold, HoldIgnoresCancellation);
             Interlocked.Increment(ref _singleReads);
             await BeforeReadAsync(hold, ignoresCancellation, token);
             var entry = EntryFor<T>(Store, key);
+            Store.Values.TryGetValue(key.Name, out var held);
             if (Interlocked.Exchange(ref _afterNextRead, null) is { } afterRead)
             {
                 await afterRead;
             }
 
-            return entry;
+            return (entry, held);
         }
 
         private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> ReadManyAsync<T>(CacheKey[] keys, CancellationToken token)

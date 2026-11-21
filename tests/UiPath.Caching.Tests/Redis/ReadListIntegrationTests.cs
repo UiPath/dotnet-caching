@@ -309,6 +309,24 @@ public class ReadListIntegrationTests(RedisContainerFixture fixture)
         ((byte[]?)await raw.GetDatabase().HashGetAsync(redisKey, "b")).Should().Equal(JsonX);
     }
 
+    [Fact]
+    public async Task A_hash_is_removed_as_unreadable_only_while_it_holds_a_field_the_policy_cannot_read()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        using var provider = Build();
+        var (hashes, policy) = HashesAndPolicy(provider, "fastonly");
+        var tier = (ISharedHashTier)hashes;
+        await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var (key, redisKey) = await SeedHashAsync(hashes, raw, FastX);
+
+        (await tier.RemoveIfUnreadableAsync<string>(key, policy, Ct)).Should().BeFalse("every field is readable");
+        (await raw.GetDatabase().KeyExistsAsync(redisKey)).Should().BeTrue();
+
+        await raw.GetDatabase().HashSetAsync(redisKey, "b", JsonX);
+        (await tier.RemoveIfUnreadableAsync<string>(key, policy, Ct)).Should().BeTrue();
+
+        (await raw.GetDatabase().KeyExistsAsync(redisKey)).Should().BeFalse();
+    }
     [Theory]
     [InlineData(HashCacheSetOption.HashReplace)]
     [InlineData(HashCacheSetOption.KeyReplace)]

@@ -870,7 +870,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 else if (!innerCacheDisconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && _background.TryReserve())
                 {
                     // A peer that takes the distributed lock next must find the value.
-                    FillInBackground(store, ret ?? Empty<T>(), policy);
+                    FillInBackground(store, ret ?? Empty<T>(), policy, fill);
                 }
                 else if (!innerCacheDisconnected && _innerCache is ISharedHashTier tier)
                 {

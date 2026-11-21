@@ -17,9 +17,11 @@ internal sealed partial class MultilayerCache
         return scope with { Fill = _background.BeginFill(options.CacheKey.Name) };
     }
 
-    private void EndFill(string name, in GenerationScope scope)
+    private void EndFill(string name, in GenerationScope scope) => EndFill(name, scope.Fill);
+
+    private void EndFill(string name, long fill)
     {
-        if (scope.Fill != BackgroundWrites.Untracked)
+        if (fill != BackgroundWrites.Untracked)
         {
             _background.EndFill(name);
         }
@@ -71,7 +73,7 @@ internal sealed partial class MultilayerCache
                 return filled;
             }
 
-            return await HealUnreadableAsync(options, value, policy).ConfigureAwait(false);
+            return await HealUnreadableAsync(options, value, policy, fill).ConfigureAwait(false);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && options.Token.IsCancellationRequested))
         {
@@ -80,11 +82,38 @@ internal sealed partial class MultilayerCache
         }
     }
 
-    /// <summary>A stored value no serializer reads is replaced, as a write over it always did: a fill that left it would never heal it.</summary>
-    private async ValueTask<FillResult<T>> HealUnreadableAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy) =>
-        await _innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, policy, options.Token).ConfigureAwait(false)
-            ? new FillResult<T>(FillOutcome.Added, default)
-            : default;
+    /// <summary>A stored value no serializer reads is replaced only while it is the bytes read, so a peer's write or removal since stands; a tier that cannot compare leaves it.</summary>
+    private async ValueTask<FillResult<T>> HealUnreadableAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy, long fill)
+    {
+        if (_innerCache is not IStampedTier tier)
+        {
+            return default;
+        }
+
+        var (snapshot, stamp) = await tier.ReadStampedAsync<T>(options.CacheKey, policy, options.Token).ConfigureAwait(false);
+        switch (snapshot.Outcome)
+        {
+            case SnapshotOutcome.Found:
+                return new FillResult<T>(FillOutcome.Existed, snapshot.Entry!.Value, snapshot.Entry.Expiration);
+            case SnapshotOutcome.Unreadable or SnapshotOutcome.Absent when _background.FillIntact(options.CacheKey.Name, fill):
+                var written = await tier.WriteIfStampAsync<T?>(options.CacheKey, value, options.Expiration, policy, stamp, options.Token).ConfigureAwait(false);
+                if (written == StampedWrite.Won)
+                {
+                    return new FillResult<T>(FillOutcome.Added, default);
+                }
+
+                // Changed again since the read: the key is the winner's, or gone.
+                return written == StampedWrite.Lost ? await AfterLostHealAsync(options, value, policy).ConfigureAwait(false) : default;
+            default:
+                return default;
+        }
+    }
+
+    private async ValueTask<FillResult<T>> AfterLostHealAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy)
+    {
+        var filled = await _innerCache.TryFillAsync<T>(options.CacheKey, value, options.Expiration, policy, options.Token).ConfigureAwait(false);
+        return filled.Outcome == FillOutcome.Unreadable ? default : filled;
+    }
 
     private Filled<T> KeepFilled<T>(FillArgs<T> s, FillResult<T> filled, BackgroundWrites.Keeper keeper)
     {
@@ -223,7 +252,7 @@ internal sealed partial class MultilayerCache
             {
                 var entry = entries[open[k]];
                 results[open[k]] = filled[k].Outcome == FillOutcome.Unreadable
-                    ? await HealUnreadableAsync(entry.CacheEntry, entry.Value, policy).ConfigureAwait(false)
+                    ? await HealUnreadableAsync(entry.CacheEntry, entry.Value, policy, BatchToken(watched, entry.CacheEntry.CacheKey.Name)).ConfigureAwait(false)
                     : filled[k];
             }
         }
@@ -249,11 +278,18 @@ internal sealed partial class MultilayerCache
 
         return adopted;
     }
-    private async ValueTask<bool> FillDetachedAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy, ICacheEntry<T?> entry, CancellationToken token)
+    private async ValueTask<bool> FillDetachedAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy, ICacheEntry<T?> entry, long fill, CancellationToken token)
     {
         try
         {
-            var filled = await TryFillOrReplaceAsync(options, value, policy).ConfigureAwait(false);
+            // The key may have changed while the write waited in the queue.
+            if (!_background.FillIntact(options.CacheKey.Name, fill))
+            {
+                _background.FillSuperseded();
+                return false;
+            }
+
+            var filled = await TryFillOrReplaceAsync(options, value, policy, fill).ConfigureAwait(false);
             switch (filled.Outcome)
             {
                 case FillOutcome.Added:
@@ -273,6 +309,10 @@ internal sealed partial class MultilayerCache
         {
             LogInnerCacheSetError(ex, Logged(options, typeof(T)));
             return false;
+        }
+        finally
+        {
+            EndFill(options.CacheKey.Name, fill);
         }
     }
 

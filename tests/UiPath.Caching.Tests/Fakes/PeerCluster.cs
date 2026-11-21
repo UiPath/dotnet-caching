@@ -131,6 +131,24 @@ internal sealed class PeerCluster : IDisposable
             }
         }
 
+        /// <summary>A hash one of whose fields no serializer reads, which nobody is told of.</summary>
+        public void WriteUnreadableQuietly(string key)
+        {
+            lock (_gate)
+            {
+                _hashes[key] = new Hash { Unreadable = true };
+            }
+        }
+
+        /// <summary>Removes the key only while it holds an unreadable field.</summary>
+        public bool RemoveIfUnreadable(string key)
+        {
+            lock (_gate)
+            {
+                return _hashes.TryGetValue(key, out var hash) && hash.Unreadable && _hashes.Remove(key);
+            }
+        }
+
         public VersionedWrite Write(string key, IDictionary<string, string?> values, HashCacheEntryOptions options, PeerFieldLimits limits, bool counted, bool onlyIfAbsent = false)
         {
             lock (_gate)
@@ -151,6 +169,7 @@ internal sealed class PeerCluster : IDisposable
                     hash.Fields[field] = value;
                 }
 
+                hash.Unreadable = false;
                 hash.Expiration = options.ExpireTime ?? DateTimeOffset.MaxValue;
                 if (options.Metadata is not null)
                 {
@@ -244,6 +263,11 @@ internal sealed class PeerCluster : IDisposable
                     return new TestCacheEntry<IDictionary<string, string?>>();
                 }
 
+                if (hash.Unreadable)
+                {
+                    return new UnreadableEntry<IDictionary<string, string?>>(new TestCacheEntry<IDictionary<string, string?>>());
+                }
+
                 var entry = new TestCacheEntry<IDictionary<string, string?>>
                 {
                     Value = new Dictionary<string, string?>(hash.Fields),
@@ -264,6 +288,8 @@ internal sealed class PeerCluster : IDisposable
             public Dictionary<string, string?> Fields { get; } = [];
 
             public long Version { get; set; }
+
+            public bool Unreadable { get; set; }
 
             public DateTimeOffset Expiration { get; set; } = DateTimeOffset.MaxValue;
 
@@ -468,6 +494,8 @@ internal sealed class PeerCluster : IDisposable
 
         public ValueTask<VersionedWrite> FillVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default) =>
             WriteVersionedAsync(cacheKey, values, options, limits, onlyIfAbsent: true, token);
+
+        public ValueTask<bool> RemoveIfUnreadableAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token) => new(Store.RemoveIfUnreadable(cacheKey.Name));
 
         public ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default)
         {

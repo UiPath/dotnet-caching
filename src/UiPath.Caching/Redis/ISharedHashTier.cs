@@ -7,6 +7,9 @@ internal interface ISharedHashTier : ISharedTier
     /// <summary>As <see cref="SetVersionedAsync{T}"/>, writing only when the key is absent; <see cref="VersionedWrite.Existed"/> when it was not.</summary>
     ValueTask<VersionedWrite> FillVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default);
 
+    /// <summary>Removes the key only while it still holds the unreadable fields just read; false when it changed meanwhile, was readable, or was absent.</summary>
+    ValueTask<bool> RemoveIfUnreadableAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token);
+
     ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default);
 
     bool TryDecodeFields<T>(IReadOnlyDictionary<string, byte[]?> encoded, CachePolicy? policy, [MaybeNullWhen(false)] out Dictionary<string, T?> values);

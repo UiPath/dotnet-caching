@@ -192,6 +192,12 @@ public abstract partial class MultilayerCacheBase
                 : cache._clock.ToDateTimeOffset(ApplyJitter(duration, rehydrateJitter));
             var rehydrateOptions = shape.BuildOptions(originalCacheKey, rehydrateExpiration, ct);
             var disconnected = cache.GetInnerCacheDisconnected();
+            // An adoption read that failed or timed out saw nothing to compare against: the value then fills only an absent key.
+            if (!disconnected && shape.CanStamp && shape.CanAdopt && !shape.InnerIsNull && !stamp.TryGet(out _))
+            {
+                stamp.Record(null);
+            }
+
             var stored = !disconnected && shape.CanStamp && stamp.TryGet(out _)
                 ? await StoreIfUnchangedAsync(originalCacheKey, entryExpiration, rehydrateOptions, shape.Present(newValue), policy, duration, run, stamp, ct).ConfigureAwait(false)
                 : await StoreAsync(rehydrateOptions, shape.Present(newValue), disconnected, policy).ConfigureAwait(false);

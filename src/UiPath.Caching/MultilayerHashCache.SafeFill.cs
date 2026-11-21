@@ -31,7 +31,7 @@ internal sealed partial class MultilayerHashCache
     }
 
     /// <summary>Writes the generated hash only if the key is absent; answers the stored hash, kept here, when it was not.</summary>
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>?> FillHashAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy, ISharedHashTier tier, long fill)
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>?> FillHashAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy, ISharedHashTier tier, long fill, bool healed = false)
     {
         FillState state;
         try
@@ -54,7 +54,7 @@ internal sealed partial class MultilayerHashCache
         }
 
         return state == FillState.Existed
-            ? await AdoptStoredAsync(options, values, policy).ConfigureAwait(false)
+            ? await AdoptStoredAsync(options, values, policy, tier, fill, healed).ConfigureAwait(false)
             : null;
     }
 
@@ -85,8 +85,7 @@ internal sealed partial class MultilayerHashCache
 
     private FillState KeepFilled<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy, long fill, (FillState State, VersionedWrite Counted) written, BackgroundWrites.Keeper keeper)
     {
-        var shape = new HashShape<T>(this);
-        if (written.State == FillState.Superseded || (written.State is FillState.Won or FillState.Failed && !_background.FillIntact(options.CacheKey.Name, fill)))
+        if (written.State == FillState.Superseded)
         {
             _background.FillSuperseded();
             return written.State;
@@ -95,18 +94,39 @@ internal sealed partial class MultilayerHashCache
         switch (written.State)
         {
             case FillState.Won:
-                shape.KeepWritten(keeper, options, values, ConnectedLifetime(policy), null, _versioned is null ? 0 : written.Counted.Version, policy);
+                KeepIfIntact(keeper, options, values, ConnectedLifetime(policy), _versioned is null ? 0 : written.Counted.Version, policy, fill);
                 break;
             case FillState.Failed when !options.Token.IsCancellationRequested:
                 // As a refused write is kept: for the disconnected cap.
-                shape.KeepWritten(keeper, options, values, DisconnectedLifetime(policy), null, 0, policy);
+                KeepIfIntact(keeper, options, values, DisconnectedLifetime(policy), 0, policy, fill);
                 break;
         }
 
         return written.State;
     }
 
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>?> AdoptStoredAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy)
+    /// <summary>The check and the keep are one step under the key's exclusion, so a removal cannot land between them.</summary>
+    private void KeepIfIntact<T>(BackgroundWrites.Keeper keeper, InternalHashCacheEntryOptions options, IDictionary<string, T?> values, TimeSpan? max, long version, CachePolicy policy, long fill)
+    {
+        options.Version = version;
+        keeper.Local(
+            options.CacheKey.Name,
+            (Cache: this, Options: options, Values: values, Max: max, Policy: policy, Fill: fill),
+            static s =>
+            {
+                if (!s.Cache._background.FillIntact(s.Options.CacheKey.Name, s.Fill))
+                {
+                    s.Cache._background.FillSuperseded();
+                    return false;
+                }
+
+                return s.Cache.MemorySet(s.Options, s.Values, s.Max, policy: s.Policy, read: true);
+            },
+            static s => s.Cache.DropSuperseded(s.Options.CacheKey.Name),
+            options.Version);
+    }
+
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>?> AdoptStoredAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy, ISharedHashTier tier, long fill, bool healed)
     {
         var shape = new HashShape<T>(this);
         // After the fill's own write, which counts as a change of the key, and before the read that no event may hide behind.
@@ -124,9 +144,10 @@ internal sealed partial class MultilayerHashCache
 
         if (stored is UnreadableEntry<IDictionary<string, T?>>)
         {
-            // A field no serializer reads would stay unreadable under a fill that only writes an absent key, so the hash is replaced as it always was.
-            await Layered<T>().InternalSetAsync(options, values, false, policy, keepRefused: true).ConfigureAwait(false);
-            return null;
+            // A field no serializer reads would stay unreadable under a fill that only writes an absent key: it is removed, only while it is what was read, and the fill goes once more.
+            return !healed && _background.FillIntact(options.CacheKey.Name, fill) && await RemoveUnreadableAsync<T>(options, policy, tier).ConfigureAwait(false)
+                ? await FillHashAsync(options, values, policy, tier, fill, healed: true).ConfigureAwait(false)
+                : null;
         }
 
         if (!stored.Found)
@@ -140,7 +161,32 @@ internal sealed partial class MultilayerHashCache
         return stored;
     }
 
-    private async ValueTask<bool> FillDetachedAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy, LocalEntry<T> local, CancellationToken token)
+    private async ValueTask<bool> RemoveUnreadableAsync<T>(InternalHashCacheEntryOptions options, CachePolicy policy, ISharedHashTier tier)
+    {
+        try
+        {
+            return await tier.RemoveIfUnreadableAsync<T>(options.CacheKey, policy, options.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && options.Token.IsCancellationRequested))
+        {
+            LogInnerCacheSetError(ex, Logged(options, typeof(T)));
+            return false;
+        }
+    }
+
+    private async ValueTask<bool> FillDetachedAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy, LocalEntry<T> local, long fill, CancellationToken token)
+    {
+        try
+        {
+            return await FillDetachedCoreAsync(options, values, policy, local, fill, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            EndFill(options.CacheKey.Name, fill);
+        }
+    }
+
+    private async ValueTask<bool> FillDetachedCoreAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy, LocalEntry<T> local, long fill, CancellationToken token)
     {
         if (_innerCache is not ISharedHashTier tier)
         {
@@ -149,6 +195,14 @@ internal sealed partial class MultilayerHashCache
 
         try
         {
+            // The key may have changed while the write waited in the queue.
+            if (!_background.FillIntact(options.CacheKey.Name, fill))
+            {
+                _background.FillSuperseded();
+                Returned(options.CacheKey.Name, local.Pending, 0);
+                return false;
+            }
+
             var counted = await tier.FillVersionedAsync<T?>(options.CacheKey, values, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), policy, _peerLimits, token).ConfigureAwait(false);
             local.Counted = counted;
             Returned(options.CacheKey.Name, local.Pending, counted.Written ? counted.Version : 0);

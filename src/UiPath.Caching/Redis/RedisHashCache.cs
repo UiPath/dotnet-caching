@@ -131,6 +131,15 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             : GetInnerCacheEntryAsync<T?, PlainFormat>(cacheKey, default, token, atomic: true);
     }
 
+    public ValueTask<bool> RemoveIfUnreadableAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var format = FormatFor(policy, forWrite: false);
+        return format.Sniff
+            ? RemoveIfUnreadableCoreAsync<T, ValueFormat>(cacheKey, format, token)
+            : RemoveIfUnreadableCoreAsync<T, PlainFormat>(cacheKey, default, token);
+    }
+
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
@@ -1352,6 +1361,52 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return (found, ret, unreadable != 0);
     }
 
+    private async ValueTask<bool> RemoveIfUnreadableCoreAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
+    {
+        var redisKey = ToRedisKey(cacheKey, token);
+        await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
+        var read = await _write.ExecuteAsync(
+            static async ValueTask<HashEntry[]?> (s, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                return await s.Self.Database.HashGetAllAsync(s.Key, CommandFlags.DemandMaster).ConfigureAwait(false);
+            },
+            (Self: this, Key: redisKey),
+            default,
+            token).ConfigureAwait(false);
+        if (read is not { Length: > 0 } entries)
+        {
+            return false;
+        }
+
+        var unreadable = 0;
+        ParseCacheEntry<T>(cacheKey, redisKey, entries, null, format.Readable, ref unreadable);
+        if (unreadable == 0)
+        {
+            return false;
+        }
+
+        // Only the hash that was read: a field a peer wrote since leaves the key to it.
+        var transaction = Database.CreateTransaction();
+        transaction.AddCondition(Condition.HashLengthEqual(redisKey, entries.Length));
+        foreach (var entry in entries)
+        {
+            transaction.AddCondition(Condition.HashEqual(redisKey, entry.Name, entry.Value));
+        }
+
+        transaction.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).Forget();
+        return await _write.ExecuteAsync(
+            static (s, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                return s.ExecuteAsync(CommandFlags.DemandMaster).AsValueTask();
+            },
+            transaction,
+            default,
+            token).ConfigureAwait(false);
+    }
+
     /// <param name="atomic">Reads the fields and the remaining lifetime in one transaction on the primary, and lets a failure through instead of answering a miss.</param>
     private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetInnerCacheEntryAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token, bool atomic = false)
         where TFormat : struct, IValueFormat
@@ -1544,7 +1599,8 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         var absent = report?.OnlyIfAbsent == true;
         if (expiration < now || hashEntries.Length == 0)
         {
-            return await DeleteKeyAsync(redisKey, token).ConfigureAwait(false);
+            // A fill of an absent key mutates nothing it did not find absent: a hash a peer stored while its generator ran stays.
+            return !absent && await DeleteKeyAsync(redisKey, token).ConfigureAwait(false);
         }
 
         // Written to a staging key and renamed under the key, so a hash that appeared meanwhile is never merged into.

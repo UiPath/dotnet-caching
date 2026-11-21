@@ -160,6 +160,9 @@ internal class AdoptionHashProxy : AdoptionProxyBase, ISharedHashTier
         return new VersionedWrite(written, 0, null);
     }
 
+    ValueTask<bool> ISharedHashTier.RemoveIfUnreadableAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token) =>
+        Target is ISharedHashTier shared ? shared.RemoveIfUnreadableAsync<T>(cacheKey, policy, token) : new(false);
+
     ValueTask<bool> ISharedHashTier.RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token)
         where T : default =>
         Target is ISharedHashTier shared

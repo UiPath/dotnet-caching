@@ -31,10 +31,9 @@ internal sealed partial class RedisCache : IFillManyTier
         if (self.RewriteScriptsOn)
         {
             var scripted = open.Select(j => FillAfterAsync(self, keys[group[j]], serialized[group[j]], deadline, lost: false, token).AsTask()).ToArray();
-            var answers = await Task.WhenAll(scripted).ConfigureAwait(false);
             for (var k = 0; k < open.Count; k++)
             {
-                raws[open[k]] = answers[k];
+                raws[open[k]] = (await self.SettleAsync(scripted[k]).ConfigureAwait(false)).Value;
             }
 
             return raws;
@@ -61,32 +60,46 @@ internal sealed partial class RedisCache : IFillManyTier
         }
 
         batch.Execute();
-        await Task.WhenAll(sets).ConfigureAwait(false);
 
+        // Each command answers for its own key: one that failed leaves the others' outcomes standing.
         List<int>? lost = null;
         for (var k = 0; k < open.Count; k++)
         {
-            if (sets[k].Result)
+            switch (await self.SettleAsync(sets[k]).ConfigureAwait(false))
             {
-                raws[open[k]] = new FillRaw(true, RedisValue.Null, DateTimeOffset.MaxValue);
-            }
-            else
-            {
-                (lost ??= []).Add(open[k]);
+                case (true, true):
+                    raws[open[k]] = new FillRaw(true, RedisValue.Null, DateTimeOffset.MaxValue);
+                    break;
+                case (true, false):
+                    (lost ??= []).Add(open[k]);
+                    break;
             }
         }
 
         if (lost is not null)
         {
             var reads = lost.Select(j => FillAfterAsync(self, keys[group[j]], serialized[group[j]], deadline, lost: true, token).AsTask()).ToArray();
-            var winners = await Task.WhenAll(reads).ConfigureAwait(false);
             for (var k = 0; k < lost.Count; k++)
             {
-                raws[lost[k]] = winners[k];
+                raws[lost[k]] = (await self.SettleAsync(reads[k]).ConfigureAwait(false)).Value;
             }
         }
 
         return raws;
+    }
+
+    /// <summary>The command's answer, or none when it failed; a cancellation is not a failure of the key.</summary>
+    private async ValueTask<(bool Answered, TResult? Value)> SettleAsync<TResult>(Task<TResult> command)
+    {
+        try
+        {
+            return (true, await command.ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogRedisCacheException(ex);
+            return (false, default);
+        }
     }
 
     private async ValueTask<FillResult<T>[]> TryFillManyInternalAsync<T, TFormat>(KeyValuePair<CacheKey, T?>[] entries, DateTimeOffset deadline, TFormat format, CancellationToken token)
