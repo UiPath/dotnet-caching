@@ -128,6 +128,21 @@ internal sealed class MoveKeyNames
     public IReadOnlyList<(int Slot, RedisKey Key)> ControlRecords(string group) =>
         [.. SlotSet().Select(slot => (slot, Control(group, slot)))];
 
+    /// <summary>
+    /// The app's claim key: the library prefix, the reserved <c>mx</c> keyspace and a tag of the lowercased app name, so each app's claim has its own slot.
+    /// With the library prefix <c>{app}:</c> it is the design's <c>{app}:mx:{{app}}</c>; it never depends on a key format.
+    /// </summary>
+    public string Claim(string app)
+    {
+        var name = app.ToLowerInvariant();
+        if (!ClaimGrammar.ValidGroup(name))
+        {
+            throw new ArgumentException($"The app name '{app}' cannot hold a claim: it must be 1 to 200 of letters, digits and . _ : > @ + -.", nameof(app));
+        }
+
+        return $"{LibraryPrefix}mx:{{{name}}}";
+    }
+
     // True for a prefix that tags every key; false for one with no braces; throws for one whose braces would take part of the key into the tag.
     private static bool PrefixTag(string prefix)
     {
