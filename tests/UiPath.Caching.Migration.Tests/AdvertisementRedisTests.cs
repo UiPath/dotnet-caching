@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -126,7 +127,7 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         var field = stackCache.SourceUri!.ToString().ToLowerInvariant() + RouterAdvertisement.FieldSuffix;
 
         (await UntilAsync(async () => await Db.HashExistsAsync(key, field))).Should().BeTrue("the entry lands where the stack's node list is, under the stack's identity");
-        router.Advertiser!.Fresh.Should().Be(stackRedis.FormatNegotiation.LivenessWindow + (stackRedis.FormatNegotiation.AdvertiseInterval * 2));
+        router.Advertiser!.Fresh.Should().Be(ownSection ? TimeSpan.FromSeconds(60) : TimeSpan.FromSeconds(150), "the router's section's LivenessWindow plus two intervals");
         if (ownSection)
         {
             ((string)key!).Should().Be("caching$nodes", "the router's section sets '$', whatever the root says");
@@ -170,6 +171,48 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         }
     }
 
+    [Fact]
+    public async Task A_non_positive_interval_leaves_the_router_without_an_advertisement()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var provider = Provider($"adv{Guid.NewGuid():N}"[..16], ownSection: true, interval: "00:00:00");
+
+        ((Router)provider.GetRequiredService<IRouter>()).Advertiser.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Without_scripts_the_entry_is_written_with_the_server_stamp_and_nothing_is_pruned()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var refusing = ScriptRefusingDatabase.Over(Db);
+        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(refusing), _key);
+
+        await store.WriteAsync("urn:a#router", new RouterAdvertisement("urn:a", "b", ["byp"]), Ct);
+        var entries = await store.ReadAsync(Ct);
+        await store.PruneAsync([("urn:a#router", entries.Single().Stamp)], Ct);
+
+        entries.Single().Advertisement.Has("byp").Should().BeTrue();
+        entries.Single().Age.Should().BeLessThan(TimeSpan.FromSeconds(5));
+        (await Db.HashExistsAsync(_key, "urn:a#router")).Should().BeTrue("without a script the compare and the delete are not atomic, so nothing is pruned");
+    }
+
+    [Fact]
+    public async Task A_prune_keeps_an_entry_written_again_after_it_was_read()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _key);
+        await store.WriteAsync("urn:a#router", new RouterAdvertisement("urn:a", "b", []), Ct);
+        var read = (await store.ReadAsync(Ct)).Single();
+        await Task.Delay(5, Ct);
+        await store.WriteAsync("urn:a#router", new RouterAdvertisement("urn:a", "b", []), Ct);
+
+        await store.PruneAsync([(read.Field, read.Stamp)], Ct);
+
+        (await Db.HashExistsAsync(_key, "urn:a#router")).Should().BeTrue("the stamp changed since the read");
+        await store.PruneAsync([(read.Field, (await store.ReadAsync(Ct)).Single().Stamp)], Ct);
+        (await Db.HashExistsAsync(_key, "urn:a#router")).Should().BeFalse("a matching stamp is pruned");
+    }
+
     private static RouterAdvertiser Advertiser(RouterAdvertisementStore store, RouterCore core) =>
         new(store, "urn:n1", "b", [new BypassTokens(core)], TimeSpan.FromHours(1), TimeSpan.FromSeconds(1), TimeProvider.System, NullLogger.Instance);
 
@@ -189,11 +232,11 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         return false;
     }
 
-    private ServiceProvider Provider(string identity, Action<IServiceCollection>? after = null, bool ownSection = false)
+    private ServiceProvider Provider(string identity, Action<IServiceCollection>? after = null, bool ownSection = false, string? interval = null)
     {
         _identity = identity;
         var section = ownSection ? "RouterCaching" : "Caching";
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        var settings = new Dictionary<string, string?>
         {
             ["Caching:AppShortName"] = "advtest",
             ["Caching:DefaultCache"] = KnownCacheProviderNames.Redis,
@@ -204,7 +247,13 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
             ["RouterCaching:Separator"] = "$",
             ["RouterCaching:SourceUri"] = "urn:router-section",
             ["RouterCaching:Redis:FormatNegotiation:LivenessWindow"] = "00:00:30",
-        }).Build();
+        };
+        if (interval is not null)
+        {
+            settings["RouterCaching:Redis:FormatNegotiation:AdvertiseInterval"] = interval;
+        }
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var source = new LegacySource(_redis!, "advc");
         var services = new ServiceCollection().AddLogging();
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
@@ -228,5 +277,23 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
             section);
         after?.Invoke(services);
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>A database that refuses every script, as a server with scripting disabled does, and passes every other command through.</summary>
+    public class ScriptRefusingDatabase : DispatchProxy
+    {
+        private IDatabase _inner = default!;
+
+        public static IDatabase Over(IDatabase inner)
+        {
+            var proxy = Create<IDatabase, ScriptRefusingDatabase>();
+            ((ScriptRefusingDatabase)(object)proxy)._inner = inner;
+            return proxy;
+        }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) =>
+            targetMethod!.Name.StartsWith("ScriptEvaluate", StringComparison.Ordinal)
+                ? throw new RedisCommandException("NOPERM this user has no permissions to run the 'eval' command")
+                : targetMethod.Invoke(_inner, args);
     }
 }

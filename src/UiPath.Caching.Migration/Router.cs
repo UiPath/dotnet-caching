@@ -123,6 +123,14 @@ internal sealed class Router : IRouter, IAsyncDisposable
             foreground.TrySetException(ex);
             cleaned.TrySetException(ex);
         }
+        finally
+        {
+            // A stop that failed part way still takes the advertisement down; StopAsync never throws and runs once.
+            if (Advertiser is { Stopped: false } advertiser)
+            {
+                await advertiser.StopAsync(PhaseLimit).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>Completes <paramref name="foreground"/> once the stop's bounded part has run; whatever overran its bound carries on after that, in order, before anything is disposed.</summary>

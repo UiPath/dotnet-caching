@@ -161,17 +161,22 @@ public static class RouterServiceCollectionExtensions
         }
     }
 
-    /// <summary>
-    /// Built from the router's configuration section, bound here as the named stack binds it, and the process id, never from the library's container,
-    /// so a library build that hangs or throws cannot hold or disable the entry, and the identity and node-list key are the stack's.
-    /// </summary>
+    /// <summary>From the router's section and the process id, never from the library's container, so a library build that hangs or throws cannot hold or disable it.</summary>
     private static RouterAdvertiser? CreateAdvertiser(IServiceProvider root, RouterBuilder builder, RouterCore core, string processId, IConfigurationSection section, ILogger logger)
     {
         try
         {
             var cacheOptions = new CacheOptions();
             section.Bind(cacheOptions);
-            var negotiation = root.GetService<IOptions<RedisCacheOptions>>()?.Value.FormatNegotiation ?? new FormatNegotiationOptions();
+            // The one timing source: the router's own section, which the stack does not bind for itself (its Redis options are set in code).
+            var negotiation = new FormatNegotiationOptions();
+            section.GetSection("Redis:FormatNegotiation").Bind(negotiation);
+            if (negotiation.AdvertiseInterval <= TimeSpan.Zero || negotiation.LivenessWindow <= TimeSpan.Zero)
+            {
+                logger.LogWarning("The router runs without a node advertisement: Redis:FormatNegotiation AdvertiseInterval and LivenessWindow must be positive.");
+                return null;
+            }
+
             Func<CancellationToken, ValueTask<IDatabase>> database = builder.SourceDatabase is { } source
                 ? _ => ValueTask.FromResult(source())
                 : async token =>

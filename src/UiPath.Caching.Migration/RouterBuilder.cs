@@ -99,10 +99,7 @@ public sealed class RouterBuilder
         return this;
     }
 
-    /// <summary>
-    /// The source client's database, without a key prefix of its own, over which the router writes its node advertisement, so the entry is kept while the
-    /// library is down. It must return at once, without waiting for a connection. Without it the application's library connection carries the entry.
-    /// </summary>
+    /// <summary>The source client's database, returned at once and with no key prefix of its own, which carries the router's node advertisement while the library is down.</summary>
     public RouterBuilder UseSourceConnection(Func<IDatabase> database)
     {
         SourceDatabase = database ?? throw new ArgumentNullException(nameof(database));

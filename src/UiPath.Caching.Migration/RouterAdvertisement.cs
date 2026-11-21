@@ -3,10 +3,7 @@ using System.Text;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>
-/// A router's entry in the node hash: <c>kind=router;inst=..;build=..;mig=t1+t2[;left=1]</c>. It carries no <c>vr</c> field, so the format negotiation does
-/// not read it as a node that reads values. <see cref="Tokens"/> holds every <c>mig</c> token; a reader looks for the ones it knows and skips the rest.
-/// </summary>
+/// <summary>A router's entry in the node hash, <c>kind=router;inst=..;build=..;mig=t1+t2[;left=1]</c>, with no <c>vr</c> field, so the format negotiation does not count it.</summary>
 internal sealed record RouterAdvertisement(string Instance, string Build, IReadOnlyList<string> Tokens, bool Left = false)
 {
     /// <summary>The router reports <see cref="RouterMode.BypassLibrary"/>.</summary>

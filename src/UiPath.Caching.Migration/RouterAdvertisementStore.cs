@@ -129,7 +129,7 @@ internal sealed class RouterAdvertisementStore(Func<CancellationToken, ValueTask
 
     private async Task<long> ServerMillisecondsAsync(IDatabase db, CancellationToken cancellationToken)
     {
-        var time = (RedisResult[]?)await db.ExecuteAsync("TIME").WaitAsync(cancellationToken).ConfigureAwait(false);
+        var time = (RedisResult[]?)await db.ExecuteAsync("TIME", [], CommandFlags.DemandMaster).WaitAsync(cancellationToken).ConfigureAwait(false);
         return (long.Parse((string)time![0]!, CultureInfo.InvariantCulture) * 1000) + (long.Parse((string)time[1]!, CultureInfo.InvariantCulture) / 1000);
     }
 }

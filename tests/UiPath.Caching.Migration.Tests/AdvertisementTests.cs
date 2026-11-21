@@ -108,6 +108,9 @@ public sealed class AdvertisementTests
     [Fact]
     public async Task An_abandoned_acquisition_is_reused_not_doubled_and_its_fault_is_observed()
     {
+        var unobserved = new List<Exception>();
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args) => unobserved.AddRange(args.Exception.InnerExceptions);
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
         using var release = new ManualResetEventSlim();
         var calls = 0;
         var store = new RouterAdvertisementStore(
@@ -137,13 +140,19 @@ public sealed class AdvertisementTests
         var after = () => store.WriteAsync("f", entry, Ct);
         await after.Should().ThrowAsync<RedisException>();
         Volatile.Read(ref calls).Should().BeLessThanOrEqualTo(2);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        unobserved.Should().NotContain(ex => ex.Message == "released", "the abandoned acquisition's fault is observed");
     }
 
     [Fact]
     public async Task Mode_change_nudges_keep_the_failure_backoff()
     {
         var attempts = 0;
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var core = new RouterCore(clock, _ => true, NullLogger.Instance);
         var advertiser = Advertiser(
             () =>
             {
@@ -151,22 +160,37 @@ public sealed class AdvertisementTests
                 throw new RedisException("down");
             },
             core,
-            interval: TimeSpan.FromHours(1));
+            interval: TimeSpan.FromHours(1),
+            clock: clock);
         advertiser.Start();
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (Volatile.Read(ref attempts) == 0 && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(5, Ct);
-        }
+        await UntilAsync(() => Volatile.Read(ref attempts) == 1 && clock.HasTimers);
 
         for (var i = 0; i < 30; i++)
         {
             advertiser.Nudge();
-            await Task.Delay(5, Ct);
         }
 
+        clock.Advance(TimeSpan.FromMilliseconds(499));
+        await Task.Yield();
         Volatile.Read(ref attempts).Should().Be(1, "the first retry waits its 500 ms backoff whatever the nudges");
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        await UntilAsync(() => Volatile.Read(ref attempts) == 2);
         await advertiser.StopAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task A_loop_that_faults_is_logged_and_the_stop_never_throws()
+    {
+        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+        var advertiser = Advertiser(() => throw new RedisException("down"), core, interval: TimeSpan.FromMilliseconds(-5));
+        advertiser.Start();
+        await Task.Delay(50, Ct);
+
+        var stop = () => advertiser.StopAsync(TimeSpan.FromSeconds(1));
+
+        await stop.Should().NotThrowAsync();
+        advertiser.Stopped.Should().BeTrue();
+        await stop.Should().NotThrowAsync("a second stop does nothing");
     }
 
     [Theory]
@@ -202,7 +226,7 @@ public sealed class AdvertisementTests
     public void The_identity_is_the_stack_form_then_the_process_part(string source, string expected) =>
         RouterServiceCollectionExtensions.StackIdentity(new Uri(source), "abc").ToString().Should().Be(expected);
 
-    internal static RouterAdvertiser Advertiser(Func<IDatabase> database, RouterCore core, TimeSpan? interval = null, TimeSpan? liveness = null) =>
+    internal static RouterAdvertiser Advertiser(Func<IDatabase> database, RouterCore core, TimeSpan? interval = null, TimeSpan? liveness = null, TimeProvider? clock = null) =>
         new(
             new RouterAdvertisementStore(_ => ValueTask.FromResult(database()), "caching:nodes"),
             "urn:test",
@@ -210,6 +234,17 @@ public sealed class AdvertisementTests
             [new BypassTokens(core)],
             interval ?? TimeSpan.FromSeconds(15),
             liveness ?? TimeSpan.FromSeconds(120),
-            TimeProvider.System,
+            clock ?? TimeProvider.System,
             NullLogger.Instance);
+
+    private static async Task UntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(5, Ct);
+        }
+
+        condition().Should().BeTrue();
+    }
 }

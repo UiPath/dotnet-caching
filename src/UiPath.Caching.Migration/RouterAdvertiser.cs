@@ -2,10 +2,7 @@ using Microsoft.Extensions.Logging;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>
-/// Keeps the router's entry in the node hash: written every interval and at once on a mode change, retried with backoff while Redis is down, never
-/// throwing to a caller. It needs no started library. Readers count an entry for <see cref="Fresh"/>; routers prune entries older than <see cref="Gone"/>.
-/// </summary>
+/// <summary>Keeps the router's entry in the node hash: every interval, at once on a mode change, retried with backoff, never throwing to a caller.</summary>
 internal sealed class RouterAdvertiser(
     RouterAdvertisementStore store,
     string nodeId,
@@ -31,6 +28,8 @@ internal sealed class RouterAdvertiser(
     public TimeSpan Fresh { get; } = livenessWindow + TimeSpan.FromTicks(interval.Ticks * 2);
 
     public TimeSpan Gone => TimeSpan.FromTicks(Math.Max(interval.Ticks * 10, Fresh.Ticks * 2));
+
+    public bool Stopped => Volatile.Read(ref _left) == 1;
 
     public void Start() => _loop = Task.Run(LoopAsync, CancellationToken.None);
 
@@ -78,18 +77,22 @@ internal sealed class RouterAdvertiser(
     /// <summary>Stops the loop and writes the departing entry once, within <paramref name="bound"/>; an entry that is not replaced expires on its own.</summary>
     public async Task StopAsync(TimeSpan bound)
     {
+        if (Interlocked.Exchange(ref _left, 1) == 1)
+        {
+            return;
+        }
+
         using var timeout = new CancellationTokenSource(bound, clock);
         await _stop.CancelAsync().ConfigureAwait(false);
         try
         {
             await _loop.WaitAsync(timeout.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // A loop stuck past the bound is left behind; its write can no longer hold the stop.
+            // A loop stuck past the bound is left behind, and one that faulted was logged; neither holds the stop.
         }
 
-        Volatile.Write(ref _left, 1);
         try
         {
             await _writing.WaitAsync(timeout.Token).ConfigureAwait(false);
@@ -112,6 +115,18 @@ internal sealed class RouterAdvertiser(
         TimeSpan.FromTicks(Math.Min(interval.Ticks, FirstRetry.Ticks << Math.Min(failures - 1, 16)));
 
     private async Task LoopAsync()
+    {
+        try
+        {
+            await RunAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException && !_stop.IsCancellationRequested)
+        {
+            logger.LogError(ex, "The router's node advertisement loop stopped; its entry expires on its own.");
+        }
+    }
+
+    private async Task RunAsync()
     {
         var failures = 0;
         var writes = 0;
