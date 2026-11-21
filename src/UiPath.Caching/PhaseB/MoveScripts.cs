@@ -4,11 +4,7 @@ using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// The scripts of a move and their watched-transaction fallbacks. Every data-changing call first checks the control record and refuses with
-/// <see cref="IdentityMismatch"/> unless it holds the identity the node acts under. Once the server refuses a script, every later call takes
-/// the fallback, which needs Redis 6.0.9 (an older server does not abort a transaction when a watched key expires).
-/// </summary>
+/// <summary>The scripts of a move, each refused unless the control record holds the caller's identity, with watched-transaction fallbacks for servers that refuse scripts.</summary>
 internal sealed partial class MoveScripts
 {
     public const long NoExpiry = -1;
@@ -27,7 +23,7 @@ internal sealed partial class MoveScripts
     private readonly IDatabase _db;
     private readonly Version? _serverVersion;
     private readonly Action<Exception>? _scriptRefused;
-    private volatile bool _useScripts;
+    private int _useScripts;
 
     /// <param name="serverVersion">The oldest server version of the deployment; the fallback runs only on 6.0.9 or later, and never when this is unknown.</param>
     /// <param name="scriptRefused">Told once, when the server first refuses a script.</param>
@@ -36,14 +32,14 @@ internal sealed partial class MoveScripts
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _serverVersion = serverVersion;
         _scriptRefused = scriptRefused;
-        _useScripts = useScripts;
+        _useScripts = useScripts ? 1 : 0;
         if (!useScripts)
         {
             EnsureFallbackAllowed();
         }
     }
 
-    public bool UsesScripts => _useScripts;
+    public bool UsesScripts => Volatile.Read(ref _useScripts) == 1;
 
     /// <summary>A fresh 128-bit nonce in hex, for fences, gates and staging keys.</summary>
     public static string NewNonce() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
@@ -88,7 +84,7 @@ internal sealed partial class MoveScripts
     /// <summary>The script's reply, or null once scripts are off and the caller takes the fallback.</summary>
     private async Task<RedisResult?> EvaluateAsync(string script, RedisKey[] keys, RedisValue[] args)
     {
-        if (_useScripts)
+        if (UsesScripts)
         {
             try
             {
@@ -96,8 +92,10 @@ internal sealed partial class MoveScripts
             }
             catch (Exception ex) when (RedisUtils.RefusesScript(ex))
             {
-                _useScripts = false;
-                _scriptRefused?.Invoke(ex);
+                if (Interlocked.Exchange(ref _useScripts, 0) == 1)
+                {
+                    _scriptRefused?.Invoke(ex);
+                }
             }
         }
 

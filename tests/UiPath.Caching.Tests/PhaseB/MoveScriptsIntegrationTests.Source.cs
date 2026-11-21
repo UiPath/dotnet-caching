@@ -1,4 +1,5 @@
 using StackExchange.Redis;
+using UiPath.Caching.PhaseB;
 
 namespace UiPath.Caching.Tests.PhaseB;
 
@@ -250,5 +251,37 @@ public partial class MoveScriptsIntegrationTests
         (await env.Scripts.CompareDeleteHashAsync(src, env.Ctl, "other", [new HashEntry("a", "1")])).Should().Be(-1);
 
         (await env.Db.KeyExistsAsync(src)).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Cmpdel_of_a_key_of_another_type_is_refused_for_a_stale_identity_and_zero_for_the_current_one(bool useScripts)
+    {
+        await using var env = await NewEnvironmentAsync(useScripts);
+        var src = env.Make("src");
+        await env.Db.HashSetAsync(src, "a", "1");
+        (await env.Scripts.ControlSyncAsync(env.Ctl, MoveTestEnvironment.Record(2, "id2", (MoveTestEnvironment.Cid, MoveScripts.NewNonce())))).Should().Be(1);
+
+        (await env.Scripts.CompareDeleteAsync(src, env.Ctl, MoveTestEnvironment.Id, "1")).Should().Be(MoveScripts.IdentityMismatch);
+        (await env.Scripts.CompareDeleteAsync(src, env.Ctl, "id2", "1")).Should().Be(0);
+
+        (await env.Db.HashGetAsync(src, "a")).Should().Be("1");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Cmpdelh_of_a_key_of_another_type_is_refused_for_a_stale_identity_and_zero_for_the_current_one(bool useScripts)
+    {
+        await using var env = await NewEnvironmentAsync(useScripts);
+        var src = env.Make("src");
+        await env.Db.StringSetAsync(src, "1");
+        (await env.Scripts.ControlSyncAsync(env.Ctl, MoveTestEnvironment.Record(2, "id2", (MoveTestEnvironment.Cid, MoveScripts.NewNonce())))).Should().Be(1);
+
+        (await env.Scripts.CompareDeleteHashAsync(src, env.Ctl, MoveTestEnvironment.Id, [new HashEntry("a", "1")])).Should().Be(MoveScripts.IdentityMismatch);
+        (await env.Scripts.CompareDeleteHashAsync(src, env.Ctl, "id2", [new HashEntry("a", "1")])).Should().Be(0);
+
+        (await env.Db.StringGetAsync(src)).Should().Be("1");
     }
 }

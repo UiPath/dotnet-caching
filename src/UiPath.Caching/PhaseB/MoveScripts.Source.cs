@@ -173,7 +173,8 @@ internal sealed partial class MoveScripts
         }
         catch (Exception ex) when (IsWrongType(ex))
         {
-            return 0;
+            // The script checks the identity before it touches the key; so does this.
+            return await HoldsIdentityAsync(control, id).ConfigureAwait(false) ? 0 : IdentityMismatch;
         }
     }
 
@@ -224,7 +225,8 @@ internal sealed partial class MoveScripts
         }
         catch (Exception ex) when (IsWrongType(ex))
         {
-            return 0;
+            // The script checks the identity before it touches the key; so does this.
+            return await HoldsIdentityAsync(control, id).ConfigureAwait(false) ? 0 : IdentityMismatch;
         }
     }
 

@@ -9,10 +9,12 @@ namespace UiPath.Caching.Tests.PhaseB;
 [Trait("Category", "Integration")]
 public class MoveScriptsHarmlessWriteTests(RedisContainerFixture fixture)
 {
-    [Fact]
-    public async Task A_repeat_of_ctlsync_ctlcommit_and_gate_still_writes_so_a_wait_has_an_offset()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_repeat_of_ctlsync_ctlcommit_and_gate_still_writes_so_a_wait_has_an_offset(bool useScripts)
     {
-        await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts: true, allowAdmin: true);
+        await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, allowAdmin: true);
         var server = env.Mux.GetServer(env.Mux.GetEndPoints()[0]);
 
         var before = await HsetCallsAsync(server);
@@ -32,10 +34,12 @@ public class MoveScriptsHarmlessWriteTests(RedisContainerFixture fixture)
         (await HsetCallsAsync(server)).Should().BeGreaterThan(gated);
     }
 
-    [Fact]
-    public async Task An_older_ctlsync_writes_nothing()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_older_ctlsync_writes_nothing(bool useScripts)
     {
-        await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts: true, allowAdmin: true);
+        await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, allowAdmin: true);
         var server = env.Mux.GetServer(env.Mux.GetEndPoints()[0]);
         var before = await HsetCallsAsync(server);
 

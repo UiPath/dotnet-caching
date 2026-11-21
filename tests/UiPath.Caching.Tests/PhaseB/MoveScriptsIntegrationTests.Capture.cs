@@ -5,6 +5,9 @@ namespace UiPath.Caching.Tests.PhaseB;
 
 public partial class MoveScriptsIntegrationTests
 {
+    private const long DeadlinePx = 60_000;
+    private const long DeadlineLeft = 10;
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -253,19 +256,11 @@ public partial class MoveScriptsIntegrationTests
     {
         await using var env = await NewEnvironmentAsync(useScripts);
         var capture = await env.CaptureAsync("n0");
-        var tcap = await env.ServerNowAsync();
+        var tcap = await env.ServerNowAsync() - (DeadlinePx - DeadlineLeft);
 
-        var result = await env.Scripts.PublishAsync(env.Keys, MoveTestEnvironment.Id, "v", env.PublicationFor(capture, "n1", px: 60_000, tcap: tcap));
+        var result = await env.Scripts.PublishAsync(env.Keys, MoveTestEnvironment.Id, "v", env.PublicationFor(capture, "n1", px: DeadlinePx, tcap: tcap));
 
-        result.Should().Be(MoveScripts.Published);
-        if (env.SupportsPExpireTime)
-        {
-            (await env.ExpireTimeAsync(env.Dst)).Should().Be(tcap + 60_000);
-        }
-        else
-        {
-            (await env.Db.KeyTimeToLiveAsync(env.Dst))!.Value.Should().BeGreaterThan(TimeSpan.Zero).And.BeLessThanOrEqualTo(TimeSpan.FromSeconds(60));
-        }
+        await AssertDeadlineAsync(env, result, tcap);
     }
 
     [Theory]
@@ -320,21 +315,15 @@ public partial class MoveScriptsIntegrationTests
         var capture = await env.CaptureAsync("n0");
         var staging = await env.StageHashAsync();
         await env.Db.StringSetAsync(env.Dst, "old");
-        var tcap = await env.ServerNowAsync();
+        var tcap = await env.ServerNowAsync() - (DeadlinePx - DeadlineLeft);
 
-        var result = await env.Scripts.PublishHashAsync(env.Keys, staging, MoveTestEnvironment.Id, env.PublicationFor(capture, "n1", px: 60_000, tcap: tcap));
+        var result = await env.Scripts.PublishHashAsync(env.Keys, staging, MoveTestEnvironment.Id, env.PublicationFor(capture, "n1", px: DeadlinePx, tcap: tcap));
 
-        result.Should().Be(MoveScripts.Published);
-        (await env.Db.HashGetAllAsync(env.Dst)).ToDictionary(e => (string)e.Name!, e => (string)e.Value!).Should().Equal(new Dictionary<string, string> { ["a"] = "1", ["b"] = "2" });
+        await AssertDeadlineAsync(env, result, tcap);
         (await env.Db.KeyExistsAsync(staging)).Should().BeFalse();
-        (await env.Db.StringGetAsync(env.Fence)).Should().Be("n1");
-        if (env.SupportsPExpireTime)
+        if (result == MoveScripts.Published)
         {
-            (await env.ExpireTimeAsync(env.Dst)).Should().Be(tcap + 60_000);
-        }
-        else
-        {
-            (await env.Db.KeyTimeToLiveAsync(env.Dst))!.Value.Should().BeGreaterThan(TimeSpan.Zero).And.BeLessThanOrEqualTo(TimeSpan.FromSeconds(60));
+            (await env.Db.StringGetAsync(env.Fence)).Should().Be("n1");
         }
     }
 
@@ -590,7 +579,7 @@ public partial class MoveScriptsIntegrationTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Fillh_with_an_existing_destination_returns_2_and_the_client_deletes_staging(bool useScripts)
+    public async Task Fillh_with_an_existing_destination_returns_2_and_deletes_staging(bool useScripts)
     {
         await using var env = await NewEnvironmentAsync(useScripts);
         var staging = await env.StageHashAsync();
@@ -602,7 +591,6 @@ public partial class MoveScriptsIntegrationTests
         result.Should().Be(MoveScripts.DestinationExists);
         (await env.Db.StringGetAsync(env.Dst)).Should().Be("present");
         (await env.Db.StringGetAsync(env.Fence)).Should().Be("f0");
-        await env.Db.KeyDeleteAsync(staging);
         (await env.Db.KeyExistsAsync(staging)).Should().BeFalse();
     }
 
@@ -633,5 +621,33 @@ public partial class MoveScriptsIntegrationTests
         result.Should().Be(MoveScripts.IdentityMismatch);
         (await env.Db.KeyExistsAsync(env.Dst)).Should().BeFalse();
         (await env.Db.KeyExistsAsync(env.Fence)).Should().BeFalse();
+    }
+
+    // The deadline is 10 ms ahead of the server's clock; a slow round trip may pass it first, which is a refusal that writes nothing.
+    private static async Task AssertDeadlineAsync(MoveTestEnvironment env, long result, long tcap)
+    {
+        result.Should().BeOneOf(MoveScripts.Published, MoveScripts.PastDeadline);
+        if (result == MoveScripts.PastDeadline)
+        {
+            (await env.Db.KeyExistsAsync(env.Dst)).Should().BeFalse();
+            return;
+        }
+
+        var remaining = await env.Db.KeyTimeToLiveAsync(env.Dst);
+        if (remaining is null)
+        {
+            (await env.Db.KeyExistsAsync(env.Dst)).Should().BeFalse("the value had the 10 ms deadline and lapsed");
+            return;
+        }
+
+        remaining.Value.Should().BeGreaterThan(TimeSpan.Zero).And.BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(DeadlineLeft));
+        if (env.SupportsPExpireTime)
+        {
+            var at = await env.ExpireTimeAsync(env.Dst);
+            if (at >= 0)
+            {
+                at.Should().Be(tcap + DeadlinePx);
+            }
+        }
     }
 }

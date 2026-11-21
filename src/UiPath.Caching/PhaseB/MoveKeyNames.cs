@@ -1,13 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
 using StackExchange.Redis;
+using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// Names of the fences, control records and staging keys of a move, for one connection view.
-/// Names are logical (the connection adds its prefix); slots are physical (prefix included), so a name always lands in its data key's slot.
-/// </summary>
+/// <summary>Names of a move's fences, control records and staging keys: logical names, physical slots, so each name lands in its data key's slot.</summary>
 internal sealed class MoveKeyNames
 {
     public const string Keyspace = "mg";
@@ -17,10 +15,17 @@ internal sealed class MoveKeyNames
     private readonly int? _prefixSlot;
 
     /// <param name="connectorPrefix">The prefix the connection prepends to every key; empty for none.</param>
+    /// <param name="libraryPrefix">The library key prefix that starts every name carrying no data key, so two deployments on one server never share them.</param>
     /// <param name="cluster">False names one control record per group, with no tags.</param>
-    public MoveKeyNames(string connectorPrefix, bool cluster)
+    public MoveKeyNames(string connectorPrefix, string libraryPrefix, bool cluster)
     {
         ConnectorPrefix = connectorPrefix ?? throw new ArgumentNullException(nameof(connectorPrefix));
+        LibraryPrefix = libraryPrefix ?? throw new ArgumentNullException(nameof(libraryPrefix));
+        if (!RedisHashTag.ContainsNoBraces(libraryPrefix))
+        {
+            throw new ArgumentException($"The library key prefix '{libraryPrefix}' may not hold a brace: it comes before the slot tag of every name.", nameof(libraryPrefix));
+        }
+
         Cluster = cluster;
         if (cluster && PrefixTag(connectorPrefix))
         {
@@ -29,6 +34,8 @@ internal sealed class MoveKeyNames
     }
 
     public string ConnectorPrefix { get; }
+
+    public string LibraryPrefix { get; }
 
     public bool Cluster { get; }
 
@@ -92,7 +99,7 @@ internal sealed class MoveKeyNames
     public RedisKey Control(string group, int slot)
     {
         ValidateName(group, nameof(group));
-        return Cluster ? $"{Keyspace}:{{{SlotTags.For(_prefixSlot ?? slot)}}}:ctl:{group}" : $"{Keyspace}:ctl:{group}";
+        return Cluster ? $"{LibraryPrefix}{Keyspace}:{{{SlotTags.For(_prefixSlot ?? slot)}}}:ctl:{group}" : $"{LibraryPrefix}{Keyspace}:ctl:{group}";
     }
 
     /// <summary>The slots that hold the group's control records: one under a tagged prefix or without a cluster, otherwise every slot.</summary>
@@ -150,10 +157,10 @@ internal sealed class MoveKeyNames
     {
         if (!Cluster)
         {
-            return $"{Keyspace}:{rest}";
+            return $"{LibraryPrefix}{Keyspace}:{rest}";
         }
 
-        return $"{Keyspace}:{{{SlotTags.For(SlotOf(dataKey))}}}:{rest}";
+        return $"{LibraryPrefix}{Keyspace}:{{{SlotTags.For(SlotOf(dataKey))}}}:{rest}";
     }
 
     private string SameSlot(string dataKey, string name)

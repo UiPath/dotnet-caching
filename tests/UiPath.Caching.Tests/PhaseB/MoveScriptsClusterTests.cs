@@ -143,7 +143,7 @@ public class MoveScriptsClusterTests
         var mux = await ConnectionMultiplexer.ConnectAsync(connectionString!);
         var db = mux.GetDatabase().WithKeyPrefix(prefix);
         var version = mux.GetServers().Min(s => s.Version)!;
-        return new ClusterContext(mux, db, new MoveScripts(db, useScripts: true, version), new MoveKeyNames(prefix, cluster: true), Guid.NewGuid().ToString("N"));
+        return new ClusterContext(mux, db, new MoveScripts(db, useScripts: true, version), new MoveKeyNames(prefix, "", cluster: true), Guid.NewGuid().ToString("N"));
     }
 
     private sealed class ClusterContext(ConnectionMultiplexer mux, IDatabase db, MoveScripts scripts, MoveKeyNames names, string group) : IAsyncDisposable

@@ -101,28 +101,16 @@ internal sealed partial class MoveScripts
                 : new Capture(0, (string?)parts[1], (long)parts[2] == 1, (string?)parts[3], long.Parse((string)parts[4]!, CultureInfo.InvariantCulture));
         }
 
-        // In order on one connection: the token read last is the one in force, and nothing here needs atomicity.
-        var batch = _db.CreateBatch();
-        var heldId = batch.HashGetAsync(keys.Control, "id", Master);
-        var gate = batch.HashGetAsync(keys.Control, "c:" + cid, Master);
-        var created = batch.StringSetAsync(keys.Fence, nonce, null, When.NotExists, Master);
-        var refreshed = batch.KeyExpireAsync(keys.Fence, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), Master);
-        var token = batch.StringGetAsync(keys.Fence, Master);
-        var exists = batch.KeyExistsAsync(keys.Data, Master);
-        batch.Execute();
-        await Task.WhenAll(heldId, gate, created, refreshed, token, exists).ConfigureAwait(false);
-        var tcap = await ServerTimeAsync(keys.Data).ConfigureAwait(false);
-        if (heldId.Result != id)
+        // A fence evicted or expired between its SET NX and its GET reads as no token, and the capture runs again.
+        for (var attempt = 0; attempt < MaxWatchAborts; attempt++)
         {
-            return new Capture(IdentityMismatch, null, false, null, 0);
+            if (await CaptureInBatchAsync(keys, id, cid, nonce, fenceTtlMilliseconds).ConfigureAwait(false) is { } capture)
+            {
+                return capture;
+            }
         }
 
-        if (gate.Result.IsNull || IsClosed(gate.Result!))
-        {
-            return new Capture(GateRefused, null, false, null, 0);
-        }
-
-        return new Capture(0, token.Result, exists.Result, gate.Result, tcap);
+        throw new RedisException($"The fence of '{keys.Data}' was gone at every one of {MaxWatchAborts} captures; the capture is refused.");
     }
 
     /// <summary>PUB: publishes <paramref name="value"/> under the fence and the gate and replaces the fence; never past the deadline <c>tcap + px</c> of the Dst server.</summary>
@@ -395,6 +383,38 @@ internal sealed partial class MoveScripts
 
             return await _db.KeyExistsAsync(keys.Data, Master).ConfigureAwait(false) ? DestinationExists : null;
         }).ConfigureAwait(false);
+    }
+
+    // In order on one connection: the token read last is the one in force, and nothing here needs atomicity, so the fence is set and refreshed
+    // even when the identity or the gate then refuses. Null when no token was read.
+    private async Task<Capture?> CaptureInBatchAsync(FencedKeys keys, string id, string cid, string nonce, long fenceTtlMilliseconds)
+    {
+        var batch = _db.CreateBatch();
+        var heldId = batch.HashGetAsync(keys.Control, "id", Master);
+        var gate = batch.HashGetAsync(keys.Control, "c:" + cid, Master);
+        var created = batch.StringSetAsync(keys.Fence, nonce, null, When.NotExists, Master);
+        var refreshed = batch.KeyExpireAsync(keys.Fence, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), Master);
+        var token = batch.StringGetAsync(keys.Fence, Master);
+        var exists = batch.KeyExistsAsync(keys.Data, Master);
+        batch.Execute();
+        await Task.WhenAll(heldId, gate, created, refreshed, token, exists).ConfigureAwait(false);
+        if (heldId.Result != id)
+        {
+            return new Capture(IdentityMismatch, null, false, null, 0);
+        }
+
+        if (gate.Result.IsNull || IsClosed(gate.Result!))
+        {
+            return new Capture(GateRefused, null, false, null, 0);
+        }
+
+        if (token.Result.IsNull)
+        {
+            return null;
+        }
+
+        var tcap = await ServerTimeAsync(keys.Data).ConfigureAwait(false);
+        return new Capture(0, token.Result, exists.Result, gate.Result, tcap);
     }
 
     // The predicates in the script's order after an aborted EXEC; null when all still hold, which was a WATCH abort.
