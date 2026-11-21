@@ -9,6 +9,9 @@ public interface IMigrationCache
     /// <summary>Announces like <c>SetAsync</c>; differs only in telling a write that was never sent from one whose result is unknown.</summary>
     ValueTask<StoreOutcome> WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
 
+    /// <summary>Writes value and expiry in one command only when the key holds nothing; announces like <c>TryAddAsync</c> when it adds.</summary>
+    ValueTask<AddOutcome> TryCreateAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
+
     /// <summary>Announces like <c>RemoveAsync</c>; differs only in telling a delete that was never sent from one whose result is unknown.</summary>
     ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 }

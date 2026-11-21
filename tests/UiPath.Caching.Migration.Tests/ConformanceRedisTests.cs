@@ -68,6 +68,36 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         report.ToString().Should().NotContain("Padded").And.NotContain("9223372036854775807");
     }
 
+    [Fact]
+    public async Task TryAdd_on_the_library_path_creates_once_with_the_source_bytes_and_deadline()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var provider = Provider(new LegacyEnvelopeProxy());
+        var router = provider.GetRequiredService<IRouter>();
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (router.Mode != RouterMode.Library && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25, Ct);
+        }
+
+        router.Mode.Should().Be(RouterMode.Library);
+        var cache = router.Get<List<long>>(_cacheName);
+        var key = (RedisKey)$"n:{_cacheName},c:t";
+        try
+        {
+            (await cache.TryAddAsync("t", [1, 2], CacheExpiry.After(TimeSpan.FromMinutes(10)), Ct)).Should().Be(AddOutcome.Added);
+            (await cache.TryAddAsync("t", [9], CacheExpiry.After(TimeSpan.FromMinutes(10)), Ct)).Should().Be(AddOutcome.Exists);
+
+            var db = _redis!.GetDatabase();
+            ((byte[]?)await db.StringGetAsync(key)).Should().Equal(LegacyEnvelope.Write(new List<long> { 1, 2 }));
+            (await db.KeyTimeToLiveAsync(key)).Should().BeCloseTo(TimeSpan.FromMinutes(10), TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            await _redis!.GetDatabase().KeyDeleteAsync(key);
+        }
+    }
+
     private ServiceProvider Provider(ISerializerProxy<byte[]> envelope)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>

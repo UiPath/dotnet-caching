@@ -122,3 +122,26 @@ UiPath.Caching.Migration.ConformanceReport.Samples.get -> int
 override UiPath.Caching.Migration.ConformanceReport.ToString() -> string!
 UiPath.Caching.Migration.RouterConformance
 static UiPath.Caching.Migration.RouterConformance.CheckAsync<T>(System.IServiceProvider! services, string! cacheName, System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<string!, T!>>! samples, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Migration.ConformanceReport!>!
+UiPath.Caching.Migration.IRoutedCache<T>.TryAddAsync(string! key, T! value, UiPath.Caching.Migration.CacheExpiry expiry = default(UiPath.Caching.Migration.CacheExpiry), System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.AddOutcome>
+UiPath.Caching.Migration.ISourceCache<T>.TryAddAsync(string! key, T! value, UiPath.Caching.Migration.CacheExpiry expiry, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.AddResult>
+UiPath.Caching.Migration.AddResult
+UiPath.Caching.Migration.AddResult.Deconstruct(out UiPath.Caching.AddOutcome Outcome, out System.TimeSpan? SettleWithin) -> void
+UiPath.Caching.Migration.AddResult.Equals(UiPath.Caching.Migration.AddResult other) -> bool
+UiPath.Caching.Migration.AddResult.Outcome.get -> UiPath.Caching.AddOutcome
+UiPath.Caching.Migration.AddResult.Outcome.init -> void
+UiPath.Caching.Migration.AddResult.SettleWithin.get -> System.TimeSpan?
+UiPath.Caching.Migration.AddResult.SettleWithin.init -> void
+UiPath.Caching.Migration.AddResult.AddResult() -> void
+UiPath.Caching.Migration.AddResult.AddResult(UiPath.Caching.AddOutcome Outcome, System.TimeSpan? SettleWithin = null) -> void
+override UiPath.Caching.Migration.AddResult.GetHashCode() -> int
+static UiPath.Caching.Migration.AddResult.FromOutcome(UiPath.Caching.AddOutcome outcome) -> UiPath.Caching.Migration.AddResult
+static UiPath.Caching.Migration.AddResult.UnknownWithin(System.TimeSpan settleWithin) -> UiPath.Caching.Migration.AddResult
+static UiPath.Caching.Migration.AddResult.implicit operator UiPath.Caching.Migration.AddResult(UiPath.Caching.AddOutcome outcome) -> UiPath.Caching.Migration.AddResult
+static UiPath.Caching.Migration.AddResult.operator !=(UiPath.Caching.Migration.AddResult left, UiPath.Caching.Migration.AddResult right) -> bool
+static UiPath.Caching.Migration.AddResult.operator ==(UiPath.Caching.Migration.AddResult left, UiPath.Caching.Migration.AddResult right) -> bool
+~override UiPath.Caching.Migration.AddResult.Equals(object obj) -> bool
+~override UiPath.Caching.Migration.AddResult.ToString() -> string
+UiPath.Caching.Migration.RouterCacheRegistration<T>.CacheNulls.get -> bool
+UiPath.Caching.Migration.RouterCacheRegistration<T>.CacheNulls.init -> void
+UiPath.Caching.Migration.RouterCacheRegistration<T>.Version.get -> System.Func<string!>?
+UiPath.Caching.Migration.RouterCacheRegistration<T>.Version.init -> void

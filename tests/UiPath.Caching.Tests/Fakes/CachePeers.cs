@@ -476,6 +476,9 @@ internal sealed class CachePeers : IDisposable
             return MigrationOutcome;
         }
 
+        ValueTask<AddOutcome> IMigrationCache.TryCreateAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
+            where T : default => throw new NotSupportedException();
+
         async ValueTask<StoreOutcome> IMigrationCache.DeleteAsync<T>(CacheKey cacheKey, CancellationToken token)
         {
             if (MigrationGate is { } gate)

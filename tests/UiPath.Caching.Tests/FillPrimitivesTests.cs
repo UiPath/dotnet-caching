@@ -755,6 +755,9 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         public async ValueTask<StoreOutcome> WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
             await SetAsync(cacheKey, value, expiration, policy, token) ? StoreOutcome.Committed : StoreOutcome.Failed;
 
+        public async ValueTask<AddOutcome> TryCreateAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+            await TryAddAsync(cacheKey, value, expiration, policy, token) ? AddOutcome.Added : AddOutcome.Exists;
+
         public async ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
             await RemoveAsync<T>(cacheKey, token) ? StoreOutcome.Committed : StoreOutcome.Failed;
 

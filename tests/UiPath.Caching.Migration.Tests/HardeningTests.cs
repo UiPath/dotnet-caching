@@ -368,6 +368,8 @@ public sealed class HardeningTests : RouterTestBase
             return WriteOutcome.NotSent;
         }
 
+        public ValueTask<AddResult> TryAddAsync(string key, Item value, DateTimeOffset? deadline, CancellationToken cancellationToken) => ValueTask.FromResult<AddResult>(AddOutcome.NotSent);
+
         public ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken) => ValueTask.FromResult<WriteResult>(WriteOutcome.NotSent);
     }
 }

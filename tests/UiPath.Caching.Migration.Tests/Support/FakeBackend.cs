@@ -35,6 +35,14 @@ internal sealed class FakeBackend(Dictionary<string, Item> store, ManualTimeProv
 
     public int Removes { get; private set; }
 
+    public int Creates { get; private set; }
+
+    /// <summary>Keys the source holds a cached null for.</summary>
+    public HashSet<string> NullKeys { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Forces the answer of a conditional create; null answers from the store.</summary>
+    public AddOutcome? CreateOverride { get; set; }
+
     public int Clears { get; private set; }
 
     public DateTimeOffset? LastDeadline { get; private set; }
@@ -85,6 +93,28 @@ internal sealed class FakeBackend(Dictionary<string, Item> store, ManualTimeProv
         return Result(Apply(WriteOutcome, () => Put(key, value)));
     }
 
+    public async ValueTask<AddResult> TryAddAsync(string key, Item value, DateTimeOffset? deadline, CancellationToken cancellationToken)
+    {
+        Creates++;
+        LastDeadline = deadline;
+        Note($"create:{key}");
+        await BeforeSend(cancellationToken);
+        if (CreateOverride is { } forced)
+        {
+            if (forced == AddOutcome.Added || (forced == AddOutcome.Unknown && UnknownLands))
+            {
+                Put(key, value);
+            }
+
+            return forced == AddOutcome.Unknown && SettleWithin is { } within ? AddResult.UnknownWithin(within) : forced;
+        }
+
+        lock (store)
+        {
+            return store.TryAdd(key, value) ? AddOutcome.Added : AddOutcome.Exists;
+        }
+    }
+
     public async ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken)
     {
         Removes++;
@@ -95,6 +125,12 @@ internal sealed class FakeBackend(Dictionary<string, Item> store, ManualTimeProv
 
     async ValueTask<SourceRead<Item>> ISourceCache<Item>.GetAsync(string key, CancellationToken cancellationToken)
     {
+        if (NullKeys.Contains(key))
+        {
+            Reads++;
+            return new SourceRead<Item>(ReadOutcome.Found, null);
+        }
+
         var read = await ReadAsync(key, cancellationToken).ConfigureAwait(false);
         return read.Kind switch
         {
@@ -104,6 +140,9 @@ internal sealed class FakeBackend(Dictionary<string, Item> store, ManualTimeProv
             _ => SourceRead<Item>.Absent,
         };
     }
+
+    ValueTask<AddResult> ISourceCache<Item>.TryAddAsync(string key, Item value, CacheExpiry expiry, CancellationToken cancellationToken) =>
+        TryAddAsync(key, value, expiry.Deadline, cancellationToken);
 
     ValueTask<WriteResult> ISourceCache<Item>.SetAsync(string key, Item value, CacheExpiry expiry, CancellationToken cancellationToken) =>
         SetAsync(key, value, expiry.Deadline, cancellationToken);

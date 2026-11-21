@@ -37,6 +37,15 @@ public sealed class RouterBuilder
         ArgumentOutOfRangeException.ThrowIfLessThan(registration.LocalCap, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(registration.PendingWindow, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(registration.PendingWindow, LibrarySettleBound.Horizon);
+        if (registration.Version is { } version)
+        {
+            var text = version();
+            if (string.IsNullOrWhiteSpace(text) || text.AsSpan().IndexOfAny("@+={} ") >= 0)
+            {
+                throw new ArgumentException($"The version of cache '{registration.Name}' must be non-empty and hold no '@', '+', '=', braces or spaces.", nameof(registration));
+            }
+        }
+
         if (_excluded.ContainsKey(registration.Name))
         {
             throw new ArgumentException($"Cache '{registration.Name}' is listed as excluded, so it cannot also be registered.", nameof(registration));

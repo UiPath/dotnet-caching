@@ -12,5 +12,8 @@ internal interface IPathClient<T>
     /// <param name="deadline">Null means no expiry.</param>
     ValueTask<WriteResult> SetAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken);
 
+    /// <param name="deadline">Null means no expiry.</param>
+    ValueTask<AddResult> TryAddAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken);
+
     ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken);
 }

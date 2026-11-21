@@ -57,7 +57,9 @@ internal sealed class TestNode : IAsyncDisposable
         Func<LibraryParts>? lazyLibrary = null,
         Func<CancellationToken, Task<LibraryParts>>? lazyLibraryAsync = null,
         TimeSpan? startBound = null,
-        TimeSpan? cleanupBound = null)
+        TimeSpan? cleanupBound = null,
+        Func<string>? version = null,
+        bool cacheNulls = false)
     {
         var source = new Uri($"urn:test-{node ?? Guid.NewGuid().ToString("N")}");
         var sourceBackend = new FakeBackend(store, clock);
@@ -78,6 +80,8 @@ internal sealed class TestNode : IAsyncDisposable
             LocalCap = localCap ?? TimeSpan.FromMinutes(1),
             PendingWindow = pendingWindow ?? TimeSpan.FromSeconds(30),
             DefaultExpiry = defaultExpiry,
+            Version = version,
+            CacheNulls = cacheNulls,
         };
         var events = new CacheEventFactory(Options.Create(new CacheOptions { SourceUri = source }));
         RoutedCache<Item> cache;

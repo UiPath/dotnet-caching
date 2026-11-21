@@ -47,6 +47,88 @@ internal sealed partial class RedisCache
         }
     }
 
+    public async ValueTask<AddOutcome> TryCreateAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        RedisKey redisKey;
+        RedisValue serialized;
+        SerializedPayload payload;
+        TimeSpan duration;
+        try
+        {
+            NotCacheableException.ThrowIfNotCacheable<T>();
+            if (token.IsCancellationRequested || !IsConnected || !TryToRedisKey(cacheKey, token, out redisKey))
+            {
+                return AddOutcome.NotSent;
+            }
+
+            duration = CallerDuration(expiration);
+            if (IsDefault(value))
+            {
+                if (!_cacheNullValues || duration <= TimeSpan.Zero)
+                {
+                    return AddOutcome.NotSent;
+                }
+
+                (serialized, payload) = (RedisValue.EmptyString, default(SerializedPayload));
+            }
+            else
+            {
+                var format = FormatFor(policy, forWrite: true);
+                (serialized, payload) = format.IsDefault ? SerializeValue(value, default(PlainFormat)) : SerializeValue(value, format);
+                _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), serialized);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogRedisCacheException(ex);
+            return AddOutcome.NotSent;
+        }
+
+        var trace = new SendTrace();
+        using (payload)
+        {
+            NoteWritten(redisKey);
+            var operation = StartOperation<T>(nameof(TryCreateAsync));
+            var added = false;
+            try
+            {
+                added = await _write.ExecuteAsync(static (s, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    s.Trace.MarkSent();
+                    return s.Trace.AcknowledgeAsync(s.Self.Database.StringSetAsync(s.Key, s.Serialized, s.Expiration, When.NotExists, CommandFlags.DemandMaster));
+                },
+                (Self: this, Key: redisKey, Serialized: serialized, Expiration: duration, Trace: trace),
+                default,
+                token).ConfigureAwait(false);
+                operation.Stop();
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                operation.Cancel();
+            }
+            catch (Exception ex)
+            {
+                operation.Stop();
+                LogRedisCacheException(ex);
+            }
+            finally
+            {
+                NoteWritten(redisKey);
+                operation.Track(added);
+            }
+        }
+
+        // An answered false is the key already holding a value; a retry after an unanswered send stays unknown, since the first may have added.
+        return trace.Outcome() switch
+        {
+            StoreOutcome.Committed => AddOutcome.Added,
+            StoreOutcome.Failed => AddOutcome.Exists,
+            StoreOutcome.NotSent => AddOutcome.NotSent,
+            _ => AddOutcome.Unknown,
+        };
+    }
+
     public async ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         RedisKey redisKey;

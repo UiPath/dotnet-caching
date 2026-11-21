@@ -7,12 +7,20 @@ namespace UiPath.Caching.Migration;
 internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDisposable
     where T : class
 {
+    /// <summary>A command that changed nothing (a create that found the key held): neither retried on the other client nor settled.</summary>
+    private const WriteOutcome Unchanged = (WriteOutcome)(-1);
+
     private static readonly Route ClearRoute = new(RoutePath.Source, Route.Flag);
+
+    /// <summary>What the local tier holds for a cached null, which it cannot hold itself.</summary>
+    private static readonly object NullMarker = new();
+
 
     private readonly RouterCore _core;
     private readonly RouterCacheRegistration<T> _registration;
     private readonly IPathClient<T> _source;
     private readonly TopicKey _topic;
+    private readonly string _eventName;
     private readonly CacheEpoch _epoch = new();
     private readonly ConcurrentDictionary<string, Flight> _flights = new(StringComparer.Ordinal);
     private readonly KeyGates _keys = new();
@@ -30,8 +38,9 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     {
         _core = core;
         _registration = registration;
-        _source = new SourcePathClient<T>(registration.Source);
-        _topic = new TopicKey($"router:{registration.Name}");
+        _source = new SourcePathClient<T>(registration.Source, registration.CacheNulls);
+        _eventName = registration.Version is { } version ? $"{registration.Name}@{version()}" : registration.Name;
+        _topic = new TopicKey($"router:{_eventName}");
         _pending = new PendingMutations(core, registration.Name, key => AnnounceRemovalAsync(key, ClearRoute), DetachKey);
         _retrier = new InvalidationRetrier(core, registration.LocalCap, PublishRemovalOnceAsync, PublishClearOnceAsync, CountPublishFailure);
         core.Register(this);
@@ -116,7 +125,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
         var mark = _core.Tier.Capture(local, _epoch);
         var read = await ReadAsync(key, local, route, mark, cancellationToken).ConfigureAwait(false);
-        if (read.Value is null)
+        if (!read.Found)
         {
             RouterTelemetry.CountMiss(_registration.Name, _registration.Group, route);
         }
@@ -130,6 +139,40 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         ArgumentNullException.ThrowIfNull(value);
         using var admission = _core.Admit(_registration.Group, out var route);
         return await WriteAsync(key, value, expiry, route, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Added settles like a write; an entry already there changes nothing, so nothing is evicted or announced. A deadline already passed creates nothing.</summary>
+    public async ValueTask<AddOutcome> TryAddAsync(string key, T value, CacheExpiry expiry = default, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentNullException.ThrowIfNull(value);
+        using var admission = _core.Admit(_registration.Group, out var route);
+        var deadline = Deadline(expiry);
+        if (deadline is { } at && at <= _core.Clock.GetUtcNow())
+        {
+            return AddOutcome.NotSent;
+        }
+
+        var reported = AddOutcome.NotSent;
+        var outcome = await MutateAsync(
+            key,
+            route,
+            async (client, token) =>
+            {
+                var result = await client.TryAddAsync(key, value, deadline, token).ConfigureAwait(false);
+                reported = result.Outcome;
+                return result.Outcome switch
+                {
+                    AddOutcome.Added => WriteOutcome.Committed,
+                    AddOutcome.Exists => Unchanged,
+                    AddOutcome.NotSent => WriteOutcome.NotSent,
+                    _ => result.SettleWithin is { } within ? WriteResult.UnknownWithin(within) : WriteOutcome.Unknown,
+                };
+            },
+            deadline ?? DateTimeOffset.MaxValue,
+            null,
+            cancellationToken).ConfigureAwait(false);
+        return outcome == WriteOutcome.NotSent ? AddOutcome.NotSent : reported;
     }
 
     public async ValueTask<WriteOutcome> RemoveAsync(string key, CancellationToken cancellationToken = default)
@@ -170,7 +213,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     public void ResetLocal() => ClearLocal();
 
     public IRouterParticipant.IAttachment Prepare(LibraryParts library) =>
-        Prepare(new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin), library.Topics, library.Events, library.Source);
+        Prepare(new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin) { CacheNulls = _registration.CacheNulls }, library.Topics, library.Events, library.Source);
 
     public Task WhenPendingSettledAsync() => _pending.WhenEmptyAsync();
 
@@ -201,7 +244,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
     private LibraryAttachment Prepare(IPathClient<T> library, ITopicProvider topics, ICacheEventFactory events, Uri ownSource)
     {
-        var publisher = new CacheEventPublisher(_registration.Name, topics, events, NullLogger.Instance);
+        var publisher = new CacheEventPublisher(_eventName, topics, events, NullLogger.Instance);
         var topic = topics.Create(_topic);
         return new LibraryAttachment(this, library, publisher, topic, topic.Subscribe(new PeerObserver(ownSource, EvictLocal, ClearLocal)));
     }
@@ -230,10 +273,10 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     private bool TryLocal(LocalKey local, Route route, out T? value)
     {
         value = null;
-        if (route.Tier && _registration.LocalCap > TimeSpan.Zero && _core.Tier.TryGet(local, _epoch, out var found) && found is T typed)
+        if (route.Tier && _registration.LocalCap > TimeSpan.Zero && _core.Tier.TryGet(local, _epoch, out var found) && (found is T || ReferenceEquals(found, NullMarker)))
         {
             RouterTelemetry.CountLocalHit(_registration.Name, _registration.Group, route);
-            value = typed;
+            value = found as T;
             return true;
         }
 
@@ -248,7 +291,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             var generation = state.Generation;
             var mark = _core.Tier.Capture(local, _epoch);
             var existing = await ReadAsync(key, local, route, mark, cancellationToken).ConfigureAwait(false);
-            if (existing.Value is not null)
+            if (existing.Found)
             {
                 return existing.Value;
             }
@@ -280,7 +323,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         var first = await Client(route.Path).ReadAsync(key, cancellationToken).ConfigureAwait(false);
         if (first.Kind == ReadOutcome.Found)
         {
-            return new Loaded(Hit(first, local, mark, readStart, route.Path, route.Reason, route.Tier), route);
+            return new Loaded(Hit(first, local, mark, readStart, route.Path, route.Reason, route.Tier), route, Found: true);
         }
 
         if (first.Kind == ReadOutcome.Absent)
@@ -312,7 +355,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         switch (second.Kind)
         {
             case ReadOutcome.Found:
-                return new Loaded(Hit(second, local, mark, readStart, route.Other, Route.OtherClientRead, route.Tier), route);
+                return new Loaded(Hit(second, local, mark, readStart, route.Other, Route.OtherClientRead, route.Tier), route, Found: true);
             case ReadOutcome.Unreadable:
                 RouterTelemetry.CountUnreadable(name, group, route.Other, Route.OtherClientUnreadable);
                 break;
@@ -331,10 +374,10 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         return new Loaded(null, firstUnavailable && route.Path == RoutePath.Library ? new Route(RoutePath.Source, Route.OtherClientRead) : route);
     }
 
-    private T Hit(PathRead<T> read, LocalKey local, FillMark mark, DateTimeOffset readStart, RoutePath path, string reason, bool fill)
+    private T? Hit(PathRead<T> read, LocalKey local, FillMark mark, DateTimeOffset readStart, RoutePath path, string reason, bool fill)
     {
         RouterTelemetry.CountRedisHit(_registration.Name, _registration.Group, path, reason);
-        var value = read.Value!;
+        var value = read.Value;
         var cap = _registration.LocalCap;
         if (fill && cap > TimeSpan.Zero)
         {
@@ -348,7 +391,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
             if (lifetime > TimeSpan.Zero)
             {
-                _core.Tier.TryFill(local, mark, _epoch, value, readStart + lifetime);
+                _core.Tier.TryFill(local, mark, _epoch, (object?)value ?? NullMarker, readStart + lifetime);
             }
         }
 
@@ -466,7 +509,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     /// <summary>Evict on this node and advance the mark; a write of unknown outcome stays off the local tier until it can no longer land, then does both again. The caller publishes once the key's lock is released.</summary>
     private void Settle(string key, WriteResult result, Route route, KeyState state, Announcement announcement)
     {
-        if (result.Outcome == WriteOutcome.NotSent)
+        if (result.Outcome is WriteOutcome.NotSent or Unchanged)
         {
             return;
         }
@@ -548,7 +591,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         _core.LogPublishFailed(_registration.Name);
     }
 
-    private readonly record struct Loaded(T? Value, Route Write);
+    private readonly record struct Loaded(T? Value, Route Write, bool Found = false);
 
     private sealed class Announcement
     {

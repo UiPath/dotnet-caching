@@ -42,6 +42,25 @@ internal sealed partial class MultilayerCache
         return sink.Outcome ?? StoreOutcome.NotSent;
     }
 
+    /// <summary>The answer of <c>TryAddAsync</c>, which keeps the local tier and the announcement: true is <see cref="AddOutcome.Added"/> and false <see cref="AddOutcome.Exists"/>, so a write the inner tier dropped also reads as present; a throw is <see cref="AddOutcome.Unknown"/>.</summary>
+    public async ValueTask<AddOutcome> TryCreateAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (token.IsCancellationRequested || (_sharedInner && GetInnerCacheDisconnected()))
+        {
+            return AddOutcome.NotSent;
+        }
+
+        try
+        {
+            return await TryAddAsync(cacheKey, value, expiration, policy, token).ConfigureAwait(false) ? AddOutcome.Added : AddOutcome.Exists;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException && !(ex is OperationCanceledException && token.IsCancellationRequested))
+        {
+            LogInnerCacheSetError(ex, Logged(cacheKey, typeof(T)));
+            return AddOutcome.Unknown;
+        }
+    }
+
     /// <summary>Awaits the store delete; the outcome is the inner tier's, and a failed announcement after a committed delete stays committed. An inner tier without <see cref="IMigrationCache"/> reports <see cref="StoreOutcome.Committed"/> for a true <c>RemoveAsync</c> and <see cref="StoreOutcome.Unknown"/> otherwise.</summary>
     public async ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {

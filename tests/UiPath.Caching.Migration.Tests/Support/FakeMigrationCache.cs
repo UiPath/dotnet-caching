@@ -32,9 +32,14 @@ internal sealed class FakeConnection : IConnectionState
 /// <summary>The library cache as a script: a read answers a value, a <see cref="SnapshotOutcome"/> or nothing (absent), and a write answers a <see cref="StoreOutcome"/>.</summary>
 internal sealed class FakeMigrationCache : IMigrationCache
 {
+    /// <summary>Returned by <see cref="Read"/> for a key that holds a cached null.</summary>
+    public static readonly object StoredNull = new();
+
     public Func<CacheKey, CancellationToken, Task<object?>> Read { get; set; } = (_, _) => Task.FromResult<object?>(null);
 
     public Func<CacheKey, CancellationToken, Task<StoreOutcome>> Write { get; set; } = (_, _) => Task.FromResult(StoreOutcome.Committed);
+
+    public Func<CacheKey, CancellationToken, Task<AddOutcome>> Create { get; set; } = (_, _) => Task.FromResult(AddOutcome.Added);
 
     public List<CacheKey> Keys { get; } = [];
 
@@ -44,6 +49,7 @@ internal sealed class FakeMigrationCache : IMigrationCache
         return await Read(cacheKey, token) switch
         {
             T typed => new SnapshotRead<T>(SnapshotOutcome.Found, new TestEntry<T>(typed, DateTimeOffset.UtcNow.AddMinutes(1))),
+            var stored when ReferenceEquals(stored, StoredNull) => new SnapshotRead<T>(SnapshotOutcome.Found, new TestEntry<T>(default, DateTimeOffset.UtcNow.AddMinutes(1))),
             SnapshotOutcome outcome => new SnapshotRead<T>(outcome, null),
             _ => new SnapshotRead<T>(SnapshotOutcome.Absent, null),
         };
@@ -53,6 +59,12 @@ internal sealed class FakeMigrationCache : IMigrationCache
     {
         Keys.Add(cacheKey);
         return await Write(cacheKey, token);
+    }
+
+    public async ValueTask<AddOutcome> TryCreateAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        Keys.Add(cacheKey);
+        return await Create(cacheKey, token);
     }
 
     public async ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default)
