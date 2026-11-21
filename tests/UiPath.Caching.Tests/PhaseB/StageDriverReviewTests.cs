@@ -120,6 +120,63 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task The_X11_legacy_purge_checks_the_guard_again_so_a_lease_taken_over_during_the_native_purge_stops_it()
+    {
+        await using var kit = await DriverKit.CreateAsync(fixture);
+        kit.Facts.AcceptRefill = true;
+        var (lease, key) = await LeaseAsync(kit);
+        kit.Fence = lease.Fence;
+        await kit.PrepareAsync();
+        await kit.StepUntilAsync("S3");
+        kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
+        kit.Mover.Census = new Dictionary<string, long> { ["a"] = 0 };
+        await kit.StepUntilAsync("S4");
+        await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "residue acknowledged", "op", CancellationToken.None);
+        await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
+        await kit.Commands.AbandonAsync(kit.Group, "cold start accepted", "op", CancellationToken.None);
+        await kit.StepUntilAsync("S0", "none");
+        kit.Fleet.All(n => n.Recycles = true);
+        kit.Data.AfterNativePurge = async () =>
+        {
+            await kit.Kit.Db.KeyDeleteAsync(key);
+            await new LeaderLease(kit.Kit.Scripts, key, kit.Kit.Options, kit.Kit.Time).TryHoldAsync();
+        };
+
+        await kit.StepAsync();
+
+        kit.Data.Calls.Should().Contain("purge_n").And.NotContain("purge_l");
+        kit.Alerts.Should().Contain(a => a.Code == "lease_lost");
+        (await kit.StateAsync()).Field(StateFields.ColdStart).Should().NotBeEmpty();
+        await kit.Kit.Db.KeyDeleteAsync(key);
+        lease.Token.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_lost_post_write_of_X9_blocks_the_release_until_a_complete_census_is_written_under_the_identity()
+    {
+        await using var kit = await DriverKit.CreateAsync(fixture);
+        await ToReverseMovingAsync(kit);
+        kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
+        var reverse = await kit.StepUntilAsync("S4", "rev");
+        await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Release, "no N residue", "op", CancellationToken.None);
+        await kit.Kit.Db.HashDeleteAsync(kit.Kit.StateKey, StateFields.ResidueId);
+        kit.Mover.Report = null;
+
+        for (var n = 0; n < 4; n++)
+        {
+            await kit.StepAsync();
+        }
+
+        (await kit.StateAsync()).State.Should().Be("S4", "no census, no release");
+        kit.Alerts.Should().Contain(("stage_pending", "release_census_pending"));
+
+        kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
+        await kit.StepAsync();
+        (await kit.StateAsync()).Field(StateFields.ResidueId).Should().Be(reverse.Id);
+        await kit.StepUntilAsync("S0", "none");
+    }
+
+    [Fact]
     public async Task A_resumed_X5_checks_the_views_again_before_step_4_and_is_abandoned_when_one_fell()
     {
         var options = new PhaseBStateOptions { ExpectedReplicasPerMaster = 1, BarrierWait = TimeSpan.FromMilliseconds(50), EvictionPolicyAttested = true };

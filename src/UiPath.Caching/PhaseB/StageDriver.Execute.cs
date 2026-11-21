@@ -204,7 +204,9 @@ internal sealed partial class StageDriver
     {
         if (spec.PostFields is { Count: > 0 } || spec.PostDelete is { Count: > 0 })
         {
-            await services.Scripts.FieldsAsync(services.Names.State(group), id, spec.PostFields ?? [], spec.PostDelete ?? [], Fence(group)).ConfigureAwait(false);
+            // The reverse census is evidence for the release only when it was written under the identity it was taken for.
+            IReadOnlyList<(string Field, string Value)> fields = spec.Code == "X9" ? [.. spec.PostFields ?? [], (StateFields.ResidueId, id)] : spec.PostFields ?? [];
+            await services.Scripts.FieldsAsync(services.Names.State(group), id, fields, spec.PostDelete ?? [], Fence(group)).ConfigureAwait(false);
         }
 
         if (spec.ReleaseClaim && token.Length > 0)

@@ -50,9 +50,11 @@ internal static partial class StepPlanner
         return new StepPlan(StepKind.Transit, new TransitionSpec("X9", "S4", "rev", 1, WayBack: true, PostFields: post, PostDelete: delete));
     }
 
-    // X10: after the stored release consent, N is swept and the group flips to S0. A census that differs from the stored counts is written first, and the consent then no longer covers it.
+    // X10: after the stored release consent, N is swept and the group flips to S0. The counts must have been written under this identity from a complete census of N, else X10 waits; a census that differs from them is written first, and the consent then no longer covers it.
     private static StepPlan FromReverseDrained(StepInput i, StepSide side) =>
-        side.Fields.Any(f => f.Field.StartsWith(StateFields.ResiduePrefix, StringComparison.Ordinal))
+        i.State.Field(StateFields.ResidueId) != i.State.Id
+            ? StepPlan.Wait("stage_pending", "release_census_pending")
+            : side.Fields.Any(f => f.Field.StartsWith(StateFields.ResiduePrefix, StringComparison.Ordinal))
             ? StepPlan.Wait("stage_pending", "release_census_changed")
             : i.State.CacheIds.Where(c => i.State.Residue is null || !i.State.Residue.ContainsKey(c)).ToArray() is { Length: > 0 } unknown
             ? StepPlan.Wait("stage_pending", $"release_residue_unknown:{string.Join(',', unknown)}")

@@ -7,7 +7,7 @@ namespace UiPath.Caching.Tests.PhaseB;
 public class StepPlannerReviewTests
 {
     private static readonly StateRecord ReverseMoving = State("S3", "rev", ep: 16, nPop: 1, caches: "a+b", prev: "S1:rev:1:15:id15", residue: new Dictionary<string, long> { ["a"] = 0, ["b"] = 0, ["gone"] = 7 });
-    private static readonly StateRecord ReverseDrained = State("S4", "rev", ep: 17, nPop: 1, caches: "a+b", prev: "S3:rev:1:16:id16");
+    private static readonly StateRecord ReverseDrained = State("S4", "rev", ep: 17, nPop: 1, caches: "a+b", prev: "S3:rev:1:16:id16").With((StateFields.ResidueId, "id17"));
     private static readonly StateRecord Moving = State("S3", ep: 13, nPop: 1, prev: "S2:fwd:0:12:id12");
 
     [Fact]
@@ -42,6 +42,39 @@ public class StepPlannerReviewTests
         (await StepPlanner.DecideAsync(Input(approved, mover: new FakeMoverStatus { Report = FakeMoverStatus.Drained(0, ("a", 0), ("b", 0)) }), Defaults)).Kind.Should().Be(StepKind.Transit, "the consent covers the counts a re-census finds");
         var stored = approved.With(("res:a", "4")) with { Residue = new Dictionary<string, long> { ["a"] = 4, ["b"] = 0 } };
         (await StepPlanner.DecideAsync(Input(stored, mover: reverseCensus), Defaults)).AlertList.Single().Detail.Should().Be("release_consent");
+    }
+
+    [Fact]
+    public async Task A_release_waits_when_the_post_write_of_X9_was_lost_even_with_complete_forward_counts_and_a_valid_consent()
+    {
+        var lost = (ReverseDrained with { Residue = new Dictionary<string, long> { ["a"] = 0, ["b"] = 0 } }).With((StateFields.ResidueId, "id9")).Approved(ApprovalKinds.Release);
+        var mover = new FakeMoverStatus();
+
+        var none = await StepPlanner.DecideAsync(Input(lost, mover: mover), Defaults);
+        none.Kind.Should().Be(StepKind.None);
+        none.AlertList.Should().ContainSingle().Which.Should().Be(new StageAlert("stage_pending", "release_census_pending"));
+        none.Fields.Should().BeEmpty("no report is no census");
+
+        mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
+        var partial = await StepPlanner.DecideAsync(Input(lost, mover: mover), Defaults);
+        partial.Kind.Should().Be(StepKind.None);
+        partial.Fields.Should().BeEmpty("a report that lacks a cache is not a complete census");
+
+        mover.Report = FakeMoverStatus.Drained(0, ("a", 0), ("b", 0));
+        var complete = await StepPlanner.DecideAsync(Input(lost, mover: mover), Defaults);
+        complete.Kind.Should().Be(StepKind.None, "the census is written under this identity first");
+        complete.Fields.Should().Contain((StateFields.ResidueId, "id17"));
+    }
+
+    [Fact]
+    public async Task A_release_runs_once_the_counts_carry_the_identity_marker_and_the_consent_covers_them()
+    {
+        var written = (ReverseDrained with { Residue = new Dictionary<string, long> { ["a"] = 2, ["b"] = 0 } }).Approved(ApprovalKinds.Release);
+        var mover = new FakeMoverStatus { Report = FakeMoverStatus.Drained(0, ("a", 2), ("b", 0)) };
+
+        var plan = await StepPlanner.DecideAsync(Input(written, mover: mover), Defaults);
+
+        plan.Spec!.Code.Should().Be("X10");
     }
 
     [Theory]

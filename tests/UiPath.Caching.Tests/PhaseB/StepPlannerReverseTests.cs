@@ -11,7 +11,7 @@ public class StepPlannerReverseTests
     private static readonly StateRecord Drained = State("S4", ep: 14, nPop: 1, prev: "S3:fwd:1:13:id13");
     private static readonly StateRecord ReverseReady = State("S1", "rev", ep: 15, nPop: 1, prev: "S4:fwd:1:14:id14");
     private static readonly StateRecord ReverseMoving = State("S3", "rev", ep: 16, nPop: 1, prev: "S1:rev:1:15:id15");
-    private static readonly StateRecord ReverseDrained = State("S4", "rev", ep: 17, nPop: 1, prev: "S3:rev:1:16:id16");
+    private static readonly StateRecord ReverseDrained = State("S4", "rev", ep: 17, nPop: 1, prev: "S3:rev:1:16:id16").With((StateFields.ResidueId, "id17"));
 
     [Fact]
     public async Task X6_returns_S1_or_S2_to_S0_once_a_lower_view_persisted_and_releases_the_claim_of_a_group_that_holds_one()

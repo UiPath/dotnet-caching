@@ -39,10 +39,9 @@ internal static partial class StepPlanner
             fields.Add((StateFields.CanaryAt, Number(i.Now.ToUnixTimeMilliseconds())));
         }
 
-        if (state is { State: "S4", Direction: "rev" } && await i.Drain().ConfigureAwait(false) is { } census)
+        if (state is { State: "S4", Direction: "rev" })
         {
-            // A new census of N changes the evidence the release consent covers, so the consent is void.
-            fields.AddRange(ResidueFields(state, census.Residue).Set.Where(f => state.Residue is not { } held || !held.TryGetValue(f.Field[StateFields.ResiduePrefix.Length..], out var count) || Number(count) != f.Value));
+            await RepairReverseAsync(i, fields).ConfigureAwait(false);
         }
 
         var hold = state.HoldOp.Length > 0 ? $"op:{state.HoldOp}" : state.HoldAuto.Length > 0 && !clear ? $"auto:{state.HoldAuto}" : set is null ? null : $"auto:{set}";
@@ -93,6 +92,22 @@ internal static partial class StepPlanner
         {
             var census = await i.ResidueCensus().ConfigureAwait(false);
             fields.AddRange(missing.Select(c => (StateFields.ResiduePrefix + c, Number(census.GetValueOrDefault(c)))));
+        }
+    }
+
+    // The residue of a reverse S4 is the census of N under this identity. A complete report is written with the identity marker (a changed count voids the consent); a missing or incomplete one is no evidence and writes nothing.
+    private static async Task RepairReverseAsync(StepInput i, List<(string, string)> fields)
+    {
+        var state = i.State;
+        if (await i.Drain().ConfigureAwait(false) is not { } census || state.CacheIds.Any(c => !census.Residue.ContainsKey(c)))
+        {
+            return;
+        }
+
+        fields.AddRange(ResidueFields(state, census.Residue).Set.Where(f => state.Residue is not { } held || !held.TryGetValue(f.Field[StateFields.ResiduePrefix.Length..], out var count) || Number(count) != f.Value));
+        if (state.Field(StateFields.ResidueId) != state.Id)
+        {
+            fields.Add((StateFields.ResidueId, state.Id));
         }
     }
 }

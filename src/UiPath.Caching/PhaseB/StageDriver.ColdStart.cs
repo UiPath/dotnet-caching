@@ -51,7 +51,14 @@ internal sealed partial class StageDriver
         }
 
         await services.Data.PurgeNativeAsync(group, guard, cancellationToken).ConfigureAwait(false);
-        await services.Data.PurgeLegacyAsync(group, guard, cancellationToken).ConfigureAwait(false);
+
+        // The lease may have been taken over while N was purged, so the guard is checked again for L.
+        if (await GuardAsync(group, state.Id).ConfigureAwait(false) is not { } legacyGuard)
+        {
+            return null;
+        }
+
+        await services.Data.PurgeLegacyAsync(group, legacyGuard, cancellationToken).ConfigureAwait(false);
         var key = services.Names.State(group);
         if (marker != NoClaim)
         {

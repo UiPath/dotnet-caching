@@ -13,6 +13,9 @@ internal sealed class FakeGroupData : IGroupDataOps
     // Runs once, after the first census that found a key: a state that moves, or a lease that is lost, between the census and the purge.
     public Func<Task>? AfterFirstCount { get; set; }
 
+    // Runs once, at the end of the first native purge: a lease taken over while N was being deleted.
+    public Func<Task>? AfterNativePurge { get; set; }
+
     public List<DataGuard> Guards { get; } = [];
 
     public async Task<long> CountNativeAsync(string group, CancellationToken cancellationToken)
@@ -28,7 +31,7 @@ internal sealed class FakeGroupData : IGroupDataOps
         return found;
     }
 
-    public Task PurgeNativeAsync(string group, DataGuard guard, CancellationToken cancellationToken)
+    public async Task PurgeNativeAsync(string group, DataGuard guard, CancellationToken cancellationToken)
     {
         Calls.Add("purge_n");
         Guards.Add(guard);
@@ -37,7 +40,11 @@ internal sealed class FakeGroupData : IGroupDataOps
             Native = 0;
         }
 
-        return Task.CompletedTask;
+        if (AfterNativePurge is { } hook)
+        {
+            AfterNativePurge = null;
+            await hook();
+        }
     }
 
     public Task PurgeLegacyAsync(string group, DataGuard guard, CancellationToken cancellationToken)
