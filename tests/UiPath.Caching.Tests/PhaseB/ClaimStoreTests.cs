@@ -21,7 +21,7 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
     {
         if (fixture.Enabled)
         {
-            _mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+            _mux = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
         }
     }
 
@@ -189,6 +189,31 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
         finally
         {
             await config.ConfigSetAsync("notify-keyspace-events", before);
+        }
+    }
+
+    [Fact]
+    public async Task A_durable_step_for_a_user_denied_scripts_finds_the_cause_of_the_discarded_transaction_and_takes_the_bound_fallback()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var user = $"claimnoscript{Guid.NewGuid():N}"[..24];
+        var acl = _mux!.GetServer(_mux.GetEndPoints()[0]);
+        await acl.ExecuteAsync("ACL", "SETUSER", user, "on", ">claimpw", "~*", "&*", "+@all", "-@scripting");
+        try
+        {
+            await using var denied = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},user={user},password=claimpw,allowAdmin=true");
+            var store = new ClaimStore(denied.GetDatabase(), _key, useScripts: true, fixture.ServerVersion);
+
+            var result = await store.OpenAsync("rt:a", T1, "rt", restore: true);
+
+            result.Code.Should().Be(1);
+            result.Durability.Should().BeOneOf([ClaimDurability.Confirmed, ClaimDurability.NoReplica], "the fallback's transaction is bound like the script's");
+            store.UsesScripts.Should().BeFalse("the EXECABORT was traced to the refused script");
+            (await Db.HashGetAsync(_key, "rt:a")).Should().Be($"open|{T1}|rt|");
+        }
+        finally
+        {
+            await acl.ExecuteAsync("ACL", "DELUSER", user);
         }
     }
 

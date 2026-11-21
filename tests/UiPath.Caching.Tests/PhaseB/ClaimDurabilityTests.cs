@@ -18,7 +18,7 @@ public sealed class ClaimDurabilityTests
     public async Task A_replica_that_cannot_acknowledge_leaves_the_step_unconfirmed_after_the_retries()
     {
         Assert.SkipUnless(Master is not null && Replica is not null, "Set REDIS_CONNECTION_STRING and CLAIM_REPLICA_CONNECTION_STRING to run.");
-        await using var master = await ConnectionMultiplexer.ConnectAsync(Master!);
+        await using var master = await ConnectionMultiplexer.ConnectAsync($"{Master},allowAdmin=true");
         await using var replica = await ConnectionMultiplexer.ConnectAsync($"{Replica},allowAdmin=true,syncTimeout=10000");
         var db = master.GetDatabase();
         var key = (RedisKey)$"claimtest:mx:{{{Guid.NewGuid():N}}}";
@@ -50,8 +50,8 @@ public sealed class ClaimDurabilityTests
     public async Task A_repeat_on_a_fresh_connection_writes_again_so_its_wait_is_not_vacuous(bool scripts)
     {
         Assert.SkipUnless(Master is not null && Replica is not null, "Set REDIS_CONNECTION_STRING and CLAIM_REPLICA_CONNECTION_STRING to run.");
-        await using var first = await ConnectionMultiplexer.ConnectAsync(Master!);
-        await using var fresh = await ConnectionMultiplexer.ConnectAsync($"{Master},syncTimeout=10000");
+        await using var first = await ConnectionMultiplexer.ConnectAsync($"{Master},allowAdmin=true");
+        await using var fresh = await ConnectionMultiplexer.ConnectAsync($"{Master},allowAdmin=true,syncTimeout=10000");
         await using var replica = await ConnectionMultiplexer.ConnectAsync($"{Replica},allowAdmin=true,syncTimeout=10000");
         var key = (RedisKey)$"claimtest:mx:{{{Guid.NewGuid():N}}}";
         try
@@ -77,7 +77,7 @@ public sealed class ClaimDurabilityTests
     public async Task CertifyClaim_reports_a_step_that_wait_did_not_confirm()
     {
         Assert.SkipUnless(Master is not null && Replica is not null, "Set REDIS_CONNECTION_STRING and CLAIM_REPLICA_CONNECTION_STRING to run.");
-        await using var master = await ConnectionMultiplexer.ConnectAsync($"{Master},syncTimeout=10000");
+        await using var master = await ConnectionMultiplexer.ConnectAsync($"{Master},allowAdmin=true,syncTimeout=10000");
         await using var replica = await ConnectionMultiplexer.ConnectAsync($"{Replica},allowAdmin=true,syncTimeout=10000");
         var db = master.GetDatabase();
         var key = (RedisKey)$"claimtest:mx:{{{Guid.NewGuid():N}}}";
@@ -97,6 +97,50 @@ public sealed class ClaimDurabilityTests
         {
             await db.KeyDeleteAsync(key);
         }
+    }
+
+    [Fact]
+    public async Task A_reconnect_between_the_write_and_the_wait_is_caught_by_the_server_and_the_write_is_sent_again()
+    {
+        Assert.SkipUnless(Master is not null && Replica is not null, "Set REDIS_CONNECTION_STRING and CLAIM_REPLICA_CONNECTION_STRING to run.");
+        await using var claim = await ConnectionMultiplexer.ConnectAsync($"{Master},allowAdmin=true,syncTimeout=10000");
+        await using var admin = await ConnectionMultiplexer.ConnectAsync($"{Master},allowAdmin=true");
+        var key = (RedisKey)$"claimtest:mx:{{{Guid.NewGuid():N}}}";
+        var real = claim.GetServer(claim.GetEndPoints()[0]);
+        var waits = 0;
+
+        // The first WAIT runs only after its connection was killed and replaced: on the new connection it would count a vacuous offset.
+        var server = InterceptingProxy.Wrap(real, (method, args) =>
+            method.Name == nameof(IServer.ExecuteAsync) && args[0] is "WAIT" && Interlocked.Increment(ref waits) == 1 ? KillThenWaitAsync(real, admin, (object[])args[1]!) : InterceptingProxy.Proceed);
+        var mux = InterceptingProxy.Wrap<IConnectionMultiplexer>(claim, (method, _) => method.Name == nameof(IConnectionMultiplexer.GetServer) ? server : InterceptingProxy.Proceed);
+        var db = InterceptingProxy.Wrap(claim.GetDatabase(), (method, _) => method.Name == "get_Multiplexer" ? mux : InterceptingProxy.Proceed);
+        try
+        {
+            var result = await new ClaimStore(db, key, useScripts: true, new Version(7, 4)).OpenAsync("rt:a", T1, "rt", restore: true);
+
+            result.Should().Be(new ClaimResult(1, ClaimDurability.Confirmed));
+            waits.Should().Be(2, "the first WAIT ran on another connection than the write, so the write and WAIT ran again");
+        }
+        finally
+        {
+            await admin.GetDatabase().KeyDeleteAsync(key);
+        }
+    }
+
+    private static async Task<RedisResult> KillThenWaitAsync(IServer real, IConnectionMultiplexer admin, object[] args)
+    {
+        var id = (long)await real.ExecuteAsync("CLIENT", "ID");
+        await admin.GetServer(admin.GetEndPoints()[0]).ExecuteAsync("CLIENT", "KILL", "ID", id);
+        await Task.Run(
+            async () =>
+            {
+                while ((long)await real.ExecuteAsync("CLIENT", "ID") == id)
+                {
+                    await Task.Delay(20, TestContext.Current.CancellationToken);
+                }
+            },
+            TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        return await real.ExecuteAsync("WAIT", args);
     }
 
     private sealed class TerminalEvidence : IClaimEvidence
