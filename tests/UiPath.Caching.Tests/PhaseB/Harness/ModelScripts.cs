@@ -368,6 +368,7 @@ internal static class ModelScripts
         });
 
     // fenceNonce null: a Src-side hash script, which only checks the control record.
+    // HINCRBY fails on a non-integer and past long.MaxValue; the script's pcall leaves the counter as it was and HSETC answers 0.
     public static long HSetC(ShardStore s, long now, string key, string ctl, string id, bool replaceKey, long expireAt, string? dropField, string? versionField, long versionSeed, string? fenceKey, string? fenceNonce, long fenceTtl, IReadOnlyList<KeyValuePair<string, string>> entries, ModelFaults f) =>
         s.Scripted(() =>
         {
@@ -404,7 +405,7 @@ internal static class ModelScripts
                     s.HSet(key, versionField, versionSeed.ToString(CultureInfo.InvariantCulture));
                 }
 
-                if (long.TryParse(s.HGet(key, versionField), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n))
+                if (long.TryParse(s.HGet(key, versionField), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n != long.MaxValue)
                 {
                     s.HSet(key, versionField, (n + 1).ToString(CultureInfo.InvariantCulture));
                     result = n + 1;
@@ -447,7 +448,7 @@ internal static class ModelScripts
                     s.HSet(key, versionField, versionSeed.ToString(CultureInfo.InvariantCulture));
                 }
 
-                if (long.TryParse(s.HGet(key, versionField), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n))
+                if (long.TryParse(s.HGet(key, versionField), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n != long.MaxValue)
                 {
                     s.HSet(key, versionField, (n + 1).ToString(CultureInfo.InvariantCulture));
                 }

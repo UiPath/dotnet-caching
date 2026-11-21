@@ -10,6 +10,8 @@ internal sealed class Oracle
     private const byte MutationEnd = 1;
     private const byte ReadStart = 2;
     private const byte Void = 4;
+    private const byte Disturbance = 5;
+    private const byte Abort = 6;
 
     private readonly ImmutableArray<KeySpec> _keys;
     private readonly KeyLog[] _logs;
@@ -72,13 +74,17 @@ internal sealed class Oracle
 
     public void DropRead(int key, int readId) => _logs[key].Events.Remove((ReadStart, readId));
 
-    public void Disturb(int key) => _logs[key].Disturbed = true;
+    // A call that gave up: its interval ends, but it deleted or wrote nothing that a later read must reflect.
+    public void AbortMutation(int key, int id) => _logs[key].Events.Add((Abort, id));
+
+    // The key may have lost its value (evicted, expired): misses are excused until a mutation that starts after this completes.
+    public void Disturb(int key) => _logs[key].Events.Add((Disturbance, 0));
 
     // A failover lost writes: mutations that completed before it no longer constrain later reads.
     public void Lose(int key)
     {
-        _logs[key].Disturbed = true;
         _logs[key].Events.Add((Void, 0));
+        _logs[key].Events.Add((Disturbance, 0));
     }
 
     public void NoteDeadline(string version, long expireAt) => _deadlines[version] = expireAt;
@@ -110,13 +116,15 @@ internal sealed class Oracle
         }
 
         var maximal = completed.Where(m => !Superseded(m)).ToList();
-        if (log.Disturbed || maximal.Count == 0 || maximal.Any(m => log.Values[m] is null))
+        var lastDisturbance = log.Events.FindLastIndex(e => e.Kind == Disturbance);
+        var excused = lastDisturbance >= 0 && !Enumerable.Range(0, log.Values.Count).Any(m => log.Values[m] is not null && log.Start(m) > lastDisturbance && log.End(m) >= 0 && log.End(m) < start);
+        if (excused || maximal.Count == 0 || maximal.Any(m => log.Values[m] is null))
         {
             return null;
         }
 
         var overlapping = Enumerable.Range(0, log.Values.Count)
-            .Where(m => log.Start(m) >= 0 && !(log.End(m) >= 0 && log.End(m) < start))
+            .Where(m => log.Start(m) >= 0 && !(log.End(m) >= 0 && log.End(m) < start) && !(log.AbortedAt(m) >= 0 && log.AbortedAt(m) < start))
             .ToList();
         var deleting = overlapping.Any(m => log.Values[m] is null);
         var overwriting = overlapping.Count > 0;
@@ -158,7 +166,6 @@ internal sealed class Oracle
     {
         foreach (var log in _logs)
         {
-            hasher.Add(log.Disturbed ? "d" : "-");
             foreach (var v in log.Values)
             {
                 hasher.Add(v);
@@ -183,12 +190,12 @@ internal sealed class Oracle
 
         public List<(byte Kind, int Id)> Events { get; init; } = [];
 
-        public bool Disturbed { get; set; }
-
-        public KeyLog Clone() => new() { Values = [.. Values], Events = [.. Events], Disturbed = Disturbed };
+        public KeyLog Clone() => new() { Values = [.. Values], Events = [.. Events] };
 
         public int Start(int m) => Events.IndexOf((MutationStart, m));
 
         public int End(int m) => Events.IndexOf((MutationEnd, m));
+
+        public int AbortedAt(int m) => Events.IndexOf((Oracle.Abort, m));
     }
 }

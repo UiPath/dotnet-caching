@@ -62,6 +62,8 @@ internal static class ConformanceScenarios
         ["HSETC under another identity"] = [Setup, PutH("src", "x=1"), new(HSetC) { Fields = "a=1", Id = "other" }],
         ["HSETC on a string key"] = [Setup, PutS("src", "x"), new(HSetC) { Fields = "a=1" }],
         ["HDELC deletes fields and drops a lone count"] = [Setup, PutH("src", "a=1;b=2;ver=3"), new(HDelC) { Fields = "a=", VersionField = "ver" }, new(HDelC) { Fields = "b=", VersionField = "ver" }],
+        ["HSETC leaves a counter at its maximum and answers 0"] = [Setup, PutH("src", "a=1;ver=9223372036854775807"), new(HSetC) { Fields = "a=2", VersionField = "ver" }],
+        ["HDELC leaves a counter at its maximum"] = [Setup, PutH("src", "a=1;b=2;ver=9223372036854775807"), new(HDelC) { Fields = "a=", VersionField = "ver" }],
         ["HEXPC sets and clears an expiry"] = [Setup, PutH("src", "a=1"), new(HExpC) { AtOffset = 60_000, WithFence = true, Nonce = "e1" }, new(HExpC), new(Delete) { Key = "src" }, new(HExpC) { AtOffset = 60_000 }],
         ["with no record every script refuses"] = [PutS("src", "x"), new(SrcDel), new(SrcSet), new(CmpDel) { Value = "x" }, new(Bump) { Op = "del" }, new(Fill), new(Gate), new(HExpC), new(Pub) { Token = "t" }],
     };

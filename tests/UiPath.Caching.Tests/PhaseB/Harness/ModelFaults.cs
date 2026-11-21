@@ -37,6 +37,8 @@ internal sealed record ModelFaults
 
     public bool LsweptWithoutConfirm { get; init; }
 
+    public bool LsweptWithoutWait { get; init; }
+
     // Not in the T-B2 list: the S1 read of a no-origin cache that returns an L miss without confirming the control identity (3.2a, S1 and S2).
     public bool S1MissWithoutIdentityCheck { get; init; }
 

@@ -22,6 +22,9 @@ internal sealed record WriteActor(string Name, int Node, int Key, ImmutableArray
 
     public int Seq { get; init; }
 
+    // True once a step of this call committed: a call that gives up after that may have changed the key.
+    public bool Touched { get; init; }
+
     public override int Choices(World w)
     {
         if (Done)
@@ -52,9 +55,17 @@ internal sealed record WriteActor(string Name, int Node, int Key, ImmutableArray
             w.Nodes[Node] = w.Auth;
             var unit = w.Auth;
             var plan = PlanOf(w, spec, unit, op);
-            return Reruns + 1 > 3 || plan.Length == 0
-                ? this with { Done = true }
-                : this with { Rerunning = false, Reruns = Reruns + 1, Unit = unit, Plan = plan, Pc = 0 };
+            if (Reruns + 1 > 3 || plan.Length == 0)
+            {
+                if (!Touched)
+                {
+                    w.Oracle.AbortMutation(Key, MutationId);
+                }
+
+                return this with { Done = true };
+            }
+
+            return this with { Rerunning = false, Reruns = Reruns + 1, Unit = unit, Plan = plan, Pc = 0 };
         }
 
         var self = this;
@@ -83,7 +94,7 @@ internal sealed record WriteActor(string Name, int Node, int Key, ImmutableArray
 
         if (self.Pc + 1 < self.Plan.Split(',').Length)
         {
-            return self with { Pc = self.Pc + 1, Seq = self.Seq + 1 };
+            return self with { Pc = self.Pc + 1, Seq = self.Seq + 1, Touched = true };
         }
 
         w.Oracle.EndMutation(Key, self.MutationId);
@@ -124,7 +135,7 @@ internal sealed record WriteActor(string Name, int Node, int Key, ImmutableArray
     }
 
     private WriteActor Advance(WriteActor done) =>
-        OpIndex + 1 < Ops.Length ? done with { OpIndex = OpIndex + 1, Pc = 0, Unit = null, MutationId = -1, Plan = string.Empty, Reruns = 0 } : done with { Done = true };
+        OpIndex + 1 < Ops.Length ? done with { OpIndex = OpIndex + 1, Pc = 0, Unit = null, MutationId = -1, Plan = string.Empty, Reruns = 0, Touched = false } : done with { Done = true };
 
     private long Execute(World w, KeySpec spec, WriterOp op, string step)
     {

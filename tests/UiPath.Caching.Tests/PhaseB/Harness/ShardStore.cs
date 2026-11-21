@@ -160,7 +160,7 @@ internal sealed class ShardStore
     }
 
     // A failover: the new master lacks the last write scripts. Control records are not rolled back (the state machine's own fault model covers them).
-    public int Failover(int lost)
+    public int Failover(int lost, long now)
     {
         var n = Math.Min(lost, Past.Count);
         if (n == 0)
@@ -181,6 +181,9 @@ internal sealed class ShardStore
         }
 
         Past.RemoveRange(Past.Count - n, n);
+
+        // The image is older than now: what expired since is gone on the new master too.
+        Expire(now);
         return n;
     }
 

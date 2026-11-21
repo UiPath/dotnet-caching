@@ -25,7 +25,7 @@ internal sealed record SweepActor(string Name, int Node, int Key, int AdoptNode)
             case 0:
                 ModelScripts.SrcDel(w.L, spec.L, Control, self.Unit!.Id, faults);
                 self.Note(w, "sweeps the residue");
-                return self with { Pc = faults.LsweptWithoutConfirm ? 3 : 1 };
+                return self with { Pc = faults.LsweptWithoutConfirm ? 2 : 1 };
             case 1:
                 // The confirming pass runs on the master and deletes what a failover brought back.
                 if (w.L.Exists(spec.L) && self.Rounds < 3)
@@ -37,13 +37,17 @@ internal sealed record SweepActor(string Name, int Node, int Key, int AdoptNode)
                 return self with { Pc = 2, Seen = w.LFailovers };
             case 2:
                 // A failover seen since the pass restarts it: the WAIT is on a connection that no longer holds the deletes.
-                if (w.LFailovers != self.Seen && self.Rounds < 3)
+                if (!faults.LsweptWithoutConfirm && !faults.LsweptWithoutWait && w.LFailovers != self.Seen && self.Rounds < 3)
                 {
                     return self with { Pc = 1, Rounds = self.Rounds + 1 };
                 }
 
-                w.L.Past.Clear();
-                self.Note(w, "waits for the L replicas");
+                if (!faults.LsweptWithoutWait)
+                {
+                    w.L.Past.Clear();
+                    self.Note(w, "waits for the L replicas");
+                }
+
                 return self with { Pc = 3 };
             case 3:
                 if (w.Auth.Id == self.Unit!.Id)

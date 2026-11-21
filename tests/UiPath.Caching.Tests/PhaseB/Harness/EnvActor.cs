@@ -78,7 +78,7 @@ internal sealed record EnvActor(string Name, string Kind, int Key, ImmutableArra
             w.LFailovers++;
         }
 
-        if (shard.Failover(int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture)) > 0)
+        if (shard.Failover(int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture), w.Now) > 0)
         {
             for (var i = 0; i < w.Config.Keys.Length; i++)
             {

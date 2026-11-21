@@ -15,6 +15,9 @@ internal sealed record ClearActor(string Name, int Node, string Cid) : Actor(Nam
 
     public string Mutations { get; init; } = string.Empty;
 
+    // True once the sweep ran: a call that gives up after that may have deleted something.
+    public bool Swept { get; init; }
+
     public override int Choices(World w) => Done ? 0 : 1;
 
     public override Actor Step(World w, int choice)
@@ -33,12 +36,12 @@ internal sealed record ClearActor(string Name, int Node, string Cid) : Actor(Nam
         switch (self.Pc)
         {
             case 0:
-                return ModelScripts.Gate(w.L, Control, id, Cid, closed, string.Empty) == 1 ? self.To(1) : self.Fail();
+                return ModelScripts.Gate(w.L, Control, id, Cid, closed, string.Empty) == 1 ? self.To(1) : self.Fail(w);
             case 1:
                 return ModelScripts.Gate(w.N, Control, id, Cid, closed, string.Empty) == 1 ? self.To(2) : self.To(8);
             case 2:
                 w.L.Scripted(() => keys.ForEach(p => w.L.Remove(p.k.L)));
-                return self.To(3);
+                return (self with { Swept = true }).To(3);
             case 3:
                 w.N.Scripted(() => keys.ForEach(p => w.N.Remove(p.k.N)));
                 return self.To(4);
@@ -66,11 +69,27 @@ internal sealed record ClearActor(string Name, int Node, string Cid) : Actor(Nam
                 return self.To(9);
             default:
                 ModelScripts.Gate(w.N, Control, id, Cid, $"OPEN:{Name}.a{self.Seq}", closed);
-                return self with { Done = true };
+                return self.Fail(w);
         }
     }
 
     private ClearActor To(int pc) => this with { Pc = pc };
 
-    private ClearActor Fail() => this with { Done = true };
+    private ClearActor Fail(World w) => Gave(w) with { Done = true };
+
+    private ClearActor Gave(World w)
+    {
+        if (Swept)
+        {
+            return this;
+        }
+
+        foreach (var m in Mutations.Split(','))
+        {
+            var parts = m.Split(':');
+            w.Oracle.AbortMutation(int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture), int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        return this;
+    }
 }

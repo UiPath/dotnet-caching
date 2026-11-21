@@ -139,6 +139,19 @@ public class FenceAndControlModelTests
         s.Exists(Ctl).Should().BeFalse("a refused script never creates the record");
     }
 
+    [Fact]
+    public void A_failover_does_not_restore_an_entry_that_has_expired()
+    {
+        var (s, _) = Store();
+        s.Scripted(() => s.Put(Fence, Entry.Str("old", 50)));
+        s.Scripted(() => s.Put(Dst, Entry.Str("v")));
+
+        s.Failover(1, 60).Should().Be(1);
+
+        s.Exists(Fence).Should().BeFalse("the before-image held a fence that expired at 50");
+        s.Exists(Dst).Should().BeFalse("the lost write is gone");
+    }
+
     private static (ShardStore Store, string Gate) Store()
     {
         var s = new ShardStore();
