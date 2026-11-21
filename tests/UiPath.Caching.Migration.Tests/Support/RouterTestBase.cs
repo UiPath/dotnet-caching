@@ -59,9 +59,12 @@ public abstract class RouterTestBase : IAsyncDisposable
         Func<LibraryParts>? lazyLibrary = null,
         Func<CancellationToken, Task<LibraryParts>>? lazyLibraryAsync = null,
         TimeSpan? startBound = null,
-        TimeSpan? cleanupBound = null)
+        TimeSpan? cleanupBound = null,
+        Func<string, bool>? pinWhen = null,
+        IPinStore? pinStore = null,
+        string? scope = null)
     {
-        var node = TestNode.Create(Bus, Clock, Store, cacheName ?? CacheName, useLibrary, localCap, pendingWindow, defaultExpiry: defaultExpiry, sharedCore: sharing?.Core, library: library, bypass: bypass, sourceTimeout: sourceTimeout, lazyLibrary: lazyLibrary, lazyLibraryAsync: lazyLibraryAsync, startBound: startBound, cleanupBound: cleanupBound);
+        var node = TestNode.Create(Bus, Clock, Store, cacheName ?? CacheName, useLibrary, localCap, pendingWindow, defaultExpiry: defaultExpiry, sharedCore: sharing?.Core, library: library, bypass: bypass, sourceTimeout: sourceTimeout, lazyLibrary: lazyLibrary, lazyLibraryAsync: lazyLibraryAsync, startBound: startBound, cleanupBound: cleanupBound, pinWhen: pinWhen, pinStore: pinStore, scope: scope);
         _nodes.Add(node);
         return node;
     }

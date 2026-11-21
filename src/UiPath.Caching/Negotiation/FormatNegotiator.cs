@@ -17,6 +17,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
     public const string ReasonTransportUnknown = "transport_unknown";
     public const string ReasonUnaccountedSubscriber = "unaccounted_subscriber";
     public const string ReasonSubscriberDeficit = "subscriber_deficit";
+    public const string ReasonGated = "format_gate";
 
     // Not a reason to fall back: the Pub/Sub count has not yet shown the same thing twice, so a format in use stays and one not in use waits.
     private const string ReasonSettling = "settling";
@@ -27,6 +28,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
     private readonly TimeProvider _clock;
     private readonly ICachingTelemetryProvider _telemetry;
     private readonly ILogger _logger;
+    private readonly IFormatWriteGate? _writeGate;
     private readonly Lock _gate = new();
     private readonly long?[] _candidateSince;
     private readonly bool[] _suspended;
@@ -46,9 +48,11 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         TimeProvider clock,
         ICachingTelemetryProvider? telemetry = null,
         ILogger? logger = null,
-        DesiredEvents? events = null)
+        DesiredEvents? events = null,
+        IFormatWriteGate? writeGate = null)
     {
         options.Validate();
+        _writeGate = writeGate;
         _slots = [.. desired.Select(d => new Slot(d.Writer, d.Tokens, d.Policies, d.Others)), .. events is null ? [] : new[] { new Slot(null, events.Tokens, [], []) }];
         _eventSlot = events is null ? -1 : _slots.Length - 1;
         _options = options;
@@ -81,7 +85,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             if (ReferenceEquals(writers[i].Writer, writer))
             {
                 // A view that stopped refreshing, without failing, decays on its own: the age is checked here, off the cached stamp and the injected clock.
-                return writers[i].Allowed && _clock.GetElapsedTime(snapshot.Stamp) <= _options.MaxViewAge;
+                return writers[i].Allowed && _clock.GetElapsedTime(snapshot.Stamp) <= _options.MaxViewAge && (_writeGate is null || _writeGate.Hold() is null);
             }
         }
 
@@ -184,6 +188,12 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         if (view.Ads.Any(stored => Unreadable(want, stored.Advertisement)))
         {
             return ReasonMissingFormat;
+        }
+
+        // An outside condition on the format, asked on every view and again on every write, so a gate that closes stops writes at once and one that opens still waits out the hold.
+        if (!want.IsEvent && _writeGate?.Hold() is not null)
+        {
+            return ReasonGated;
         }
 
         var attested = _options.AssumeAllNodesCanRead;

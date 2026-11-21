@@ -402,6 +402,79 @@ public class FormatNegotiatorTests
         best.Should().Be(0);
     }
 
+    [Fact]
+    public void A_closed_gate_holds_a_format_every_node_reads()
+    {
+        var gate = new FakeGate("not_ready");
+        var sut = Negotiator(gate);
+
+        Settle(sut, View(Node("a", Binary), Node("b", Binary)));
+
+        sut.Allows(_writer).Should().BeFalse();
+        _telemetry.Metrics.Should().NotContain(m => m.Name == Metrics.FormatFallback, "it was never written, so there is nothing to fall back from");
+    }
+
+    [Fact]
+    public void An_open_gate_still_waits_out_the_hold_after_it_opens()
+    {
+        var gate = new FakeGate("not_ready");
+        var sut = Negotiator(gate);
+        var view = View(Node("a", Binary));
+        Settle(sut, view);
+        gate.Reason = null;
+
+        sut.Observe(view);
+        sut.Allows(_writer).Should().BeFalse("the hold starts when the gate opens");
+        _clock.Advance(_options.UpgradeHold);
+        sut.Observe(view);
+
+        sut.Allows(_writer).Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_gate_that_closes_stops_writes_at_once_without_a_new_view_and_reopening_restarts_the_hold()
+    {
+        var gate = new FakeGate(null);
+        var sut = Negotiator(gate);
+        var view = View(Node("a", Binary));
+        Settle(sut, view);
+        sut.Allows(_writer).Should().BeTrue();
+
+        gate.Reason = "node_without_pin";
+
+        sut.Allows(_writer).Should().BeFalse();
+        sut.Observe(view);
+        _telemetry.Metrics.Should().Contain(m => m.Name == Metrics.FormatFallback && m.Properties!["reason"] == FormatNegotiator.ReasonGated);
+        gate.Reason = null;
+        sut.Observe(view);
+        sut.Allows(_writer).Should().BeFalse();
+        _clock.Advance(_options.UpgradeHold);
+        sut.Observe(view);
+        sut.Allows(_writer).Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_decision_behind_an_open_gate_is_read_without_allocating()
+    {
+        var sut = Negotiator(new FakeGate(null));
+        Settle(sut, View(Node("a", Binary)));
+        sut.Allows(_writer).Should().BeTrue();
+
+        var best = long.MaxValue;
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 10_000; i++)
+            {
+                _ = sut.Allows(_writer);
+            }
+
+            best = Math.Min(best, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+
+        best.Should().Be(0);
+    }
+
     private static (string Id, NodeAdvertisement Ad) Node(string id, string[] formats, IReadOnlyDictionary<string, IReadOnlyList<string>>? strict = null, string? instance = null) =>
         (id, new("3.2.0", instance ?? id, ["json", .. formats], strict ?? new Dictionary<string, IReadOnlyList<string>>()));
 
@@ -413,10 +486,20 @@ public class FormatNegotiatorTests
     private FormatNegotiator Negotiator(string[]? policies = null, string[]? others = null) =>
         new([new DesiredWrite(_writer, Binary, policies ?? ["default"], others ?? [])], _options, _clock, _telemetry);
 
+    private FormatNegotiator Negotiator(IFormatWriteGate gate) =>
+        new([new DesiredWrite(_writer, Binary, ["default"], [])], _options, _clock, _telemetry, writeGate: gate);
+
     private void Settle(FormatNegotiator sut, NodeListView view)
     {
         sut.Observe(view);
         _clock.Advance(_options.UpgradeHold);
         sut.Observe(view);
     }
+}
+
+file sealed class FakeGate(string? reason) : IFormatWriteGate
+{
+    public string? Reason { get; set; } = reason;
+
+    public string? Hold() => Reason;
 }
