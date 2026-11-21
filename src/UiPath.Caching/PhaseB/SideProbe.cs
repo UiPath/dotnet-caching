@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using StackExchange.Redis;
@@ -11,22 +10,26 @@ namespace UiPath.Caching.PhaseB;
 /// Each master is probed for hash commands, scripts, a watched transaction, replicas, WAIT and eviction policy. The script and the transaction run every
 /// command the move uses on disposable keys that carry a per-call nonce. Run it on a connection of its own: the WAIT probe blocks the connection for up
 /// to 15 s on a server whose replica does not answer. Key commands run through the side's view, since the user's ACL may restrict key patterns; ROLE,
-/// WAIT, CONFIG and INFO run on the master's own server.
+/// WAIT, CONFIG and INFO run on the master's own server. Every probe key gets its expiry in the command or script that creates it, and DEL and PEXPIRE
+/// are tried on absent keys before the first write; a master whose probe keys cannot be deleted is reported in <see cref="SideCaps.Uncleaned"/>. Time
+/// (the scan budget, the probe expiry) comes from the <see cref="TimeProvider"/> the caller passes.
 /// </remarks>
 internal static class SideProbe
 {
-    // SET, GET, EXISTS, PEXPIRE, PEXPIREAT, PERSIST, RENAME, TIME, HSET, HSETNX, HGETALL, HKEYS, HLEN and HDEL: every command the move uses.
+    // SET, GET, EXISTS, PEXPIRE, PEXPIREAT, PERSIST, RENAME, TIME, HSET, HSETNX, HGETALL, HKEYS, HLEN and HDEL: every command the move uses. A key is created
+    // by SET ... PX or followed at once by PEXPIRE (after PERSIST and after HSET), so a command that fails halfway leaves a key that expires.
     private const string ProbeScript =
         "local t = redis.call('TIME') "
-        + "redis.call('SET', KEYS[1], 'v') redis.call('GET', KEYS[1]) redis.call('EXISTS', KEYS[1]) "
-        + "redis.call('PEXPIRE', KEYS[1], 60001) redis.call('PEXPIREAT', KEYS[1], (tonumber(t[1]) + 60) * 1000 + 1) redis.call('PERSIST', KEYS[1]) "
+        + "redis.call('SET', KEYS[1], 'v', 'PX', 60000) redis.call('GET', KEYS[1]) redis.call('EXISTS', KEYS[1]) "
+        + "redis.call('PEXPIRE', KEYS[1], 60001) redis.call('PEXPIREAT', KEYS[1], (tonumber(t[1]) + 60) * 1000 + 1) redis.call('PERSIST', KEYS[1]) redis.call('PEXPIRE', KEYS[1], 60001) "
         + "redis.call('RENAME', KEYS[1], KEYS[2]) redis.call('PEXPIRE', KEYS[2], 60001) "
-        + "redis.call('HSET', KEYS[1], 'f', 'v') redis.call('HSETNX', KEYS[1], 'g', 'v') redis.call('HGETALL', KEYS[1]) redis.call('HKEYS', KEYS[1]) "
+        + "redis.call('HSET', KEYS[1], 'f', 'v') redis.call('PEXPIRE', KEYS[1], 60001) redis.call('HSETNX', KEYS[1], 'g', 'v') redis.call('HGETALL', KEYS[1]) redis.call('HKEYS', KEYS[1]) "
         + "redis.call('HLEN', KEYS[1]) redis.call('HDEL', KEYS[1], 'f', 'g') return 1";
 
     private const string TwoKeyScript = "return redis.call('EXISTS', KEYS[1], KEYS[2])";
     private const int WaitWrites = 5;
     private const long WaitMilliseconds = 3000;
+    private const long ProbeExpiryMilliseconds = 60001;
     private const int DefaultScanCount = 1000;
     private static readonly TimeSpan DefaultScanBudget = TimeSpan.FromSeconds(30);
 
@@ -36,14 +39,16 @@ internal static class SideProbe
     /// <param name="slotEnforced">Set by configuration instead of probed, for a server whose policy is known.</param>
     /// <param name="cancellationToken">Cancels the probe, including the scan, which can walk the whole keyspace of every primary.</param>
     /// <param name="scanCount">The COUNT of each scan step; tests lower it to force many steps.</param>
+    /// <param name="timeProvider">The clock of the scan budget and the probe expiry; <see cref="TimeProvider.System"/> when null.</param>
     public static Task<SideCaps> ProbeAsync(
         IDatabase database,
         string probePrefix,
         string scanPattern,
         bool? slotEnforced = null,
         CancellationToken cancellationToken = default,
-        int scanCount = DefaultScanCount) =>
-        ProbeAsync(database, probePrefix, scanPattern, DefaultScanBudget, slotEnforced, cancellationToken, scanCount);
+        int scanCount = DefaultScanCount,
+        TimeProvider? timeProvider = null) =>
+        ProbeAsync(database, probePrefix, scanPattern, DefaultScanBudget, slotEnforced, cancellationToken, scanCount, timeProvider);
 
     /// <param name="database">The side's view: the Src prefixed view or the Dst view.</param>
     /// <param name="probePrefix">The library prefix and keyspace probe keys are written under, so they never meet application keys.</param>
@@ -52,6 +57,7 @@ internal static class SideProbe
     /// <param name="slotEnforced">Set by configuration instead of probed, for a server whose policy is known.</param>
     /// <param name="cancellationToken">Cancels the probe, including the scan, which can walk the whole keyspace of every primary.</param>
     /// <param name="scanCount">The COUNT of each scan step; tests lower it to force many steps.</param>
+    /// <param name="timeProvider">The clock of the scan budget and the probe expiry; <see cref="TimeProvider.System"/> when null.</param>
     public static async Task<SideCaps> ProbeAsync(
         IDatabase database,
         string probePrefix,
@@ -59,21 +65,24 @@ internal static class SideProbe
         TimeSpan? scanBudget,
         bool? slotEnforced = null,
         CancellationToken cancellationToken = default,
-        int scanCount = DefaultScanCount)
+        int scanCount = DefaultScanCount,
+        TimeProvider? timeProvider = null)
     {
+        var clock = timeProvider ?? TimeProvider.System;
         var nonce = MoveScripts.NewNonce();
         var denied = new List<string>();
         var (targets, unreachable) = await MastersAsync(database, probePrefix, nonce, cancellationToken).ConfigureAwait(false);
         var masters = new List<MasterCaps>();
+        var uncleaned = new List<EndPoint>();
         foreach (var (endpoint, key) in targets)
         {
-            masters.Add(await MasterAsync(database, database.Multiplexer.GetServer(endpoint), key, denied).ConfigureAwait(false));
+            masters.Add(await MasterAsync(database, database.Multiplexer.GetServer(endpoint), key, denied, uncleaned, clock).ConfigureAwait(false));
         }
 
         var first = database.Multiplexer.GetServer(targets[0].EndPoint);
         var enforced = slotEnforced ?? (!masters.TrueForAll(static m => m.Scripts) || await SlotEnforcedAsync(first, probePrefix, nonce, denied).ConfigureAwait(false));
-        var scan = await ScanAsync(database, first, scanPattern, enforced, denied, scanCount, scanBudget, cancellationToken).ConfigureAwait(false);
-        return new SideCaps(masters, scan, enforced, denied, unreachable);
+        var scan = await ScanAsync(database, first, scanPattern, enforced, denied, scanCount, scanBudget, clock, cancellationToken).ConfigureAwait(false);
+        return new SideCaps(masters, scan, enforced, denied, unreachable) { Uncleaned = uncleaned };
     }
 
     /// <summary>The connected primaries the view reaches, each with a probe key base it owns, and the primaries that are not connected.</summary>
@@ -107,39 +116,87 @@ internal static class SideProbe
         return found.Count > 0 ? (found, unreachable) : throw new RedisException($"The probe keys have no reachable master (unreachable: {string.Join(", ", unreachable)}).");
     }
 
-    private static async Task<MasterCaps> MasterAsync(IDatabase database, IServer server, string key, List<string> denied)
+    private static async Task<MasterCaps> MasterAsync(IDatabase database, IServer server, string key, List<string> denied, List<EndPoint> uncleaned, TimeProvider clock)
     {
         RedisKey first = $"{key}:a";
         RedisKey second = $"{key}:b";
+        var (canDelete, canExpire) = await PreflightAsync(database, server.EndPoint, first, second, denied).ConfigureAwait(false);
         try
         {
-            var hashes = await HashesAsync(database, server.EndPoint, first, denied).ConfigureAwait(false);
-            await CleanAsync(database, first, second).ConfigureAwait(false);
+            var hashes = await HashesAsync(database, server.EndPoint, first, denied, canDelete || canExpire).ConfigureAwait(false);
+            await CleanAsync(database, server.EndPoint, first, second, canDelete, uncleaned).ConfigureAwait(false);
             var scripts = await ScriptsAsync(database, server.EndPoint, first, second, denied).ConfigureAwait(false);
-            await CleanAsync(database, first, second).ConfigureAwait(false);
-            var transactions = await TransactionsAsync(database, server.EndPoint, first, second, denied).ConfigureAwait(false);
-            await CleanAsync(database, first, second).ConfigureAwait(false);
+            await CleanAsync(database, server.EndPoint, first, second, canDelete, uncleaned).ConfigureAwait(false);
+            var transactions = await TransactionsAsync(database, server.EndPoint, first, second, denied, clock).ConfigureAwait(false);
+            await CleanAsync(database, server.EndPoint, first, second, canDelete, uncleaned).ConfigureAwait(false);
             var replicas = await ReplicasAsync(server, denied).ConfigureAwait(false);
             var wait = replicas != 0 && await WaitAsync(database, server, first, denied).ConfigureAwait(false);
             var eviction = await EvictionPolicyAsync(server).ConfigureAwait(false);
-            return new MasterCaps(server.EndPoint, server.Version, scripts, transactions, hashes, wait, replicas, eviction);
+            var (clientIdDenied, infoDenied, needsAdmin) = await ProofAsync(server, denied).ConfigureAwait(false);
+            return new MasterCaps(server.EndPoint, server.Version, scripts, transactions, hashes, wait, replicas, eviction)
+            {
+                ClientIdDenied = clientIdDenied,
+                InfoDenied = infoDenied,
+                NeedsAdmin = needsAdmin,
+            };
         }
         finally
         {
-            await CleanAsync(database, first, second).ConfigureAwait(false);
+            await CleanAsync(database, server.EndPoint, first, second, canDelete, uncleaned).ConfigureAwait(false);
         }
     }
 
-    /// <summary>Deletes the probe keys, so a script that stopped halfway on a denial does not leave a key of the wrong type for the next probe.</summary>
-    private static async Task CleanAsync(IDatabase database, RedisKey first, RedisKey second)
+    /// <summary>DEL and PEXPIRE on keys that do not exist, before the first write: whether the probe keys can be deleted, and whether a key can be given an expiry.</summary>
+    /// <remarks>ACL checks the command, not the key's existence. A denied DEL is reported; every probe write still carries its expiry, so a key that cannot be deleted expires.</remarks>
+    private static async Task<(bool CanDelete, bool CanExpire)> PreflightAsync(IDatabase database, EndPoint endpoint, RedisKey first, RedisKey second, List<string> denied)
     {
+        var canDelete = true;
+        var canExpire = true;
         try
         {
             await database.KeyDeleteAsync([first, second], CommandFlags.DemandMaster).ConfigureAwait(false);
         }
+        catch (RedisServerException ex)
+        {
+            canDelete = false;
+            if (Denies(ex))
+            {
+                denied.Add(Denial("DEL", endpoint));
+            }
+        }
+
+        try
+        {
+            await database.KeyExpireAsync(first, TimeSpan.FromMilliseconds(ProbeExpiryMilliseconds), CommandFlags.DemandMaster).ConfigureAwait(false);
+        }
         catch (RedisServerException)
         {
-            // Best effort: a user denied DEL leaves keys that expire or are empty already.
+            canExpire = false;
+        }
+
+        return (canDelete, canExpire);
+    }
+
+    /// <summary>Deletes the probe keys, so a script that stopped halfway on a denial does not leave a key of the wrong type for the next probe.</summary>
+    /// <remarks>A master whose keys cannot be deleted is added to <paramref name="uncleaned"/> once: the keys expire on their own, and the report says so.</remarks>
+    private static async Task CleanAsync(IDatabase database, EndPoint endpoint, RedisKey first, RedisKey second, bool canDelete, List<EndPoint> uncleaned)
+    {
+        try
+        {
+            if (canDelete)
+            {
+                await database.KeyDeleteAsync([first, second], CommandFlags.DemandMaster).ConfigureAwait(false);
+                return;
+            }
+        }
+        catch (RedisServerException)
+        {
+            // Reported below, never dropped.
+        }
+
+        if (!uncleaned.Contains(endpoint))
+        {
+            uncleaned.Add(endpoint);
         }
     }
 
@@ -167,11 +224,17 @@ internal static class SideProbe
     }
 
     /// <summary>HSET, HSETNX, HGETALL, HKEYS, HLEN and HDEL on the control-like key, outside a script.</summary>
-    private static async Task<bool> HashesAsync(IDatabase database, EndPoint endpoint, RedisKey key, List<string> denied)
+    /// <remarks>The first HSET, which creates the hash, runs with its PEXPIRE in one script, or in one transaction where scripts are refused. It does not run at all when the key could neither be deleted nor given an expiry.</remarks>
+    private static async Task<bool> HashesAsync(IDatabase database, EndPoint endpoint, RedisKey key, List<string> denied, bool safe)
     {
         try
         {
-            await database.HashSetAsync(key, "f", "v", flags: CommandFlags.DemandMaster).ConfigureAwait(false);
+            if (!safe || !await CreateHashAsync(database, key).ConfigureAwait(false))
+            {
+                denied.Add(Denial("HASH", endpoint));
+                return false;
+            }
+
             await database.HashSetAsync(key, "g", "v", When.NotExists, CommandFlags.DemandMaster).ConfigureAwait(false);
             await database.HashGetAllAsync(key, CommandFlags.DemandMaster).ConfigureAwait(false);
             await database.HashKeysAsync(key, CommandFlags.DemandMaster).ConfigureAwait(false);
@@ -184,6 +247,42 @@ internal static class SideProbe
             denied.Add(Denial("HASH", endpoint));
             return false;
         }
+    }
+
+    /// <summary>HSET and PEXPIRE together: one script, else one transaction, else the two commands one after the other; false when the transaction ran but did not commit.</summary>
+    /// <remarks>A denial of HSET itself throws, and <see cref="HashesAsync"/> reports it. The last form is not atomic, but is the only one on a server that refuses both scripts and transactions.</remarks>
+    private static async Task<bool> CreateHashAsync(IDatabase database, RedisKey key)
+    {
+        try
+        {
+            await database.ScriptEvaluateAsync(
+                $"redis.call('HSET', KEYS[1], 'f', 'v') redis.call('PEXPIRE', KEYS[1], {ProbeExpiryMilliseconds}) return 1",
+                [key],
+                flags: CommandFlags.DemandMaster).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (RedisUtils.RefusesScript(ex))
+        {
+            // Scripts are refused or the denial is inside this one: the transaction decides.
+        }
+
+        try
+        {
+            var transaction = database.CreateTransaction();
+            var set = transaction.HashSetAsync(key, "f", "v");
+            var expire = transaction.KeyExpireAsync(key, TimeSpan.FromMilliseconds(ProbeExpiryMilliseconds));
+            var executed = await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
+            await Task.WhenAll(set, expire).ConfigureAwait(false);
+            return executed;
+        }
+        catch (Exception ex) when (Denies(ex) || (ex is RedisServerException && (ex.Message.Contains("EXEC without MULTI", StringComparison.OrdinalIgnoreCase) || ex.Message.StartsWith("EXECABORT", StringComparison.OrdinalIgnoreCase))))
+        {
+            // Transactions are refused as well.
+        }
+
+        await database.HashSetAsync(key, "f", "v", flags: CommandFlags.DemandMaster).ConfigureAwait(false);
+        await database.KeyExpireAsync(key, TimeSpan.FromMilliseconds(ProbeExpiryMilliseconds), CommandFlags.DemandMaster).ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>One script of every command the move uses; a refusal of EVAL itself differs from a denial of a command inside the script.</summary>
@@ -207,26 +306,28 @@ internal static class SideProbe
         || message.Contains("ACL failure in script", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>A watched transaction: a hash length condition, then every command the move uses; it must execute.</summary>
-    private static async Task<bool> TransactionsAsync(IDatabase database, EndPoint endpoint, RedisKey first, RedisKey second, List<string> denied)
+    private static async Task<bool> TransactionsAsync(IDatabase database, EndPoint endpoint, RedisKey first, RedisKey second, List<string> denied, TimeProvider clock)
     {
         List<Task> queued = [];
         try
         {
             var transaction = database.CreateTransaction();
             transaction.AddCondition(Condition.HashLengthEqual(first, 0));
-            var atSecond = DateTime.UtcNow.AddMinutes(1);
+            var atSecond = clock.GetUtcNow().UtcDateTime.AddMinutes(1);
             Task[] commands =
             [
-                transaction.StringSetAsync(first, "v"),
+                transaction.StringSetAsync(first, "v", TimeSpan.FromMilliseconds(ProbeExpiryMilliseconds)),
                 transaction.StringGetAsync(first),
                 transaction.KeyExistsAsync(first),
                 transaction.KeyExpireAsync(first, TimeSpan.FromMilliseconds(60001)),
                 transaction.KeyExpireAsync(first, new DateTime(atSecond.Ticks - (atSecond.Ticks % TimeSpan.TicksPerSecond) + (TimeSpan.TicksPerMillisecond * 500), DateTimeKind.Utc)),
                 transaction.KeyPersistAsync(first),
+                transaction.KeyExpireAsync(first, TimeSpan.FromMilliseconds(ProbeExpiryMilliseconds)),
                 transaction.KeyRenameAsync(first, second),
                 transaction.KeyExpireAsync(second, TimeSpan.FromMilliseconds(60001)),
                 transaction.ExecuteAsync("TIME"),
                 transaction.HashSetAsync(first, "f", "v"),
+                transaction.KeyExpireAsync(first, TimeSpan.FromMilliseconds(ProbeExpiryMilliseconds)),
                 transaction.HashSetAsync(first, "g", "v", When.NotExists),
                 transaction.HashGetAllAsync(first),
                 transaction.HashKeysAsync(first),
@@ -295,6 +396,52 @@ internal static class SideProbe
         }
     }
 
+    /// <summary><c>CLIENT ID</c> and <c>INFO server replication</c> on the master's own server: what proves a WAIT ran on the connection that sent the write.</summary>
+    /// <remarks>A server denial of either, or a client that refuses them without allowAdmin, means no WAIT of this side can be confirmed. A client timeout proves nothing either way.</remarks>
+    private static async Task<(bool ClientIdDenied, bool InfoDenied, bool NeedsAdmin)> ProofAsync(IServer server, List<string> denied)
+    {
+        var clientIdDenied = false;
+        var infoDenied = false;
+        var needsAdmin = false;
+        try
+        {
+            await server.ExecuteAsync("CLIENT", "ID").ConfigureAwait(false);
+        }
+        catch (RedisCommandException ex) when (ex.Message.Contains("admin", StringComparison.OrdinalIgnoreCase))
+        {
+            needsAdmin = true;
+        }
+        catch (RedisTimeoutException)
+        {
+            // Inconclusive, like every other client timeout of the probe.
+        }
+        catch (Exception ex) when (Denies(ex) || ex is RedisCommandException)
+        {
+            clientIdDenied = true;
+            denied.Add(Denial("CLIENT ID", server.EndPoint));
+        }
+
+        try
+        {
+            await server.ExecuteAsync("INFO", BarrierProof.InfoSections).ConfigureAwait(false);
+        }
+        catch (RedisCommandException ex) when (ex.Message.Contains("admin", StringComparison.OrdinalIgnoreCase))
+        {
+            needsAdmin = true;
+        }
+        catch (RedisTimeoutException)
+        {
+            // Inconclusive, like every other client timeout of the probe.
+        }
+        catch (Exception ex) when (Denies(ex) || ex is RedisCommandException)
+        {
+            infoDenied = true;
+            denied.Add(Denial("INFO", server.EndPoint));
+        }
+
+        return (clientIdDenied, infoDenied, needsAdmin);
+    }
+
     /// <summary>Five writes, each followed by <c>WAIT 1 3000</c>: any 1 or more means available; 0 or a timeout proves nothing alone.</summary>
     private static async Task<bool> WaitAsync(IDatabase database, IServer server, RedisKey key, List<string> denied)
     {
@@ -343,35 +490,45 @@ internal static class SideProbe
         }
     }
 
-    /// <summary><c>SCAN 0 MATCH pattern COUNT n TYPE string</c> answers and its loop ends, on every connected primary, or on the one unit a proxy shows.</summary>
-    /// <remarks>The walk is cancellable and bounded by <paramref name="budget"/>: a loop still running when it ends makes the scan <see cref="ScanMode.Incomplete"/>.</remarks>
-    private static async Task<ScanMode> ScanAsync(IDatabase database, IServer server, string pattern, bool enforced, List<string> denied, int count, TimeSpan? budget, CancellationToken cancellationToken)
+    /// <summary><c>SCAN 0 MATCH pattern COUNT n TYPE string</c> answers on every connected primary, or on the one unit a proxy shows, and its loop ends.</summary>
+    /// <remarks>
+    /// One SCAN step runs on every unit first, so a unit that denies or errors fails the scan whatever the others do. Only then does the traversal run, from
+    /// each unit's cursor; it is cancellable and bounded by <paramref name="budget"/>, and a loop still running when it ends makes the scan <see cref="ScanMode.Incomplete"/>.
+    /// </remarks>
+    private static async Task<ScanMode> ScanAsync(IDatabase database, IServer server, string pattern, bool enforced, List<string> denied, int count, TimeSpan? budget, TimeProvider clock, CancellationToken cancellationToken)
     {
         var cluster = server.ServerType == ServerType.Cluster;
         var proxy = server.ServerType is ServerType.Twemproxy or ServerType.Envoyproxy || (!cluster && enforced);
         var units = proxy ? [server] : database.Multiplexer.GetServers().Where(static s => !s.IsReplica && s.IsConnected).ToList();
-        var started = Stopwatch.GetTimestamp();
-        var incomplete = false;
         var current = server;
         try
         {
+            var cursors = new List<string>();
             foreach (var unit in units)
             {
                 current = unit;
-                var cursor = "0";
-                while (!incomplete)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var reply = (RedisResult[])(await unit.ExecuteAsync("SCAN", cursor, "MATCH", pattern, "COUNT", count, "TYPE", "string").ConfigureAwait(false))!;
-                    cursor = (string)reply[0]!;
-                    if (cursor == "0")
-                    {
-                        break;
-                    }
+                cancellationToken.ThrowIfCancellationRequested();
+                cursors.Add(await ScanStepAsync(unit, "0", pattern, count).ConfigureAwait(false));
+            }
 
-                    incomplete = budget is { } limit && Stopwatch.GetElapsedTime(started) >= limit;
+            var started = clock.GetTimestamp();
+            var incomplete = false;
+            for (var i = 0; i < units.Count && !incomplete; i++)
+            {
+                current = units[i];
+                var cursor = cursors[i];
+                while (cursor != "0" && !incomplete)
+                {
+                    incomplete = budget is { } limit && clock.GetElapsedTime(started) >= limit;
+                    if (!incomplete)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        cursor = await ScanStepAsync(units[i], cursor, pattern, count).ConfigureAwait(false);
+                    }
                 }
             }
+
+            return incomplete ? ScanMode.Incomplete : proxy ? ScanMode.ProxySingleUnit : ScanMode.PerShard;
         }
         catch (Exception ex) when (Denies(ex))
         {
@@ -382,8 +539,13 @@ internal static class SideProbe
         {
             return ScanMode.None;
         }
+    }
 
-        return incomplete ? ScanMode.Incomplete : proxy ? ScanMode.ProxySingleUnit : ScanMode.PerShard;
+    /// <returns>The cursor the step ended on; "0" when the unit is done.</returns>
+    private static async Task<string> ScanStepAsync(IServer unit, string cursor, string pattern, int count)
+    {
+        var reply = (RedisResult[])(await unit.ExecuteAsync("SCAN", cursor, "MATCH", pattern, "COUNT", count, "TYPE", "string").ConfigureAwait(false))!;
+        return (string)reply[0]!;
     }
 
     /// <summary>From <c>CONFIG GET</c> on the master where allowed, else from <c>INFO memory</c>; null when the server tells neither (a managed service blocks CONFIG).</summary>

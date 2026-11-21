@@ -131,7 +131,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
     public async Task A_user_denied_the_probed_commands_reports_each_denial_as_a_capability()
     {
         Assert.SkipUnless(Limited is not null, "Set MOVE_SIDES_LIMITED to run.");
-        await using var mux = await ConnectionMultiplexer.ConnectAsync(Limited!);
+        await using var mux = await ConnectionMultiplexer.ConnectAsync($"{Limited},allowAdmin=true");
 
         var caps = await SideProbe.ProbeAsync(mux.GetDatabase(), "sidetest:mg:", "sidetest:*", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -141,52 +141,48 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         caps.Notes("dst").Should().ContainSingle().Which.Should().Be("dst: eviction policy unknown, needs attestation (G12)");
         DeniedCommands(caps).Should().Contain(["SCAN", "ROLE"]);
         caps.Denied.Should().OnlyContain(d => d.Contains("@", StringComparison.Ordinal), "every denial names the endpoint");
-        caps.Failures("dst").Should().ContainSingle().Which.Should().Contain("scan", "an unknown eviction policy is a note for G12, not a gate failure");
+        caps.Failures("dst").Should().HaveCount(2).And.Contain(f => f.Contains("scan", StringComparison.Ordinal)).And.Contain(f => f.Contains("denies INFO", StringComparison.Ordinal), "an unknown eviction policy is a note for G12, not a gate failure");
     }
 
     [Fact]
     public async Task A_master_with_a_replica_probes_wait_and_its_barrier_confirms()
     {
         Assert.SkipUnless(MasterWithReplica is not null, "Set MOVE_SIDES_MASTER to run.");
-        await using var mux = await ConnectionMultiplexer.ConnectAsync(MasterWithReplica!);
+        await using var mux = await ConnectionMultiplexer.ConnectAsync($"{MasterWithReplica},allowAdmin=true");
         var db = mux.GetDatabase();
 
         var caps = await SideProbe.ProbeAsync(db, "sidetest:mg:", "sidetest:*", cancellationToken: TestContext.Current.CancellationToken);
         caps.Wait.Should().BeTrue();
         caps.Replicas.Should().Be(1);
+        caps.Failures("src").Should().BeEmpty();
 
         var barrier = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: false);
-        var target = await barrier.TargetAsync();
-        await db.StringSetAsync("sidetest:k", "v");
-        (await barrier.WaitAsync(target, () => Task.CompletedTask, wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
+        (await barrier.WriteAndWaitAsync(transaction => transaction.StringSetAsync("sidetest:k", "v"), wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
     }
 
     [Fact]
     public async Task A_replica_that_cannot_acknowledge_leaves_the_barrier_unconfirmed_and_a_way_back_then_skips_it()
     {
         Assert.SkipUnless(MasterWithReplica is not null && Replica is not null, "Set MOVE_SIDES_MASTER and MOVE_SIDES_REPLICA to run.");
-        await using var mux = await ConnectionMultiplexer.ConnectAsync($"{MasterWithReplica},syncTimeout=10000");
+        await using var mux = await ConnectionMultiplexer.ConnectAsync($"{MasterWithReplica},allowAdmin=true,syncTimeout=10000");
         await using var replica = await ConnectionMultiplexer.ConnectAsync($"{Replica},allowAdmin=true,syncTimeout=10000");
         var db = mux.GetDatabase();
-        var reissued = 0;
+        var written = 0;
         var barrier = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: false) { Timeout = TimeSpan.FromMilliseconds(200), Retries = 2 };
 
         var sleeping = replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", "2");
         await Task.Delay(100, TestContext.Current.CancellationToken);
-        var target = await barrier.TargetAsync();
-        await db.StringSetAsync("sidetest:k", "v");
-        var outcome = await barrier.WaitAsync(
-            target,
-            async () =>
+        var outcome = await barrier.WriteAndWaitAsync(
+            transaction =>
             {
-                reissued++;
-                await db.StringSetAsync("sidetest:k", "v");
+                written++;
+                return transaction.StringSetAsync("sidetest:k", "v");
             },
             wayBack: false);
 
         outcome.Should().Be(BarrierOutcome.NotConfirmed, "0 or a timeout is not a confirmation");
-        reissued.Should().Be(2, "each retry re-issues the writes, with no extra backoff");
-        (await barrier.WaitAsync(target, () => Task.CompletedTask, wayBack: true)).Should().Be(BarrierOutcome.SkippedAfterRecentFailure);
+        written.Should().Be(3, "attempt 0 and one transaction per retry, with no extra backoff");
+        (await barrier.WriteAndWaitAsync(transaction => transaction.StringSetAsync("sidetest:k", "v"), wayBack: true)).Should().Be(BarrierOutcome.SkippedAfterRecentFailure);
         await sleeping;
     }
 
@@ -194,7 +190,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
     public async Task A_master_without_a_replica_needs_no_barrier()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        await using var mux = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
         var replicas = await mux.GetServer(mux.GetEndPoints()[0]).RoleAsync() is Role.Master m ? m.Replicas.Count : 0;
         Assert.SkipUnless(replicas == 0, "The shared test server has replicas.");
 
@@ -203,9 +199,9 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         var free = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: true);
         var expecting = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: false) { Retries = 1 };
 
-        (await free.WaitAsync(await free.TargetAsync(), () => Task.CompletedTask, wayBack: false))
+        (await free.WriteAndWaitAsync(transaction => transaction.StringSetAsync("sidetest:k", "v"), wayBack: false))
             .Should().Be(BarrierOutcome.NoReplica);
-        (await expecting.WaitAsync(await expecting.TargetAsync(), () => Task.CompletedTask, wayBack: false))
+        (await expecting.WriteAndWaitAsync(transaction => transaction.StringSetAsync("sidetest:k", "v"), wayBack: false))
             .Should().Be(BarrierOutcome.NotConfirmed, "a deployment not configured as replica-free expects a replica, whatever ROLE lists now");
     }
 
@@ -258,7 +254,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
     public async Task A_user_denied_eval_and_multi_cannot_run_either_path()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        await using var mux = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
         var noMulti = InterceptingProxy.Wrap(mux.GetDatabase(), (method, _) =>
             method.Name == nameof(IDatabase.CreateTransaction)
                 ? throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM User u has no permissions to run the 'multi' command")
@@ -319,7 +315,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
     public async Task A_scan_that_outlasts_its_budget_is_incomplete_and_the_default_budget_leaves_a_small_scan_whole()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        await using var mux = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
         var db = mux.GetDatabase();
         var keys = Enumerable.Range(0, 300).Select(i => (RedisKey)$"sidetest:budget:{i}").ToArray();
         try

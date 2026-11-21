@@ -122,13 +122,16 @@ internal sealed class FakeSide
                 return primary.Config is not null
                     ? Task.FromException<RedisResult>(primary.Config)
                     : Task.FromResult(RedisResult.Create([RedisResult.Create("maxmemory-policy", ResultType.BulkString), RedisResult.Create("noeviction", ResultType.BulkString)]));
+            case "CLIENT":
+                return primary.Client is not null ? Task.FromException<RedisResult>(primary.Client) : Number(7);
             case "INFO":
-                return primary.Info is not null ? Task.FromException<RedisResult>(primary.Info) : Task.FromResult(RedisResult.Create("maxmemory_policy:noeviction\r\n", ResultType.BulkString));
+                return primary.Info is not null ? Task.FromException<RedisResult>(primary.Info) : Task.FromResult(RedisResult.Create("maxmemory_policy:noeviction\r\nrun_id:fake\r\n", ResultType.BulkString));
             case "SCAN":
                 Scanned.Add(primary.EndPoint);
+                primary.OnScan?.Invoke();
                 return primary.Scan is not null
                     ? Task.FromException<RedisResult>(primary.Scan)
-                    : Task.FromResult(RedisResult.Create([RedisResult.Create("0", ResultType.BulkString), RedisResult.Create(Array.Empty<RedisResult>())]));
+                    : Task.FromResult(RedisResult.Create([RedisResult.Create(primary.ScanEndless ? "1" : "0", ResultType.BulkString), RedisResult.Create(Array.Empty<RedisResult>())]));
             default:
                 return Number(0);
         }

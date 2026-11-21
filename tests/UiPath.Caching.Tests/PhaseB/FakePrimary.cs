@@ -11,6 +11,9 @@ namespace UiPath.Caching.Tests.PhaseB;
 /// <param name="Config">Thrown by CONFIG GET when set.</param>
 /// <param name="Info">Thrown by INFO when set.</param>
 /// <param name="Scan">Thrown by SCAN when set.</param>
+/// <param name="ScanEndless">SCAN never returns cursor 0, so a traversal only ends when its budget does.</param>
+/// <param name="OnScan">Runs on every SCAN step, so a test can move a clock.</param>
+/// <param name="Client">Thrown by CLIENT ID when set.</param>
 internal sealed record FakePrimary(
     EndPoint EndPoint,
     bool Connected = true,
@@ -19,4 +22,7 @@ internal sealed record FakePrimary(
     object? Wait = null,
     Exception? Config = null,
     Exception? Info = null,
-    Exception? Scan = null);
+    Exception? Scan = null,
+    bool ScanEndless = false,
+    Action? OnScan = null,
+    Exception? Client = null);

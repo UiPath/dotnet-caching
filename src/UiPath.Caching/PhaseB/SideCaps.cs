@@ -14,6 +14,9 @@ internal sealed record SideCaps(
     IReadOnlyList<string> Denied,
     IReadOnlyList<EndPoint> Unreachable)
 {
+    /// <summary>Primaries whose probe keys could not be deleted; the keys carry an expiry and go on their own, which <see cref="Notes"/> reports.</summary>
+    public IReadOnlyList<EndPoint> Uncleaned { get; init; } = [];
+
     /// <summary>The oldest master's version.</summary>
     public Version Version => Masters.Min(static m => m.Version)!;
 
@@ -58,6 +61,11 @@ internal sealed record SideCaps(
             }
         }
 
+        if (Masters.Any(static m => m.NeedsAdmin))
+        {
+            yield return $"{side}: the move connection needs allowAdmin";
+        }
+
         if (Scan == ScanMode.None)
         {
             yield return $"{side}: the scan probe failed";
@@ -70,6 +78,11 @@ internal sealed record SideCaps(
         if (Scan == ScanMode.Incomplete)
         {
             yield return $"{side}: scan probe incomplete; the move's first scan traverses fully";
+        }
+
+        foreach (var endpoint in Uncleaned)
+        {
+            yield return $"{side}: {endpoint} could not delete its probe keys; they expire on their own within a minute";
         }
 
         if (Masters.Any(static m => m.EvictionPolicy is null))

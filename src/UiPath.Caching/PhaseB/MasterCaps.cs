@@ -19,6 +19,15 @@ internal sealed record MasterCaps(
     int? Replicas,
     string? EvictionPolicy)
 {
+    /// <summary>The server denied <c>CLIENT ID</c>, so a WAIT cannot be proven to run on the connection that wrote.</summary>
+    public bool ClientIdDenied { get; init; }
+
+    /// <summary>The server denied <c>INFO server</c>, so a WAIT cannot be proven to run on the connection that wrote.</summary>
+    public bool InfoDenied { get; init; }
+
+    /// <summary>The client refused <c>CLIENT ID</c> or <c>INFO</c> because the connection lacks allowAdmin; <see cref="SideCaps.Failures"/> reports it once per side.</summary>
+    public bool NeedsAdmin { get; init; }
+
     public bool FallbackAllowed => Version >= MoveScripts.FallbackMinimum;
 
     /// <summary>Control records are never evicted: <c>noeviction</c> or a <c>volatile-*</c> policy; unknown needs the operator's attestation (G12).</summary>
@@ -36,6 +45,16 @@ internal sealed record MasterCaps(
             yield return FallbackAllowed
                 ? $"{side}: {EndPoint} refuses scripts and watched transactions, so neither scripts nor the fallback run"
                 : $"{side}: {EndPoint} refuses scripts and Redis {Version} is older than {MoveScripts.FallbackMinimum}, so neither scripts nor the fallback run";
+        }
+
+        if (ClientIdDenied)
+        {
+            yield return $"{side}: {EndPoint} denies CLIENT ID, so a WAIT cannot be proven";
+        }
+
+        if (InfoDenied)
+        {
+            yield return $"{side}: {EndPoint} denies INFO, so a WAIT cannot be proven";
         }
 
         if (EvictionSafe == false)
