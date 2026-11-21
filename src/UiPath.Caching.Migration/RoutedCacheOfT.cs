@@ -440,6 +440,8 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             // The key lock and the write slot are free by now: a slow publish holds back neither the next write of the key nor a clear.
             if (announcement.Route is { } announced)
             {
+                // Started first and awaited last, so neither channel waits behind the other; the bridge needs no library, so bypass reaches it too.
+                var bridged = PublishBridgeAsync(BridgeMessageKind.Key, key).AsTask();
                 if (announced.Bypass)
                 {
                     AnnounceFromBypass(key, announced);
@@ -449,8 +451,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
                     await PublishKeyAsync(key, setDeadline, announced).ConfigureAwait(false);
                 }
 
-                // The bridge needs no library, so a write in bypass reaches the older client's nodes too.
-                await PublishBridgeAsync(BridgeMessageKind.Key, key).ConfigureAwait(false);
+                await bridged.ConfigureAwait(false);
             }
         }
     }
@@ -568,24 +569,26 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
     private async ValueTask AnnounceRemovalAsync(string key, Route route)
     {
+        var bridged = PublishBridgeAsync(BridgeMessageKind.Key, key).AsTask();
         if (!await PublishRemovalOnceAsync(key).ConfigureAwait(false))
         {
             CountPublishFailure(route);
             _retrier.ReportKey(key, route);
         }
 
-        await PublishBridgeAsync(BridgeMessageKind.Key, key).ConfigureAwait(false);
+        await bridged.ConfigureAwait(false);
     }
 
     private async ValueTask PublishClearAsync()
     {
+        var bridged = PublishBridgeAsync(BridgeMessageKind.Clear, null).AsTask();
         if (!await PublishClearOnceAsync().ConfigureAwait(false))
         {
             CountPublishFailure(ClearRoute);
             _retrier.ReportClear(ClearRoute);
         }
 
-        await PublishBridgeAsync(BridgeMessageKind.Clear, null).ConfigureAwait(false);
+        await bridged.ConfigureAwait(false);
     }
 
     private ValueTask PublishBridgeAsync(BridgeMessageKind kind, string? key) =>

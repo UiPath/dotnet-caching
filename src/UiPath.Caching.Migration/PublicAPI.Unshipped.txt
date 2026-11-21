@@ -172,4 +172,4 @@ static UiPath.Caching.Migration.BridgeMessage.operator !=(UiPath.Caching.Migrati
 static UiPath.Caching.Migration.BridgeMessage.operator ==(UiPath.Caching.Migration.BridgeMessage left, UiPath.Caching.Migration.BridgeMessage right) -> bool
 ~override UiPath.Caching.Migration.BridgeMessage.Equals(object obj) -> bool
 ~override UiPath.Caching.Migration.BridgeMessage.ToString() -> string
-UiPath.Caching.Migration.RouterBuilder.UseChannelBridge(UiPath.Caching.Migration.IChannelBridge! bridge) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.UseChannelBridge(UiPath.Caching.Migration.IChannelBridge! bridge, int maxPendingPublishes = 16) -> UiPath.Caching.Migration.RouterBuilder!

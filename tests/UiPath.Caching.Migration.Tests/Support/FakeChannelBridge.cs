@@ -7,6 +7,8 @@ internal sealed class FakeChannelBridge : IChannelBridge
     private Action<BridgeMessage>? _subscriber;
     private int _cancelled;
     private int _subscribeCalls;
+    private int _disposals;
+    private int _entered;
 
     public Exception? PublishFails { get; set; }
 
@@ -15,12 +17,19 @@ internal sealed class FakeChannelBridge : IChannelBridge
 
     public bool DisposeFails { get; set; }
 
+    /// <summary>Holds Subscribe until set, as an adapter waiting on its channel does.</summary>
+    public ManualResetEventSlim? SubscribeGate { get; set; }
+
     /// <summary>Blocks the calling thread inside PublishAsync before it returns, as an adapter waiting on a lock does.</summary>
     public ManualResetEventSlim? BlockBeforeReturn { get; set; }
 
     public int Cancelled => Volatile.Read(ref _cancelled);
 
     public int SubscribeCalls => Volatile.Read(ref _subscribeCalls);
+
+    public int Disposals => Volatile.Read(ref _disposals);
+
+    public bool SubscribeEntered => Volatile.Read(ref _entered) == 1;
 
     /// <summary>Holds every publish until it completes.</summary>
     public TaskCompletionSource? PublishGate { get; set; }
@@ -67,6 +76,8 @@ internal sealed class FakeChannelBridge : IChannelBridge
 
     public IDisposable Subscribe(Action<BridgeMessage> onMessage)
     {
+        Volatile.Write(ref _entered, 1);
+        SubscribeGate?.Wait(TimeSpan.FromSeconds(30));
         if (Interlocked.Increment(ref _subscribeCalls) <= SubscribeFailures)
         {
             throw new InvalidOperationException("channel unavailable");
@@ -82,6 +93,7 @@ internal sealed class FakeChannelBridge : IChannelBridge
     {
         public void Dispose()
         {
+            Interlocked.Increment(ref owner._disposals);
             owner._subscriber = null;
             if (owner.DisposeFails)
             {

@@ -171,7 +171,7 @@ public static class RouterServiceCollectionExtensions
             core.UseLibrary(token => StartLibraryAsync(root, builder, token));
             if (builder.Bridge is { } bridge)
             {
-                core.Bridge = new BridgeHost(bridge, RouterIdentity(section, processId), core, logger);
+                core.Bridge = new BridgeHost(bridge, RouterIdentity(section, processId), core, logger) { MaxPending = builder.BridgeMaxPending };
             }
 
             var advertiser = CreateAdvertiser(root, builder, core, processId, section, logger);

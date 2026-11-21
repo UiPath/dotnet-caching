@@ -9,6 +9,8 @@ namespace UiPath.Caching.Migration;
 /// </summary>
 internal sealed class BridgeHost(IChannelBridge bridge, string origin, RouterCore core, ILogger logger)
 {
+    public const int DefaultMaxPending = 16;
+
     private static readonly TimeSpan FirstRetry = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan LastRetry = TimeSpan.FromMinutes(1);
 
@@ -20,16 +22,13 @@ internal sealed class BridgeHost(IChannelBridge bridge, string origin, RouterCor
     public string Origin { get; } = origin;
 
     /// <summary>Adapter calls that may be running, including ones a caller stopped waiting for; publishes beyond it are dropped.</summary>
-    public int MaxPending { get; init; } = 64;
+    public int MaxPending { get; init; } = DefaultMaxPending;
 
-    /// <summary>Subscribes now, or keeps retrying in the background with backoff until it works or the router stops.</summary>
+    /// <summary>Subscribes off the start path, so an adapter that blocks never holds the router's start; a failure is retried with backoff until it works or the router stops.</summary>
     public void Attach(Func<string, IRouterParticipant?> find, Action clearAll)
     {
         void OnMessage(BridgeMessage message) => Receive(message, find, clearAll);
-        if (!TrySubscribe(OnMessage))
-        {
-            _ = Task.Run(() => RetrySubscribeAsync(OnMessage), CancellationToken.None);
-        }
+        _ = Task.Run(() => SubscribeAsync(OnMessage), CancellationToken.None);
     }
 
     /// <summary>A subscription that fails to dispose is counted and logged; the router's stop carries on.</summary>
@@ -53,20 +52,40 @@ internal sealed class BridgeHost(IChannelBridge bridge, string origin, RouterCor
         {
             Interlocked.Decrement(ref _pending);
             RouterTelemetry.CountBridge("publish_dropped", kind);
+            LogOnce(null, "A bridge publish was dropped: the adapter already has the most calls in flight. Later failures are counted only.");
             return;
         }
 
-        var deadline = new CancellationTokenSource(core.SourceTimeout, core.Clock);
-        var linked = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token, core.StopToken);
-        var message = new BridgeMessage(kind, cacheName, key, Origin: Origin);
+        CancellationTokenSource? deadline = null;
+        CancellationTokenSource? linked = null;
+        Task call;
+        try
+        {
+            deadline = new CancellationTokenSource(core.SourceTimeout, core.Clock);
+            linked = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token, core.StopToken);
+            var message = new BridgeMessage(kind, cacheName, key, Origin: Origin);
+            var token = linked.Token;
 
-        // On the thread pool, so an adapter that blocks before it returns cannot hold the caller past the deadline.
-        var call = Task.Run(() => bridge.PublishAsync(message, linked.Token).AsTask(), CancellationToken.None);
+            // On the thread pool, so an adapter that blocks before it returns cannot hold the caller past the deadline.
+            call = Task.Run(() => bridge.PublishAsync(message, token).AsTask(), CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            linked?.Dispose();
+            deadline?.Dispose();
+            Interlocked.Decrement(ref _pending);
+            RouterTelemetry.CountBridge("publish_failed", kind);
+            LogOnce(ex, "A bridge publish could not start.");
+            return;
+        }
+
         _ = call.ContinueWith(
-            (_, state) =>
+            (finished, state) =>
             {
-                var (pending, owner) = ((CancellationTokenSource[], BridgeHost))state!;
-                foreach (var source in pending)
+                // Observed even when the caller stopped waiting first.
+                _ = finished.Exception;
+                var (sources, owner) = ((CancellationTokenSource[], BridgeHost))state!;
+                foreach (var source in sources)
                 {
                     source.Dispose();
                 }
@@ -80,14 +99,24 @@ internal sealed class BridgeHost(IChannelBridge bridge, string origin, RouterCor
         try
         {
             await call.WaitAsync(linked.Token).ConfigureAwait(false);
+
+            // Logged again after the next failure, so an outage that comes back is seen.
+            Volatile.Write(ref _publishFailureLogged, 0);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             RouterTelemetry.CountBridge("publish_failed", kind);
-            if (Interlocked.Exchange(ref _publishFailureLogged, 1) == 0)
-            {
-                logger.LogWarning(ex, "A bridge publish failed; peers on the older client may serve their copy up to the local cap. Later failures are counted only.");
-            }
+            LogOnce(ex, "A bridge publish failed; peers on the older client may serve their copy up to the local cap. Later failures are counted only.");
+        }
+    }
+
+    private void LogOnce(Exception? ex, string message)
+    {
+        if (Interlocked.Exchange(ref _publishFailureLogged, 1) == 0)
+        {
+#pragma warning disable CA2254 // One of two fixed texts.
+            logger.LogWarning(ex, message);
+#pragma warning restore CA2254
         }
     }
 
@@ -95,14 +124,14 @@ internal sealed class BridgeHost(IChannelBridge bridge, string origin, RouterCor
     {
         try
         {
-            var subscription = bridge.Subscribe(onMessage);
+            Volatile.Write(ref _subscription, bridge.Subscribe(onMessage));
+
+            // A stop that ran while Subscribe was still blocked found nothing to dispose; this one is disposed here instead.
             if (Volatile.Read(ref _detached) == 1)
             {
-                subscription.Dispose();
-                return true;
+                Detach();
             }
 
-            Volatile.Write(ref _subscription, subscription);
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -113,8 +142,13 @@ internal sealed class BridgeHost(IChannelBridge bridge, string origin, RouterCor
         }
     }
 
-    private async Task RetrySubscribeAsync(Action<BridgeMessage> onMessage)
+    private async Task SubscribeAsync(Action<BridgeMessage> onMessage)
     {
+        if (Volatile.Read(ref _detached) == 1 || TrySubscribe(onMessage))
+        {
+            return;
+        }
+
         var delay = FirstRetry;
         while (Volatile.Read(ref _detached) == 0 && !core.StopToken.IsCancellationRequested)
         {
@@ -138,6 +172,11 @@ internal sealed class BridgeHost(IChannelBridge bridge, string origin, RouterCor
 
     private void Receive(BridgeMessage message, Func<string, IRouterParticipant?> find, Action clearAll)
     {
+        if (Volatile.Read(ref _detached) == 1)
+        {
+            return;
+        }
+
         try
         {
             if (string.Equals(message.Origin, Origin, StringComparison.Ordinal))
@@ -154,7 +193,7 @@ internal sealed class BridgeHost(IChannelBridge bridge, string origin, RouterCor
                 case BridgeMessageKind.Clear when message.CacheName is { } name && find(name) is { } cache:
                     cache.ResetLocal();
                     break;
-                case BridgeMessageKind.Tag:
+                case BridgeMessageKind.Tag when message.Tag is { Length: > 0 }:
                     clearAll();
                     break;
                 default:

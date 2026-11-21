@@ -183,10 +183,10 @@ public sealed class BridgeTests : RouterTestBase
     public async Task A_subscribe_that_throws_neither_fails_the_router_nor_stays_down()
     {
         var (node, bridge) = Bridged(bridge: new FakeChannelBridge { SubscribeFailures = 2 });
-        bridge.Subscribed.Should().BeFalse();
         (await node.Cache.SetAsync("k", new Item("v"), default, Ct)).Should().Be(WriteOutcome.Committed);
 
-        await UntilAsync(() => Clock.HasTimers);
+        await UntilAsync(() => bridge.SubscribeCalls == 1 && Clock.HasTimers);
+        bridge.Subscribed.Should().BeFalse();
         Clock.Advance(TimeSpan.FromSeconds(1));
         await UntilAsync(() => bridge.SubscribeCalls == 2 && Clock.HasTimers);
         Clock.Advance(TimeSpan.FromSeconds(2));
@@ -244,13 +244,54 @@ public sealed class BridgeTests : RouterTestBase
     [Fact]
     public async Task A_subscription_that_throws_on_dispose_does_not_stop_the_cleanup()
     {
-        var (node, bridge) = Bridged();
+        var hosted = new FakeHostedService();
+        var (node, bridge) = Bridged(lazyLibraryAsync: _ => Task.FromResult(Parts(new FakeMigrationCache(), [hosted])));
+        await UntilAsync(() => node.Router.Mode == RouterMode.Library);
         bridge.DisposeFails = true;
 
-        var dispose = async () => await node.StartDispose();
+        await node.StartDispose().WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
-        await dispose.Should().NotThrowAsync();
         bridge.Subscribed.Should().BeFalse();
+        hosted.Stopped.Should().Be(1, "the library is released after the failed detach");
+    }
+
+    [Fact]
+    public async Task A_stop_while_Subscribe_is_blocked_disposes_the_subscription_when_it_arrives()
+    {
+        using var gate = new ManualResetEventSlim();
+        var (node, bridge) = Bridged(bridge: new FakeChannelBridge { SubscribeGate = gate });
+        await UntilAsync(() => bridge.SubscribeEntered);
+
+        await node.StartDispose().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        gate.Set();
+
+        await UntilAsync(() => bridge.Disposals == 1);
+        bridge.Subscribed.Should().BeFalse("a subscription that arrived after the stop is disposed at once");
+    }
+
+    [Theory]
+    [InlineData(BridgeMessageKind.Key)]
+    [InlineData(BridgeMessageKind.Clear)]
+    public async Task A_message_received_during_a_load_keeps_the_loaded_value_off_the_local_tier(BridgeMessageKind kind)
+    {
+        var (node, bridge) = Bridged();
+        Store["k"] = new Item("old");
+        var read = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        node.LibraryBackend.AfterRead = async () =>
+        {
+            read.TrySetResult();
+            await release.Task;
+        };
+
+        var load = node.Cache.TryGetAsync("k", Ct).AsTask();
+        await read.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        bridge.Deliver(new BridgeMessage(kind, CacheName, kind == BridgeMessageKind.Key ? "k" : null, Origin: "urn:other"));
+        node.LibraryBackend.AfterRead = null;
+        release.SetResult();
+
+        (await load.WaitAsync(TimeSpan.FromSeconds(10), Ct))!.Name.Should().Be("old", "the caller still gets what it read");
+        node.IsLocal("k").Should().BeFalse("a value read before the eviction is not kept");
     }
 
     private (TestNode Node, FakeChannelBridge Bridge) Bridged(
@@ -262,8 +303,15 @@ public sealed class BridgeTests : RouterTestBase
     {
         bridge ??= new FakeChannelBridge();
         var node = NewNode(useLibrary: useLibrary, lazyLibraryAsync: lazyLibraryAsync, startBound: startBound, sourceTimeout: sourceTimeout, bridge: bridge, bridgeOrigin: Me);
-        if (bridge.SubscribeFailures == 0)
+        if (bridge.SubscribeFailures == 0 && bridge.SubscribeGate is null)
         {
+            // The first Subscribe runs off the start path.
+            var until = DateTime.UtcNow.AddSeconds(10);
+            while (!bridge.Subscribed && DateTime.UtcNow < until)
+            {
+                Thread.Sleep(5);
+            }
+
             bridge.Subscribed.Should().BeTrue();
         }
 

@@ -30,6 +30,8 @@ public sealed class RouterBuilder
 
     internal IChannelBridge? Bridge { get; private set; }
 
+    internal int BridgeMaxPending { get; private set; } = BridgeHost.DefaultMaxPending;
+
     public RouterBuilder Add<T>(RouterCacheRegistration<T> registration)
         where T : class
     {
@@ -68,10 +70,15 @@ public sealed class RouterBuilder
         return this;
     }
 
-    /// <summary>The adapter over the older client's invalidation channel: the router publishes every key write, delete and clear on it and evicts on what it receives.</summary>
-    public RouterBuilder UseChannelBridge(IChannelBridge bridge)
+    /// <summary>
+    /// The adapter over the older client's invalidation channel: the router publishes every key write, delete and clear on it and evicts on what it
+    /// receives. At most <paramref name="maxPendingPublishes"/> adapter calls are in flight; a publish beyond that is dropped and counted.
+    /// </summary>
+    public RouterBuilder UseChannelBridge(IChannelBridge bridge, int maxPendingPublishes = 16)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxPendingPublishes, 1);
         Bridge = bridge ?? throw new ArgumentNullException(nameof(bridge));
+        BridgeMaxPending = maxPendingPublishes;
         return this;
     }
 
