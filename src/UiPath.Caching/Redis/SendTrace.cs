@@ -37,6 +37,23 @@ internal sealed class SendTrace
         return result;
     }
 
+    /// <summary>A command whose answer only says that it ran, as a delete's does whether or not the key existed: any answer commits.</summary>
+    public async ValueTask<bool> AcknowledgeRanAsync(Task pending)
+    {
+        try
+        {
+            await pending.ConfigureAwait(false);
+        }
+        catch (RedisConnectionException ex) when (NeverWritten(ex))
+        {
+            Interlocked.Decrement(ref _sent);
+            throw;
+        }
+
+        MarkAnswered(true);
+        return true;
+    }
+
     /// <summary>Committed when any attempt was answered true, otherwise unknown while any send is unanswered, otherwise failed.</summary>
     public StoreOutcome Outcome()
     {

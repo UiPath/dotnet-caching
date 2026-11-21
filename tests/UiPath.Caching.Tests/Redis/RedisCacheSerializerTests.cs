@@ -869,6 +869,38 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public async Task A_write_delete_and_null_write_the_client_never_wrote_are_not_sent()
+    {
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(5)));
+        var unsent = new RedisConnectionException(ConnectionFailureType.UnableToConnect, CommandFlags.None, "No connection is active/available to service this operation", null, CommandStatus.WaitingToBeSent);
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(unsent));
+        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(unsent));
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.WriteAsync<string>("k", null, DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent, "the null value is a delete or an empty write, accounted the same way");
+    }
+
+    [Fact]
+    public async Task A_delete_whose_connection_drops_after_sending_is_unknown()
+    {
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(5)));
+        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromException<bool>(new RedisConnectionException(ConnectionFailureType.SocketClosed, CommandFlags.None, "SocketClosed", null, CommandStatus.Sent)));
+
+        (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.Unknown);
+    }
+
+    [Fact]
+    public async Task A_delete_of_an_absent_key_is_committed()
+    {
+        var sut = Create(out _);
+        StubStore(set: true, delete: false);
+
+        (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.Committed);
+    }
+
+    [Fact]
     public async Task A_write_the_store_answers_with_a_failure_is_failed()
     {
         var sut = Create(out _);

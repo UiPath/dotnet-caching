@@ -211,27 +211,21 @@ internal sealed partial class RouterCore
         }
     }
 
-    /// <summary>Waits for the pending windows at most <see cref="CleanupBound"/>; the keys still pending then are logged with their deadlines and left.</summary>
+    /// <summary>Waits for every pending window to its real deadline; past <see cref="CleanupBound"/> one warning lists the keys still pending, and the wait goes on.</summary>
     /// <remarks>
-    /// Only the window is waited for: no I/O of a pending key borrows caller memory, the cache-level invalidation of the bounded stop is already published, and the
-    /// flush that follows announces every key again. A stop that cannot wait for a write of unknown outcome must not hold the host for the whole window.
+    /// A pending key's final announcement must come after its window: a peer that refills the old value before then would miss a commit that lands late. A write
+    /// of unknown outcome therefore costs a slower shutdown; a process killed during that wait falls into the crash case, where peers rely on their local cap.
     /// </remarks>
     public async Task SettlePendingAsync(IRouterParticipant[] participants)
     {
-        if (await BoundedStop.CompletesAsync(Task.WhenAll(participants.Select(p => p.WhenPendingSettledAsync())), CleanupBound).ConfigureAwait(false))
+        var settled = Task.WhenAll(participants.Select(p => p.WhenPendingSettledAsync()));
+        if (!await BoundedStop.CompletesAsync(settled, CleanupBound).ConfigureAwait(false))
         {
-            return;
+            var pending = participants.SelectMany(p => p.PendingKeys()).Select(p => $"{p.Cache}/{p.Key} until {p.Until:O}");
+            LogPendingWait(string.Join(", ", pending));
         }
 
-        Interlocked.Increment(ref _unfinishedCleanup);
-        RouterTelemetry.CountCleanupTimedOut();
-        foreach (var participant in participants)
-        {
-            foreach (var (cache, key, until) in participant.PendingKeys())
-            {
-                LogPendingLeft(cache, key, until);
-            }
-        }
+        await settled.ConfigureAwait(false);
     }
 
     private void ExitActive()
@@ -652,8 +646,8 @@ internal sealed partial class RouterCore
             LogCleanupTimedOut(name);
         }
     }
-    [LoggerMessage(Level = LogLevel.Warning, Message = "The router stopped without waiting for pending key {Key} of cache {Cache}, whose write may still land until {Until}; peers were told to drop the cache.")]
-    private partial void LogPendingLeft(string cache, string key, DateTimeOffset until);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The router's dispose waits for keys whose write may still land: {Pending}.")]
+    private partial void LogPendingWait(string pending);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Router mode is {Mode} ({Reason}).")]
     private partial void LogMode(RouterMode mode, RouterModeReason reason);

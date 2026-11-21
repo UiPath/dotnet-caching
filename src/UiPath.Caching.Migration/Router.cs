@@ -162,7 +162,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
             foreground.TrySetResult();
             await invalidate.ConfigureAwait(false);
 
-            // Calls still running use the router's resources, so they are waited for; a pending window is not, past the cleanup bound.
+            // Calls still running use the router's resources, and a pending key's announcement must wait for its window: both are waited for.
             await _core.OperationsDrained.ConfigureAwait(false);
             await _core.SettlePendingAsync(stoppables).ConfigureAwait(false);
         }

@@ -211,7 +211,7 @@ public sealed class StopAndFenceTests : RouterTestBase
     }
 
     [Fact]
-    public async Task A_dispose_leaves_a_pending_window_past_the_cleanup_bound_and_counts_it()
+    public async Task A_dispose_waits_for_a_pending_window_to_its_deadline_past_the_cleanup_bound()
     {
         var node = NewNode(pendingWindow: TimeSpan.FromMinutes(10), cleanupBound: TimeSpan.FromMilliseconds(300));
         node.LibraryBackend.WriteOutcome = WriteOutcome.Unknown;
@@ -231,9 +231,8 @@ public sealed class StopAndFenceTests : RouterTestBase
 
         await dispose;
 
-        (Clock.GetUtcNow() - started).Should().BeLessThan(TimeSpan.FromMinutes(10), "a write of unknown outcome does not hold the dispose for its whole window");
-        node.Core.UnfinishedCleanup.Should().BeGreaterThan(0, "the window left is counted and logged");
-        Bus.Events.Should().Contain(ev => ev.Type == KnownEventTypes.TopicInvalidated, "peers were told to drop the cache instead");
+        (Clock.GetUtcNow() - started).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMinutes(10), "the final announcement waits for the window, so a late commit is never missed by a peer");
+        Bus.Events.Should().Contain(ev => ev.Type == KnownEventTypes.TopicInvalidated, "the bounded stop still announced the cache-level invalidation");
     }
 
     [Fact]
