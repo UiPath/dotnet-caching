@@ -192,7 +192,8 @@ internal sealed partial class RouterCore
             {
                 try
                 {
-                    await BoundedAsync(parts.ReleaseTopicAsync(topic), "topic release").ConfigureAwait(false);
+                    using var bound = new CancellationTokenSource(CleanupBound);
+                    await BoundedAsync(parts.ReleaseTopicAsync(topic, bound.Token), "topic release").ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {

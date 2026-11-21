@@ -134,14 +134,20 @@ public sealed class PinHostTests
     public async Task With_a_write_format_setting_and_no_reachable_redis_a_pinned_group_still_fails_closed_and_never_reaches_the_source()
     {
         var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
-        await using var provider = Build(source, "g", router => router.UsePinWhen(_ => true).UseValueSerializers(stack => stack.AddValueSerializer("messagepack", [TestFormatSerializer.Id], _ => new TestFormatSerializer())).UseWriteFormatWhen(_ => throw new InvalidOperationException("no setting")));
+        var provider = Build(source, "g", router => router.UsePinWhen(_ => true).UseValueSerializers(stack => stack.AddValueSerializer("messagepack", [TestFormatSerializer.Id], _ => new TestFormatSerializer())).UseWriteFormatWhen(_ => throw new InvalidOperationException("no setting")));
+        try
+        {
+            var router = provider.GetRequiredService<IRouter>();
 
-        var router = provider.GetRequiredService<IRouter>();
-
-        var write = await router.Get<Item>("items").SetAsync("k", new Item("v"), default, Ct);
-        write.Should().Be(WriteOutcome.NotSent);
-        source.Writes.Should().Be(0);
-        await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
+            var write = await router.Get<Item>("items").SetAsync("k", new Item("v"), default, Ct);
+            write.Should().Be(WriteOutcome.NotSent);
+            source.Writes.Should().Be(0);
+        }
+        finally
+        {
+            // One bounded dispose: a dispose that hangs fails the test instead of the run.
+            await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
+        }
     }
 
     [Fact]

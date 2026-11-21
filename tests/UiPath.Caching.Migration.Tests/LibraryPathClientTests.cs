@@ -155,7 +155,7 @@ public sealed class LibraryPathClientTests : RouterTestBase
     public async Task A_write_takes_the_policy_asked_at_that_write_and_none_when_no_policy_is_given()
     {
         var policies = new Queue<CachePolicy>([WriteFormats.Envelope, WriteFormats.MessagePackPolicy]);
-        var picking = new LibraryPathClient<Item>(_store, _connection, key => key, () => Settle, policies.Dequeue);
+        var picking = new LibraryPathClient<Item>(_store, _connection, key => key, () => Settle, () => new WriteLease(policies.Dequeue(), null));
 
         await Client().SetAsync("k", new Item("v"), null, Ct);
         await picking.SetAsync("k", new Item("v"), null, Ct);

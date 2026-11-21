@@ -173,7 +173,9 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
         await flush.ConfigureAwait(false);
         _core.CancelBackground();
-        var background = _core.DrainAsync();
+
+        // Started on the pool, so the phase bound runs even if the drain does not yield.
+        var background = Task.Run(_core.DrainAsync);
         if (!await WithinAsync(background).ConfigureAwait(false))
         {
             foreground.TrySetResult();

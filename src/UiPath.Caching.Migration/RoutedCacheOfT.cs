@@ -229,7 +229,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
     private IPathClient<T> Client(Route route) => route.Hold ? UnavailablePathClient<T>.Instance : Client(route.Path);
 
-    private Func<CachePolicy?>? WritePolicy() => _core.WriteFormats is { } formats && _pin is { } pin ? () => formats.PolicyFor(pin) : null;
+    private Func<WriteLease>? WritePolicy() => _core.WriteFormats is { } formats && _pin is { } pin ? () => formats.Select(pin) : null;
 
     private bool MayFallBack(Route route) => route.Other != RoutePath.Source || _core.MaySourceFallback(_pin);
 

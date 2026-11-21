@@ -83,8 +83,12 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     }
 
     /// <summary>Null when MessagePack writes may go ahead. Asking is what makes the pin a switch: the state is written only once a format write is wanted.</summary>
-    /// <remarks>With a write format setting, the groups that asked for MessagePack are the ones that count; otherwise every group does, from the first ask.</remarks>
-    public string? Hold()
+    /// <remarks>With a write format setting, the groups that asked for MessagePack, or are writing it, are the ones that count; otherwise every group does, from the first ask.</remarks>
+    public string? Hold() => HoldFor(null);
+
+    /// <summary><see cref="Hold"/>, and the group about to write must itself be covered by the snapshot, acknowledged and durable.</summary>
+    /// <remarks>Checked for the writing group directly, so a concurrent answer that clears its wanted bit cannot drop it from the check.</remarks>
+    public string? HoldFor(GroupPin? writing)
     {
         if (WriteFormat is null && Volatile.Read(ref _wanted) == 0 && Interlocked.Exchange(ref _wanted, 1) == 0)
         {
@@ -122,6 +126,19 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
             }
 
             if (!group.Acked || !group.Durable)
+            {
+                return "pin_lost";
+            }
+        }
+
+        if (writing is not null)
+        {
+            if (!snapshot.Covers(writing.Group))
+            {
+                return "group_not_evaluated";
+            }
+
+            if (!writing.Acked || !writing.Durable)
             {
                 return "pin_lost";
             }
@@ -251,7 +268,7 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     private GroupPin[] Wanted(GroupPin[] groups) =>
         WriteFormat is null
             ? (Volatile.Read(ref _wanted) == 1 ? groups : [])
-            : [.. groups.Where(group => group.Wanted)];
+            : [.. groups.Where(group => group.Wanted || group.Writing)];
 
     private async Task<bool> RefreshGroupAsync(GroupPin group, NodeCache nodes, CancellationToken cancellationToken)
     {

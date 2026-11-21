@@ -11,7 +11,15 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
 {
     private readonly HashSet<string> _failed = [];
 
+    /// <summary>The policy alone, for a caller that writes nothing with it.</summary>
     public CachePolicy PolicyFor(GroupPin pin)
+    {
+        using var lease = Select(pin);
+        return lease.Policy!;
+    }
+
+    /// <summary>The policy of one write; a MessagePack lease keeps the group in the gate's coverage until it is disposed after the write.</summary>
+    public WriteLease Select(GroupPin pin)
     {
         string? answer;
         try
@@ -21,23 +29,37 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Report(pin.Group, ex);
-            return WriteFormats.Envelope;
+            return new(WriteFormats.Envelope, null);
         }
 
-        Recover(pin.Group);
         if (!WriteFormats.IsKnown(answer))
         {
             Report(pin.Group, null);
             pins.Want(pin, false);
-            return WriteFormats.Envelope;
+            return new(WriteFormats.Envelope, null);
         }
 
+        // Only an answer that reads and validates ends a reported failure, so a setting that stays wrong is logged once.
+        Recover(pin.Group);
         var wanted = WriteFormats.WantsMessagePack(answer);
         pins.Want(pin, wanted);
-        return wanted && Ready(pin) ? WriteFormats.MessagePackPolicy : WriteFormats.Envelope;
+        if (!wanted)
+        {
+            return new(WriteFormats.Envelope, null);
+        }
+
+        // Counted as writing before the gate is asked, so a concurrent answer that clears the wanted bit cannot drop the group from the library's own check.
+        pin.EnterWriting();
+        if (Ready(pin))
+        {
+            return new(WriteFormats.MessagePackPolicy, pin);
+        }
+
+        pin.ExitWriting();
+        return new(WriteFormats.Envelope, null);
     }
 
-    private bool Ready(GroupPin pin) => pin.Applied && pin.Acked && pin.Switched && pin.Durable && pins.Hold() is null;
+    private bool Ready(GroupPin pin) => pin.Applied && pin.Acked && pin.Switched && pin.Durable && pins.HoldFor(pin) is null;
 
     private void Report(string group, Exception? exception)
     {

@@ -246,6 +246,72 @@ public sealed class WriteFormatTests
         pins.Hold().Should().Be("unpinned_group", "the unwanted group B holds the gate when no setting says which groups want it");
     }
 
+    [Fact]
+    public async Task A_durable_group_whose_wanted_bit_is_cleared_before_its_write_is_still_checked_for_its_own_coverage()
+    {
+        var pins = Coordinator("a", "A", "B");
+        var a = pins.GroupFor("A");
+        var b = pins.GroupFor("B");
+        _pinned["A"] = true;
+        _pinned["B"] = true;
+        _format["A"] = "messagepack";
+        _format["B"] = "messagepack";
+        pins.EvaluatePins();
+        Advertise("a", pins);
+        var selector = new WriteFormatSelector(g => _format[g], pins, NullLogger.Instance);
+        selector.PolicyFor(a);
+        selector.PolicyFor(b);
+        await pins.RefreshAsync(Ct);
+        Advertise("a", pins);
+        await pins.RefreshAsync(Ct);
+        selector.PolicyFor(b).Should().BeSameAs(WriteFormats.MessagePackPolicy, "B is switched and durable");
+
+        // B goes back to JSON, and a peer that never pinned B joins: the view the gate now opens from is A's alone.
+        _format["B"] = "json";
+        pins.EvaluatePins();
+        _store.Nodes.Add(Node("peer", "ap=app", RouterAdvertisement.Pin + "A"));
+        await pins.RefreshAsync(Ct);
+        b.Wanted.Should().BeFalse();
+        b.Durable.Should().BeTrue();
+        pins.Hold().Should().BeNull("A alone is wanted, and the view covers it");
+
+        // The interleaving: a B write that read messagepack, then lost its wanted bit to a concurrent JSON answer before the gate check.
+        pins.HoldFor(b).Should().NotBeNull("B itself is not covered by the A-only view, whatever its wanted bit says");
+        using (new WriteLease(WriteFormats.MessagePackPolicy, Enter(b)))
+        {
+            pins.Hold().Should().NotBeNull("the library's own check during the write covers the writing group too");
+        }
+
+        pins.Hold().Should().BeNull();
+    }
+
+    [Fact]
+    public void A_setting_that_stays_unknown_is_reported_once_and_a_valid_answer_ends_it()
+    {
+        var pins = ReadyCoordinator(out var a);
+        var logger = new CountingLogger();
+        var answer = "xml";
+        var selector = new WriteFormatSelector(_ => answer, pins, logger);
+
+        for (var i = 0; i < 5; i++)
+        {
+            selector.PolicyFor(a).Should().BeSameAs(WriteFormats.Envelope);
+        }
+
+        logger.Warnings.Should().Be(1);
+        answer = "json";
+        selector.PolicyFor(a);
+        answer = "xml";
+        selector.PolicyFor(a);
+        logger.Warnings.Should().Be(2, "a valid answer in between ends the report, so the next failure is new");
+    }
+
+    private static GroupPin Enter(GroupPin group)
+    {
+        group.EnterWriting();
+        return group;
+    }
+
     private static NodeEntry Node(string node, params string[] tokens) =>
         new(node + RouterAdvertisement.FieldSuffix, new RouterAdvertisement(node, "b", tokens, false).Encode(), TimeSpan.Zero);
 

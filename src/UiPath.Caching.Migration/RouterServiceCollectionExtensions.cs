@@ -149,6 +149,22 @@ public static class RouterServiceCollectionExtensions
         return query < 0 ? new Uri($"{text}-p{processId}") : new Uri($"{text[..query]}-p{processId}{text[query..]}");
     }
 
+    /// <summary>The topic is removed first, so its reader is gone before the group is, and cannot make it again.</summary>
+    /// <remarks>The connection is awaited, never read synchronously, so a Redis that cannot be reached leaves a task the caller's bound covers.</remarks>
+    internal static async Task ReleaseTopicAsync(ITopicProvider topics, IRedisConnector connector, RedisKey stream, string group, TopicKey key, CancellationToken cancellationToken)
+    {
+        topics.Remove(key);
+        try
+        {
+            await connector.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            await connector.Database.ExecuteAsync("XGROUP", "DESTROY", stream, group).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (RedisServerException)
+        {
+            // No such stream or group: nothing of ours is left.
+        }
+    }
+
     private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, PinFormatGate? gate, IConfigurationSection section)
     {
         var logger = root.GetService<ILoggerFactory>()?.CreateLogger("UiPath.Caching.Migration") ?? NullLogger.Instance;
@@ -265,7 +281,7 @@ public static class RouterServiceCollectionExtensions
                 source,
                 LibrarySettleWithin(root, builder.SettleBound),
                 started,
-                key => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key));
+                (key, cancellationToken) => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key, cancellationToken));
         }
         catch
         {
@@ -283,20 +299,6 @@ public static class RouterServiceCollectionExtensions
             }
 
             throw;
-        }
-    }
-
-    /// <summary>The topic is removed first, so its reader is gone before the group is, and cannot make it again.</summary>
-    private static async Task ReleaseTopicAsync(ITopicProvider topics, IRedisConnector connector, RedisKey stream, string group, TopicKey key)
-    {
-        topics.Remove(key);
-        try
-        {
-            await connector.Database.ExecuteAsync("XGROUP", "DESTROY", stream, group).ConfigureAwait(false);
-        }
-        catch (RedisServerException)
-        {
-            // No such stream or group: nothing of ours is left.
         }
     }
 }
