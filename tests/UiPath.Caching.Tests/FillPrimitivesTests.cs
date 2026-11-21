@@ -186,6 +186,35 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         (await sut.SetIfChangedAsync("b", "v", StringComparer.Ordinal, Ttl, Ct)).Outcome.Should().Be(ChangeOutcome.Failed);
     }
 
+    [Theory]
+    [InlineData(AddOutcome.Unknown)]
+    [InlineData(AddOutcome.Added)]
+    public async Task A_create_the_inner_tier_added_or_may_have_added_is_reported_as_such_and_drops_the_local_copy(AddOutcome inner)
+    {
+        var shared = new FillStore();
+        using var sut = Layered(shared);
+        await sut.SetAsync("k", "old", Ttl, null, Ct);
+        shared.CreateOutcome = inner;
+
+        var outcome = await sut.AsMigrationCache().TryCreateAsync("k", "new", DateTimeOffset.UtcNow.Add(Ttl), null, Ct);
+
+        outcome.Should().Be(inner, "a lost reply must not read as an existing value");
+        shared.CreateOutcome = null;
+        await shared.SetAsync("k", "landed", Ttl, null, Ct);
+        (await sut.GetAsync<string>("k", null, Ct)).Should().Be("landed", "the local copy was dropped");
+    }
+
+    [Fact]
+    public async Task A_create_of_a_held_key_is_exists()
+    {
+        var shared = new FillStore();
+        using var sut = Layered(shared);
+        await sut.SetAsync("k", "old", Ttl, null, Ct);
+
+        (await sut.AsMigrationCache().TryCreateAsync("k", "new", DateTimeOffset.UtcNow.Add(Ttl), null, Ct)).Should().Be(AddOutcome.Exists);
+        (await shared.GetAsync<string>("k", null, Ct)).Should().Be("old");
+    }
+
     [Fact]
     public async Task A_cancelled_fill_throws()
     {
@@ -735,6 +764,9 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
 
         public FillStoreFault Fault { get; set; }
 
+        /// <summary>Forces the answer of a create, as a store that lost the reply would give.</summary>
+        public AddOutcome? CreateOutcome { get; set; }
+
         public bool ReportNoExpiration { get; set; }
 
         /// <summary>How long from now a found entry reports it has left.</summary>
@@ -756,7 +788,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
             await SetAsync(cacheKey, value, expiration, policy, token) ? StoreOutcome.Committed : StoreOutcome.Failed;
 
         public async ValueTask<AddOutcome> TryCreateAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-            await TryAddAsync(cacheKey, value, expiration, policy, token) ? AddOutcome.Added : AddOutcome.Exists;
+            CreateOutcome ?? (await TryAddAsync(cacheKey, value, expiration, policy, token) ? AddOutcome.Added : AddOutcome.Exists);
 
         public async ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
             await RemoveAsync<T>(cacheKey, token) ? StoreOutcome.Committed : StoreOutcome.Failed;

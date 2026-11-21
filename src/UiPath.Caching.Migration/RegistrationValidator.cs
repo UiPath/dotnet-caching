@@ -39,27 +39,10 @@ internal static class RegistrationValidator
             violations.Add($"Redis.{nameof(RedisCacheOptions.ReadFrom)} is {redisOptions.ReadFrom}: reads go to the primary, as the source's do.");
         }
 
-        if (cacheOptions.DefaultCachePolicy is { } policy)
+        // The router's provider is Redis-only, passes absolute deadlines and awaits its writes, so jitter, fail-safe and background writes never reach it.
+        if (cacheOptions.DefaultCachePolicy?.Serializer is not null)
         {
-            if (policy.Serializer is not null)
-            {
-                violations.Add($"{nameof(CacheOptions.DefaultCachePolicy)}.{nameof(CachePolicy.Serializer)} is set: values are written with the source's envelope only.");
-            }
-
-            if (policy.JitterMaxDuration is { } jitter && jitter > TimeSpan.Zero)
-            {
-                violations.Add($"{nameof(CacheOptions.DefaultCachePolicy)}.{nameof(CachePolicy.JitterMaxDuration)} is {jitter}: a deadline is stored as the caller gives it.");
-            }
-
-            if (policy.FailSafeEnabled == true)
-            {
-                violations.Add($"{nameof(CacheOptions.DefaultCachePolicy)}.{nameof(CachePolicy.FailSafeEnabled)} is on: expired values are not served.");
-            }
-
-            if (policy.BackgroundDistributedWrite == true)
-            {
-                violations.Add($"{nameof(CacheOptions.DefaultCachePolicy)}.{nameof(CachePolicy.BackgroundDistributedWrite)} is on: a write commits before the call returns.");
-            }
+            violations.Add($"{nameof(CacheOptions.DefaultCachePolicy)}.{nameof(CachePolicy.Serializer)} is set: values are written with the source's envelope only.");
         }
 
         return violations;

@@ -98,7 +98,57 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         }
     }
 
-    private ServiceProvider Provider(ISerializerProxy<byte[]> envelope)
+    [Fact]
+    public async Task A_library_write_that_stores_nothing_fails_the_check()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var provider = Provider(
+            new LegacyEnvelopeProxy(),
+            after: services => services.AddKeyedSingleton<ICacheFactory>(RouterServiceCollectionExtensions.StackName, new NullCacheFactory()));
+
+        var report = await RouterConformance.CheckAsync(provider, _cacheName, Samples.Take(1), Ct);
+
+        report.Failures.Should().Contain(f => f.Contains("the library write stored nothing", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_stored_null_on_the_library_path_is_a_hit_only_with_CacheNulls(bool cacheNulls)
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var provider = Provider(new LegacyEnvelopeProxy(), cacheNulls);
+        var router = provider.GetRequiredService<IRouter>();
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (router.Mode != RouterMode.Library && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25, Ct);
+        }
+
+        var key = (RedisKey)$"n:{_cacheName},c:nul";
+        await _redis!.GetDatabase().StringSetAsync(key, RedisValue.EmptyString, TimeSpan.FromMinutes(5));
+        try
+        {
+            var runs = 0;
+            var value = await router.Get<List<long>>(_cacheName).GetOrAddAsync("nul", _ => { runs++; return Task.FromResult<List<long>?>([7]); }, CacheExpiry.After(TimeSpan.FromMinutes(5)), Ct);
+
+            if (cacheNulls)
+            {
+                value.Should().BeNull();
+                runs.Should().Be(0, "the stored null is a hit");
+            }
+            else
+            {
+                runs.Should().Be(1, "without CacheNulls a stored null is a miss");
+            }
+        }
+        finally
+        {
+            await _redis!.GetDatabase().KeyDeleteAsync(key);
+        }
+    }
+
+    private ServiceProvider Provider(ISerializerProxy<byte[]> envelope, bool cacheNulls = false, Action<IServiceCollection>? after = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -114,7 +164,8 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         services.AddCachingRouter(configuration, router => router
             .UseLibraryWhen(_ => true)
             .UseEnvelope(envelope)
-            .Add(new RouterCacheRegistration<List<long>> { Name = _cacheName, Group = "cfg", Source = source, RedisKey = source.RedisKey }));
+            .Add(new RouterCacheRegistration<List<long>> { Name = _cacheName, Group = "cfg", Source = source, RedisKey = source.RedisKey, CacheNulls = cacheNulls }));
+        after?.Invoke(services);
         var provider = services.BuildServiceProvider();
         _ = provider.GetRequiredService<IRouter>();
         return provider;
@@ -137,6 +188,22 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         {
             result = default;
             return false;
+        }
+    }
+
+    /// <summary>A library whose writes report committed and store nothing.</summary>
+    private sealed class NullCacheFactory : ICacheFactory
+    {
+        public IEnumerable<string> ProviderNames => [KnownCacheProviderNames.Redis];
+
+        public ICache CreateCache(string? providerName = null) => NullCache.Instance;
+
+        public IHashCache CreateHashCache(string? providerName = null) => throw new NotSupportedException();
+
+        public void AddProvider(ICacheProvider provider) => throw new NotSupportedException();
+
+        public void Dispose()
+        {
         }
     }
 }

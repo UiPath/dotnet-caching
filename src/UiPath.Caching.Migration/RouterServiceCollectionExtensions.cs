@@ -128,6 +128,9 @@ public static class RouterServiceCollectionExtensions
     {
         options.RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance;
         options.RemoveUnreadable = false;
+
+        // A stored null then reads as found; each registration decides with CacheNulls whether that is a hit. The router never writes a null.
+        options.CacheNullValues = true;
     }
 
     private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, IConfigurationSection section)

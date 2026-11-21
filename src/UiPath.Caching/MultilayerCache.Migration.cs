@@ -42,7 +42,11 @@ internal sealed partial class MultilayerCache
         return sink.Outcome ?? StoreOutcome.NotSent;
     }
 
-    /// <summary>The answer of <c>TryAddAsync</c>, which keeps the local tier and the announcement: true is <see cref="AddOutcome.Added"/> and false <see cref="AddOutcome.Exists"/>, so a write the inner tier dropped also reads as present; a throw is <see cref="AddOutcome.Unknown"/>.</summary>
+    /// <summary>
+    /// The inner tier's own create outcome; an added or unknown create drops this node's copy and announces a removal. An inner tier without
+    /// <see cref="IMigrationCache"/> answers only true or false, and false is <see cref="AddOutcome.Unknown"/>, since it may hide a lost reply.
+    /// A local-only cache has no reply to lose, so its false is <see cref="AddOutcome.Exists"/>.
+    /// </summary>
     public async ValueTask<AddOutcome> TryCreateAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
     {
         if (token.IsCancellationRequested || (_sharedInner && GetInnerCacheDisconnected()))
@@ -52,7 +56,26 @@ internal sealed partial class MultilayerCache
 
         try
         {
-            return await TryAddAsync(cacheKey, value, expiration, policy, token).ConfigureAwait(false) ? AddOutcome.Added : AddOutcome.Exists;
+            NotCacheableException.ThrowIfNotCacheable<T>();
+            if (!_sharedInner)
+            {
+                return await TryAddAsync(cacheKey, value, expiration, policy, token).ConfigureAwait(false) ? AddOutcome.Added : AddOutcome.Exists;
+            }
+
+            if (_innerCache is not IMigrationCache migration)
+            {
+                return await TryAddAsync(cacheKey, value, expiration, policy, token).ConfigureAwait(false) ? AddOutcome.Added : AddOutcome.Unknown;
+            }
+
+            var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, GetExpiration(expiration), token);
+            var outcome = await migration.TryCreateAsync(options.CacheKey, value, expiration, policy ?? _defaultPolicy, token).ConfigureAwait(false);
+            if (outcome is AddOutcome.Added or AddOutcome.Unknown)
+            {
+                RemoveLocal(options.CacheKey.Name);
+                await _eventPublisher.CacheRemovedAsync(options, typeof(T)).ConfigureAwait(false);
+            }
+
+            return outcome;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException && !(ex is OperationCanceledException && token.IsCancellationRequested))
         {

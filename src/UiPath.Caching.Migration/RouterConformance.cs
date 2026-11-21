@@ -12,6 +12,7 @@ namespace UiPath.Caching.Migration;
 public static class RouterConformance
 {
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(10);
+    // Less than the two minutes between the source's and the library's deadlines, so the check tells them apart.
     private static readonly TimeSpan TtlTolerance = TimeSpan.FromSeconds(30);
 
     public static async Task<ConformanceReport> CheckAsync<T>(
@@ -50,9 +51,17 @@ public static class RouterConformance
                     failures.Add($"{label}: the library read {libraryRead.Kind} for what the source wrote, not the value.");
                 }
 
-                await ExpectCommittedAsync(library.SetAsync(key, value, deadline, cancellationToken), label, "the library write", failures).ConfigureAwait(false);
+                // On an empty key and with another deadline, so a library write that stores nothing cannot pass on what the source left.
+                await connector.Database.KeyDeleteAsync(redisKey).ConfigureAwait(false);
+                var libraryDeadline = deadline + TimeSpan.FromMinutes(2);
+                await ExpectCommittedAsync(library.SetAsync(key, value, libraryDeadline, cancellationToken), label, "the library write", failures).ConfigureAwait(false);
                 var libraryBytes = (byte[]?)await connector.Database.StringGetAsync(redisKey).ConfigureAwait(false);
-                await ExpectTtlAsync(connector.Database, redisKey, deadline, clock, label, "the library write", failures).ConfigureAwait(false);
+                if (libraryBytes is null)
+                {
+                    failures.Add($"{label}: the library write stored nothing.");
+                }
+
+                await ExpectTtlAsync(connector.Database, redisKey, libraryDeadline, clock, label, "the library write", failures).ConfigureAwait(false);
                 var sourceRead = await source.ReadAsync(key, cancellationToken).ConfigureAwait(false);
                 if (sourceRead.Kind != ReadOutcome.Found || !Same(envelope, sourceRead.Value, value))
                 {

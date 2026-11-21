@@ -87,12 +87,12 @@ internal sealed class TestNode : IAsyncDisposable
         RoutedCache<Item> cache;
         if (lazyLibrary is null && lazyLibraryAsync is null)
         {
-            cache = new RoutedCache<Item>(core, registration, library ?? libraryBackend, bus.For(source), events, source);
+            cache = new RoutedCache<Item>(core, registration, library ?? libraryBackend, bus.For(source), events, source, version?.Invoke());
             return new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
         }
 
         core.UseLibrary(lazyLibraryAsync ?? (_ => Task.FromResult(lazyLibrary!())));
-        cache = new RoutedCache<Item>(core, registration);
+        cache = new RoutedCache<Item>(core, registration, version?.Invoke());
         var lazy = new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
         lazy.Router.Start();
         return lazy;

@@ -34,12 +34,13 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     private int _attached;
 
     /// <summary>A cache whose library is not there yet: <see cref="Prepare(LibraryParts)"/> brings it in.</summary>
-    public RoutedCache(RouterCore core, RouterCacheRegistration<T> registration)
+    /// <param name="version">The value <see cref="RouterCacheRegistration{T}.Version"/> gave when the router was built; null for an unversioned cache.</param>
+    public RoutedCache(RouterCore core, RouterCacheRegistration<T> registration, string? version = null)
     {
         _core = core;
         _registration = registration;
         _source = new SourcePathClient<T>(registration.Source, registration.CacheNulls);
-        _eventName = registration.Version is { } version ? $"{registration.Name}@{version()}" : registration.Name;
+        _eventName = version is null ? registration.Name : $"{registration.Name}@{version}";
         _topic = new TopicKey($"router:{_eventName}");
         _pending = new PendingMutations(core, registration.Name, key => AnnounceRemovalAsync(key, ClearRoute), DetachKey);
         _retrier = new InvalidationRetrier(core, registration.LocalCap, PublishRemovalOnceAsync, PublishClearOnceAsync, CountPublishFailure);
@@ -52,8 +53,9 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         IPathClient<T> library,
         ITopicProvider topics,
         ICacheEventFactory events,
-        Uri ownSource)
-        : this(core, registration) => Prepare(library, topics, events, ownSource).Commit();
+        Uri ownSource,
+        string? version = null)
+        : this(core, registration, version) => Prepare(library, topics, events, ownSource).Commit();
 
     public TopicKey? Topic => _topicHandle is null ? null : _topic;
 
@@ -62,6 +64,8 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     internal CacheEpoch Epoch => _epoch;
 
     internal RouterCacheRegistration<T> Registration => _registration;
+
+    internal string EventName => _eventName;
 
     internal InvalidationRetrier Retrier => _retrier;
 

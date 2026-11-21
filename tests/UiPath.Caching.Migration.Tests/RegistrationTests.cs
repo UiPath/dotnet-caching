@@ -67,23 +67,16 @@ public sealed class RegistrationTests
         };
         var cache = new CacheOptions
         {
-            DefaultCachePolicy = new CachePolicy
-            {
-                Serializer = new SerializerPolicy(),
-                JitterMaxDuration = TimeSpan.FromSeconds(5),
-                FailSafeEnabled = true,
-                BackgroundDistributedWrite = true,
-            },
+            DefaultCachePolicy = new CachePolicy { Serializer = new SerializerPolicy() },
         };
 
         var violations = RegistrationValidator.Violations(cache, stack);
 
-        violations.Should().HaveCount(9);
+        violations.Should().HaveCount(6);
         string[] named =
         [
             nameof(RedisCacheOptions.RedisKeyStrategyFactory), nameof(RedisCacheOptions.CacheKeyStrategy), nameof(RedisCacheOptions.EntryFactory),
-            nameof(RedisCacheOptions.RemoveUnreadable), nameof(RedisCacheOptions.ReadFrom), nameof(CachePolicy.Serializer), nameof(CachePolicy.JitterMaxDuration),
-            nameof(CachePolicy.FailSafeEnabled), nameof(CachePolicy.BackgroundDistributedWrite),
+            nameof(RedisCacheOptions.RemoveUnreadable), nameof(RedisCacheOptions.ReadFrom), nameof(CachePolicy.Serializer),
         ];
         foreach (var name in named)
         {
@@ -94,11 +87,43 @@ public sealed class RegistrationTests
     [Fact]
     public async Task An_inherited_setting_that_breaks_a_rule_fails_router_creation()
     {
-        await using var provider = Build(("Caching:DefaultCachePolicy:FailSafeEnabled", "true"));
+        await using var provider = Build(("Caching:DefaultCachePolicy:Serializer:Write", "msgpack"));
 
         var act = () => provider.GetRequiredService<IRouter>();
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*FailSafeEnabled*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Serializer*envelope*");
+    }
+
+    [Fact]
+    public async Task A_host_whose_policy_only_affects_layered_caches_still_builds_the_router()
+    {
+        await using var provider = Build(
+            ("Caching:DefaultCachePolicy:FailSafeEnabled", "true"),
+            ("Caching:DefaultCachePolicy:JitterMaxDuration", "00:00:05"),
+            ("Caching:DefaultCachePolicy:BackgroundDistributedWrite", "true"));
+
+        provider.GetRequiredService<IRouter>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void The_version_is_read_once_and_that_value_names_the_events()
+    {
+        var calls = 0;
+        var registration = new RouterCacheRegistration<Item>
+        {
+            Name = "items",
+            Group = "g",
+            Source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch)),
+            RedisKey = key => key,
+            Version = () => ++calls == 1 ? "v1" : "v2",
+        };
+        var builder = new RouterBuilder().Add(registration);
+        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+
+        var (_, _, cache) = builder.Registrations.Single()(core);
+
+        calls.Should().Be(1);
+        ((RoutedCache<Item>)cache).EventName.Should().Be("items@v1");
     }
 
     [Fact]

@@ -37,13 +37,11 @@ public sealed class RouterBuilder
         ArgumentOutOfRangeException.ThrowIfLessThan(registration.LocalCap, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(registration.PendingWindow, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(registration.PendingWindow, LibrarySettleBound.Horizon);
-        if (registration.Version is { } version)
+        // Read once: the value checked here is the one the cache's events use.
+        var version = registration.Version?.Invoke();
+        if (version is not null && (string.IsNullOrWhiteSpace(version) || version.AsSpan().IndexOfAny("@+={} ") >= 0))
         {
-            var text = version();
-            if (string.IsNullOrWhiteSpace(text) || text.AsSpan().IndexOfAny("@+={} ") >= 0)
-            {
-                throw new ArgumentException($"The version of cache '{registration.Name}' must be non-empty and hold no '@', '+', '=', braces or spaces.", nameof(registration));
-            }
+            throw new ArgumentException($"The version of cache '{registration.Name}' must be non-empty and hold no '@', '+', '=', braces or spaces.", nameof(registration));
         }
 
         if (_excluded.ContainsKey(registration.Name))
@@ -61,7 +59,8 @@ public sealed class RouterBuilder
             typeof(T),
             new RoutedCache<T>(
                 core,
-                registration)));
+                registration,
+                version)));
         return this;
     }
 
