@@ -112,6 +112,14 @@ public static class RouterServiceCollectionExtensions
         return (redisOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, RedisKeyspaces.String).GetRedisKey(name);
     }
 
+    /// <summary>The identity the router's adverts and bridge messages carry: the stack's source identity, from the router's section as the stack binds it.</summary>
+    internal static string RouterIdentity(IConfigurationSection section, string processId)
+    {
+        var options = new CacheOptions();
+        section.Bind(options);
+        return StackIdentity(options.SourceUri ?? CacheOptions.MachineUri, processId).ToString().ToLowerInvariant();
+    }
+
     /// <summary>The router stack's source identity: the named stack's <c>?stack=</c> form, then the process part.</summary>
     internal static Uri StackIdentity(Uri source, string processId) =>
         WithProcess(new Uri($"{source.AbsoluteUri.Split('?')[0]}?stack={Uri.EscapeDataString(StackName)}"), processId);
@@ -161,6 +169,11 @@ public static class RouterServiceCollectionExtensions
 
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
             core.UseLibrary(token => StartLibraryAsync(root, builder, token));
+            if (builder.Bridge is { } bridge)
+            {
+                core.Bridge = new BridgeHost(bridge, RouterIdentity(section, processId), core, logger);
+            }
+
             var advertiser = CreateAdvertiser(root, builder, core, processId, section, logger);
             var router = new Router(core, builder.Registrations, builder.Excluded) { Advertiser = advertiser, Envelope = builder.Envelope };
 
@@ -203,7 +216,7 @@ public static class RouterServiceCollectionExtensions
             var build = typeof(Router).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
             return new RouterAdvertiser(
                 new RouterAdvertisementStore(database, NodeListKey(new CacheOptions { Separator = cacheOptions.Separator }, new RedisCacheOptions { RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance })),
-                StackIdentity(cacheOptions.SourceUri ?? CacheOptions.MachineUri, processId).ToString().ToLowerInvariant(),
+                RouterIdentity(section, processId),
                 build,
                 [new BypassTokens(core)],
                 negotiation.AdvertiseInterval,

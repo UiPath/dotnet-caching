@@ -21,6 +21,7 @@ internal static class RouterTelemetry
     private static readonly Counter<long> LeaveTimedOut = RouterMeter.CreateCounter<long>("leave_timed_out");
     private static readonly Counter<long> CleanupTimedOut = RouterMeter.CreateCounter<long>("cleanup_timed_out");
     private static readonly Counter<long> LibraryStartFailed = RouterMeter.CreateCounter<long>("library_start_failed");
+    private static readonly Counter<long> Bridge = RouterMeter.CreateCounter<long>("bridge");
 
     public static void CountLocalHit(string cache, string group, Route route) => Add(LocalHit, cache, group, route.Path, route.Reason);
 
@@ -47,6 +48,14 @@ internal static class RouterTelemetry
     }
 
     public static void CountLibraryStartFailed() => LibraryStartFailed.Add(1);
+
+    public static void CountBridge(string outcome, BridgeMessageKind kind)
+    {
+        if (Bridge.Enabled)
+        {
+            Bridge.Add(1, new TagList { { "outcome", outcome }, { "kind", kind == BridgeMessageKind.Key ? "key" : kind == BridgeMessageKind.Tag ? "tag" : "clear" } });
+        }
+    }
 
     public static void CountCleanupTimedOut() => CleanupTimedOut.Add(1);
 

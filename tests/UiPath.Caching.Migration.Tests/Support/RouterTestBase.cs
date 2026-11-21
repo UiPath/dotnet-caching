@@ -61,9 +61,11 @@ public abstract class RouterTestBase : IAsyncDisposable
         TimeSpan? startBound = null,
         TimeSpan? cleanupBound = null,
         Func<string>? version = null,
-        bool cacheNulls = false)
+        bool cacheNulls = false,
+        IChannelBridge? bridge = null,
+        string? bridgeOrigin = null)
     {
-        var node = TestNode.Create(Bus, Clock, Store, cacheName ?? CacheName, useLibrary, localCap, pendingWindow, defaultExpiry: defaultExpiry, sharedCore: sharing?.Core, library: library, bypass: bypass, sourceTimeout: sourceTimeout, lazyLibrary: lazyLibrary, lazyLibraryAsync: lazyLibraryAsync, startBound: startBound, cleanupBound: cleanupBound, version: version, cacheNulls: cacheNulls);
+        var node = TestNode.Create(Bus, Clock, Store, cacheName ?? CacheName, useLibrary, localCap, pendingWindow, defaultExpiry: defaultExpiry, sharedCore: sharing?.Core, library: library, bypass: bypass, sourceTimeout: sourceTimeout, lazyLibrary: lazyLibrary, lazyLibraryAsync: lazyLibraryAsync, startBound: startBound, cleanupBound: cleanupBound, version: version, cacheNulls: cacheNulls, bridge: bridge, bridgeOrigin: bridgeOrigin);
         _nodes.Add(node);
         return node;
     }

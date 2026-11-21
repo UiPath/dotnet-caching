@@ -145,3 +145,31 @@ UiPath.Caching.Migration.RouterCacheRegistration<T>.CacheNulls.get -> bool
 UiPath.Caching.Migration.RouterCacheRegistration<T>.CacheNulls.init -> void
 UiPath.Caching.Migration.RouterCacheRegistration<T>.Version.get -> System.Func<string!>?
 UiPath.Caching.Migration.RouterCacheRegistration<T>.Version.init -> void
+UiPath.Caching.Migration.BridgeMessage
+UiPath.Caching.Migration.BridgeMessage.BridgeMessage() -> void
+UiPath.Caching.Migration.BridgeMessage.BridgeMessage(UiPath.Caching.Migration.BridgeMessageKind Kind, string? CacheName, string? Key = null, string? Tag = null, string? Origin = null) -> void
+UiPath.Caching.Migration.BridgeMessage.CacheName.get -> string?
+UiPath.Caching.Migration.BridgeMessage.CacheName.init -> void
+UiPath.Caching.Migration.BridgeMessage.Deconstruct(out UiPath.Caching.Migration.BridgeMessageKind Kind, out string? CacheName, out string? Key, out string? Tag, out string? Origin) -> void
+UiPath.Caching.Migration.BridgeMessage.Equals(UiPath.Caching.Migration.BridgeMessage other) -> bool
+UiPath.Caching.Migration.BridgeMessage.Key.get -> string?
+UiPath.Caching.Migration.BridgeMessage.Key.init -> void
+UiPath.Caching.Migration.BridgeMessage.Kind.get -> UiPath.Caching.Migration.BridgeMessageKind
+UiPath.Caching.Migration.BridgeMessage.Kind.init -> void
+UiPath.Caching.Migration.BridgeMessage.Origin.get -> string?
+UiPath.Caching.Migration.BridgeMessage.Origin.init -> void
+UiPath.Caching.Migration.BridgeMessage.Tag.get -> string?
+UiPath.Caching.Migration.BridgeMessage.Tag.init -> void
+UiPath.Caching.Migration.BridgeMessageKind
+UiPath.Caching.Migration.BridgeMessageKind.Clear = 2 -> UiPath.Caching.Migration.BridgeMessageKind
+UiPath.Caching.Migration.BridgeMessageKind.Key = 0 -> UiPath.Caching.Migration.BridgeMessageKind
+UiPath.Caching.Migration.BridgeMessageKind.Tag = 1 -> UiPath.Caching.Migration.BridgeMessageKind
+UiPath.Caching.Migration.IChannelBridge
+UiPath.Caching.Migration.IChannelBridge.PublishAsync(UiPath.Caching.Migration.BridgeMessage message, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask
+UiPath.Caching.Migration.IChannelBridge.Subscribe(System.Action<UiPath.Caching.Migration.BridgeMessage>! onMessage) -> System.IDisposable!
+override UiPath.Caching.Migration.BridgeMessage.GetHashCode() -> int
+static UiPath.Caching.Migration.BridgeMessage.operator !=(UiPath.Caching.Migration.BridgeMessage left, UiPath.Caching.Migration.BridgeMessage right) -> bool
+static UiPath.Caching.Migration.BridgeMessage.operator ==(UiPath.Caching.Migration.BridgeMessage left, UiPath.Caching.Migration.BridgeMessage right) -> bool
+~override UiPath.Caching.Migration.BridgeMessage.Equals(object obj) -> bool
+~override UiPath.Caching.Migration.BridgeMessage.ToString() -> string
+UiPath.Caching.Migration.RouterBuilder.UseChannelBridge(UiPath.Caching.Migration.IChannelBridge! bridge) -> UiPath.Caching.Migration.RouterBuilder!

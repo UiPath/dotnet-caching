@@ -28,6 +28,8 @@ public sealed class RouterBuilder
 
     internal Func<IDatabase>? SourceDatabase { get; private set; }
 
+    internal IChannelBridge? Bridge { get; private set; }
+
     public RouterBuilder Add<T>(RouterCacheRegistration<T> registration)
         where T : class
     {
@@ -63,6 +65,13 @@ public sealed class RouterBuilder
                 core,
                 registration,
                 version)));
+        return this;
+    }
+
+    /// <summary>The adapter over the older client's invalidation channel: the router publishes every key write, delete and clear on it and evicts on what it receives.</summary>
+    public RouterBuilder UseChannelBridge(IChannelBridge bridge)
+    {
+        Bridge = bridge ?? throw new ArgumentNullException(nameof(bridge));
         return this;
     }
 

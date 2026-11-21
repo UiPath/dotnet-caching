@@ -217,6 +217,12 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
     public void ResetLocal() => ClearLocal();
 
+    public void EvictLocal(string key)
+    {
+        _core.Tier.Evict(new LocalKey(_registration.Name, key));
+        DetachKey(key);
+    }
+
     public IRouterParticipant.IAttachment Prepare(LibraryParts library) =>
         Prepare(new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin) { CacheNulls = _registration.CacheNulls }, library.Topics, library.Events, library.Source);
 
@@ -252,12 +258,6 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         var publisher = new CacheEventPublisher(_eventName, topics, events, NullLogger.Instance);
         var topic = topics.Create(_topic);
         return new LibraryAttachment(this, library, publisher, topic, topic.Subscribe(new PeerObserver(ownSource, EvictLocal, ClearLocal)));
-    }
-
-    private void EvictLocal(string key)
-    {
-        _core.Tier.Evict(new LocalKey(_registration.Name, key));
-        DetachKey(key);
     }
 
     /// <summary>A caller that starts now must not join a load that began before, and a load that began before must not write.</summary>
@@ -448,6 +448,9 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
                 {
                     await PublishKeyAsync(key, setDeadline, announced).ConfigureAwait(false);
                 }
+
+                // The bridge needs no library, so a write in bypass reaches the older client's nodes too.
+                await PublishBridgeAsync(BridgeMessageKind.Key, key).ConfigureAwait(false);
             }
         }
     }
@@ -570,6 +573,8 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             CountPublishFailure(route);
             _retrier.ReportKey(key, route);
         }
+
+        await PublishBridgeAsync(BridgeMessageKind.Key, key).ConfigureAwait(false);
     }
 
     private async ValueTask PublishClearAsync()
@@ -579,7 +584,12 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             CountPublishFailure(ClearRoute);
             _retrier.ReportClear(ClearRoute);
         }
+
+        await PublishBridgeAsync(BridgeMessageKind.Clear, null).ConfigureAwait(false);
     }
+
+    private ValueTask PublishBridgeAsync(BridgeMessageKind kind, string? key) =>
+        _core.Bridge is { } bridge ? bridge.PublishAsync(kind, _registration.Name, key) : ValueTask.CompletedTask;
 
     // Without a started library nothing can be published; the failure is counted and retried like any other.
     private ValueTask<bool> PublishRemovalOnceAsync(string key) =>

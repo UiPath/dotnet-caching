@@ -59,7 +59,9 @@ internal sealed class TestNode : IAsyncDisposable
         TimeSpan? startBound = null,
         TimeSpan? cleanupBound = null,
         Func<string>? version = null,
-        bool cacheNulls = false)
+        bool cacheNulls = false,
+        IChannelBridge? bridge = null,
+        string? bridgeOrigin = null)
     {
         var source = new Uri($"urn:test-{node ?? Guid.NewGuid().ToString("N")}");
         var sourceBackend = new FakeBackend(store, clock);
@@ -71,6 +73,11 @@ internal sealed class TestNode : IAsyncDisposable
             StartBound = startBound ?? TimeSpan.FromSeconds(5),
             CleanupBound = cleanupBound ?? TimeSpan.FromSeconds(10),
         };
+        if (bridge is not null && sharedCore is null)
+        {
+            core.Bridge = new BridgeHost(bridge, bridgeOrigin ?? source.ToString(), core, NullLogger.Instance);
+        }
+
         var registration = new RouterCacheRegistration<Item>
         {
             Name = cacheName,
@@ -88,7 +95,9 @@ internal sealed class TestNode : IAsyncDisposable
         if (lazyLibrary is null && lazyLibraryAsync is null)
         {
             cache = new RoutedCache<Item>(core, registration, library ?? libraryBackend, bus.For(source), events, source, version?.Invoke());
-            return new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
+            var started = new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
+            started.Router.AttachBridge();
+            return started;
         }
 
         core.UseLibrary(lazyLibraryAsync ?? (_ => Task.FromResult(lazyLibrary!())));

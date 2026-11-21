@@ -116,12 +116,25 @@ internal sealed class Router : IRouter, IAsyncDisposable
     internal void Start()
     {
         _core.Start();
+        AttachBridge();
         if (Advertiser is { } advertiser)
         {
             _core.ModeChanged += (_, _) => advertiser.Nudge();
             advertiser.Start();
         }
     }
+
+    /// <summary>Delivers the older client's messages to this router's caches; needs no started library.</summary>
+    internal void AttachBridge() =>
+        _core.Bridge?.Attach(
+            name => _caches.TryGetValue(name, out var entry) ? entry.Cache as IRouterParticipant : null,
+            () =>
+            {
+                foreach (var (_, cache) in _caches.Values)
+                {
+                    (cache as IRouterParticipant)?.ResetLocal();
+                }
+            });
 
     private static Task PendingSettled(IRouterParticipant[] stoppables) => Task.WhenAll(stoppables.Select(stoppable => stoppable.WhenPendingSettledAsync()));
 
@@ -182,6 +195,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
         }
 
         await background.ConfigureAwait(false);
+        _core.Bridge?.Detach();
         if (Advertiser is { } advertiser)
         {
             // Departs only after every call has ended, so a reader never sees this node gone while it still serves.
