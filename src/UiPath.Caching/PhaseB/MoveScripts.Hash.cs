@@ -150,7 +150,8 @@ internal sealed partial class MoveScripts
             if (exists)
             {
                 queued.Add(transaction.HashSetAsync(key, versionField, versionSeed, When.NotExists, Master));
-                queued.Add(transaction.HashIncrementAsync(key, versionField, 1, Master));
+                // At the 64-bit maximum the count stays and the delete still lands, as the script's pcall does; so this result is not awaited.
+                transaction.HashIncrementAsync(key, versionField, 1, Master).Forget();
             }
 
             if (fields.Count > 0)

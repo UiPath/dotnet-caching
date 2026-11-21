@@ -154,6 +154,21 @@ public partial class MoveScriptsIntegrationTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task Hdelc_deletes_the_fields_when_the_count_is_at_its_maximum(bool useScripts)
+    {
+        await using var env = await NewEnvironmentAsync(useScripts);
+        var key = env.Make("hash");
+        await env.Db.HashSetAsync(key, [new HashEntry("a", "1"), new HashEntry("b", "2"), new HashEntry("ver", long.MaxValue)]);
+
+        (await env.Scripts.HashDeleteFieldsAsync(key, env.Ctl, MoveTestEnvironment.Id, ["a"], versionField: "ver", versionSeed: 100)).Should().Be(1);
+
+        (await env.Db.HashExistsAsync(key, "a")).Should().BeFalse();
+        ((long)await env.Db.HashGetAsync(key, "ver")).Should().Be(long.MaxValue);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task Hdelc_keeps_a_hash_that_still_has_a_data_field(bool useScripts)
     {
         await using var env = await NewEnvironmentAsync(useScripts);
