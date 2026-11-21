@@ -54,9 +54,10 @@ internal sealed partial class MoveScripts
         return await WatchedAsync(async () =>
         {
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(control, "id", id));
             var deleted = transaction.KeyDeleteAsync(key, Master);
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return await deleted.ConfigureAwait(false) ? 1 : 0;
             }
@@ -79,14 +80,15 @@ internal sealed partial class MoveScripts
         return await WatchedAsync(async () =>
         {
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(control, "id", id));
             if (onlyIfAbsent)
             {
                 transaction.AddCondition(Condition.KeyNotExists(key));
             }
 
-            transaction.StringSetAsync(key, value, px == NoExpiry ? null : TimeSpan.FromMilliseconds(px), When.Always, Master).Forget();
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            queued.Add(transaction.StringSetAsync(key, value, px == NoExpiry ? null : TimeSpan.FromMilliseconds(px), When.Always, Master));
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return 1;
             }
@@ -114,6 +116,7 @@ internal sealed partial class MoveScripts
         return await WatchedAsync(async () =>
         {
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(control, "id", id));
             Task<bool> changed;
             if (px == NoExpiry)
@@ -126,7 +129,7 @@ internal sealed partial class MoveScripts
                 changed = transaction.KeyExpireAsync(key, TimeSpan.FromMilliseconds(px), Master);
             }
 
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return px == NoExpiry || await changed.ConfigureAwait(false) ? 1 : 0;
             }
@@ -155,10 +158,11 @@ internal sealed partial class MoveScripts
             return await WatchedAsync(async () =>
             {
                 var transaction = _db.CreateTransaction();
+                var queued = new List<Task>();
                 transaction.AddCondition(Condition.HashEqual(control, "id", id));
                 transaction.AddCondition(Condition.StringEqual(key, expected));
                 var deleted = transaction.KeyDeleteAsync(key, Master);
-                if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+                if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
                 {
                     return await deleted.ConfigureAwait(false) ? 1 : 0;
                 }
@@ -202,6 +206,7 @@ internal sealed partial class MoveScripts
             return await WatchedAsync(async () =>
             {
                 var transaction = _db.CreateTransaction();
+                var queued = new List<Task>();
                 transaction.AddCondition(Condition.HashEqual(control, "id", id));
                 transaction.AddCondition(Condition.HashLengthEqual(key, expected.Count));
                 foreach (var entry in expected)
@@ -210,7 +215,7 @@ internal sealed partial class MoveScripts
                 }
 
                 var deleted = transaction.KeyDeleteAsync(key, Master);
-                if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+                if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
                 {
                     return await deleted.ConfigureAwait(false) ? 1 : 0;
                 }

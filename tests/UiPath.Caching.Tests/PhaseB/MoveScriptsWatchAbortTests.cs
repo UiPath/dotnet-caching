@@ -70,6 +70,37 @@ public class MoveScriptsWatchAbortTests(RedisContainerFixture fixture)
         evicting.Batches.Should().Be(MoveScripts.MaxWatchAborts);
     }
 
+    [Fact]
+    public async Task The_cleanup_of_a_count_only_hash_after_hdelc_is_sent_again_when_its_exec_aborts()
+    {
+        await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts: false);
+        var src = await CountedHashAsync(env);
+        await using var harness = await WatchAbortHarness.CreateAsync(env, fixture.ConnectionString, toForce: 1, skip: 1);
+
+        var result = await new MoveScripts(harness.Database, useScripts: false, env.ServerVersion)
+            .HashDeleteFieldsAsync(src, env.Ctl, MoveTestEnvironment.Id, ["a"], versionField: "ver", versionSeed: 100);
+
+        result.Should().Be(1);
+        (await env.Db.KeyExistsAsync(src)).Should().BeFalse();
+        harness.Aborted.Should().Be(1);
+        harness.Executions.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task A_cleanup_of_a_count_only_hash_that_aborts_every_time_throws_after_the_attempt_limit()
+    {
+        await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts: false);
+        var src = await CountedHashAsync(env);
+        await using var harness = await WatchAbortHarness.CreateAsync(env, fixture.ConnectionString, toForce: long.MaxValue, skip: 1);
+
+        var act = () => new MoveScripts(harness.Database, useScripts: false, env.ServerVersion)
+            .HashDeleteFieldsAsync(src, env.Ctl, MoveTestEnvironment.Id, ["a"], versionField: "ver", versionSeed: 100);
+
+        await act.Should().ThrowAsync<RedisException>();
+        harness.Aborted.Should().Be(MoveScripts.MaxWatchAborts);
+        harness.Executions.Should().Be(1 + MoveScripts.MaxWatchAborts);
+    }
+
     // The setup goes through the environment's own scripts; only the command under test goes through <paramref name="scripts"/>.
     private static async Task<long> RunAsync(string command, MoveTestEnvironment env, MoveScripts scripts)
     {
@@ -112,5 +143,12 @@ public class MoveScriptsWatchAbortTests(RedisContainerFixture fixture)
             default:
                 throw new ArgumentOutOfRangeException(nameof(command), command, null);
         }
+    }
+
+    private static async Task<RedisKey> CountedHashAsync(MoveTestEnvironment env)
+    {
+        var src = env.Make("src");
+        await env.Db.HashSetAsync(src, [new HashEntry("a", "1"), new HashEntry("ver", "5")]);
+        return src;
     }
 }

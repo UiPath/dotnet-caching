@@ -71,40 +71,41 @@ internal sealed partial class MoveScripts
         return await WatchedAsync(async () =>
         {
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(control, "id", id));
-            BumpIn(transaction, fence);
+            BumpIn(transaction, queued, fence);
             if (write.Mode == HashCacheSetOption.KeyReplace)
             {
-                transaction.KeyDeleteAsync(key, Master).Forget();
+                queued.Add(transaction.KeyDeleteAsync(key, Master));
             }
 
             if (write.Entries.Count > 0)
             {
-                transaction.HashSetAsync(key, [.. write.Entries], Master).Forget();
+                queued.Add(transaction.HashSetAsync(key, [.. write.Entries], Master));
             }
             if (write.DropField is { } drop)
             {
-                transaction.HashDeleteAsync(key, drop, Master).Forget();
+                queued.Add(transaction.HashDeleteAsync(key, drop, Master));
             }
 
             Task<long>? counted = null;
             if (write.VersionField is { } version)
             {
-                transaction.HashSetAsync(key, version, write.VersionSeed, When.NotExists, Master).Forget();
+                queued.Add(transaction.HashSetAsync(key, version, write.VersionSeed, When.NotExists, Master));
                 counted = transaction.HashIncrementAsync(key, version, 1, Master);
                 counted.Forget();
             }
 
             if (write.ExpireAtMilliseconds != NoExpiry)
             {
-                transaction.KeyExpireAsync(key, At(write.ExpireAtMilliseconds), Master).Forget();
+                queued.Add(transaction.KeyExpireAsync(key, At(write.ExpireAtMilliseconds), Master));
             }
             else if (write.Mode == HashCacheSetOption.HashReplace)
             {
-                transaction.KeyPersistAsync(key, Master).Forget();
+                queued.Add(transaction.KeyPersistAsync(key, Master));
             }
 
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return counted is null ? 1 : await CountOrZeroAsync(counted).ConfigureAwait(false);
             }
@@ -138,24 +139,25 @@ internal sealed partial class MoveScripts
         {
             var exists = versionField is not null && await _db.KeyExistsAsync(key, Master).ConfigureAwait(false);
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(control, "id", id));
             if (versionField is not null)
             {
                 transaction.AddCondition(exists ? Condition.KeyExists(key) : Condition.KeyNotExists(key));
             }
 
-            BumpIn(transaction, fence);
+            BumpIn(transaction, queued, fence);
             if (exists)
             {
-                transaction.HashSetAsync(key, versionField, versionSeed, When.NotExists, Master).Forget();
-                transaction.HashIncrementAsync(key, versionField, 1, Master).Forget();
+                queued.Add(transaction.HashSetAsync(key, versionField, versionSeed, When.NotExists, Master));
+                queued.Add(transaction.HashIncrementAsync(key, versionField, 1, Master));
             }
 
             if (fields.Count > 0)
             {
-                transaction.HashDeleteAsync(key, [.. fields], Master).Forget();
+                queued.Add(transaction.HashDeleteAsync(key, [.. fields], Master));
             }
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return 1;
             }
@@ -164,12 +166,7 @@ internal sealed partial class MoveScripts
         }).ConfigureAwait(false);
         if (result == 1 && versionField is not null)
         {
-            var emptied = _db.CreateTransaction();
-            emptied.AddCondition(Condition.HashEqual(control, "id", id));
-            emptied.AddCondition(Condition.HashLengthEqual(key, 1));
-            emptied.AddCondition(Condition.HashExists(key, versionField));
-            emptied.HashDeleteAsync(key, versionField, Master).Forget();
-            await emptied.ExecuteAsync(Master).ConfigureAwait(false);
+            await RemoveCountOnlyHashAsync(key, control, id, versionField).ConfigureAwait(false);
         }
 
         return result;
@@ -192,19 +189,20 @@ internal sealed partial class MoveScripts
         {
             var exists = await _db.KeyExistsAsync(key, Master).ConfigureAwait(false);
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(control, "id", id));
             transaction.AddCondition(exists ? Condition.KeyExists(key) : Condition.KeyNotExists(key));
-            BumpIn(transaction, fence);
+            BumpIn(transaction, queued, fence);
             if (exists && expireAtMilliseconds == NoExpiry)
             {
-                transaction.KeyPersistAsync(key, Master).Forget();
+                queued.Add(transaction.KeyPersistAsync(key, Master));
             }
             else if (exists)
             {
-                transaction.KeyExpireAsync(key, At(expireAtMilliseconds), Master).Forget();
+                queued.Add(transaction.KeyExpireAsync(key, At(expireAtMilliseconds), Master));
             }
 
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return exists ? 1 : 0;
             }
@@ -216,11 +214,11 @@ internal sealed partial class MoveScripts
     private static RedisKey[] Keys(RedisKey key, RedisKey control, FenceBump? fence) =>
         fence is { } f ? [key, control, f.Fence] : [key, control];
 
-    private static void BumpIn(ITransaction transaction, FenceBump? fence)
+    private static void BumpIn(ITransaction transaction, List<Task> queued, FenceBump? fence)
     {
         if (fence is { } f)
         {
-            transaction.StringSetAsync(f.Fence, f.Nonce, TimeSpan.FromMilliseconds(f.TtlMilliseconds), When.Always, Master).Forget();
+            queued.Add(transaction.StringSetAsync(f.Fence, f.Nonce, TimeSpan.FromMilliseconds(f.TtlMilliseconds), When.Always, Master));
         }
     }
 
@@ -236,4 +234,28 @@ internal sealed partial class MoveScripts
             return 0;
         }
     }
+
+    // The script removes a hash left with only its count in the same step; here a second transaction does, under the same WATCH-abort rule.
+    private Task<long> RemoveCountOnlyHashAsync(RedisKey key, RedisKey control, string id, string versionField) =>
+        WatchedAsync(async () =>
+        {
+            var emptied = _db.CreateTransaction();
+            var queued = new List<Task>();
+            emptied.AddCondition(Condition.HashEqual(control, "id", id));
+            emptied.AddCondition(Condition.HashLengthEqual(key, 1));
+            emptied.AddCondition(Condition.HashExists(key, versionField));
+            queued.Add(emptied.HashDeleteAsync(key, versionField, Master));
+            if (await ExecuteAllAsync(emptied, queued).ConfigureAwait(false))
+            {
+                return 1;
+            }
+
+            if (!await HoldsIdentityAsync(control, id).ConfigureAwait(false))
+            {
+                return IdentityMismatch;
+            }
+
+            var held = await _db.HashGetAllAsync(key, Master).ConfigureAwait(false);
+            return held is [var only] && only.Name == versionField ? null : 0;
+        });
 }

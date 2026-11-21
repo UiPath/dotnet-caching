@@ -146,19 +146,20 @@ internal sealed partial class MoveScripts
         return await WatchedAsync(async () =>
         {
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             AddPublishConditions(transaction, keys, id, p);
-            transaction.StringSetAsync(keys.Data, value, null, When.Always, Master).Forget();
+            queued.Add(transaction.StringSetAsync(keys.Data, value, null, When.Always, Master));
             if (deadline is { } at)
             {
-                transaction.KeyExpireAsync(keys.Data, At(at), Master).Forget();
+                queued.Add(transaction.KeyExpireAsync(keys.Data, At(at), Master));
             }
             else if (p.Px != NoExpiry)
             {
-                transaction.KeyExpireAsync(keys.Data, TimeSpan.FromMilliseconds(p.Px), Master).Forget();
+                queued.Add(transaction.KeyExpireAsync(keys.Data, TimeSpan.FromMilliseconds(p.Px), Master));
             }
 
-            transaction.StringSetAsync(keys.Fence, p.NewNonce, TimeSpan.FromMilliseconds(p.FenceTtlMilliseconds), When.Always, Master).Forget();
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            queued.Add(transaction.StringSetAsync(keys.Fence, p.NewNonce, TimeSpan.FromMilliseconds(p.FenceTtlMilliseconds), When.Always, Master));
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return Published;
             }
@@ -213,20 +214,21 @@ internal sealed partial class MoveScripts
         return await WatchedAsync(async () =>
         {
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             AddPublishConditions(transaction, keys, id, p);
             transaction.AddCondition(Condition.KeyExists(staging));
-            transaction.KeyRenameAsync(staging, keys.Data, When.Always, Master).Forget();
+            queued.Add(transaction.KeyRenameAsync(staging, keys.Data, When.Always, Master));
             if (deadline is { } at)
             {
-                transaction.KeyExpireAsync(keys.Data, At(at), Master).Forget();
+                queued.Add(transaction.KeyExpireAsync(keys.Data, At(at), Master));
             }
             else
             {
-                transaction.KeyPersistAsync(keys.Data, Master).Forget();
+                queued.Add(transaction.KeyPersistAsync(keys.Data, Master));
             }
 
-            transaction.StringSetAsync(keys.Fence, p.NewNonce, TimeSpan.FromMilliseconds(p.FenceTtlMilliseconds), When.Always, Master).Forget();
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            queued.Add(transaction.StringSetAsync(keys.Fence, p.NewNonce, TimeSpan.FromMilliseconds(p.FenceTtlMilliseconds), When.Always, Master));
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return Published;
             }
@@ -261,8 +263,9 @@ internal sealed partial class MoveScripts
         return await WatchedAsync(async () =>
         {
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(keys.Control, "id", id));
-            transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master).Forget();
+            queued.Add(transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master));
             Task<bool>? deleted = null;
             if (operation == BumpOperation.Delete)
             {
@@ -270,10 +273,10 @@ internal sealed partial class MoveScripts
             }
             else if (operation == BumpOperation.Set)
             {
-                transaction.StringSetAsync(keys.Data, value, px == NoExpiry ? null : TimeSpan.FromMilliseconds(px), When.Always, Master).Forget();
+                queued.Add(transaction.StringSetAsync(keys.Data, value, px == NoExpiry ? null : TimeSpan.FromMilliseconds(px), When.Always, Master));
             }
 
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return deleted is null ? 1 : await deleted.ConfigureAwait(false) ? 1 : 0;
             }
@@ -296,11 +299,12 @@ internal sealed partial class MoveScripts
         return await WatchedAsync(async () =>
         {
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(keys.Control, "id", id));
             transaction.AddCondition(Condition.KeyNotExists(keys.Data));
-            transaction.StringSetAsync(keys.Data, value, px == NoExpiry ? null : TimeSpan.FromMilliseconds(px), When.Always, Master).Forget();
-            transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master).Forget();
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            queued.Add(transaction.StringSetAsync(keys.Data, value, px == NoExpiry ? null : TimeSpan.FromMilliseconds(px), When.Always, Master));
+            queued.Add(transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master));
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return Published;
             }
@@ -352,21 +356,22 @@ internal sealed partial class MoveScripts
         return await WatchedAsync(async () =>
         {
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(keys.Control, "id", id));
             transaction.AddCondition(Condition.KeyNotExists(keys.Data));
             transaction.AddCondition(Condition.KeyExists(staging));
-            transaction.KeyRenameAsync(staging, keys.Data, When.Always, Master).Forget();
+            queued.Add(transaction.KeyRenameAsync(staging, keys.Data, When.Always, Master));
             if (px == NoExpiry)
             {
-                transaction.KeyPersistAsync(keys.Data, Master).Forget();
+                queued.Add(transaction.KeyPersistAsync(keys.Data, Master));
             }
             else
             {
-                transaction.KeyExpireAsync(keys.Data, TimeSpan.FromMilliseconds(px), Master).Forget();
+                queued.Add(transaction.KeyExpireAsync(keys.Data, TimeSpan.FromMilliseconds(px), Master));
             }
 
-            transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master).Forget();
-            if (await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+            queued.Add(transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master));
+            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return Published;
             }

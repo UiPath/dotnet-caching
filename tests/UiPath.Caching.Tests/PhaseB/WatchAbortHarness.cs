@@ -11,17 +11,19 @@ internal sealed class WatchAbortHarness : IAsyncDisposable
     private readonly ConnectionMultiplexer _otherMux;
     private readonly RedisKey _watched;
     private readonly RedisValue _field;
-    private int _toForce;
+    private readonly int _skip;
+    private readonly long _toForce;
     private int _executions;
     private int _aborted;
 
-    private WatchAbortHarness(IDatabase real, ConnectionMultiplexer otherMux, RedisKey watched, RedisValue field, int toForce)
+    private WatchAbortHarness(IDatabase real, ConnectionMultiplexer otherMux, RedisKey watched, RedisValue field, long toForce, int skip)
     {
         _real = real;
         _otherMux = otherMux;
         _watched = watched;
         _field = field;
         _toForce = toForce;
+        _skip = skip;
         Database = InterceptingProxy.Wrap(real, InterceptDatabase);
     }
 
@@ -32,8 +34,9 @@ internal sealed class WatchAbortHarness : IAsyncDisposable
     // Transactions the server answered with an aborted EXEC, forced or not.
     public int Aborted => Volatile.Read(ref _aborted);
 
-    public static async Task<WatchAbortHarness> CreateAsync(MoveTestEnvironment env, string connectionString, int toForce, string field = "dur") =>
-        new(env.Db, await ConnectionMultiplexer.ConnectAsync(connectionString), env.Ctl, field, toForce);
+    // The first <paramref name="skip"/> transactions run untouched, the next <paramref name="toForce"/> are aborted.
+    public static async Task<WatchAbortHarness> CreateAsync(MoveTestEnvironment env, string connectionString, long toForce, string field = "dur", int skip = 0) =>
+        new(env.Db, await ConnectionMultiplexer.ConnectAsync(connectionString), env.Ctl, field, toForce, skip);
 
     public async ValueTask DisposeAsync() => await _otherMux.DisposeAsync();
 
@@ -53,8 +56,8 @@ internal sealed class WatchAbortHarness : IAsyncDisposable
 
     private async Task<bool> ExecuteAsync(ITransaction inner, CommandFlags flags)
     {
-        Interlocked.Increment(ref _executions);
-        if (Interlocked.Decrement(ref _toForce) >= 0)
+        var attempt = Interlocked.Increment(ref _executions);
+        if (attempt > _skip && attempt - _skip <= _toForce)
         {
             await _real.ExecuteAsync("WATCH", _watched).ConfigureAwait(false);
             await _otherMux.GetDatabase().HashSetAsync(_watched, _field, "0").ConfigureAwait(false);

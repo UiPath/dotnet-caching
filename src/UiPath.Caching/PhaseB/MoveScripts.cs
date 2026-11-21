@@ -72,6 +72,18 @@ internal sealed partial class MoveScripts
         throw new RedisException($"A move transaction aborted {MaxWatchAborts} times while its conditions held; the outcome is unknown.");
     }
 
+    // EXEC commits even when one of its commands fails, for example on a key of another type; the script would raise that error, so this does too.
+    private static async Task<bool> ExecuteAllAsync(ITransaction transaction, List<Task> queued)
+    {
+        if (!await transaction.ExecuteAsync(Master).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        await Task.WhenAll(queued).ConfigureAwait(false);
+        return true;
+    }
+
     private void EnsureFallbackAllowed()
     {
         if (_serverVersion is null || _serverVersion < FallbackMinimum)

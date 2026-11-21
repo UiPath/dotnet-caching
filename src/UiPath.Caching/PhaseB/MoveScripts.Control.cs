@@ -84,6 +84,7 @@ internal sealed partial class MoveScripts
             fields.TryGetValue("ep", out var ep);
             fields.TryGetValue("id", out var heldId);
             var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
             AddIdentityConditions(transaction, control, ep, heldId);
             if (!ep.IsNull)
             {
@@ -100,32 +101,32 @@ internal sealed partial class MoveScripts
                         return IdentityConflict;
                     }
 
-                    transaction.HashSetAsync(control, "id", record.Id, When.Always, Master).Forget();
-                    return await transaction.ExecuteAsync(Master).ConfigureAwait(false) ? AlreadyWrittenOrOlder : null;
+                    queued.Add(transaction.HashSetAsync(control, "id", record.Id, When.Always, Master));
+                    return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? AlreadyWrittenOrOlder : null;
                 }
             }
 
             // A gate added since the read changes the length, so the delete below never misses one.
             transaction.AddCondition(Condition.HashLengthEqual(control, held.Length));
-            transaction.HashSetAsync(
+            queued.Add(transaction.HashSetAsync(
                 control,
                 [
                     new("ep", record.Ep), new("id", record.Id), new("st", record.State), new("dir", record.Direction), new("np", record.NPop), new("dur", "0"),
                     new("pst", record.PreviousState), new("pdir", record.PreviousDirection), new("pnp", record.PreviousNPop), new("pep", record.PreviousEp), new("pid", record.PreviousId),
                 ],
-                Master).Forget();
+                Master));
             var gates = fields.Keys.Where(f => f.StartsWith("c:", StringComparison.Ordinal)).Select(f => (RedisValue)f).ToArray();
             if (gates.Length > 0)
             {
-                transaction.HashDeleteAsync(control, gates, Master).Forget();
+                queued.Add(transaction.HashDeleteAsync(control, gates, Master));
             }
 
             if (record.Gates.Count > 0)
             {
-                transaction.HashSetAsync(control, [.. record.Gates.Select(g => new HashEntry("c:" + g.Cid, "OPEN:" + g.Nonce))], Master).Forget();
+                queued.Add(transaction.HashSetAsync(control, [.. record.Gates.Select(g => new HashEntry("c:" + g.Cid, "OPEN:" + g.Nonce))], Master));
             }
 
-            return await transaction.ExecuteAsync(Master).ConfigureAwait(false) ? Written : null;
+            return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
         }).ConfigureAwait(false);
     }
 
@@ -153,9 +154,11 @@ internal sealed partial class MoveScripts
             }
 
             var transaction = _db.CreateTransaction();
+
+            var queued = new List<Task>();
             AddIdentityConditions(transaction, control, held[0], held[1]);
-            transaction.HashSetAsync(control, "dur", "1", When.Always, Master).Forget();
-            return await transaction.ExecuteAsync(Master).ConfigureAwait(false) ? Written : null;
+            queued.Add(transaction.HashSetAsync(control, "dur", "1", When.Always, Master));
+            return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
         }).ConfigureAwait(false);
     }
 
@@ -186,10 +189,12 @@ internal sealed partial class MoveScripts
             }
 
             var transaction = _db.CreateTransaction();
+
+            var queued = new List<Task>();
             transaction.AddCondition(Condition.HashEqual(control, "id", id));
             transaction.AddCondition(held[1].IsNull ? Condition.HashNotExists(control, field) : Condition.HashEqual(control, field, held[1]));
-            transaction.HashSetAsync(control, field, value, When.Always, Master).Forget();
-            return await transaction.ExecuteAsync(Master).ConfigureAwait(false) ? Written : null;
+            queued.Add(transaction.HashSetAsync(control, field, value, When.Always, Master));
+            return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
         }).ConfigureAwait(false);
     }
 

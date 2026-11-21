@@ -12,11 +12,28 @@ public class MoveScriptsClusterTests
 
     public static TheoryData<string> Prefixes => ["", "app:", "{shard}:"];
 
+    public static TheoryData<bool, string, string> Cases()
+    {
+        var data = new TheoryData<bool, string, string>();
+        foreach (var useScripts in new[] { true, false })
+        {
+            foreach (var library in new[] { "", "lib:" })
+            {
+                foreach (var prefix in new[] { "", "app:", "{shard}:" })
+                {
+                    data.Add(useScripts, library, prefix);
+                }
+            }
+        }
+
+        return data;
+    }
+
     [Theory]
     [MemberData(nameof(Prefixes))]
     public async Task The_computed_slot_is_the_slot_the_server_uses(string prefix)
     {
-        await using var cluster = await ClusterAsync(prefix);
+        await using var cluster = await ClusterAsync(prefix, "", useScripts: true);
 
         foreach (var key in InPlaceKeys())
         {
@@ -26,10 +43,10 @@ public class MoveScriptsClusterTests
     }
 
     [Theory]
-    [MemberData(nameof(Prefixes))]
-    public async Task Source_scripts_run_with_the_control_record_of_the_key_slot(string prefix)
+    [MemberData(nameof(Cases))]
+        public async Task Source_scripts_run_with_the_control_record_of_the_key_slot(bool useScripts, string library, string prefix)
     {
-        await using var cluster = await ClusterAsync(prefix);
+        await using var cluster = await ClusterAsync(prefix, library, useScripts);
 
         foreach (var key in InPlaceKeys())
         {
@@ -46,10 +63,10 @@ public class MoveScriptsClusterTests
     }
 
     [Theory]
-    [MemberData(nameof(Prefixes))]
-    public async Task Reverse_promotion_captures_and_publishes_with_the_fence_of_the_in_place_key(string prefix)
+    [MemberData(nameof(Cases))]
+    public async Task Reverse_promotion_captures_and_publishes_with_the_fence_of_the_in_place_key(bool useScripts, string library, string prefix)
     {
-        await using var cluster = await ClusterAsync(prefix);
+        await using var cluster = await ClusterAsync(prefix, library, useScripts);
 
         foreach (var key in InPlaceKeys())
         {
@@ -67,10 +84,10 @@ public class MoveScriptsClusterTests
     }
 
     [Theory]
-    [MemberData(nameof(Prefixes))]
-    public async Task Forward_promotion_captures_and_publishes_with_the_fence_of_the_tagged_native_key(string prefix)
+    [MemberData(nameof(Cases))]
+    public async Task Forward_promotion_captures_and_publishes_with_the_fence_of_the_tagged_native_key(bool useScripts, string library, string prefix)
     {
-        await using var cluster = await ClusterAsync(prefix);
+        await using var cluster = await ClusterAsync(prefix, library, useScripts);
 
         for (var i = 0; i < 100; i++)
         {
@@ -88,10 +105,10 @@ public class MoveScriptsClusterTests
     }
 
     [Theory]
-    [MemberData(nameof(Prefixes))]
-    public async Task Hash_fill_and_publish_use_a_staging_key_in_the_slot_of_the_in_place_key(string prefix)
+    [MemberData(nameof(Cases))]
+    public async Task Hash_fill_and_publish_use_a_staging_key_in_the_slot_of_the_in_place_key(bool useScripts, string library, string prefix)
     {
-        await using var cluster = await ClusterAsync(prefix);
+        await using var cluster = await ClusterAsync(prefix, library, useScripts);
 
         foreach (var key in InPlaceKeys().Take(50))
         {
@@ -115,10 +132,12 @@ public class MoveScriptsClusterTests
         }
     }
 
-    [Fact]
-    public async Task A_tagged_prefix_puts_every_control_record_on_one_slot()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_tagged_prefix_puts_every_control_record_on_one_slot(bool useScripts)
     {
-        await using var cluster = await ClusterAsync("{shard}:");
+        await using var cluster = await ClusterAsync("{shard}:", "lib:", useScripts);
 
         cluster.Names.SlotSet().Should().ContainSingle().Which.Should().Be(HashSlot.Of("{shard}:"));
         var records = new HashSet<string>();
@@ -136,14 +155,14 @@ public class MoveScriptsClusterTests
     private static IEnumerable<string> InPlaceKeys() =>
         Enumerable.Range(0, 100).Select(i => $"n:cache{i % 7},c:key{i}");
 
-    private static async Task<ClusterContext> ClusterAsync(string prefix)
+    private static async Task<ClusterContext> ClusterAsync(string prefix, string library, bool useScripts)
     {
         var connectionString = Environment.GetEnvironmentVariable("REDIS_CLUSTER_CONNECTION_STRING");
         Assert.SkipUnless(!string.IsNullOrWhiteSpace(connectionString), "Set REDIS_CLUSTER_CONNECTION_STRING to a Redis Cluster to run.");
         var mux = await ConnectionMultiplexer.ConnectAsync(connectionString!);
         var db = mux.GetDatabase().WithKeyPrefix(prefix);
         var version = mux.GetServers().Min(s => s.Version)!;
-        return new ClusterContext(mux, db, new MoveScripts(db, useScripts: true, version), new MoveKeyNames(prefix, "", cluster: true), Guid.NewGuid().ToString("N"));
+        return new ClusterContext(mux, db, new MoveScripts(db, useScripts, version), new MoveKeyNames(prefix, library, cluster: true), Guid.NewGuid().ToString("N"));
     }
 
     private sealed class ClusterContext(ConnectionMultiplexer mux, IDatabase db, MoveScripts scripts, MoveKeyNames names, string group) : IAsyncDisposable
