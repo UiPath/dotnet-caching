@@ -52,6 +52,39 @@ public sealed class ServerBarrierDurabilityTests
         }
     }
 
+    [Fact]
+    public async Task A_fire_and_forget_command_that_fails_at_run_time_is_observed_and_not_confirmed()
+    {
+        Assert.SkipUnless(Master is not null, "Set MOVE_SIDES_MASTER to run.");
+        await using var mux = await ConnectionMultiplexer.ConnectAsync($"{Master},allowAdmin=true,syncTimeout=10000");
+        var db = mux.GetDatabase();
+        var key = (RedisKey)$"sidetest:{{{Guid.NewGuid():N}}}:k";
+        var other = (RedisKey)$"sidetest:{{{Guid.NewGuid():N}}}:o";
+        var writes = 0;
+        await db.StringSetAsync(key, "string");
+        try
+        {
+            var barrier = new ServerBarrier(db, key, TimeProvider.System, replicaFree: false);
+
+            var outcome = await barrier.WriteAndWaitAsync(
+                transaction =>
+                {
+                    Interlocked.Increment(ref writes);
+                    _ = transaction.ListRightPushAsync(key, "x", flags: CommandFlags.FireAndForget);
+                    _ = transaction.StringSetAsync(other, "v");
+                },
+                wayBack: false);
+
+            outcome.Should().Be(BarrierOutcome.NotConfirmed);
+            writes.Should().Be(1, "a failure after EXEC succeeded is never replayed");
+            barrier.LastError.Should().BeOfType<RedisServerException>().Which.Message.Should().Contain("WRONGTYPE");
+        }
+        finally
+        {
+            await db.KeyDeleteAsync([key, other]);
+        }
+    }
+
     private static async Task<RedisResult> KillThenWaitAsync(IServer real, IConnectionMultiplexer admin, object[] args)
     {
         var id = (long)await real.ExecuteAsync("CLIENT", "ID");

@@ -14,8 +14,9 @@ namespace UiPath.Caching.PhaseB;
 /// <para>
 /// Anything short of that (an owner that moved, a failure, a MOVED or ASK answer, a WAIT of 0, a different proof) is not confirmed, and the next attempt
 /// sends the whole transaction and WAIT again, up to <see cref="Retries"/> times with no extra backoff; a repeat must rewrite what it confirms. Only an
-/// attempt that certainly applied nothing repeats: an EXECABORT, a redirect, a connection error before EXEC completed, or a transaction whose conditions
-/// failed. Once EXEC succeeded, a queued command that fails at run time means the transaction was partly applied: the outcome is <c>NotConfirmed</c>, the
+/// attempt that certainly applied nothing repeats: an EXECABORT, a redirect, a connection error before EXEC was sent, or a transaction whose conditions
+/// failed. An EXEC whose reply never arrived (a dropped connection, a timeout after sending) is uncertain: the outcome is <c>NotConfirmed</c>, the writes are
+/// never replayed, and <see cref="LastError"/> holds the error. Once EXEC succeeded, a queued command that fails at run time means the transaction was partly applied: the outcome is <c>NotConfirmed</c>, the
 /// writes are never replayed, and <see cref="LastError"/> holds the command's error. Every queued command is observed by the barrier, and all must
 /// succeed before the outcome is confirmed. A way-back transition sends its writes once without a WAIT for a master that failed within <see cref="Episode"/>.
 /// </para>
@@ -53,7 +54,7 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
         init => _timeout = value;
     }
 
-    /// <summary>The error of the last write the barrier did not repeat: a queued command that failed at run time after EXEC succeeded, or an unbound write that failed; null when none.</summary>
+    /// <summary>The error of the last write the barrier did not repeat: a queued command that failed at run time after EXEC succeeded, an EXEC whose reply never arrived, or an unbound write that failed; null when none.</summary>
     public Exception? LastError => Volatile.Read(ref _lastError);
 
     public int Retries { get; init; } = 3;
@@ -120,6 +121,17 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
     }
 
     private static bool Transient(Exception ex) => ex is RedisException or RedisTimeoutException;
+
+    /// <summary>Whether a failed EXEC certainly sent nothing that applied: a queue-time abort, a redirect, or a connection error before the command was sent.</summary>
+    private static bool NotSent(Exception ex) => ex switch
+    {
+        RedisConnectionException connection => connection.CommandStatus == CommandStatus.WaitingToBeSent
+            || connection.Message.Contains("No connection is active/available", StringComparison.OrdinalIgnoreCase),
+        RedisServerException server => server.Message.StartsWith("EXECABORT", StringComparison.Ordinal)
+            || server.Message.StartsWith("MOVED", StringComparison.Ordinal)
+            || server.Message.StartsWith("ASK", StringComparison.Ordinal),
+        _ => false,
+    };
 
     private static bool Denies(Exception ex) =>
         ex is RedisServerException
@@ -210,7 +222,7 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
             var (sent, error) = await WriteAsync(queueWrites).ConfigureAwait(false);
             if (error is not null)
             {
-                // EXEC succeeded and a queued command failed: the transaction is partly applied, never replayed.
+                // A queued command failed after EXEC succeeded, or the reply of EXEC was lost: the writes may have applied, never replayed.
                 Remember(error);
                 return BarrierOutcome.NotConfirmed;
             }
@@ -250,7 +262,7 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
         }
     }
 
-    /// <summary>The proof of the connection the writes ran on, null when the transaction did not commit; or the first error of a queued write that ran.</summary>
+    /// <summary>The proof of the connection the writes ran on, null when the transaction did not commit; or the first error of a queued write that ran or of an EXEC that may have applied.</summary>
     /// <remarks>CLIENT ID and INFO are queued first, so they run in the transaction of the writes: the connection that answers them is the one that wrote.</remarks>
     private async Task<(Proven? Proof, Exception? Error)> WriteAsync(Action<ITransaction> queueWrites)
     {
@@ -258,7 +270,17 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
         var clientId = real.ExecuteAsync("CLIENT", "ID");
         var info = real.ExecuteAsync("INFO");
         queueWrites(TransactionRecorder.Wrap(real, out var recorder));
-        var committed = await real.ExecuteAsync(Pinned).ConfigureAwait(false);
+        bool committed;
+        try
+        {
+            committed = await real.ExecuteAsync(Pinned).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (Transient(ex) && !NotSent(ex))
+        {
+            // The reply of EXEC never arrived: the writes may have applied, so they are never replayed.
+            return (null, ex);
+        }
+
         if (await SettleAsync(recorder.Queued(), committed).ConfigureAwait(false) is { } error)
         {
             return (null, error);

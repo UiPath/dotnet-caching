@@ -4,7 +4,7 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>A transaction that forwards every call to the real one and keeps each task it returns, so the barrier observes every queued command itself.</summary>
+/// <summary>A transaction that forwards every call to the real one, with <see cref="CommandFlags.FireAndForget"/> cleared, and keeps each task it returns, so the barrier observes every queued command itself.</summary>
 internal class TransactionRecorder : DispatchProxy
 {
     private readonly List<Task> _queued = [];
@@ -33,6 +33,7 @@ internal class TransactionRecorder : DispatchProxy
         ArgumentNullException.ThrowIfNull(targetMethod);
         try
         {
+            ClearFireAndForget(args);
             var result = targetMethod.Invoke(_inner, args);
             if (result is Task task)
             {
@@ -48,6 +49,18 @@ internal class TransactionRecorder : DispatchProxy
         {
             ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
             throw;
+        }
+    }
+
+    // A fire-and-forget command gets a completed placeholder task, so a failure at run time would go unseen.
+    private static void ClearFireAndForget(object?[]? args)
+    {
+        for (var i = 0; args is not null && i < args.Length; i++)
+        {
+            if (args[i] is CommandFlags flags)
+            {
+                args[i] = flags & ~CommandFlags.FireAndForget;
+            }
         }
     }
 }

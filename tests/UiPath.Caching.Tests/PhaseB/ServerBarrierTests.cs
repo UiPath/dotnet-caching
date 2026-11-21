@@ -254,14 +254,60 @@ public sealed class ServerBarrierTests
         fake.Waits.Should().Be(1);
     }
 
-    [Fact]
-    public async Task A_write_that_fails_in_a_failover_is_not_confirmed_never_an_exception()
+    [Theory]
+    [InlineData(CommandStatus.Unknown)]
+    [InlineData(CommandStatus.Sent)]
+    public async Task An_exec_whose_reply_never_arrived_may_have_applied_and_is_not_confirmed_nor_replayed(CommandStatus status)
     {
-        var fake = new Fake { Exec = _ => new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "failover", null, CommandStatus.Unknown) };
+        var fake = new Fake
+        {
+            ApplyOnFailure = true,
+            Exec = _ => new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "failover", null, status),
+        };
+        var barrier = fake.Barrier(retries: 2);
 
-        (await fake.Barrier(retries: 2).WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
-        fake.Writes.Should().Be(3);
+        (await barrier.WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
+        fake.Writes.Should().Be(1);
+        fake.Applied.Should().Be(1, "the write applied once and is not sent again");
         fake.Waits.Should().Be(0);
+        barrier.LastError.Should().BeOfType<RedisConnectionException>();
+    }
+
+    [Fact]
+    public async Task An_exec_that_timed_out_after_sending_is_not_confirmed_nor_replayed()
+    {
+        var fake = new Fake { ApplyOnFailure = true, Exec = _ => new RedisTimeoutException(CommandFlags.None, "timeout", CommandStatus.Sent) };
+        var barrier = fake.Barrier(retries: 2);
+
+        (await barrier.WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
+        fake.Applied.Should().Be(1);
+        barrier.LastError.Should().BeOfType<RedisTimeoutException>();
+    }
+
+    [Theory]
+    [InlineData("failover")]
+    [InlineData("No connection is active/available to service this operation: EXEC")]
+    public async Task An_exec_that_was_never_sent_applied_nothing_and_is_repeated(string message)
+    {
+        var fake = new Fake
+        {
+            Exec = call => call == 0 ? new RedisConnectionException(ConnectionFailureType.UnableToConnect, CommandFlags.None, message, null, CommandStatus.WaitingToBeSent) : null,
+        };
+
+        (await fake.Barrier().WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
+        fake.Writes.Should().Be(2);
+        fake.Applied.Should().Be(1, "the first attempt was never sent");
+    }
+
+    [Fact]
+    public async Task A_queued_command_loses_its_fire_and_forget_flag_before_it_is_forwarded()
+    {
+        var fake = new Fake();
+
+        (await fake.Barrier().WriteAndWaitAsync(
+            transaction => _ = transaction.StringSetAsync("barriertest:{fake}", "v", flags: CommandFlags.FireAndForget | CommandFlags.DemandMaster),
+            wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
+        fake.QueuedFlags.Should().Equal([CommandFlags.DemandMaster]);
     }
 
     [Fact]
@@ -320,12 +366,13 @@ public sealed class ServerBarrierTests
     [Theory]
     [InlineData(1, 0)]
     [InlineData(0, 1)]
-    public async Task An_info_that_answers_busy_once_is_not_applied_and_the_next_attempt_confirms(int transactionBusy, int postBusy)
+    public async Task An_info_that_answers_busy_once_is_repeated_and_the_next_attempt_confirms(int transactionBusy, int postBusy)
     {
         var fake = new Fake { TransactionInfoBusy = transactionBusy, PostInfoBusy = postBusy };
 
         (await fake.Barrier().WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
-        fake.Writes.Should().Be(2, "the busy attempt was repeated");
+        fake.Aborts.Should().Be(transactionBusy, "a BUSY in the transaction aborts it at queue time");
+        fake.Applied.Should().Be(1 + postBusy, "only a BUSY after the WAIT leaves an applied write behind");
     }
 
     [Fact]
@@ -334,7 +381,8 @@ public sealed class ServerBarrierTests
         var fake = new Fake { TransactionInfoBusy = int.MaxValue };
 
         (await fake.Barrier(retries: 2).WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
-        fake.Writes.Should().Be(3);
+        fake.Aborts.Should().Be(3);
+        fake.Applied.Should().Be(0, "every attempt was aborted at queue time");
         fake.Waits.Should().Be(0);
     }
 
@@ -465,7 +513,20 @@ public sealed class ServerBarrierTests
         /// <summary>Whether the transaction's conditions held, by write number.</summary>
         public Func<int, bool> Committed { get; init; } = _ => true;
 
+        /// <summary>The EXECs sent that were not aborted at queue time.</summary>
         public int Writes { get; private set; }
+
+        /// <summary>The EXECs aborted at queue time by a BUSY reply to a queued INFO: nothing was applied.</summary>
+        public int Aborts { get; private set; }
+
+        /// <summary>The writes the server applied: a committed EXEC, or a failed one when <see cref="ApplyOnFailure"/> is set.</summary>
+        public int Applied { get; private set; }
+
+        /// <summary>Whether an EXEC that throws had applied its writes before its reply was lost.</summary>
+        public bool ApplyOnFailure { get; init; }
+
+        /// <summary>The flags of every SET queued, as the fake received them.</summary>
+        public List<CommandFlags> QueuedFlags { get; } = [];
 
         public int Waits { get; private set; }
 
@@ -533,6 +594,7 @@ public sealed class ServerBarrierTests
         private ITransaction Transaction()
         {
             Transactions.Clear();
+            var queueRejected = false;
             return InterceptingProxy.Wrap<ITransaction>(null!, (method, args) =>
             {
                 switch (method.Name)
@@ -540,20 +602,41 @@ public sealed class ServerBarrierTests
                     case nameof(ITransaction.ExecuteAsync) when args[0] is CommandFlags flags:
                         Transactions.Add("EXEC");
                         ExecFlags.Add(flags);
+                        if (queueRejected)
+                        {
+                            Aborts++;
+                            return Task.FromException<bool>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "EXECABORT Transaction discarded because of previous errors."));
+                        }
+
                         var write = Writes++;
-                        return Exec(write) is { } failure ? Task.FromException<bool>(failure) : Task.FromResult(Committed(write));
+                        if (Exec(write) is { } failure)
+                        {
+                            Applied += ApplyOnFailure ? 1 : 0;
+                            return Task.FromException<bool>(failure);
+                        }
+
+                        var committed = Committed(write);
+                        Applied += committed ? 1 : 0;
+                        return Task.FromResult(committed);
                     case nameof(ITransaction.ExecuteAsync) when args[0] is "CLIENT":
                         Transactions.Add("CLIENT");
                         return Task.FromResult(RedisResult.Create(7));
                     case nameof(ITransaction.ExecuteAsync) when args[0] is "INFO":
                         Transactions.Add("INFO");
                         InfoArguments.Add(((object[])args[1]!).Length);
-                        return TransactionInfoBusy-- > 0 ? Busy() : Info(Run, Repl, TransactionRole);
+                        if (TransactionInfoBusy-- > 0)
+                        {
+                            queueRejected = true;
+                            return Busy();
+                        }
+
+                        return Info(Run, Repl, TransactionRole);
                     case nameof(ITransaction.KeyRenameAsync):
                         Transactions.Add("RENAME");
                         return Task.FromException<bool>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR no such key"));
                     case nameof(ITransaction.StringSetAsync):
                         Transactions.Add("SET");
+                        QueuedFlags.Add(args.OfType<CommandFlags>().Single());
                         return Task.FromResult(true);
                     default:
                         throw new NotSupportedException(method.Name);
