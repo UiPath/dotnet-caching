@@ -61,6 +61,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private readonly bool _systemClock;
     private readonly IMemoryCacheOptions _memoryOptions;
     private readonly Uri? _sourceUri;
+    private readonly bool _failSafeConfigured;
     private StaleValues? _stale;
     private bool _disposed;
 
@@ -94,6 +95,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
         _sourceUri = cacheOptions.SourceUri;
         Telemetry = telemetryProvider;
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
+        _failSafeConfigured = _defaultPolicy.FailSafeEnabled == true || policyFactory.Keys.Any(key => policyFactory.Resolve(key)?.FailSafeEnabled == true);
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);
         _clock = clock;
         _systemClock = ReferenceEquals(clock, TimeProvider.System);
@@ -137,6 +139,13 @@ public abstract partial class MultilayerCacheBase : IDisposable
         _distributedLockSkipReread = defaultLock.DistributedLockSkipReread!.Value;
         Name = cacheName;
         _rehydrator = new RehydrationCoordinator(cacheName, _clock, distributedLock, _lockKeyStrategy, telemetryProvider, logger, _masker);
+
+        // A cache configured with fail-safe tracks every local write and removal from the start, so none that began before the first keep can be
+        // undone by it; one only given fail-safe at a call site starts tracking at its first such write.
+        if (_failSafeConfigured)
+        {
+            CreateStale();
+        }
     }
 
     public string Name { get; }
@@ -361,7 +370,14 @@ public abstract partial class MultilayerCacheBase : IDisposable
     /// </summary>
     private protected void DropKeptUnlessLive(string name)
     {
-        if (Volatile.Read(ref _stale) is { } stale && stale.Find(name) is { } kept && !IsLocalEntry(name, kept.Entry))
+        if (Volatile.Read(ref _stale) is not { } stale)
+        {
+            return;
+        }
+
+        // A keep of an older write still in flight is refused from here on.
+        stale.Advance(name);
+        if (stale.Find(name) is { } kept && !IsLocalEntry(name, kept.Entry))
         {
             stale.Drop(name, kept);
         }
@@ -372,7 +388,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     /// <param name="size">The size the local tier charged the entry.</param>
     /// <param name="epoch">What <see cref="KeepEpoch"/> returned before the entry was written locally.</param>
     /// <param name="policy">The policy the write was kept under; null when it was not kept.</param>
-    private protected void KeepStale(string name, TopicKey topic, ICacheEntry entry, DateTimeOffset localDeadline, long size, long epoch, CachePolicy? policy)
+    private protected void KeepStale(string name, TopicKey topic, ICacheEntry entry, DateTimeOffset localDeadline, long size, long epoch, long change, CachePolicy? policy)
     {
         if (policy?.FailSafeEnabled != true)
         {
@@ -382,12 +398,12 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
 
         var stale = Volatile.Read(ref _stale) ?? CreateStale();
-        var kept = stale.Keep(name, topic, entry, localDeadline, size, policy.FailSafeMaxStaleAge ?? StaleValues.DefaultMaxStaleAge, epoch);
+        var kept = stale.Keep(name, topic, entry, localDeadline, size, policy.FailSafeMaxStaleAge ?? StaleValues.DefaultMaxStaleAge, epoch, change);
 
-        // A peer's change heard between the commit and the keep expired the entry before the store could hear it.
-        if (kept is not null && !IsLocalEntry(name, entry))
+        // A peer's change heard between the commit and the keep took the entry first and drops the value; an entry that only expired meanwhile keeps it.
+        if (kept is not null)
         {
-            stale.Drop(name, kept);
+            stale.Settle(name, kept, entry, IsLocalEntry(name, entry), custom: entry is not ILocalEntry, changed: entry is ILocalEntry { TokenChanged: true });
         }
     }
 
@@ -400,6 +416,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
     /// <summary>The kept values' epoch for a write under a fail-safe policy, read before the write commits locally. The store exists and watches the topic first, so a gap during the first such write is heard too.</summary>
     private protected long KeepEpoch(TopicKey topic) => (Volatile.Read(ref _stale) ?? CreateStale()).EpochFor(topic);
+
+    /// <summary>The key's change generation, read before the entry is written locally, after <see cref="KeepEpoch"/> made the store.</summary>
+    private protected long KeepChange(string name) => Volatile.Read(ref _stale)?.ChangeFor(name) ?? 0;
 
     /// <summary>Whether <paramref name="value"/> is still the key's fail-safe value, read in the key's local turn: no write or removal of the key is half done.</summary>
     private protected bool StillKept(string name, StaleValue value) =>

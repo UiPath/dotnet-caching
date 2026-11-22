@@ -522,6 +522,7 @@ internal sealed partial class MultilayerCache
 
         // Before the write: kept values dropped all at once from here on are newer than this value.
         var epoch = keeps ? KeepEpoch(options.TopicKey) : 0;
+        var change = keeps ? KeepChange(options.CacheKey.Name) : 0;
         if (!LateStillCurrent(options))
         {
             return false;
@@ -535,9 +536,9 @@ internal sealed partial class MultilayerCache
             MarkRead(item);
         }
 
-        // Under fail-safe in a tier with a size limit, the entry's expiry is what gives its kept value a size.
-        var kept = _localMemorySetter.Set(options, item, typeof(T), maxExpiration, target, out var localDeadline, out var size, keeps && StaleOrNull is { Limited: true } charged ? charged : null);
-        KeepStale(options.CacheKey.Name, options.TopicKey, item, localDeadline, size, epoch, kept ? failSafe ?? policy : null);
+        // Under fail-safe the entry's leaving is always told: its expiry gives its kept value a size in a limited tier, and settles a late keep in any tier.
+        var kept = _localMemorySetter.Set(options, item, typeof(T), maxExpiration, target, out var localDeadline, out var size, keeps ? StaleOrNull : null);
+        KeepStale(options.CacheKey.Name, options.TopicKey, item, localDeadline, size, epoch, change, kept ? failSafe ?? policy : null);
         return kept;
     }
 }

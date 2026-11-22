@@ -45,7 +45,7 @@ public sealed class StaleValuesTests : IDisposable
         {
             var old = _entries.Create<string?>("old", deadline);
             var newest = _entries.Create<string?>("newest", deadline);
-            var oldValue = store.Keep(Name, Topic, old, deadline, Size, Age, store.EpochFor(Topic))!;
+            var oldValue = store.Keep(Name, Topic, old, deadline, Size, Age, store.EpochFor(Topic), store.ChangeFor(Name))!;
 
             // As the token of the entry a write replaces changes, or a late answer drops the value it replaced, while that write keeps its own.
             var go = 0;
@@ -67,7 +67,7 @@ public sealed class StaleValuesTests : IDisposable
                 () =>
                 {
                     SpinWait.SpinUntil(() => Volatile.Read(ref go) == 1);
-                    store.Keep(Name, Topic, newest, deadline, Size, Age, store.EpochFor(Topic));
+                    store.Keep(Name, Topic, newest, deadline, Size, Age, store.EpochFor(Topic), store.ChangeFor(Name));
                 },
                 Ct);
             Volatile.Write(ref go, 1);
@@ -127,7 +127,7 @@ public sealed class StaleValuesTests : IDisposable
         using var store = Store();
 
         // At no size, as a value is until its entry expires: the scan then has nothing to subtract from what the tier counts.
-        StaleValue? KeepUnsized(UiPath.Caching.ICacheEntry entry) => store.Keep(Name, Topic, entry, Deadline, 0, Age, store.EpochFor(Topic));
+        StaleValue? KeepUnsized(UiPath.Caching.ICacheEntry entry) => store.Keep(Name, Topic, entry, Deadline, 0, Age, store.EpochFor(Topic), store.ChangeFor(Name));
         KeepUnsized(Entry("first")).Should().NotBeNull();
         var done = 0;
         var missed = 0;
@@ -329,6 +329,151 @@ public sealed class StaleValuesTests : IDisposable
         leaving.Should().NotThrow();
     }
 
+    [Fact]
+    public void A_value_kept_after_its_entry_expired_is_kept_at_the_entrys_size()
+    {
+        using var store = Store();
+        var entry = Entry("v1");
+
+        // The keep runs late, as a starved continuation does: the entry's expiry was heard first, and found nothing to charge.
+        _clock.Advance(TimeSpan.FromMinutes(2));
+        Leaves(store, entry, EvictionReason.Expired);
+        var kept = store.Keep(Name, Topic, entry, _clock.GetUtcNow().AddMinutes(-1), Size, Age, store.EpochFor(Topic), store.ChangeFor(Name))!;
+        store.Settle(Name, kept, entry, local: false, custom: false, changed: false);
+
+        Kept(store).Should().BeSameAs(entry, "an entry that only expired before the keep leaves its value to fail-safe");
+        SizeHeld.Should().Be(Size, "the value took over the expired entry's size");
+    }
+
+    [Theory]
+    [InlineData(EvictionReason.Removed)]
+    [InlineData(EvictionReason.Replaced)]
+    [InlineData(EvictionReason.TokenExpired)]
+    [InlineData(EvictionReason.Capacity)]
+    public void A_value_whose_entry_was_taken_before_the_keep_is_dropped(EvictionReason reason)
+    {
+        using var store = Store();
+        var entry = Entry("v1");
+
+        // A peer's removal or invalidation, a newer write, or the tier's compaction took the entry between the commit and the keep.
+        Leaves(store, entry, reason);
+        var kept = Keep(store, entry)!;
+        store.Settle(Name, kept, entry, local: false, custom: false, changed: false);
+
+        Kept(store).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(EvictionReason.Removed, false)]
+    [InlineData(EvictionReason.Expired, true)]
+    public void A_value_whose_entry_is_not_yet_heard_leaving_waits_for_that_leaving(EvictionReason reason, bool stays)
+    {
+        using var store = Store();
+        var entry = Entry("v1");
+        var kept = Keep(store, entry)!;
+
+        store.Settle(Name, kept, entry, local: false, custom: false, changed: false);
+        Kept(store).Should().BeSameAs(entry, "nothing is known yet about why the entry is gone");
+
+        // A peer's removal heard after the commit still drops the value; its own expiry charges it.
+        Leaves(store, entry, reason);
+        (Kept(store) is not null).Should().Be(stays);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_peers_change_heard_after_the_entry_expired_and_before_the_keep_refuses_the_keep(bool sizeLimited)
+    {
+        using var local = sizeLimited ? null : UnlimitedTier();
+        using var store = Store(local, sizeLimited ? null : new InMemoryCacheOptions());
+        var entry = Entry("v1");
+        var epoch = store.EpochFor(Topic);
+        var change = store.ChangeFor(Name);
+
+        // The write read the generation, committed, and its entry expired; its token was disposed with it, so only the store hears the peer.
+        _clock.Advance(TimeSpan.FromMinutes(2));
+        if (sizeLimited)
+        {
+            Leaves(store, entry, EvictionReason.Expired);
+        }
+
+        PeerChanges();
+        var kept = store.Keep(Name, Topic, entry, _clock.GetUtcNow().AddMinutes(-1), Size, Age, epoch, change);
+
+        kept.Should().BeNull("the peer's change came after the value was read, even with nothing kept yet");
+        Kept(store).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_value_whose_entry_expired_before_a_late_keep_with_no_peer_change_is_kept(bool sizeLimited)
+    {
+        using var local = sizeLimited ? null : UnlimitedTier();
+        using var store = Store(local, sizeLimited ? null : new InMemoryCacheOptions());
+        var entry = Entry("v1");
+        var epoch = store.EpochFor(Topic);
+        var change = store.ChangeFor(Name);
+
+        _clock.Advance(TimeSpan.FromMinutes(2));
+        if (sizeLimited)
+        {
+            Leaves(store, entry, EvictionReason.Expired);
+        }
+
+        var kept = store.Keep(Name, Topic, entry, _clock.GetUtcNow().AddMinutes(-1), Size, Age, epoch, change)!;
+        store.Settle(Name, kept, entry, local: false, custom: false, changed: false);
+
+        Kept(store).Should().BeSameAs(entry);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(EvictionReason.Expired)]
+    public void An_entry_the_caches_factory_did_not_make_is_dropped_once_it_is_not_local(EvictionReason? heard)
+    {
+        using var store = Store();
+        var entry = Entry("v1");
+        if (heard is { } reason)
+        {
+            Leaves(store, entry, reason);
+        }
+
+        var kept = Keep(store, entry)!;
+        store.Settle(Name, kept, entry, local: false, custom: true, changed: false);
+
+        Kept(store).Should().BeNull("its token cannot be told apart from one a peer's change fired, so the old rule holds");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_value_whose_entrys_token_fired_is_dropped_even_when_the_entry_is_local(bool local)
+    {
+        using var store = Store();
+        var entry = Entry("v1");
+        var kept = Keep(store, entry)!;
+
+        // The store heard the peer before the write read the generation; only the entry's token heard it after.
+        store.Settle(Name, kept, entry, local, custom: false, changed: true);
+
+        Kept(store).Should().BeNull();
+    }
+
+    [Fact]
+    public void A_value_whose_entry_is_still_local_is_left_as_kept()
+    {
+        using var store = Store();
+        var entry = Entry("v1");
+        var kept = Keep(store, entry)!;
+
+        store.Settle(Name, kept, entry, local: true, custom: false, changed: false);
+
+        Kept(store).Should().BeSameAs(entry);
+        SizeHeld.Should().Be(0, "the local entry still holds the payload");
+    }
+
     public void Dispose() => _local.Dispose();
 
     private static void Leaves(StaleValues store, UiPath.Caching.ICacheEntry entry, EvictionReason reason) => StaleValues.EntryLeft(Name, entry, reason, store);
@@ -337,9 +482,13 @@ public sealed class StaleValuesTests : IDisposable
 
     private UiPath.Caching.ICacheEntry<string?> Entry(string value) => _entries.Create<string?>(value, Deadline);
 
-    private StaleValue? Keep(StaleValues store, UiPath.Caching.ICacheEntry entry) => store.Keep(Name, Topic, entry, Deadline, Size, Age, store.EpochFor(Topic));
+    private StaleValue? Keep(StaleValues store, UiPath.Caching.ICacheEntry entry) => store.Keep(Name, Topic, entry, Deadline, Size, Age, store.EpochFor(Topic), store.ChangeFor(Name));
 
-    private StaleValues Store(IMemoryCache? local = null) => new(_topics, null, _clock, _options, local ?? _local, NullLogger.Instance);
+    private StaleValues Store(IMemoryCache? local = null, InMemoryCacheOptions? options = null) => new(_topics, null, _clock, options ?? _options, local ?? _local, NullLogger.Instance);
+
+    private MemoryCache UnlimitedTier() => (MemoryCache)new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(new InMemoryCacheOptions());
+
+    private void PeerChanges() => _watcher!.OnNext(new CacheEvent { Id = "e1", Type = KnownEventTypes.CacheRemoved, Source = new Uri("urn:peer"), Data = new CacheEventData(Name) });
 
     /// <summary>The local tier, which takes no new entry while <see cref="Fails"/> is set.</summary>
     private sealed class FailingMemory(IMemoryCache inner) : IMemoryCache

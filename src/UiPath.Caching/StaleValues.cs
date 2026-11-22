@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 
 namespace UiPath.Caching;
 
@@ -34,6 +35,12 @@ internal sealed partial class StaleValues : IDisposable
     // value whose local entry has expired never lands after a removal or a write of the key. By key, so writes of other keys do not wait.
     // Innermost: only the tier's cache runs under one, so nothing takes two, and none is held when a key's local turn is asked for.
     private readonly Lock[] _commits = [.. Enumerable.Range(0, CommitLocks).Select(static _ => new Lock())];
+
+    // Per commit stripe, the peers' changes heard so far: a write reads it before its commit, and its keep is refused when it moved since.
+    private readonly long[] _changes = new long[CommitLocks];
+
+    // Why each fail-safe entry left the local tier, held only as long as the entry itself: a keep that runs after the entry left reads it.
+    private readonly ConditionalWeakTable<ICacheEntry, StrongBox<EvictionReason>> _left = new();
     private long _epoch;
     private bool _disposed;
 
@@ -61,10 +68,23 @@ internal sealed partial class StaleValues : IDisposable
         return Epoch;
     }
 
-    /// <summary>Keeps <paramref name="entry"/> for the key until <paramref name="localDeadline"/> plus <paramref name="maxStaleAge"/>; null, and the key's value dropped, when its topic is not watched, that is already past, or <paramref name="epoch"/> is no longer the store's.</summary>
+    /// <summary>The change generation of the key's stripe, which a write reads before its commit and hands to <see cref="Keep"/>; every peer change of a key in the stripe moves it.</summary>
+    public long ChangeFor(string name) => Volatile.Read(ref _changes[Stripe(name)]);
+
+    /// <summary>A local write or removal of the key that keeps no value: the stripe's generation moves, so a keep of an older write in flight is refused.</summary>
+    public void Advance(string name)
+    {
+        lock (Commit(name))
+        {
+            _changes[Stripe(name)]++;
+        }
+    }
+
+    /// <summary>Keeps <paramref name="entry"/> for the key until <paramref name="localDeadline"/> plus <paramref name="maxStaleAge"/>; null, and the key's value dropped, when its topic is not watched, that is already past, <paramref name="epoch"/> is no longer the store's, or a peer changed a key of its stripe since <paramref name="change"/>.</summary>
     /// <param name="size">The size the local tier charged the entry, which the value takes over when that entry expires: a size asked for again then could differ, or fail.</param>
     /// <param name="epoch">What <see cref="EpochFor"/> returned before the value was committed locally: everything kept was dropped since when it moved, and this value is from before that.</param>
-    public StaleValue? Keep(string name, TopicKey topic, ICacheEntry entry, DateTimeOffset localDeadline, long size, TimeSpan maxStaleAge, long epoch)
+    /// <param name="change">What <see cref="ChangeFor"/> returned before the value was committed locally: a peer's change heard since, even with nothing kept, refuses the keep.</param>
+    public StaleValue? Keep(string name, TopicKey topic, ICacheEntry entry, DateTimeOffset localDeadline, long size, TimeSpan maxStaleAge, long epoch, long change)
     {
         var until = maxStaleAge.Ticks > DateTimeOffset.MaxValue.UtcTicks - localDeadline.UtcTicks ? DateTimeOffset.MaxValue : localDeadline + maxStaleAge;
         if (!Watching(topic) || until <= _clock.GetUtcNow() || epoch != Epoch)
@@ -77,6 +97,13 @@ internal sealed partial class StaleValues : IDisposable
         var value = new StaleValue(entry, size, localDeadline, until, epoch);
         lock (Commit(name))
         {
+            // Checked in the stripe's lock, which a peer's change takes too: a change heard after the write read the generation is never undone.
+            if (_changes[Stripe(name)] != change)
+            {
+                _local.Remove(new KeptKey(name));
+                return null;
+            }
+
             // The local entry holds the same payload, so the value takes no size yet; a compaction leaves it alone, since it would free nothing.
             Store(new KeptKey(name), value, 0, CacheItemPriority.NeverRemove);
         }
@@ -153,6 +180,43 @@ internal sealed partial class StaleValues : IDisposable
         }
     }
 
+    /// <summary>Settles a value kept for <paramref name="entry"/> once the entry may have left the local tier before the keep.</summary>
+    /// <param name="custom">An entry the cache's own factory did not make: it cannot be told apart from one a peer's change took, so it is dropped, as before.</param>
+    /// <param name="changed">The entry's change token fired: a peer's change reached the key while the entry was, or was being, stored.</param>
+    /// <remarks>
+    /// A peer's change heard by the store since the write was refused by the keep already; one heard only by the entry's token, which may come first or
+    /// later in a dispatch, drops the value here. A local entry needs nothing more. Otherwise the entry's recorded leaving decides: its own expiry keeps
+    /// the value, charged at its size, since a slow keep must not lose it, and any other leaving drops it. An entry not yet heard leaving keeps it: its
+    /// leaving is always reported, and settles it later.
+    /// </remarks>
+    public void Settle(string name, StaleValue kept, ICacheEntry entry, bool local, bool custom, bool changed)
+    {
+        if (local && !changed)
+        {
+            return;
+        }
+
+        if (custom || changed)
+        {
+            Drop(name, kept);
+            return;
+        }
+
+        if (!_left.TryGetValue(entry, out var reason))
+        {
+            return;
+        }
+
+        if (reason.Value == EvictionReason.Expired)
+        {
+            Charge(name, entry);
+        }
+        else
+        {
+            Drop(name, kept);
+        }
+    }
+
     /// <summary>Drops the key's value only while it holds <paramref name="entry"/>: that entry was invalidated.</summary>
     public void Drop(string name, ICacheEntry entry)
     {
@@ -188,7 +252,9 @@ internal sealed partial class StaleValues : IDisposable
         _ => uri.OriginalString,
     };
 
-    private Lock Commit(string name) => _commits[(uint)StringComparer.Ordinal.GetHashCode(name) % CommitLocks];
+    private static int Stripe(string name) => (int)((uint)StringComparer.Ordinal.GetHashCode(name) % CommitLocks);
+
+    private Lock Commit(string name) => _commits[Stripe(name)];
 
     /// <summary>What the tier holds for the key, whatever its epoch.</summary>
     private StaleValue? Held(KeptKey key) => _local.TryGetValue(key, out var held) ? held as StaleValue : null;
@@ -214,6 +280,9 @@ internal sealed partial class StaleValues : IDisposable
 
     private void Left(string name, ICacheEntry entry, EvictionReason reason)
     {
+        // Recorded first, for a keep that has not run yet.
+        _left.AddOrUpdate(entry, new StrongBox<EvictionReason>(reason));
+
         // The write that replaced the entry has kept its own value, or dropped this one.
         if (reason == EvictionReason.Replaced)
         {
@@ -252,7 +321,11 @@ internal sealed partial class StaleValues : IDisposable
             {
                 if (kept.Epoch == Epoch)
                 {
-                    Store(key, kept, kept.Size, CacheItemPriority.Low);
+                    // Only a tier with a size limit charges it; in any other the value stays where it is, out of compaction's reach.
+                    if (Limited)
+                    {
+                        Store(key, kept, kept.Size, CacheItemPriority.Low);
+                    }
                 }
                 else
                 {
@@ -314,7 +387,17 @@ internal sealed partial class StaleValues : IDisposable
         }
         else if (value.Key is { } key)
         {
-            Drop(key);
+            Changed(key);
+        }
+    }
+
+    /// <summary>A peer changed the key: its kept value goes, and the stripe's generation moves even with nothing kept, so a keep in flight is refused.</summary>
+    private void Changed(string name)
+    {
+        lock (Commit(name))
+        {
+            _changes[Stripe(name)]++;
+            _local.Remove(new KeptKey(name));
         }
     }
 
