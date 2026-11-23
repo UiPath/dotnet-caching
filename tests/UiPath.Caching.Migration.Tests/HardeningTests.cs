@@ -167,8 +167,16 @@ public sealed class HardeningTests : RouterTestBase
 
         core.IsIdle.Should().BeTrue();
         retrier.WaitingKeys.Should().Be(0, "the worker pruned the expired key instead of dying on a negative wait");
+        // A new report must start a worker. With this clock the worker prunes the key and ends at once, so the
+        // count of running workers is a race; the key's removal is the proof, since only a worker removes it.
         retrier.ReportKey("j", new Route(RoutePath.Library, Route.Flag));
-        core.BackgroundCount.Should().Be(1, "the running flag was released, so a new report starts a worker");
+        until = DateTime.UtcNow.AddSeconds(5);
+        while ((retrier.WaitingKeys != 0 || !core.IsIdle) && DateTime.UtcNow < until)
+        {
+            await Task.Delay(10, Ct);
+        }
+
+        retrier.WaitingKeys.Should().Be(0, "the running flag was released, so the new report started a worker that pruned the key");
         core.BeginStop();
         core.CancelBackground();
         await core.DrainAsync();
