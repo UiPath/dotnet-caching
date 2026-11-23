@@ -17,7 +17,11 @@ internal sealed class GroupStateMonitor(IStateReader reader, KeyMoveStateOptions
             throw new InvalidOperationException("The monitor is already running; stop it before it is started again.");
         }
 
-        var trackers = Register(registrations);
+        var list = registrations.ToArray();
+        _ = Register(list);
+
+        // A monitor that was stopped keeps its trackers, and every one of them is polled again.
+        var trackers = list.Select(r => _groups[r.Name]).Distinct().ToArray();
         _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var token = _stop.Token;
         _loops = [.. trackers.Select(t => Task.Run(() => RunAsync(t, token), CancellationToken.None))];
@@ -39,6 +43,33 @@ internal sealed class GroupStateMonitor(IStateReader reader, KeyMoveStateOptions
 
     public GroupRules RulesFor(string group) =>
         _groups.TryGetValue(group, out var tracker) ? GroupRuleEvaluator.Evaluate(tracker.View(), options) : GroupRules.Unaffected;
+
+    /// <summary>The state the node last read for the group, whether or not it acts on it yet; null for none.</summary>
+    public StateRecord? CurrentState(string group) => _groups.TryGetValue(group, out var tracker) ? tracker.View().State : null;
+
+    /// <summary>The age of the node's oldest snapshot among its fast-polled relevant groups; null when it has none, or when one has not read yet.</summary>
+    public TimeSpan? SnapshotAge()
+    {
+        TimeSpan? oldest = null;
+        foreach (var tracker in _groups.Values)
+        {
+            var view = tracker.View();
+            if (!GroupRuleEvaluator.IsRelevant(view) || GroupRuleEvaluator.PollInterval(view, options) != options.PollInterval)
+            {
+                // A slow poll must not make the node look stale.
+                continue;
+            }
+
+            if (view.SinceRead is not { } age)
+            {
+                return null;
+            }
+
+            oldest = oldest is { } held && held > age ? held : age;
+        }
+
+        return oldest;
+    }
 
     public bool Acknowledge(string group, long ep, string id) =>
         _groups.TryGetValue(group, out var tracker) && tracker.Acknowledge(ep, id);
@@ -171,6 +202,7 @@ internal sealed class GroupStateMonitor(IStateReader reader, KeyMoveStateOptions
         }
         catch (OperationCanceledException)
         {
+            // Cancellation ends this background loop.
         }
     }
 

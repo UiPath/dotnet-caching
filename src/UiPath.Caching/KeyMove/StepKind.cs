@@ -13,4 +13,7 @@ internal enum StepKind
     Resume,
 
     ColdStart,
+
+    /// <summary>X12 in S1 or S2 for the cache set every fresh node advertises, which differs from the stored one.</summary>
+    RebuildCaches,
 }

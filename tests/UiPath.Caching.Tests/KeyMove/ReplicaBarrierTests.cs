@@ -122,6 +122,7 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
     {
         var connection = Environment.GetEnvironmentVariable("REDIS_REPLICA_CONNECTION_STRING");
         Assert.SkipUnless(!string.IsNullOrWhiteSpace(connection), "Set REDIS_REPLICA_CONNECTION_STRING to a replica of REDIS_CONNECTION_STRING to run.");
+        ReplicaGuard.RequireOnlyReplica(Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING") ?? "127.0.0.1:6379", connection!);
         return connection!;
     }
 
@@ -177,14 +178,14 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
             }
         }
 
-        public async Task Confirmed() => (await channel.WaitAsync(1, TimeSpan.FromSeconds(5), CancellationToken.None)).Should().BeGreaterThanOrEqualTo(1);
+        public async Task Confirmed() => (await WaitAsync(5000, CancellationToken.None)).Should().BeGreaterThanOrEqualTo(1);
 
         // The replica stops answering; the repeat runs; the WAIT is started and either is still pending half a second later or has returned.
         public async Task<bool> WaitedAfterAsync(Func<Task> repeat, CancellationToken cancellationToken)
         {
             var stall = await ReplicaStall.StartAsync(replica, 4);
             await repeat();
-            var wait = channel.WaitAsync(1, TimeSpan.FromSeconds(5), cancellationToken);
+            var wait = WaitAsync(5000, cancellationToken);
             await Task.WhenAny(wait, Task.Delay(500, cancellationToken));
             var pending = !wait.IsCompleted;
             (await wait).Should().BeGreaterThanOrEqualTo(1);
@@ -205,5 +206,8 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
                 await primary.DisposeAsync();
             }
         }
+
+        private async Task<long> WaitAsync(long milliseconds, CancellationToken cancellationToken) =>
+            (long)await channel.StateDatabase.Multiplexer.GetServer(channel.Endpoint).ExecuteAsync("WAIT", 1, milliseconds).WaitAsync(cancellationToken);
     }
 }

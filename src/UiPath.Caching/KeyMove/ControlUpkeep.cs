@@ -77,6 +77,7 @@ internal sealed class ControlUpkeep(ControlRecordReader records, TransitionSeque
         }
         catch (OperationCanceledException)
         {
+            // Cancellation ends this background loop.
         }
     }
 

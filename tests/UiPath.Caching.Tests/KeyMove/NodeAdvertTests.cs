@@ -74,7 +74,7 @@ public class NodeAdvertTests
         var list = new List<string>();
         tokens.AddTo(list);
 
-        list.Should().Equal("km", "kmg=g1", "ca=g1:a,b", "fl=g1:4", "g1@6:ab:S3f", "pi=g1:1", "rc=g1:6");
+        list.Should().Equal("km", "kmg=g1", "ca=g1:a,b", "fl=g1:4", "g1@6:ab:S3f", "pi=g1:1", "rc=g1:6", "snap=0");
     }
 
     [Fact]

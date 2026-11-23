@@ -319,7 +319,7 @@ public partial class MoveScriptsIntegrationTests
 
         var result = await env.Scripts.PublishHashAsync(env.Keys, staging, MoveTestEnvironment.Id, MoveTestEnvironment.PublicationFor(capture, "n1", px: DeadlinePx, tcap: tcap));
 
-        await AssertDeadlineAsync(env, result, tcap);
+        await AssertDeadlineAsync(env, result, tcap, untouched: "old");
         (await env.Db.KeyExistsAsync(staging)).Should().BeFalse();
         if (result == MoveScripts.Published)
         {
@@ -624,12 +624,21 @@ public partial class MoveScriptsIntegrationTests
     }
 
     // The deadline is 10 ms ahead of the server's clock; a slow round trip may pass it first, which is a refusal that writes nothing.
-    private static async Task AssertDeadlineAsync(MoveTestEnvironment env, long result, long tcap)
+    // A refused publish leaves the destination as it was: absent, or holding `untouched`.
+    private static async Task AssertDeadlineAsync(MoveTestEnvironment env, long result, long tcap, string? untouched = null)
     {
         result.Should().BeOneOf(MoveScripts.Published, MoveScripts.PastDeadline);
         if (result == MoveScripts.PastDeadline)
         {
-            (await env.Db.KeyExistsAsync(env.Dst)).Should().BeFalse();
+            if (untouched is null)
+            {
+                (await env.Db.KeyExistsAsync(env.Dst)).Should().BeFalse();
+            }
+            else
+            {
+                (await env.Db.StringGetAsync(env.Dst)).Should().Be(untouched);
+            }
+
             return;
         }
 
@@ -640,7 +649,8 @@ public partial class MoveScriptsIntegrationTests
             return;
         }
 
-        remaining.Value.Should().BeGreaterThan(TimeSpan.Zero).And.BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(DeadlineLeft));
+        // PTTL reports 0 for a key with under a millisecond left.
+        remaining.Value.Should().BeGreaterThanOrEqualTo(TimeSpan.Zero).And.BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(DeadlineLeft));
         if (env.SupportsPExpireTime)
         {
             var at = await env.ExpireTimeAsync(env.Dst);

@@ -2,60 +2,93 @@ using System.Net;
 
 namespace UiPath.Caching.KeyMove;
 
+/// <summary>Opens a dedicated connection per master without delaying the other masters.</summary>
 internal sealed class MasterChannels(IStateTopology topology) : IAsyncDisposable
 {
-    private readonly Dictionary<EndPoint, IMasterChannel> _open = [];
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Dictionary<EndPoint, Task<IMasterChannel>> _open = [];
+#if NET9_0_OR_GREATER
+    private readonly Lock _lock = new();
+#else
+    private readonly object _lock = new();
+#endif
 
     public async Task<IMasterChannel> GetAsync(EndPoint master, CancellationToken cancellationToken)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Task<IMasterChannel> opening;
+        lock (_lock)
+        {
+            if (_open.TryGetValue(master, out var current))
+            {
+                opening = current;
+            }
+            else
+            {
+                // Shared by every caller that asks while it opens, so it does not take one caller's cancellation.
+                opening = topology.OpenAsync(master, CancellationToken.None);
+                _open[master] = opening;
+            }
+        }
+
         try
         {
-            if (!_open.TryGetValue(master, out var channel))
+            return await opening.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (opening.IsFaulted && ex is not OperationCanceledException)
+        {
+            lock (_lock)
             {
-                channel = await topology.OpenAsync(master, cancellationToken).ConfigureAwait(false);
-                _open[master] = channel;
+                if (_open.TryGetValue(master, out var current) && ReferenceEquals(current, opening))
+                {
+                    _open.Remove(master);
+                }
             }
 
-            return channel;
-        }
-        finally
-        {
-            _gate.Release();
+            throw;
         }
     }
 
     public async Task ReplaceAsync(EndPoint master, CancellationToken cancellationToken)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Task<IMasterChannel>? old;
+        lock (_lock)
+        {
+            _open.Remove(master, out old);
+        }
+
+        if (old is null)
+        {
+            return;
+        }
+
         try
         {
-            if (_open.Remove(master, out var old))
-            {
-                try
-                {
-                    await old.DisposeAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                }
-            }
+            await (await old.WaitAsync(cancellationToken).ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false);
         }
-        finally
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _gate.Release();
+            // The old connection is being replaced because it failed, or never opened.
         }
     }
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var channel in _open.Values)
+        Task<IMasterChannel>[] all;
+        lock (_lock)
         {
-            await channel.DisposeAsync().ConfigureAwait(false);
+            all = [.. _open.Values];
+            _open.Clear();
         }
 
-        _open.Clear();
-        _gate.Dispose();
+        foreach (var opening in all)
+        {
+            try
+            {
+                await (await opening.ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A connection that never opened has nothing to close.
+            }
+        }
     }
 }

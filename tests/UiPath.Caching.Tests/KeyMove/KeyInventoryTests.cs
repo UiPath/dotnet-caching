@@ -1,0 +1,156 @@
+using System.Globalization;
+using StackExchange.Redis;
+using UiPath.Caching.KeyMove;
+using UiPath.Caching.Tests.Redis;
+
+namespace UiPath.Caching.Tests.KeyMove;
+
+[Collection("RedisIntegration")]
+[Trait("Category", "Integration")]
+public class KeyInventoryTests(RedisContainerFixture fixture)
+{
+    private static CancellationToken Ct => CancellationToken.None;
+
+    [Fact]
+    public async Task The_inventory_counts_owned_source_keys_per_cache_with_a_zero_for_a_cache_that_holds_none()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        await kit.SetAsync(MoveSide.Legacy, "a", "k1");
+        await kit.SetAsync(MoveSide.Legacy, "a", "mv2");
+        await kit.SetAsync(MoveSide.Legacy, "c", "k3");
+        await kit.SetAsync(MoveSide.Native, "b", "k4");
+
+        var inventory = (await kit.Inventory.RunAsync(kit.Group, Ct))!;
+
+        inventory.Residue.Should().BeEquivalentTo(new Dictionary<string, long> { ["a"] = 2, ["b"] = 0 });
+        inventory.Movable.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_reverse_inventory_counts_the_native_side()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        await kit.SetAsync(MoveSide.Native, "b", "k1");
+        await kit.SetAsync(MoveSide.Legacy, "b", "k2");
+        await kit.MoveToAsync("S4", "rev", 1);
+
+        var inventory = (await kit.Inventory.RunAsync(kit.Group, Ct))!;
+
+        inventory.Residue["b"].Should().Be(1);
+        KeyInventory.SourceOf(await kit.StateAsync()).Should().Be(MoveSide.Native);
+    }
+
+    [Fact]
+    public async Task The_canary_counts_keys_whose_life_says_they_were_written_after_S3_and_needs_the_time_of_S3()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        kit.Kit.Time.Advance(TimeSpan.FromDays(1));
+        kit.Space.MaxTtl["a"] = TimeSpan.FromMinutes(10);
+        await kit.SetAsync(MoveSide.Legacy, "a", "long", TimeSpan.FromHours(1));
+        await kit.SetAsync(MoveSide.Legacy, "a", "short", TimeSpan.FromSeconds(30));
+        await kit.SetAsync(MoveSide.Legacy, "a", "never");
+        (await kit.Inventory.RunAsync(kit.Group, Ct))!.Canary.Should().BeNull("no S3 time, no evidence");
+
+        var state = await kit.StateAsync();
+        var t3 = kit.Kit.Time.GetUtcNow().AddMinutes(-2).ToUnixTimeMilliseconds();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, t3.ToString(CultureInfo.InvariantCulture)), (StateFields.AllAck, state.Id)], []);
+
+        (await kit.Inventory.RunAsync(kit.Group, Ct))!.Canary.Should().Be(1, "an hour of life and two minutes since S3 beats the longest source life; thirty seconds does not; no expiry is not seen");
+    }
+
+    [Fact]
+    public async Task The_drain_report_never_passes_without_a_mover_pass_and_then_needs_nothing_movable()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        await kit.SetAsync(MoveSide.Legacy, "a", "k1");
+
+        (await new InventoryMoverStatus(kit.Inventory, kit.Kit.Time).DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("only the mover can say its pass finished");
+        (await new InventoryMoverStatus(kit.Inventory, kit.Kit.Time, (_, _, _) => Task.FromResult(true)).DrainAsync(kit.Group, "fwd", Ct))!.Should().Match<DrainReport>(r => r.Passed && r.Residue["a"] == 1 && r.Canary == 0);
+        await kit.SetAsync(MoveSide.Legacy, "a", "mv2");
+        (await new InventoryMoverStatus(kit.Inventory, kit.Kit.Time, (_, _, _) => Task.FromResult(true)).DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("a movable key is left");
+    }
+
+    [Fact]
+    public async Task A_forward_report_is_null_without_the_time_of_S3_and_the_residue_inventory_still_answers()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        await kit.SetAsync(MoveSide.Legacy, "b", "k1");
+        var status = new InventoryMoverStatus(kit.Inventory, kit.Kit.Time);
+
+        (await status.DrainAsync(kit.Group, "fwd", Ct)).Should().BeNull();
+        (await status.ResidueInventoryAsync(kit.Group, Ct))["b"].Should().Be(1);
+        (await status.ResidueInventoryAsync("g" + Guid.NewGuid().ToString("N")[..8], Ct)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_time_of_S3_that_no_acknowledgement_of_the_current_identity_stands_behind_is_no_time()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        kit.Space.MaxTtl["a"] = TimeSpan.FromMinutes(10);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, "an-older-identity")], []);
+
+        (await kit.Inventory.RunAsync(kit.Group, Ct))!.Canary.Should().BeNull("the time is an older move's");
+    }
+
+    [Fact]
+    public async Task The_drain_report_reuses_one_inventory_for_thirty_seconds_and_asks_the_mover_first()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        await kit.SetAsync(MoveSide.Legacy, "a", "k1");
+        var events = new List<string>();
+        kit.Space.OnOwnerOf = _ => events.Add("scan");
+        var status = new InventoryMoverStatus(kit.Inventory, kit.Kit.Time, (_, _, _) =>
+        {
+            events.Add("mover");
+            return Task.FromResult(false);
+        });
+
+        await status.DrainAsync(kit.Group, "fwd", Ct);
+        await status.DrainAsync(kit.Group, "fwd", Ct);
+        events.Count(e => e == "scan").Should().Be(1, "the second report reuses the inventory");
+        events.First().Should().Be("mover");
+        kit.Kit.Time.Advance(TimeSpan.FromSeconds(31));
+        await status.DrainAsync(kit.Group, "fwd", Ct);
+
+        events.Count(e => e == "scan").Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_inventory_that_fails_on_Redis_is_no_evidence_for_the_drain_and_an_error_for_the_residue()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        kit.Kit.Topology.Layout = (_, _) => throw new RedisException("the topology is unreadable");
+        var status = new InventoryMoverStatus(kit.Inventory, kit.Kit.Time);
+
+        (await status.DrainAsync(kit.Group, "fwd", Ct)).Should().BeNull();
+        var act = () => status.ResidueInventoryAsync(kit.Group, Ct);
+        await act.Should().ThrowAsync<RedisException>();
+    }
+
+    [Fact]
+    public async Task A_completed_mover_pass_with_only_invalid_mappings_left_does_not_pass_D1_and_D2()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        kit.Space.InvalidDestination = k => k.Contains(":bad", StringComparison.Ordinal);
+        var status = new InventoryMoverStatus(kit.Inventory, kit.Kit.Time, (_, _, _) => Task.FromResult(true));
+        await kit.SetAsync(MoveSide.Legacy, "a", "skipped-class");
+
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeTrue("a key in an accepted skip class does not block");
+        await kit.SetAsync(MoveSide.Legacy, "a", "bad1");
+        kit.Kit.Time.Advance(InventoryMoverStatus.ReuseFor + TimeSpan.FromSeconds(1));
+
+        var inventory = (await kit.Inventory.RunAsync(kit.Group, Ct))!;
+        inventory.InvalidMapping.Should().Be(1);
+        inventory.Movable.Should().Be(0, "nothing is movable, and the mover pass is complete");
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("an invalid mapping is a defect, not a skip class");
+    }
+}

@@ -27,8 +27,16 @@ internal sealed class StageFlagPoller(IMigrationStageSource source, Func<string,
 
     public void Start(IEnumerable<string> groups, CancellationToken cancellationToken)
     {
-        _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _loops = [.. groups.Distinct(StringComparer.Ordinal).Select(g => Task.Run(() => RunAsync(g, _stop.Token), CancellationToken.None))];
+        if (_stop is not null)
+        {
+            throw new InvalidOperationException("The poller is already running; stop it before it is started again.");
+        }
+
+        // The groups and the token are taken now: a caller that changes its collection or stops this poller later must not reach into the loops.
+        var snapshot = groups.Distinct(StringComparer.Ordinal).ToArray();
+        var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _stop = stop;
+        _loops = [.. snapshot.Select(g => Task.Run(() => RunAsync(g, stop.Token), CancellationToken.None))];
     }
 
     public async Task StopAsync()

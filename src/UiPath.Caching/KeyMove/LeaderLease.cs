@@ -3,8 +3,9 @@ using StackExchange.Redis;
 namespace UiPath.Caching.KeyMove;
 
 /// <summary>The lease <c>mg:{g}:lead</c>: taken when free, renewed by its holder; a holder that cannot renew stops writing once the time it could rely on has run out.</summary>
-internal sealed class LeaderLease(MoveScripts scripts, RedisKey key, KeyMoveStateOptions options, TimeProvider time)
+internal sealed class LeaderLease(MoveScripts initialScripts, RedisKey key, KeyMoveStateOptions options, TimeProvider time)
 {
+    private volatile MoveScripts _scripts = initialScripts;
     private long _sentAt;
     private int _held;
 
@@ -15,11 +16,14 @@ internal sealed class LeaderLease(MoveScripts scripts, RedisKey key, KeyMoveStat
     /// <summary>True while the last successful take or renewal, counted from before it was sent, is younger than the lease lifetime.</summary>
     public bool HoldsLease => Volatile.Read(ref _held) == 1 && time.GetElapsedTime(Volatile.Read(ref _sentAt)) < options.LeaseTtl;
 
+    /// <summary>Points the lease at scripts over a new connection; the token and the validity it already earned carry over.</summary>
+    public void Rebind(MoveScripts scripts) => _scripts = scripts;
+
     /// <summary>One take or renewal; a failed call changes nothing, so the old validity runs out by itself.</summary>
     public async Task<bool> TryHoldAsync()
     {
         var sent = time.GetTimestamp();
-        var code = await scripts.LeaseAsync(key, Token, (long)options.LeaseTtl.TotalMilliseconds).ConfigureAwait(false);
+        var code = await _scripts.LeaseAsync(key, Token, (long)options.LeaseTtl.TotalMilliseconds).ConfigureAwait(false);
         if (code == MoveScripts.LeaseHeldByAnother)
         {
             Volatile.Write(ref _held, 0);
@@ -34,7 +38,7 @@ internal sealed class LeaderLease(MoveScripts scripts, RedisKey key, KeyMoveStat
     public async Task ReleaseAsync()
     {
         Volatile.Write(ref _held, 0);
-        await scripts.LeaseReleaseAsync(key, Token).ConfigureAwait(false);
+        await _scripts.LeaseReleaseAsync(key, Token).ConfigureAwait(false);
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)

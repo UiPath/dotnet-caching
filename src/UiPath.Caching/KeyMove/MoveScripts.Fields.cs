@@ -18,14 +18,16 @@ internal sealed partial class MoveScripts
     private const string GuardScript = """
         if redis.call('HGET', KEYS[1], 'id') ~= ARGV[1] then return 0 end
         if ARGV[2] ~= '' and redis.call('GET', KEYS[2]) ~= ARGV[2] then return -7 end
+        if ARGV[3] == '1' and (redis.call('HGET', KEYS[1], 'st') ~= 'S0' or redis.call('HEXISTS', KEYS[1], 'moveId') == 1) then return -8 end
         return 1
         """;
 
     /// <summary>Whether the state still holds <paramref name="id"/> and the fence's lease is still the caller's; writes nothing.</summary>
-    /// <returns>1 when both hold; 0 when the id differs; <see cref="LeaseNotHeld"/> when the lease is not the caller's.</returns>
-    public async Task<long> GuardAsync(RedisKey state, string id, LeaseFence? fence)
+    /// <param name="neverStarted">Also requires the S0 state that no X1, X7 or X13 ever stamped with <c>moveId</c>, which is the durable evidence that no control record was ever written.</param>
+    /// <returns>1 when all hold; 0 when the id differs; <see cref="LeaseNotHeld"/> when the lease is not the caller's; <see cref="GroupStarted"/> when <paramref name="neverStarted"/> fails.</returns>
+    public async Task<long> GuardAsync(RedisKey state, string id, LeaseFence? fence, bool neverStarted = false)
     {
-        var reply = await EvaluateAsync(GuardScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty]).ConfigureAwait(false);
+        var reply = await EvaluateAsync(GuardScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty, neverStarted ? "1" : "0"]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
@@ -36,7 +38,17 @@ internal sealed partial class MoveScripts
             return 0;
         }
 
-        return fence is not null && !await HoldsFenceAsync(fence).ConfigureAwait(false) ? LeaseNotHeld : 1;
+        if (fence is not null && !await HoldsFenceAsync(fence).ConfigureAwait(false))
+        {
+            return LeaseNotHeld;
+        }
+
+        if (neverStarted && (await _db.HashGetAsync(state, StateFields.State, Master).ConfigureAwait(false) != "S0" || await _db.HashExistsAsync(state, StateFields.MoveId, Master).ConfigureAwait(false)))
+        {
+            return GroupStarted;
+        }
+
+        return 1;
     }
 
     /// <summary>Sets and deletes plain fields of an existing state hash, only while its id is <paramref name="expectedId"/> when one is given; never creates the hash.</summary>

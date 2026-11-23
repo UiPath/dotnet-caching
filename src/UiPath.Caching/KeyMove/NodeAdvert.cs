@@ -7,6 +7,7 @@ internal sealed record NodeAdvert(string Node, TimeSpan Age, IReadOnlyList<strin
     public const string Km = "km";
     public const string Bypass = "byp";
     public const string CtlQuestion = "ctlq";
+    public const int SnapshotBucket = 5;
 
     public bool HasKm => Has(Km);
 
@@ -18,6 +19,9 @@ internal sealed record NodeAdvert(string Node, TimeSpan Age, IReadOnlyList<strin
     public int? SnapshotSeconds => Tokens.FirstOrDefault(t => t.StartsWith("snap=", StringComparison.Ordinal)) is { } t && int.TryParse(t[5..], NumberStyles.None, CultureInfo.InvariantCulture, out var s) ? s : null;
 
     public string? Scope => Tokens.FirstOrDefault(t => t.StartsWith("ap=", StringComparison.Ordinal) || t.StartsWith("sc=", StringComparison.Ordinal))?[3..];
+
+    /// <summary>The age rounded up to the next 5 seconds, so the token changes at most every 5 seconds and never understates the age.</summary>
+    public static string Snapshot(TimeSpan age) => string.Create(CultureInfo.InvariantCulture, $"snap={(int)(Math.Ceiling(Math.Max(age.TotalSeconds, 0) / SnapshotBucket) * SnapshotBucket)}");
 
     public static string Flag(string group, int stage) => string.Create(CultureInfo.InvariantCulture, $"fl={group}:{stage}");
 

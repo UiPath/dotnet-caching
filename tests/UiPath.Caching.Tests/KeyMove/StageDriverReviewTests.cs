@@ -210,6 +210,32 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task An_uncertain_commit_is_reported_by_the_step_and_resumed_by_the_next_one_never_repeated_in_the_same_call()
+    {
+        var options = new KeyMoveStateOptions { ExpectedReplicasPerMaster = 1, BarrierWait = TimeSpan.FromMilliseconds(50), EvictionPolicyAttested = true };
+        await using var kit = await DriverKit.CreateAsync(fixture, state: options);
+        kit.Kit.Topology.Probe = _ => new MasterProbe(1, "noeviction");
+        kit.Kit.Topology.Wait = (_, _) => 1;
+        await kit.PrepareAsync();
+
+        // The EXECs of the first transition: TRANSIT, epoch sync, commit marker, then the commit of the only slot, whose EXEC gets no reply and never runs.
+        kit.Kit.Topology.LoseBeforeApply = number => number == 4;
+        var first = await kit.StepAsync(TimeSpan.FromSeconds(30));
+
+        first!.Result!.Outcome.Should().Be(TransitionOutcome.CommitUncertain);
+        kit.Kit.Topology.Execs.Should().Be(4, "nothing of the commit was sent again in the same call");
+        (await kit.StateAsync()).Durable.Should().BeFalse();
+
+        // The next step resumes the transition, on its own, and completes it.
+        kit.Kit.Topology.LoseBeforeApply = null;
+        var next = await kit.StepAsync();
+
+        next!.Plan.Kind.Should().Be(StepKind.Resume);
+        next.Result!.Outcome.Should().Be(TransitionOutcome.Completed);
+        (await kit.StateAsync()).Durable.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task The_reverse_inventory_replaces_the_forward_residue_and_a_release_consent_dies_when_the_inventory_changes()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);

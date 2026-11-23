@@ -1,6 +1,7 @@
 using System.Buffers;
 using StackExchange.Redis;
 using UiPath.Caching.Config;
+using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Migration;
 
@@ -9,8 +10,10 @@ public sealed class RouterBuilder
     private static readonly SearchValues<char> ForbiddenVersionCharacters = SearchValues.Create("@+={} ");
 
     private readonly List<Func<RouterCore, (string Name, Type Type, object Cache)>> _registrations = [];
+    private readonly Dictionary<string, (string Group, Func<string, string> InPlaceKey)> _routed = new(StringComparer.Ordinal);
     private readonly HashSet<string> _names = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _excluded = new(StringComparer.Ordinal);
+    private (IMigrationStageSource Stages, KeyMoveBuilder Builder)? _keyMove;
 
     internal IReadOnlyList<Func<RouterCore, (string Name, Type Type, object Cache)>> Registrations => _registrations;
 
@@ -42,6 +45,10 @@ public sealed class RouterBuilder
 
     internal int BridgeMaxPending { get; private set; } = BridgeHost.DefaultMaxPending;
 
+    internal KeyMoveSetup? KeyMove { get; private set; }
+
+    internal IReadOnlyDictionary<string, (string Group, Func<string, string> InPlaceKey)> Routed => _routed;
+
     public RouterBuilder Add<T>(RouterCacheRegistration<T> registration)
         where T : class
     {
@@ -70,6 +77,7 @@ public sealed class RouterBuilder
             throw new ArgumentException($"A cache named '{registration.Name}' is already registered.", nameof(registration));
         }
 
+        _routed[registration.Name] = (registration.Group, registration.RedisKey);
         _registrations.Add(core => (
             registration.Name,
             typeof(T),
@@ -80,10 +88,7 @@ public sealed class RouterBuilder
         return this;
     }
 
-    /// <summary>
-    /// The adapter over the older client's invalidation channel: the router publishes every key write, delete and clear on it and evicts on what it
-    /// receives. At most <paramref name="maxPendingPublishes"/> adapter calls are in flight; a publish beyond that is dropped and counted.
-    /// </summary>
+    /// <summary>The adapter over the older client's invalidation channel: the router publishes every key write, delete and clear on it and evicts on what it receives. At most <paramref name="maxPendingPublishes"/> adapter calls are in flight; a publish beyond that is dropped and counted.</summary>
     public RouterBuilder UseChannelBridge(IChannelBridge bridge, int maxPendingPublishes = 16)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxPendingPublishes, 1);
@@ -92,11 +97,7 @@ public sealed class RouterBuilder
         return this;
     }
 
-    /// <summary>
-    /// Lists a cache that stays on the application's own client, outside the router: one the library cannot match, such as a lock or another
-    /// primitive the two stacks implement differently, or a map cache with field semantics the library does not keep. The startup log names it,
-    /// and asking the router for it fails with <paramref name="reason"/>.
-    /// </summary>
+    /// <summary>Lists a cache that stays on the application's own client, outside the router: one the library cannot match, such as a lock or another primitive the two stacks implement differently, or a map cache with field semantics the library does not keep. The startup log names it, and asking the router for it fails with <paramref name="reason"/>.</summary>
     public RouterBuilder Exclude(string cacheName, string reason)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cacheName);
@@ -197,5 +198,38 @@ public sealed class RouterBuilder
     {
         SourceDatabase = database ?? throw new ArgumentNullException(nameof(database));
         return this;
+    }
+
+    /// <summary>Registers key move groups and caches with their traits and key maps; without it nothing of key move runs and nothing of it is advertised.</summary>
+    public RouterBuilder UseKeyMove(IMigrationStageSource stageSource, Action<KeyMoveBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(stageSource);
+        ArgumentNullException.ThrowIfNull(configure);
+        if (_keyMove is not null)
+        {
+            throw new InvalidOperationException("UseKeyMove was already called; register every key move group and cache in one call.");
+        }
+
+        var builder = new KeyMoveBuilder();
+        configure(builder);
+        _keyMove = (stageSource, builder);
+        return this;
+    }
+
+    internal RouterBuilder UseKeyMoveSetup(KeyMoveSetup setup)
+    {
+        KeyMove = setup ?? throw new ArgumentNullException(nameof(setup));
+        return this;
+    }
+
+    /// <summary>Checks the key move registration against the router's and builds its setup; null when none was given.</summary>
+    internal KeyMoveSetup? BuildKeyMove()
+    {
+        if (_keyMove is { } given)
+        {
+            KeyMove = given.Builder.Build(given.Stages, _routed);
+        }
+
+        return KeyMove;
     }
 }

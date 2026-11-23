@@ -86,6 +86,7 @@ public class ReplicaRecoveryTests(RedisContainerFixture fixture)
     {
         var connection = Environment.GetEnvironmentVariable("REDIS_REPLICA_CONNECTION_STRING");
         Assert.SkipUnless(!string.IsNullOrWhiteSpace(connection), "Set REDIS_REPLICA_CONNECTION_STRING to a replica of REDIS_CONNECTION_STRING to run.");
+        ReplicaGuard.RequireOnlyReplica(Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING") ?? "127.0.0.1:6379", connection!);
         return connection!;
     }
 }

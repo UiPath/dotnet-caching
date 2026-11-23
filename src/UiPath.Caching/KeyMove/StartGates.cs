@@ -14,15 +14,15 @@ internal static class StartGates
 
         Overridable(i, ApprovalKinds.Start, KeyMoveGateIds.StartReleaseFloor, "release_floor_not_attested", i.Facts.ReleaseFloorAttested, failures, overrides, counted: false);
         Overridable(i, ApprovalKinds.StartUnsettled, KeyMoveGateIds.StartViewStable, "view_changed", i.ViewStable >= options.UpgradeHold, failures, overrides);
-        if (Nodes(i, a => a.SnapshotSeconds is { } age && TimeSpan.FromSeconds(age) > i.StaleAfter) is { Length: > 0 } stale)
+        if (Nodes(i, a => a.SnapshotSeconds is not { } age || TimeSpan.FromSeconds(age) + a.Age > i.StaleAfter) is { Length: > 0 } stale)
         {
             failures.Add(new GateFailure(KeyMoveGateIds.StartSnapshotFreshness, stale));
         }
 
         var dry = DryRunStamp.TryParse(i.State.Field(StateFields.DryRun));
         Overridable(i, ApprovalKinds.StartNoDryRun, KeyMoveGateIds.StartDryRun, "no_recent_dry_run", dry is not null && i.Now - dry.At <= options.DryRunMaxAge, failures, overrides);
-        Overridable(i, ApprovalKinds.StartMemory, KeyMoveGateIds.StartMemoryHeadroom, "memory_plan", dry is not null && i.Facts.MemoryFits(group, dry.EstimatedBytes, options.MemoryHeadroom), failures, overrides);
-        if (!i.Facts.FormatSettled(group))
+        Overridable(i, ApprovalKinds.StartMemory, KeyMoveGateIds.StartMemoryHeadroom, "memory_plan", dry is not null && i.Facts.MemoryFits(group, dry.ReportId, dry.EstimatedBytes, options.MemoryHeadroom), failures, overrides);
+        if (!i.Facts.FormatSettled(group, i.State))
         {
             failures.Add(new GateFailure(KeyMoveGateIds.StartFormatSettled, "format_not_settled"));
         }
@@ -68,6 +68,11 @@ internal static class StartGates
             failures.Add(new GateFailure(KeyMoveGateIds.StartNodeList, "no_fresh_advert"));
         }
 
+        if (i.Facts.TakesClaim(group) && !i.Facts.ClaimWired(group))
+        {
+            failures.Add(new GateFailure(KeyMoveGateIds.StartClaimAvailable, "claim_unavailable"));
+        }
+
         if (Nodes(i, a => !a.HasKm) is { Length: > 0 } noKm)
         {
             failures.Add(new GateFailure(KeyMoveGateIds.StartKeyMoveSupport, noKm));
@@ -78,7 +83,7 @@ internal static class StartGates
             failures.Add(new GateFailure(KeyMoveGateIds.StartPins, unpinned));
         }
 
-        if (!i.Facts.NodeListComplete(group))
+        if (!i.Facts.NodeListComplete(group, i.State))
         {
             failures.Add(new GateFailure(KeyMoveGateIds.StartNodeList, "node_list_incomplete"));
         }

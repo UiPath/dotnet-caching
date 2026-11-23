@@ -20,8 +20,15 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
 
     public void Start(IEnumerable<string> groups, CancellationToken cancellationToken)
     {
-        _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _loops = [.. groups.Distinct(StringComparer.Ordinal).Select(g => Task.Run(() => RunAsync(g, _stop.Token), CancellationToken.None))];
+        if (_stop is not null)
+        {
+            throw new InvalidOperationException("The driver is already running; stop it before it is started again.");
+        }
+
+        var snapshot = groups.Distinct(StringComparer.Ordinal).ToArray();
+        var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _stop = stop;
+        _loops = [.. snapshot.Select(g => Task.Run(() => RunAsync(g, stop.Token), CancellationToken.None))];
     }
 
     public async Task StopAsync()
@@ -128,7 +135,7 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
         }
 
         _notified[key] = now;
-        services.Alert?.Invoke(group, code, detail);
+        services.Alert?.Invoke(new KeyMoveAlert(group, code, detail));
     }
 
     private void RaiseAlerts(string group, GroupMemory memory, IReadOnlyList<StageAlert> alerts)
@@ -143,7 +150,7 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
             current[key] = since is not null && !repeat ? since.Value : now;
             if (since is null || repeat)
             {
-                services.Alert?.Invoke(group, alert.Code, alert.Detail);
+                services.Alert?.Invoke(new KeyMoveAlert(group, alert.Code, alert.Detail));
             }
         }
 

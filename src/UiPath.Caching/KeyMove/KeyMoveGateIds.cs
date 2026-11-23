@@ -23,6 +23,7 @@ internal static class KeyMoveGateIds
     public const string StartServerPreflight = "start.server_preflight";
     public const string StartCacheSet = "start.cache_set";
     public const string StartNativeEmpty = "start.native_empty";
+    public const string StartClaimAvailable = "start.claim_available";
     public const string DrainConfirmingPass = "drain.confirming_pass";
     public const string DrainSkippedAccounted = "drain.skipped_accounted";
     public const string DrainPromotionsIdle = "drain.promotions_idle";

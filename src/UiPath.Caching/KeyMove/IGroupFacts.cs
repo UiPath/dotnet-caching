@@ -20,11 +20,17 @@ internal interface IGroupFacts
     bool AllAcceptRefill(string group, IReadOnlyList<string> cacheIds);
 
     /// <summary>A key move must wait for an active format change to settle.</summary>
-    bool FormatSettled(string group);
+    bool FormatSettled(string group, StateRecord state);
 
     /// <summary>A settled subscriber count is insufficient when a pattern or shard subscription can hide nodes.</summary>
-    bool NodeListComplete(string group);
+    bool NodeListComplete(string group, StateRecord state);
+
+    /// <summary>The leader took X1 for the group; returns the evidence entries this Start consumed, which the leader records in the state so no later Start can use them again.</summary>
+    IReadOnlyList<string> StartTaken(string group);
+
+    /// <summary>Whether a move claim is wired for the group; Start is refused while a group that takes one has none.</summary>
+    bool ClaimWired(string group);
 
     /// <summary>The estimate includes native keys, fences, and control records.</summary>
-    bool MemoryFits(string group, long estimatedBytes, double headroom);
+    bool MemoryFits(string group, string reportId, long estimatedBytes, double headroom);
 }

@@ -48,7 +48,8 @@ public class StateReviewFixesTests(RedisContainerFixture fixture)
         var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
 
         result.Outcome.Should().Be(TransitionOutcome.Completed);
-        kit.Topology.Waits.Should().BeGreaterThan(5, "the unsettled slot was written and waited for again");
+        kit.Topology.Waits.Should().Be(5, "the unsettled slot is left out of the writes, so nothing is waited for until it settles, and then it is written and waited for like any other");
+        (await kit.ControlAsync(0)).Should().Contain(e => e.Name == "dur" && e.Value == "1");
     }
 
     [Theory]

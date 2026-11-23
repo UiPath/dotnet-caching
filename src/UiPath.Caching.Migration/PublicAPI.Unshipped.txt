@@ -176,3 +176,42 @@ UiPath.Caching.Migration.RouterBuilder.UseChannelBridge(UiPath.Caching.Migration
 UiPath.Caching.Migration.RouterBuilder.UsePinWhen(System.Func<string!, bool>! pinned) -> UiPath.Caching.Migration.RouterBuilder!
 UiPath.Caching.Migration.RouterBuilder.UseValueSerializers(System.Action<UiPath.Caching.Config.ICachingBuilder!>! register) -> UiPath.Caching.Migration.RouterBuilder!
 UiPath.Caching.Migration.RouterBuilder.UseWriteFormatWhen(System.Func<string!, string?>! format) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder
+UiPath.Caching.Migration.KeyMoveBuilder.AddCache(UiPath.Caching.Migration.KeyMoveCacheRegistration! cache) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.AddGroup(string! name, bool listed = false) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.AttestReleaseFloor() -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.UseLibraryKeyPrefix(string! prefix) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveCacheRegistration
+UiPath.Caching.Migration.KeyMoveCacheRegistration.AcceptRefill.get -> bool
+UiPath.Caching.Migration.KeyMoveCacheRegistration.AcceptRefill.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.AtMostOnce.get -> bool
+UiPath.Caching.Migration.KeyMoveCacheRegistration.AtMostOnce.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.FormatNativeKey.get -> System.Func<string!, string!>!
+UiPath.Caching.Migration.KeyMoveCacheRegistration.FormatNativeKey.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.Group.get -> string!
+UiPath.Caching.Migration.KeyMoveCacheRegistration.Group.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.InPlacePattern.get -> string!
+UiPath.Caching.Migration.KeyMoveCacheRegistration.InPlacePattern.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.MaxSourceTtl.get -> System.TimeSpan?
+UiPath.Caching.Migration.KeyMoveCacheRegistration.MaxSourceTtl.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.Name.get -> string!
+UiPath.Caching.Migration.KeyMoveCacheRegistration.Name.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.NativePattern.get -> string!
+UiPath.Caching.Migration.KeyMoveCacheRegistration.NativePattern.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.NoOrigin.get -> bool
+UiPath.Caching.Migration.KeyMoveCacheRegistration.NoOrigin.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.OwnsInPlaceKey.get -> System.Func<string!, bool>?
+UiPath.Caching.Migration.KeyMoveCacheRegistration.OwnsInPlaceKey.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.OwnsNativeKey.get -> System.Func<string!, bool>?
+UiPath.Caching.Migration.KeyMoveCacheRegistration.OwnsNativeKey.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.ParseInPlaceKey.get -> System.Func<string!, string?>!
+UiPath.Caching.Migration.KeyMoveCacheRegistration.ParseInPlaceKey.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.ParseNativeKey.get -> System.Func<string!, string?>!
+UiPath.Caching.Migration.KeyMoveCacheRegistration.ParseNativeKey.init -> void
+UiPath.Caching.Migration.KeyMoveCacheRegistration.KeyMoveCacheRegistration() -> void
+UiPath.Caching.Migration.RouterBuilder.UseKeyMove(UiPath.Caching.KeyMove.IMigrationStageSource! stageSource, System.Action<UiPath.Caching.Migration.KeyMoveBuilder!>! configure) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.AttestFormatSettled(string! group, string! evidenceId) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.AttestMemoryFits(string! group, string! dryRunReportId) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.AttestNodeListComplete(string! group, string! evidenceId) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.OnAlert(System.Action<UiPath.Caching.KeyMove.KeyMoveAlert!>! alert) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.ExcludeKeyspace(string! pattern) -> UiPath.Caching.Migration.KeyMoveBuilder!

@@ -49,6 +49,40 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task X1_tells_the_facts_that_a_start_was_taken_once_and_no_other_step_does()
+    {
+        await using var kit = await DriverKit.CreateAsync(fixture);
+        await kit.PrepareAsync();
+        kit.Facts.Started.Should().BeEmpty();
+
+        kit.Facts.Evidence.AddRange(["f:e1", "n:e2"]);
+        await kit.StepUntilAsync("S1");
+        var s3 = await kit.StepUntilAsync("S3");
+
+        kit.Facts.Started.Should().Equal(kit.Group);
+        s3.Field(StateFields.Attested).Should().Be("f:e1,n:e2", "the Start recorded the evidence it consumed, fenced, in the state");
+    }
+
+    [Fact]
+    public async Task The_acknowledgement_of_S3_stores_the_time_of_S3_with_it_and_the_acknowledgement_of_any_other_state_stores_none()
+    {
+        await using var kit = await DriverKit.CreateAsync(fixture);
+        await kit.PrepareAsync();
+        var ready = await kit.StepUntilAsync("S1");
+        await kit.StepAsync();
+        var acked = await kit.StateAsync();
+        acked.AllAck.Should().Be(ready.Id);
+        acked.Field(StateFields.T3At).Should().BeEmpty("S1 is not S3");
+
+        var moving = await kit.StepUntilAsync("S3");
+        await kit.StepAsync();
+
+        var s3 = await kit.StateAsync();
+        s3.AllAck.Should().Be(moving.Id);
+        long.Parse(s3.Field(StateFields.T3At), System.Globalization.CultureInfo.InvariantCulture).Should().BeGreaterThan(0, "the time of the S3 acknowledgement is stored with it");
+    }
+
+    [Fact]
     public async Task A_group_with_a_NoOrigin_cache_visits_S2_and_X3_waits_for_every_fresh_node_to_ack_the_barrier()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);

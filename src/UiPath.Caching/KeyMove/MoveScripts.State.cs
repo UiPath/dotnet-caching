@@ -10,6 +10,7 @@ internal sealed partial class MoveScripts
     public const long StateRefreshed = 2;
     public const long StateNotInitial = -1;
     public const long LeaseNotHeld = -7;
+    public const long GroupStarted = -8;
 
     private const string TransitScript = """
         if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[1] then return -7 end
@@ -52,6 +53,7 @@ internal sealed partial class MoveScripts
     private const string AllAckScript = """
         if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[2] then return -7 end
         if redis.call('HGET', KEYS[1], 'id') ~= ARGV[1] then return 0 end
+        if ARGV[3] ~= '' and redis.call('HGET', KEYS[1], 'allAck') ~= ARGV[1] then redis.call('HSET', KEYS[1], 't3At', ARGV[3]) end
         redis.call('HSET', KEYS[1], 'allAck', ARGV[1])
         return 1
         """;
@@ -71,7 +73,11 @@ internal sealed partial class MoveScripts
 
     /// <summary>TRANSIT: a compare-and-set that replaces the stored identity with the target one at <c>dur=0</c>, or creates the hash when the expectation is absence.</summary>
     /// <returns>1 written; 0 when the stored state is not the expected one; 2 for a repeat of the stored target, which rewrites its id; <see cref="LeaseNotHeld"/> when the fence's lease is not the caller's.</returns>
-    public async Task<long> TransitAsync(RedisKey state, StateExpectation expected, StateTarget target, LeaseFence? fence = null)
+    public async Task<long> TransitAsync(RedisKey state, StateExpectation expected, StateTarget target, LeaseFence? fence = null) =>
+        await TransitWrite(state, expected, target, fence).RunAsync().ConfigureAwait(false);
+
+    /// <summary>TRANSIT as a write that runs alone or inside the transaction of a barrier; see <see cref="TransitAsync"/> for its codes.</summary>
+    public Write TransitWrite(RedisKey state, StateExpectation expected, StateTarget target, LeaseFence? fence = null)
     {
         if (expected.Ep is { } expectedEp && target.Ep <= expectedEp)
         {
@@ -82,88 +88,76 @@ internal sealed partial class MoveScripts
         var clear = target.Clear ?? [];
 
         var args = TransitArguments(expected, target, fence, clear, optional);
-        var reply = await EvaluateAsync(TransitScript, KeysOf(state, fence), [.. args]).ConfigureAwait(false);
-        if (reply is not null)
-        {
-            return (long)reply;
-        }
-
-        return await WatchedAsync(() => TransitWatchedAsync(state, expected, target, fence, clear, optional)).ConfigureAwait(false);
+        return new Write(this, TransitScript, KeysOf(state, fence), [.. args], () => PlanTransitAsync(state, expected, target, fence, clear, optional));
     }
 
     /// <summary>DURABLE: marks the stored identity committed and copies it into <c>prev</c>; a repeat writes both again, so a following WAIT has an offset to confirm.</summary>
     /// <param name="release">The claim certificate <c>rel</c>, written in the same step for an S0 target of a group that holds a claim; empty for none.</param>
     /// <returns>1 written (also for a repeat); 0 when the stored id differs or the hash is unreadable.</returns>
-    public async Task<long> DurableAsync(RedisKey state, string id, string release = "")
-    {
-        var reply = await EvaluateAsync(DurableScript, [state], [id, release]).ConfigureAwait(false);
-        if (reply is not null)
-        {
-            return (long)reply;
-        }
+    public async Task<long> DurableAsync(RedisKey state, string id, string release = "") =>
+        await DurableWrite(state, id, release).RunAsync().ConfigureAwait(false);
 
-        return await WatchedAsync(async () =>
+    /// <summary>DURABLE as a write that runs alone or inside the transaction of a barrier; see <see cref="DurableAsync"/> for its codes.</summary>
+    public Write DurableWrite(RedisKey state, string id, string release = "") =>
+        new(this, DurableScript, [state], [id, release], async () =>
         {
             var held = await _db.HashGetAsync(state, [StateFields.Id, StateFields.State, StateFields.Direction, StateFields.NPop, StateFields.Ep], Master).ConfigureAwait(false);
             if (held[0] != id || held.Skip(1).Any(v => v.IsNull))
             {
-                return ExpectationFailed;
+                return new FallbackPlan(ExpectationFailed, null);
             }
 
-            var transaction = _db.CreateTransaction();
-            var queued = new List<Task>();
-            foreach (var (field, value) in new[] { StateFields.Id, StateFields.State, StateFields.Direction, StateFields.NPop, StateFields.Ep }.Zip(held))
+            return new FallbackPlan(Written, (transaction, queued) =>
             {
-                transaction.AddCondition(Condition.HashEqual(state, field, value));
-            }
+                foreach (var (field, value) in new[] { StateFields.Id, StateFields.State, StateFields.Direction, StateFields.NPop, StateFields.Ep }.Zip(held))
+                {
+                    transaction.AddCondition(Condition.HashEqual(state, field, value));
+                }
 
-            var entries = new List<HashEntry> { new(StateFields.Durable, "1"), new(StateFields.Prev, $"{held[1]}:{held[2]}:{held[3]}:{held[4]}:{id}") };
-            if (release.Length > 0)
-            {
-                entries.Add(new HashEntry(StateFields.Release, release));
-            }
+                var entries = new List<HashEntry> { new(StateFields.Durable, "1"), new(StateFields.Prev, $"{held[1]}:{held[2]}:{held[3]}:{held[4]}:{id}") };
+                if (release.Length > 0)
+                {
+                    entries.Add(new HashEntry(StateFields.Release, release));
+                }
 
-            queued.Add(transaction.HashSetAsync(state, [.. entries], Master));
-            return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
-        }).ConfigureAwait(false);
-    }
+                queued.Add(transaction.HashSetAsync(state, [.. entries], Master));
+            });
+        });
 
     /// <summary>CMTBEGIN: marks on the state that the commit of this identity begins, before the first CTLCOMMIT. An abandon is refused from then on, and a begin is refused once the id is replaced, so the two are arbitrated by the one key both write. A repeat writes the marker again.</summary>
     /// <returns>1 marked; 0 when the stored id differs; <see cref="LeaseNotHeld"/> when the fence's lease is not the caller's.</returns>
-    public async Task<long> CommitBeginAsync(RedisKey state, string id, LeaseFence? fence = null)
-    {
-        var reply = await EvaluateAsync(CommitBeginScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty]).ConfigureAwait(false);
-        if (reply is not null)
-        {
-            return (long)reply;
-        }
+    public async Task<long> CommitBeginAsync(RedisKey state, string id, LeaseFence? fence = null) =>
+        await CommitBeginWrite(state, id, fence).RunAsync().ConfigureAwait(false);
 
-        return await WatchedAsync(async () =>
+    /// <summary>CMTBEGIN as a write that runs alone or inside the transaction of a barrier; see <see cref="CommitBeginAsync"/> for its codes.</summary>
+    public Write CommitBeginWrite(RedisKey state, string id, LeaseFence? fence = null) =>
+        new(this, CommitBeginScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty], async () =>
         {
             if (fence is not null && !await HoldsFenceAsync(fence).ConfigureAwait(false))
             {
-                return LeaseNotHeld;
+                return new FallbackPlan(LeaseNotHeld, null);
             }
 
             if (await _db.HashGetAsync(state, StateFields.Id, Master).ConfigureAwait(false) != id)
             {
-                return ExpectationFailed;
+                return new FallbackPlan(ExpectationFailed, null);
             }
 
-            var transaction = _db.CreateTransaction();
-            var queued = new List<Task>();
-            AddFence(transaction, fence);
-            transaction.AddCondition(Condition.HashEqual(state, StateFields.Id, id));
-            queued.Add(transaction.HashSetAsync(state, StateFields.CommitBegun, id, When.Always, Master));
-            return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
-        }).ConfigureAwait(false);
-    }
+            return new FallbackPlan(Written, (transaction, queued) =>
+            {
+                AddFence(transaction, fence);
+                transaction.AddCondition(Condition.HashEqual(state, StateFields.Id, id));
+                queued.Add(transaction.HashSetAsync(state, StateFields.CommitBegun, id, When.Always, Master));
+            });
+        });
 
     /// <summary>ALLACK: records that every fresh node acknowledged the identity, only while it is the stored one; a repeat writes the same value again.</summary>
+    /// <param name="t3At">The time of the first acknowledgement of an S3 identity, written in the same step so it is never missing next to <c>allAck</c>; null for any other state.</param>
     /// <returns>1 written; 0 when the stored id differs; <see cref="LeaseNotHeld"/> when the fence's lease is not the caller's.</returns>
-    public async Task<long> AllAckAsync(RedisKey state, string id, LeaseFence? fence = null)
+    public async Task<long> AllAckAsync(RedisKey state, string id, LeaseFence? fence = null, long? t3At = null)
     {
-        var reply = await EvaluateAsync(AllAckScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty]).ConfigureAwait(false);
+        var stamp = t3At?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+        var reply = await EvaluateAsync(AllAckScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty, stamp]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
@@ -176,8 +170,8 @@ internal sealed partial class MoveScripts
                 return LeaseNotHeld;
             }
 
-            var held = await _db.HashGetAsync(state, StateFields.Id, Master).ConfigureAwait(false);
-            if (held != id)
+            var held = await _db.HashGetAsync(state, [StateFields.Id, StateFields.AllAck], Master).ConfigureAwait(false);
+            if (held[0] != id)
             {
                 return ExpectationFailed;
             }
@@ -186,6 +180,12 @@ internal sealed partial class MoveScripts
             var queued = new List<Task>();
             AddFence(transaction, fence);
             transaction.AddCondition(Condition.HashEqual(state, StateFields.Id, id));
+            transaction.AddCondition(held[1].IsNull ? Condition.HashNotExists(state, StateFields.AllAck) : Condition.HashEqual(state, StateFields.AllAck, held[1]));
+            if (stamp.Length > 0 && held[1] != id)
+            {
+                queued.Add(transaction.HashSetAsync(state, StateFields.T3At, stamp, When.Always, Master));
+            }
+
             queued.Add(transaction.HashSetAsync(state, StateFields.AllAck, id, When.Always, Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
         }).ConfigureAwait(false);
@@ -298,11 +298,16 @@ internal sealed partial class MoveScripts
     private static bool IsRepeatedTransit(RedisValue[] held, StateTarget target) =>
         !held[0].IsNull && long.TryParse((string?)held[0], NumberStyles.None, CultureInfo.InvariantCulture, out var stored) && stored == target.Ep && held[1] == target.Id;
 
-    private static bool ApplyHeldTransitExpectation(RedisKey state, StateExpectation expected, RedisValue[] held, ITransaction transaction)
+    private static bool MatchesTransitExpectation(StateExpectation expected, RedisValue[] held) =>
+        held[0] == expected.Ep && held[1] == expected.Id && held[2] == expected.Durable && !(expected.Abandon && held[3] == expected.Id);
+
+    private static void QueueTransitConditions(ITransaction transaction, RedisKey state, LeaseFence? fence, bool absent, RedisValue[] held)
     {
-        if (held[0] != expected.Ep || held[1] != expected.Id || held[2] != expected.Durable || (expected.Abandon && held[3] == expected.Id))
+        AddFence(transaction, fence);
+        if (absent)
         {
-            return false;
+            transaction.AddCondition(Condition.KeyNotExists(state));
+            return;
         }
 
         AddIdentityConditions(transaction, state, held[0], held[1]);
@@ -310,8 +315,6 @@ internal sealed partial class MoveScripts
 
         // Watch the commit marker so a concurrent commit begin prevents abandonment.
         transaction.AddCondition(held[3].IsNull ? Condition.HashNotExists(state, StateFields.CommitBegun) : Condition.HashEqual(state, StateFields.CommitBegun, held[3]));
-
-        return true;
     }
 
     private static RedisKey[] KeysOf(RedisKey state, LeaseFence? fence) => fence is null ? [state] : [state, fence.Key];
@@ -359,7 +362,7 @@ internal sealed partial class MoveScripts
         queued.Add(transaction.HashSetAsync(state, [.. entries], Master));
     }
 
-    private async Task<long?> TransitWatchedAsync(
+    private async Task<FallbackPlan> PlanTransitAsync(
         RedisKey state,
         StateExpectation expected,
         StateTarget target,
@@ -369,36 +372,38 @@ internal sealed partial class MoveScripts
     {
         if (fence is not null && !await HoldsFenceAsync(fence).ConfigureAwait(false))
         {
-            return LeaseNotHeld;
+            return new FallbackPlan(LeaseNotHeld, null);
         }
 
         var held = await _db.HashGetAsync(state, [StateFields.Ep, StateFields.Id, StateFields.Durable, StateFields.CommitBegun], Master).ConfigureAwait(false);
-        var transaction = _db.CreateTransaction();
-        var queued = new List<Task>();
-        AddFence(transaction, fence);
         if (IsRepeatedTransit(held, target))
         {
-            AddIdentityConditions(transaction, state, held[0], held[1]);
-            queued.Add(transaction.HashSetAsync(state, StateFields.Id, target.Id, When.Always, Master));
-            return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Repeated : null;
+            return new FallbackPlan(Repeated, (transaction, queued) =>
+            {
+                AddFence(transaction, fence);
+                AddIdentityConditions(transaction, state, held[0], held[1]);
+                queued.Add(transaction.HashSetAsync(state, StateFields.Id, target.Id, When.Always, Master));
+            });
         }
 
-        if (expected.IsAbsent)
+        var absent = expected.IsAbsent;
+        if (absent)
         {
             if (await _db.KeyExistsAsync(state, Master).ConfigureAwait(false))
             {
-                return ExpectationFailed;
+                return new FallbackPlan(ExpectationFailed, null);
             }
-
-            transaction.AddCondition(Condition.KeyNotExists(state));
         }
-        else if (!ApplyHeldTransitExpectation(state, expected, held, transaction))
+        else if (!MatchesTransitExpectation(expected, held))
         {
-            return ExpectationFailed;
+            return new FallbackPlan(ExpectationFailed, null);
         }
 
-        QueueTransitFields(transaction, state, target, clear, optional, queued);
-        return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
+        return new FallbackPlan(Written, (transaction, queued) =>
+        {
+            QueueTransitConditions(transaction, state, fence, absent, held);
+            QueueTransitFields(transaction, state, target, clear, optional, queued);
+        });
     }
 
     private async Task<bool> HoldsFenceAsync(LeaseFence fence) => await _db.StringGetAsync(fence.Key, Master).ConfigureAwait(false) == fence.Token;
