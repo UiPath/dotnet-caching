@@ -22,6 +22,12 @@ internal interface ILocalEntry
     /// <summary>The deadline of the last local write of the entry; <see cref="DateTimeOffset.MinValue"/> when none.</summary>
     DateTimeOffset LocalDeadline { get; set; }
 
+    /// <summary>The entry's change token fired: a peer's removal, invalidation or write reached the key while the entry was, or was being, stored.</summary>
+    bool TokenChanged { get; }
+
+    /// <summary>Marks the entry's change token as fired; set from the token's own change callback, which runs at once on a token that fired before it registered.</summary>
+    void MarkTokenChanged();
+
     /// <summary>Sets whether the entry takes read marks; set before the entry is published.</summary>
     void Track(bool tracked);
 

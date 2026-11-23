@@ -210,7 +210,7 @@ public class MultilayerCacheFailSafeSizeLimitTests
     }
 
     [Fact]
-    public async Task Without_a_size_limit_a_kept_value_is_stored_once_and_nothing_is_told_when_its_entry_leaves()
+    public async Task Without_a_size_limit_an_entrys_leaving_is_still_told_so_a_late_keep_can_be_settled()
     {
         using var cache = Build(sizeLimit: null);
         await WriteAsync(cache, "a", FailSafe);
@@ -218,8 +218,9 @@ public class MultilayerCacheFailSafeSizeLimitTests
 
         (await FallbackAsync(cache, "a")).Should().Be("a");
 
+        // The leaving tells the store why the entry went, which decides a keep that ran after it; the value itself is not stored again at a size here.
         _memory.Committed.Should().HaveCount(2);
-        _memory.Committed.Should().ContainSingle(entry => entry.Key is string).Which.Callbacks.Should().Be(0);
+        _memory.Committed.Should().ContainSingle(entry => entry.Key is string).Which.Callbacks.Should().Be(1);
     }
 
     private static async Task WriteAsync(MultilayerCache cache, string key, CachePolicy policy, TimeSpan? lifetime = null) =>

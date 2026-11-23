@@ -138,6 +138,8 @@ internal abstract class MemoryCacheSetter(
     {
         if (state is RefreshMetadataState metadataState)
         {
+            // First, so a fail-safe keep that runs after the token fired sees it, whatever its eviction tells later.
+            (metadataState.CacheEntity as ILocalEntry)?.MarkTokenChanged();
             TokenChanged?.Invoke(metadataState.CacheKey.Name, metadataState.CacheEntity);
             if (metadataState.Refresh is not null)
             {

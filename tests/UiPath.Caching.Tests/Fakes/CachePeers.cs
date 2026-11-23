@@ -26,9 +26,9 @@ internal sealed class CachePeers : IDisposable
 
     /// <param name="clock">The cache's clock; the system clock when null.</param>
     /// <param name="localClock">The local tier's clock, for its expirations; the system clock when null.</param>
-    public Node Add(string name, InMemoryRedisCacheOptions? options = null, RecordingTelemetryProvider? telemetry = null, TimeProvider? clock = null, TimeProvider? localClock = null)
+    public Node Add(string name, InMemoryRedisCacheOptions? options = null, RecordingTelemetryProvider? telemetry = null, TimeProvider? clock = null, TimeProvider? localClock = null, ICachePolicyFactory? policies = null)
     {
-        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry, clock ?? TimeProvider.System, localClock ?? TimeProvider.System);
+        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry, clock ?? TimeProvider.System, localClock ?? TimeProvider.System, policies);
         _nodes.Add(node);
         return node;
     }
@@ -122,7 +122,7 @@ internal sealed class CachePeers : IDisposable
         private readonly RecordingTelemetryProvider? _telemetry;
         private int _evicted;
 
-        public Node(CachePeers peers, string name, InMemoryRedisCacheOptions options, RecordingTelemetryProvider? telemetry, TimeProvider clock, TimeProvider localClock)
+        public Node(CachePeers peers, string name, InMemoryRedisCacheOptions options, RecordingTelemetryProvider? telemetry, TimeProvider clock, TimeProvider localClock, ICachePolicyFactory? policies = null)
         {
             Name = name;
             _telemetry = telemetry;
@@ -151,7 +151,7 @@ internal sealed class CachePeers : IDisposable
                 options,
                 cacheOptions,
                 NullDistributedLock.Instance,
-                NullCachePolicyFactory.Instance,
+                policies ?? NullCachePolicyFactory.Instance,
                 clock,
                 NullLogger.Instance));
         }
@@ -186,6 +186,12 @@ internal sealed class CachePeers : IDisposable
 
         /// <summary>Runs on the writing thread before an entry of the local tier commits, with its key, after the cache wired its token.</summary>
         public Action<string>? BeforeCommit { get; set; }
+
+        /// <summary>When set, every eviction callback of the local tier waits for it, so a test decides when a leaving is heard.</summary>
+        public ManualResetEventSlim? EvictionGate { get; set; }
+
+        /// <summary>Runs on the writing thread right after an entry of the local tier commits, with its key, before the cache keeps its fail-safe value.</summary>
+        public Action<string>? AfterCommit { get; set; }
 
         /// <summary>Runs once, as the next fail-safe value is committed to the local tier.</summary>
         public Action? BeforeKept { get; set; }
@@ -329,12 +335,17 @@ internal sealed class CachePeers : IDisposable
                     var callback = registration.EvictionCallback;
                     registration.EvictionCallback = (key, value, reason, state) =>
                     {
+                        node.EvictionGate?.Wait();
                         callback?.Invoke(key, value, reason, state);
                         node.OnEvicted();
                     };
                 }
 
                 inner.Dispose();
+                if (inner.Key is string committed)
+                {
+                    node.AfterCommit?.Invoke(committed);
+                }
             }
         }
 

@@ -593,6 +593,11 @@ How it behaves:
   only a shorter `FailSafeMaxStaleAge` bounds it. Once a cache has used fail-safe, the local tier's
   statistics (entry count, hits, misses) include the kept records and their lookups, and a custom
   `IMemoryCacheFactory` cache receives keys that are not strings.
+- **Writes racing a keep.** A write, removal or peer change of the key that lands between a fail-safe
+  write's local commit and its keep refuses the keep, and an entry that only expired in between keeps
+  its value. A cache whose default or named policy enables fail-safe tracks this from construction; one
+  given fail-safe only by a policy passed at the call site starts at its first fail-safe write, so a
+  write already under way at that moment is not tracked.
 - **One `SizeLimit`.** The limit covers the local entries and the kept values together. A full cache
   refuses a kept value, which is then not kept. A write at the limit may be refused too, as it is
   without fail-safe. Either refusal starts a compaction, which removes expired entries, then kept

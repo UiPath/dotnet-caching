@@ -10,6 +10,8 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
     private struct Marks : IEquatable<Marks>
     {
         public int Read;
+        // Beside Read, in the slot its padding leaves: after the longs it would grow every entry by 8 bytes.
+        public int TokenChanged;
         public long ReplacedBy;
         public long Replaces;
         public long LocalDeadline;
@@ -62,6 +64,10 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
             get => Volatile.Read(ref _marks.LocalDeadline) is var ticks and > 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : DateTimeOffset.MinValue;
             set => Volatile.Write(ref _marks.LocalDeadline, value.UtcTicks);
         }
+
+        bool ILocalEntry.TokenChanged => Volatile.Read(ref _marks.TokenChanged) == 1;
+
+        void ILocalEntry.MarkTokenChanged() => Volatile.Write(ref _marks.TokenChanged, 1);
 
         void ILocalEntry.Track(bool tracked)
         {
