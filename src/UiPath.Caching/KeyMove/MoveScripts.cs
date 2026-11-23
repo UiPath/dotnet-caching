@@ -102,8 +102,9 @@ internal sealed partial class MoveScripts
             {
                 return await _db.ScriptEvaluateAsync(script, keys, args, Master).ConfigureAwait(false);
             }
-            catch (Exception ex) when (RedisUtils.RefusesScript(ex))
+            catch (Exception ex) when (RedisUtils.ScriptNeverRan(ex))
             {
+                // Only a refusal of the EVAL itself turns to the fallback: an error from inside a running script comes after commands that may have applied, and goes to the caller as it is.
                 if (Interlocked.Exchange(ref _useScripts, 0) == 1)
                 {
                     _scriptRefused?.Invoke(ex);

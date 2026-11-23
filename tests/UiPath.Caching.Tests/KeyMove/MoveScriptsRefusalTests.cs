@@ -32,7 +32,7 @@ public class MoveScriptsRefusalTests(RedisContainerFixture fixture)
     {
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts: true);
         var told = 0;
-        var scripts = new MoveScripts(Refusing(env.Db, "NOPERM no"), useScripts: true, env.ServerVersion, _ => Interlocked.Increment(ref told));
+        var scripts = new MoveScripts(Refusing(env.Db, "NOPERM this user has no permissions to run the 'eval' command"), useScripts: true, env.ServerVersion, _ => Interlocked.Increment(ref told));
 
         var results = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ =>
             Task.Run(() => scripts.GateAsync(env.Ctl, MoveTestEnvironment.Id, MoveTestEnvironment.Cid, "CLOSED:x"))));
@@ -46,7 +46,7 @@ public class MoveScriptsRefusalTests(RedisContainerFixture fixture)
     {
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts: true);
         var told = 0;
-        var scripts = new MoveScripts(Refusing(env.Db, "NOPERM no"), useScripts: true, new Version(6, 0, 8), _ => told++);
+        var scripts = new MoveScripts(Refusing(env.Db, "NOPERM this user has no permissions to run the 'eval' command"), useScripts: true, new Version(6, 0, 8), _ => told++);
         var before = await env.Db.HashGetAsync(env.Ctl, "c:" + MoveTestEnvironment.Cid);
 
         var act = () => scripts.GateAsync(env.Ctl, MoveTestEnvironment.Id, MoveTestEnvironment.Cid, "CLOSED:x");
