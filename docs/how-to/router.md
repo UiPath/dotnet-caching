@@ -101,7 +101,7 @@ Meter `UiPath.Caching.Migration`, counters `local_hit`, `redis_hit`, `miss`, `fa
 
 ## Key move stage checks
 
-When the stage driver reports a blocked start, close, or drain, use the check IDs below to identify the missing evidence.
+Use these check IDs to identify the missing evidence when a stage is blocked or an instance move holds admission.
 
 | IDs | What they check |
 | --- | --- |
@@ -113,5 +113,8 @@ When the stage driver reports a blocked start, close, or drain, use the check ID
 | `close.acks`, `close.soak`, `close.canary`, `close.consent` | Every fresh node acknowledges the identity, the soak has elapsed, no canary activity occurred during it, and consent covers the stored residue. |
 | `close.node_readiness`, `close.inventory`, `close.views` | Fresh nodes can use key move without bypassing, current residue fits within the approved counts, and all views confirm the close stage. |
 | `drain.confirming_pass`, `drain.skipped_accounted`, `drain.promotions_idle`, `drain.canary_zero` | The confirming pass finds nothing movable, all skips are accounted for, no promotions remain in flight, and the forward canary is zero. The first two IDs are reported together because the mover supplies one verdict for both. |
+| `dst_preflight`, `dst_state_missing`, `dst_unreachable`, `dst_preflight_timeout`, `dst_not_master`, `dst_replica_unhealthy` | Before updating the source control record, the destination state and masters must answer within the timeout, and known replica counts must meet the configured expectation. |
+| `baseline_unavailable`, `pend_wait_unavailable`, `mirror_open_unavailable` | The controller could not establish or confirm the generation baselines, the destination mirror pend, or the destination mirror open. |
+| `src_admission_pending`, `mirror_repair_pending` | Source admission needs fresh mirror evidence that the move ended. Destination admission or commit needs a mirror confirmed in the current destination generation. |
 
 Approval commands take approval kinds. `start` supplies the release attestation. `start_unsettled` requires the exact `UpgradeHoldOverrideText` confirmation. `start_no_dry_run`, `start_memory`, and `control_records_evictable` authorize their respective exceptions. `close` attests that the source application code remains deployed and approves the stored residue. `close_force` also permits proceeding before the soak or with canary activity. `force_reverse` can override the key move support, pin, node list, and snapshot checks for reversal. An active hold blocks a forward drain.

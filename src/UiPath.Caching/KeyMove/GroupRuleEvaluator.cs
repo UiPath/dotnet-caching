@@ -1,6 +1,6 @@
 namespace UiPath.Caching.KeyMove;
 
-internal static class GroupRuleEvaluator
+internal static partial class GroupRuleEvaluator
 {
     private const string Closed = "S5";
     private const string Off = "S0";
@@ -25,9 +25,11 @@ internal static class GroupRuleEvaluator
         };
     }
 
-    public static GroupRules Evaluate(GroupView view, KeyMoveStateOptions options)
+    public static GroupRules Evaluate(GroupView view, KeyMoveStateOptions options) =>
+        view.Registration.InstanceMove ? EvaluateInstance(view, options) : WithManaged(view, EvaluateRules(view, options));
+
+    private static GroupRules WithManaged(GroupView view, GroupRules rules)
     {
-        var rules = EvaluateRules(view, options);
         if (!rules.Relevant || view.State is not { } state)
         {
             return rules;

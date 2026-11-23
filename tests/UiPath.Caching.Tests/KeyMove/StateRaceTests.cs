@@ -95,7 +95,7 @@ public class StateRaceTests(RedisContainerFixture fixture)
         var racing = RaceDatabase.AfterHashGetAll(
             kit.ControlDb,
             async () => await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(s1), StateKit.TargetFrom(s1, "S3", "fwd", 1), null, CancellationToken.None));
-        var raced = new StateRecovery(kit.Store, kit.Sampler, new ControlRecordReader(racing, kit.Names), kit.ControlDb, kit.Sequence, kit.Names, TimeProvider.System);
+        var raced = new StateRecovery(kit.Store, kit.Store, new ControlRecordReader(racing, kit.Names), kit.Sequence, TimeProvider.System);
 
         var result = await raced.ReassertAsync(kit.Group, "confirmed", null, null, null, CancellationToken.None);
 
@@ -139,7 +139,7 @@ public class StateRaceTests(RedisContainerFixture fixture)
             "changed" => RaceDatabase.Before(kit.ControlDb, () => kit.ControlDb.HashSet(control, "id", "other"), nameof(IDatabase.HashGetAllAsync), nameof(IDatabase.HashKeysAsync)),
             _ => kit.ControlDb,
         };
-        var raced = new StateRecovery(kit.Store, kit.Sampler, kit.Records, db, kit.Sequence, kit.Names, TimeProvider.System);
+        var raced = new StateRecovery(kit.Store, kit.Store, new ControlRecordReader(db, kit.Names), kit.Sequence, TimeProvider.System);
 
         var result = await raced.RecreateAsync(kit.Group, [new PeerIdentity("S3", "fwd", 40, "recid")], [], null, CancellationToken.None);
 

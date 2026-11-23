@@ -92,22 +92,13 @@ internal sealed class GroupStateMonitor(IStateReader reader, KeyMoveStateOptions
     {
         var tracker = _groups[group];
         var first = tracker.View().Answer == StateAnswer.Unknown;
-        try
+        var read = await ReadSnapshotAsync(group, tracker, first, cancellationToken).ConfigureAwait(false);
+        RaiseAlerts(tracker);
+        if (!read)
         {
-            await ReadSnapshotAsync(group, tracker, first, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            if (first)
-            {
-                await TryProbeAsync(tracker, cancellationToken).ConfigureAwait(false);
-            }
-
-            RaiseAlerts(tracker);
             return options.RetryInterval;
         }
 
-        RaiseAlerts(tracker);
         var view = tracker.View();
         if (GroupRuleEvaluator.IsRelevant(view))
         {
@@ -133,21 +124,46 @@ internal sealed class GroupStateMonitor(IStateReader reader, KeyMoveStateOptions
         return made;
     }
 
-    // While the state is unreadable a record that is still readable shows the group is closed, or that it exists at all.
-    private async Task ReadSnapshotAsync(string group, GroupTracker tracker, bool first, CancellationToken cancellationToken)
+    private async Task<bool> ReadSnapshotAsync(string group, GroupTracker tracker, bool first, CancellationToken cancellationToken)
     {
-        // Read records first so a concurrent transition can only make the state newer.
-        // Sample all masters once an unlisted group proves it has a state.
-        var before = tracker.View();
-        var sampling = first || before.Answer != StateAnswer.Present || before.Conflict is not null;
-        var listed = tracker.Registration.Listed;
-        ControlSample? sample = null;
-        if (sampling)
+        var stateRead = false;
+        try
         {
-            sample = listed ? await reader.SampleAsync(group, cancellationToken).ConfigureAwait(false) : await reader.ProbeAsync(group, cancellationToken).ConfigureAwait(false);
-        }
+            // Read records first so a concurrent transition can only make the state newer.
+            var before = tracker.View();
+            var sampling = first || before.Answer != StateAnswer.Present || before.Conflict is not null;
+            var listed = tracker.Registration.Listed;
+            ControlSample? sample = null;
+            if (sampling)
+            {
+                sample = listed ? await reader.SampleAsync(group, cancellationToken).ConfigureAwait(false) : await reader.ProbeAsync(group, cancellationToken).ConfigureAwait(false);
+            }
 
+            stateRead = true;
+            await ApplySnapshotAsync(group, tracker, sampling, listed, sample, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var dstReadFailed = tracker.Registration.InstanceMove && stateRead;
+            if (dstReadFailed)
+            {
+                tracker.ReadFailed();
+            }
+
+            if (first || dstReadFailed)
+            {
+                await TryProbeAsync(tracker, cancellationToken).ConfigureAwait(false);
+            }
+
+            return false;
+        }
+    }
+
+    private async Task ApplySnapshotAsync(string group, GroupTracker tracker, bool sampling, bool listed, ControlSample? sample, CancellationToken cancellationToken)
+    {
         var record = await reader.ReadAsync(group, cancellationToken).ConfigureAwait(false);
+        // Sample all masters once an unlisted group proves it has a state.
         if (sampling && record is not null && !listed)
         {
             sample = await reader.SampleAsync(group, cancellationToken).ConfigureAwait(false);

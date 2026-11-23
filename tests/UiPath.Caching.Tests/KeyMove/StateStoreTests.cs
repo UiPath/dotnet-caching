@@ -79,7 +79,7 @@ public class StateStoreTests(RedisContainerFixture fixture)
         await kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, 0), new ControlRecord(7, "x", "S3", "fwd", "1", "S1", "fwd", "0", "6", "w", []));
         await kit.Scripts.ControlCommitAsync(kit.Names.Control(kit.Group, 0), 7, "x");
 
-        (await kit.Store.ProbeAsync(kit.Group, CancellationToken.None)).Should().Be(new ControlSample(7, "x", "S3", "fwd", true));
+        (await kit.Store.ProbeAsync(kit.Group, CancellationToken.None)).Should().Be(new ControlSample(7, "x", "S3", "fwd", true, NPop: 1));
     }
 
     [Fact]

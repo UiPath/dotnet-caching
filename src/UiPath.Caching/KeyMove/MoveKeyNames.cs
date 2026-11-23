@@ -162,6 +162,9 @@ internal sealed class MoveKeyNames
         return $"{LibraryPrefix}mx:{{{name}}}";
     }
 
+    // Both baselines share the Dst claim hash slot, so a Src failover cannot lose the Src baseline.
+    public string Baseline(string app, string kind) => $"{Claim(app)}:gen:{kind}";
+
     // True for a prefix that tags every key; false for one with no braces; throws for one whose braces would take part of the key into the tag.
     private static bool PrefixTag(string prefix)
     {

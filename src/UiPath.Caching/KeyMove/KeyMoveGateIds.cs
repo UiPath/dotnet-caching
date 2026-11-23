@@ -28,4 +28,15 @@ internal static class KeyMoveGateIds
     public const string DrainSkippedAccounted = "drain.skipped_accounted";
     public const string DrainPromotionsIdle = "drain.promotions_idle";
     public const string DrainCanaryZero = "drain.canary_zero";
+    public const string DstPreflight = "dst_preflight";
+    public const string DstStateMissing = "dst_state_missing";
+    public const string DstUnreachable = "dst_unreachable";
+    public const string DstPreflightTimeout = "dst_preflight_timeout";
+    public const string DstNotMaster = "dst_not_master";
+    public const string DstReplicaUnhealthy = "dst_replica_unhealthy";
+    public const string SrcAdmissionPending = "src_admission_pending";
+    public const string MirrorRepairPending = "mirror_repair_pending";
+    public const string MirrorOpenUnavailable = "mirror_open_unavailable";
+    public const string PendWaitUnavailable = "pend_wait_unavailable";
+    public const string BaselineUnavailable = "baseline_unavailable";
 }

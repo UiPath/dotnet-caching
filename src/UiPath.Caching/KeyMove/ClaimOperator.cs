@@ -54,19 +54,13 @@ internal sealed class ClaimOperator(ClaimStore store, IClaimEvidence evidence)
             return ClaimCommandOutcome.NoEvidence;
         }
 
-        var cert = await store.CertifyAsync(field, value.Token, terminal.Epoch, terminal.Swept).ConfigureAwait(false);
-        if (cert.Code is not (ClaimCodes.Done or ClaimCodes.AlreadyDone))
+        // An S0 certificate requires the matching published release because CTLCOMMIT can precede a failed DURABLE.
+        if (!terminal.Swept && terminal.PublishedRelease != $"{value.Token}:{terminal.Epoch}:S0")
         {
-            return ToOutcome(cert.Code);
+            return ClaimCommandOutcome.NoEvidence;
         }
 
-        var end = terminal.Swept ? await store.CloseAsync(field, value.Token).ConfigureAwait(false) : await store.IdleAsync(field, value.Token).ConfigureAwait(false);
-        if (end.Code is not (ClaimCodes.Done or ClaimCodes.AlreadyDone))
-        {
-            return ToOutcome(end.Code);
-        }
-
-        return cert.Durability == ClaimDurability.NotConfirmed || end.Durability == ClaimDurability.NotConfirmed ? ClaimCommandOutcome.DoneUnconfirmed : ClaimCommandOutcome.Done;
+        return await CertifyAndSettleAsync(field, value, terminal).ConfigureAwait(false);
     }
 
     /// <summary>Drops the group's move fields, then its <c>prv:</c> pointer, each by its current value; <c>cur:fm</c> stays, so admission keeps protecting the final format.</summary>
@@ -125,4 +119,21 @@ internal sealed class ClaimOperator(ClaimStore store, IClaimEvidence evidence)
         ClaimCodes.FallbackExhausted => ClaimCommandOutcome.Unknown,
         _ => ClaimCommandOutcome.Refused,
     };
+
+    private async Task<ClaimCommandOutcome> CertifyAndSettleAsync(string field, ClaimValue value, ClaimTerminal terminal)
+    {
+        var cert = await store.CertifyAsync(field, value.Token, terminal.Epoch, terminal.Swept).ConfigureAwait(false);
+        if (cert.Code is not (ClaimCodes.Done or ClaimCodes.AlreadyDone))
+        {
+            return ToOutcome(cert.Code);
+        }
+
+        var end = terminal.Swept ? await store.CloseAsync(field, value.Token).ConfigureAwait(false) : await store.IdleAsync(field, value.Token).ConfigureAwait(false);
+        if (end.Code is not (ClaimCodes.Done or ClaimCodes.AlreadyDone))
+        {
+            return ToOutcome(end.Code);
+        }
+
+        return cert.Durability == ClaimDurability.NotConfirmed || end.Durability == ClaimDurability.NotConfirmed ? ClaimCommandOutcome.DoneUnconfirmed : ClaimCommandOutcome.Done;
+    }
 }

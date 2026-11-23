@@ -21,6 +21,12 @@ internal sealed class KeyMoveStateOptions
     /// <summary>Replicas configured for each master when the topology does not say; null reads them from the topology.</summary>
     public int? ExpectedReplicasPerMaster { get; init; }
 
+    /// <summary>The bound of the Dst health read that runs immediately before the first Src write of a transition (<c>dst_preflight</c>); a read that exceeds it fails the step, which waits.</summary>
+    public TimeSpan DstPreflightTimeout { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long a pending claim whose token the state does not show (<c>ct</c>) stays unchanged before the leader releases it to idle (the leader's monotonic clock).</summary>
+    public TimeSpan ClaimPendHold { get; init; } = TimeSpan.FromSeconds(60);
+
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(2);
 
     public TimeSpan SlowPollInterval { get; init; } = TimeSpan.FromSeconds(60);

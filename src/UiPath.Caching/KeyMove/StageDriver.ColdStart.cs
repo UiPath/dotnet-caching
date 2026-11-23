@@ -21,7 +21,7 @@ internal sealed partial class StageDriver
             }
 
             // The claim stays open until the sweep stores lswept.
-            if (marker != NoClaim && state.Swept == state.Id && await services.Claim.ReopenAsync(group, marker, Fence(group), cancellationToken).ConfigureAwait(false) != ClaimOutcome.Done)
+            if (marker != NoClaim && state.Swept == state.Id && Settle(group, await services.Claim.ReopenAsync(group, marker, Fence(group), cancellationToken).ConfigureAwait(false)) != ClaimOutcome.Done)
             {
                 Notify(group, "abandon_refused", "the move claim could not be reopened");
                 return null;
@@ -40,14 +40,14 @@ internal sealed partial class StageDriver
         var key = services.Names.State(group);
         if (marker != NoClaim)
         {
-            if (await services.Claim.CertifyAsync(group, marker, state.Ep, "S0", Fence(group), cancellationToken).ConfigureAwait(false) == ClaimOutcome.Failed)
+            if (Settle(group, await services.Claim.CertifyAsync(group, marker, state.Ep, "S0", Fence(group), cancellationToken).ConfigureAwait(false)) == ClaimOutcome.Failed)
             {
                 Notify(group, "claim_release_failed", marker);
                 return null;
             }
 
             await services.Scripts.FieldsAsync(key, state.Id, [(StateFields.Release, $"{marker}:{state.Ep}:S0")], [], Fence(group)).ConfigureAwait(false);
-            if (await services.Claim.ReleaseIdleAsync(group, marker, Fence(group), cancellationToken).ConfigureAwait(false) == ClaimOutcome.Failed)
+            if (Settle(group, await services.Claim.ReleaseIdleAsync(group, marker, Fence(group), cancellationToken).ConfigureAwait(false)) == ClaimOutcome.Failed)
             {
                 Notify(group, "claim_release_failed", marker);
                 return null;

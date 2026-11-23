@@ -8,6 +8,7 @@ namespace UiPath.Caching.KeyMove;
 /// <param name="Fence">The lease the state mutations of the sequence (TRANSIT, the commit marker) carry, so a controller that was paused past its lease is refused by the server.</param>
 /// <param name="Ledger">Remembers failed barriers across transitions; required for the way-back rule.</param>
 /// <param name="BeforeCommit">Runs after barrier 1 and its verification and before the commit begins; a result other than null ends the sequence with it (the claim open of an X1).</param>
+/// <param name="AfterMarker">Checks the Dst connection proof after the commit marker and can pause the transition for retry.</param>
 /// <param name="BeforeDurable">Runs after barrier 2 and before DURABLE; a result other than null ends the sequence with it (the claim certificate of a transition into S0).</param>
 internal sealed record SequenceOptions(
     bool SkipBarriers = false,
@@ -18,4 +19,5 @@ internal sealed record SequenceOptions(
     Func<bool>? HoldsLease = null,
     LeaseFence? Fence = null,
     Func<CancellationToken, Task<TransitionResult?>>? BeforeCommit = null,
-    Func<CancellationToken, Task<TransitionResult?>>? BeforeDurable = null);
+    Func<CancellationToken, Task<TransitionResult?>>? BeforeDurable = null,
+    Func<ConnectionProof?, CancellationToken, Task<TransitionResult?>>? AfterMarker = null);

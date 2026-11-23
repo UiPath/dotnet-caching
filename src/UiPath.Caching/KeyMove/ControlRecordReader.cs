@@ -2,7 +2,7 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.KeyMove;
 
-internal sealed class ControlRecordReader(IDatabase controlDatabase, MoveKeyNames names)
+internal sealed class ControlRecordReader(IDatabase controlDatabase, MoveKeyNames names) : IRecordReader
 {
     private const int Batch = 512;
     private const CommandFlags Master = CommandFlags.DemandMaster;
@@ -32,4 +32,13 @@ internal sealed class ControlRecordReader(IDatabase controlDatabase, MoveKeyName
 
         return result;
     }
+
+    async Task<IReadOnlyList<(RecordSide Side, int Slot, IReadOnlyDictionary<string, string> Fields)>> IRecordReader.ReadAllAsync(string group, CancellationToken cancellationToken) =>
+        [.. (await ReadAllAsync(group, cancellationToken).ConfigureAwait(false)).Select(static r => (RecordSide.Src, r.Slot, r.Fields))];
+
+    Task<IReadOnlyDictionary<string, string>> IRecordReader.ReadSampledAsync(string group, ControlSample sample, CancellationToken cancellationToken) =>
+        ReadRecordAsync(controlDatabase, names.Control(group, sample.Slot));
+
+    internal static async Task<IReadOnlyDictionary<string, string>> ReadRecordAsync(IDatabase database, RedisKey key) =>
+        (await database.HashGetAllAsync(key, Master).ConfigureAwait(false)).ToDictionary(e => e.Name.ToString(), e => e.Value.ToString());
 }

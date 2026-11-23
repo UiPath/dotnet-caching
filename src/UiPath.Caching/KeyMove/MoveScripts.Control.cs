@@ -57,26 +57,8 @@ internal sealed partial class MoveScripts
         await ControlSyncWrite(control, record).RunAsync().ConfigureAwait(false);
 
     /// <summary>CTLSYNC as a write that runs alone or inside the transaction of a barrier; see <see cref="ControlSyncAsync"/> for its codes.</summary>
-    public Write ControlSyncWrite(RedisKey control, ControlRecord record)
-    {
-        foreach (var (cid, _) in record.Gates)
-        {
-            MoveKeyNames.ValidateName(cid, nameof(record));
-        }
-
-        var args = new List<RedisValue>(10 + (record.Gates.Count * 2))
-        {
-            record.Ep, record.Id, record.State, record.Direction, record.NPop,
-            record.PreviousState, record.PreviousDirection, record.PreviousNPop, record.PreviousEp, record.PreviousId,
-        };
-        foreach (var (cid, nonce) in record.Gates)
-        {
-            args.Add(cid);
-            args.Add(nonce);
-        }
-
-        return new Write(this, CtlSyncScript, [control], [.. args], () => PlanControlSyncAsync(control, record));
-    }
+    public Write ControlSyncWrite(RedisKey control, ControlRecord record) =>
+        new(this, CtlSyncScript, [control], ControlSyncArguments(record), () => PlanControlSyncAsync(control, record));
 
     /// <summary>CTLCOMMIT: marks the record of this transition committed; a repeat writes the flag again, so a following WAIT has an offset to confirm.</summary>
     /// <returns>1 committed, 0 for another <c>ep</c>, -5 for the same <c>ep</c> under another id; the controller treats 0 and -5 as failures.</returns>
@@ -139,6 +121,27 @@ internal sealed partial class MoveScripts
             queued.Add(transaction.HashSetAsync(control, field, value, When.Always, Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
         }).ConfigureAwait(false);
+    }
+
+    private static RedisValue[] ControlSyncArguments(ControlRecord record)
+    {
+        foreach (var (cid, _) in record.Gates)
+        {
+            MoveKeyNames.ValidateName(cid, nameof(record));
+        }
+
+        var args = new List<RedisValue>(10 + (record.Gates.Count * 2))
+        {
+            record.Ep, record.Id, record.State, record.Direction, record.NPop,
+            record.PreviousState, record.PreviousDirection, record.PreviousNPop, record.PreviousEp, record.PreviousId,
+        };
+        foreach (var (cid, nonce) in record.Gates)
+        {
+            args.Add(cid);
+            args.Add(nonce);
+        }
+
+        return [.. args];
     }
 
     private static void AddIdentityConditions(ITransaction transaction, RedisKey control, RedisValue ep, RedisValue id)

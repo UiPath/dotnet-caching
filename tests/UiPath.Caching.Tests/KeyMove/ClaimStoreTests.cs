@@ -255,7 +255,7 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
 
         var shown = $"open|{T1}|rt|";
         (await new ClaimOperator(Store(), new FakeEvidence()).CertifyAsync("rt:r", shown, "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.NoEvidence);
-        var claim = new ClaimOperator(Store(), new FakeEvidence { Terminal = new ClaimTerminal(7, Swept: false) });
+        var claim = new ClaimOperator(Store(), new FakeEvidence { Terminal = new ClaimTerminal(7, Swept: false, PublishedRelease: $"{T1}:7:S0") });
         (await claim.CertifyAsync("rt:r", shown, string.Empty, TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Refused, "the operator must confirm");
         (await claim.CertifyAsync("rt:r", $"pend|{T1}|rt|", "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Changed, "the value is no longer the one shown");
         (await claim.CertifyAsync("rt:r", shown, "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Done);

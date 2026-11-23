@@ -8,6 +8,17 @@ internal sealed class ControlUpkeep(ControlRecordReader records, TransitionSeque
     public static bool Applies(StateRecord state) =>
         state.Durable && (state.State is "S1" or "S2" or "S3" or "S4" || (state.State == "S5" && state.Swept != state.Id));
 
+    /// <summary>The X12 target: the same state and direction under <c>ep</c> plus one and a new id, with the managed set when it changes.</summary>
+    public static StateTarget SameState(StateRecord state, string? newCaches, TimeProvider time) => new(
+        state.State,
+        state.Direction,
+        state.NPop,
+        state.Ep + 1,
+        MoveScripts.NewNonce(),
+        StateRecord.FormatPrev(state.State, state.Direction, state.NPop, state.Ep, state.Id),
+        time.GetUtcNow().ToUnixTimeMilliseconds(),
+        Caches: newCaches is null ? null : (newCaches, StateRecord.HashOfCaches(newCaches)));
+
     public async Task<UpkeepVerdict> CheckAsync(string group, StateRecord state, CancellationToken cancellationToken)
     {
         if (!Applies(state))
@@ -50,15 +61,7 @@ internal sealed class ControlUpkeep(ControlRecordReader records, TransitionSeque
             throw new InvalidOperationException($"The managed set is frozen outside S1 and S2: the group is in {state.State} {state.Direction}.");
         }
 
-        var target = new StateTarget(
-            state.State,
-            state.Direction,
-            state.NPop,
-            state.Ep + 1,
-            MoveScripts.NewNonce(),
-            StateRecord.FormatPrev(state.State, state.Direction, state.NPop, state.Ep, state.Id),
-            time.GetUtcNow().ToUnixTimeMilliseconds(),
-            Caches: newCaches is null ? null : (newCaches, StateRecord.HashOfCaches(newCaches)));
+        var target = SameState(state, newCaches, time);
         return await sequence.RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 1), target, sequenceOptions, cancellationToken).ConfigureAwait(false);
     }
 

@@ -4,6 +4,11 @@ namespace UiPath.Caching.Tests.KeyMove;
 
 internal sealed class FakeMoveClaim : IMoveClaim
 {
+#if NET9_0_OR_GREATER
+    private readonly Lock _gate = new();
+#else
+    private readonly object _gate = new();
+#endif
     private bool _opened;
 
     public List<string> Calls { get; } = [];
@@ -21,6 +26,35 @@ internal sealed class FakeMoveClaim : IMoveClaim
     public ClaimOutcome Idle { get; set; } = ClaimOutcome.Done;
 
     public ClaimStatus? ForcedStatus { get; set; }
+
+    public string? AcquiredToken { get; set; }
+
+    public List<string> Acquired { get; } = [];
+
+    public bool GuardBlocks { get; set; }
+
+    public List<(string Token, ConnectionProof? Marker)> Guarded { get; } = [];
+
+    public Task<TransitionResult?> CommitGuardAsync(string group, string token, ConnectionProof? marker, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            Guarded.Add((token, marker));
+        }
+
+        return Task.FromResult<TransitionResult?>(GuardBlocks ? new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "guard") : null);
+    }
+
+    public Task<string?> AcquireTokenAsync(string group, LeaseFence? fence, CancellationToken cancellationToken)
+    {
+        var token = AcquiredToken ?? MoveScripts.NewNonce();
+        lock (_gate)
+        {
+            Acquired.Add(token);
+        }
+
+        return Task.FromResult<string?>(token);
+    }
 
     public Task<ClaimOutcome> PendAsync(string group, string token, string descriptor, LeaseFence? fence, CancellationToken cancellationToken) => Record($"pend:{descriptor}", Pend, fence);
 
@@ -46,7 +80,7 @@ internal sealed class FakeMoveClaim : IMoveClaim
 
     private Task<ClaimOutcome> Record(string call, ClaimOutcome outcome, LeaseFence? fence)
     {
-        lock (Calls)
+        lock (_gate)
         {
             Calls.Add(call);
             Fences.Add(fence);

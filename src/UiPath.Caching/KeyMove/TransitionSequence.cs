@@ -8,7 +8,7 @@ namespace UiPath.Caching.KeyMove;
 /// <remarks>Barriers use the dedicated writer connection. A possibly applied transaction is retried only by a later resume.</remarks>
 /// <param name="report">Told of <c>no_replica</c>, <c>barrier_failed</c>, <c>barrier_stuck</c> and <c>wait_skipped</c> with a detail text.</param>
 /// <param name="time">The clock of the barriers; the system clock by default.</param>
-internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames names, KeyMoveStateOptions options, Action<string, string>? report = null, TimeProvider? time = null)
+internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames names, KeyMoveStateOptions options, Action<string, string>? report = null, TimeProvider? time = null) : ITransitionSequence
 {
     private const int SlotBatch = 256;
     private const CommandFlags Master = CommandFlags.DemandMaster;

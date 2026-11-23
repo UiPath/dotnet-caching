@@ -145,7 +145,7 @@ public sealed class ClaimDurabilityTests
 
     private sealed class TerminalEvidence : IClaimEvidence
     {
-        public Task<ClaimTerminal?> ReadTerminalAsync(string group, CancellationToken cancellationToken) => Task.FromResult<ClaimTerminal?>(new ClaimTerminal(3, Swept: false));
+        public Task<ClaimTerminal?> ReadTerminalAsync(string group, CancellationToken cancellationToken) => Task.FromResult<ClaimTerminal?>(new ClaimTerminal(3, Swept: false, PublishedRelease: $"{T1}:3:S0"));
 
         public Task<bool> ShowsTerminalAsync(string group, CancellationToken cancellationToken) => Task.FromResult(true);
 

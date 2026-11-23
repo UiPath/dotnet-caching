@@ -25,6 +25,48 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task X1_takes_the_token_from_the_claim_before_the_pend_and_the_transit_clears_a_stored_pending_token()
+    {
+        const string stored = "0123456789abcdef0123456789abcdef";
+        await using var kit = await DriverKit.CreateAsync(fixture);
+        kit.Facts.Claims = true;
+        await kit.PrepareAsync();
+        kit.Claim.AcquiredToken = stored;
+        await kit.Kit.Db.HashSetAsync(kit.Kit.StateKey, StateFields.PendToken, stored);
+        await kit.Kit.Db.HashSetAsync(kit.Kit.StateKey, StateFields.PendUncertain, "1");
+
+        var ready = await kit.StepUntilAsync("S1");
+
+        kit.Claim.Acquired.Should().NotBeEmpty().And.OnlyContain(t => t == stored);
+        ready.Claim.Should().Be(stored, "the state carries the token the claim handed out");
+        (await kit.Kit.Db.HashExistsAsync(kit.Kit.StateKey, StateFields.PendToken)).Should().BeFalse("the TRANSIT that binds the claim ends the acquisition");
+        (await kit.Kit.Db.HashExistsAsync(kit.Kit.StateKey, StateFields.PendUncertain)).Should().BeFalse("the mark goes with the token");
+    }
+
+    [Fact]
+    public async Task X1_guards_the_commit_marker_with_the_claim_on_the_first_run_and_on_every_resume_until_the_mirror_is_repaired()
+    {
+        MarkerProbeSequence? probe = null;
+        await using var kit = await DriverKit.CreateAsync(fixture, wrapSequence: inner => probe = new MarkerProbeSequence(inner));
+        kit.Facts.Claims = true;
+        await kit.PrepareAsync();
+        kit.Claim.GuardBlocks = true;
+
+        for (var step = 0; step < 4; step++)
+        {
+            await kit.StepAsync(Ten);
+        }
+
+        var stuck = await kit.StateAsync();
+        stuck.Should().Match<StateRecord>(s => s.State == "S1" && !s.Durable, "the guard stopped the transition after TRANSIT");
+        probe!.Blocked.Should().StartWith("run").And.Contain("resume", "the resumed transition is guarded as well");
+        kit.Claim.Guarded.Should().NotBeEmpty().And.OnlyContain(g => g.Token == stuck.Claim && g.Marker != null);
+
+        kit.Claim.GuardBlocks = false;
+        (await kit.StepUntilAsync("S1", advance: Ten)).Durable.Should().BeTrue("after the repair the guard lets the marker stand");
+    }
+
+    [Fact]
     public async Task A_refused_pend_starts_nothing_and_a_refused_open_abandons_X1_and_releases_the_pending_claim_idle_with_no_certificate()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);

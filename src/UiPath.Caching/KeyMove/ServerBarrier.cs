@@ -46,10 +46,16 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
     private static readonly TimeSpan FallbackAsyncTimeout = TimeSpan.FromSeconds(5);
 
     private readonly bool _provable = AllowsAdmin(database.Multiplexer);
+#if NET9_0_OR_GREATER
+    private readonly Lock _proofLock = new();
+#else
+    private readonly object _proofLock = new();
+#endif
     private long _failedAt = long.MinValue;
     private int _sawReplicas;
     private TimeSpan? _timeout;
     private Exception? _lastError;
+    private ConnectionProof? _lastProof;
 
     /// <summary>The WAIT timeout; by default 80% of the connection's async timeout, so WAIT returns before the client gives up on it.</summary>
     public TimeSpan Timeout
@@ -60,6 +66,18 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
 
     /// <summary>The error of the last write the barrier did not repeat: a queued command that failed at run time after EXEC succeeded, an EXEC whose reply never arrived, or an unbound write that failed; null when none.</summary>
     public Exception? LastError => Volatile.Read(ref _lastError);
+
+    /// <summary>The proof of the connection the last confirmed write ran on; null when the last write was not confirmed or was written unproven.</summary>
+    public ConnectionProof? LastProof
+    {
+        get
+        {
+            lock (_proofLock)
+            {
+                return _lastProof;
+            }
+        }
+    }
 
     public int Retries { get; init; } = 3;
 
@@ -147,6 +165,17 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
         return FinishKeyedBatch(tallies, outcomes, parts.Any(static p => p.Endpoint is null));
     }
 
+    /// <summary>Whether a failed EXEC certainly sent nothing that applied: a queue-time abort, a redirect, or a connection error before the command was sent.</summary>
+    internal static bool NotSent(Exception ex) => ex switch
+    {
+        RedisConnectionException connection => connection.CommandStatus == CommandStatus.WaitingToBeSent
+            || connection.Message.Contains("No connection is active/available", StringComparison.OrdinalIgnoreCase),
+        RedisServerException server => server.Message.StartsWith("EXECABORT", StringComparison.Ordinal)
+            || server.Message.StartsWith("MOVED", StringComparison.Ordinal)
+            || server.Message.StartsWith("ASK", StringComparison.Ordinal),
+        _ => false,
+    };
+
     private static async Task<(bool[] Committed, Exception? Failure, Exception? Error)> ObserveWritesAsync(List<Sent> sent, Tally tally, Exception? failure)
     {
         var committed = new bool[sent.Count];
@@ -211,33 +240,19 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
         return first is { } sole ? sole with { IsMaster = master } : null;
     }
 
-    private static string? FieldOf(string? info, string name) =>
-        info?.Split('\n').FirstOrDefault(l => l.StartsWith(name, StringComparison.Ordinal))?[name.Length..].Trim();
-
-    /// <summary>The proof from the replies of <c>CLIENT ID</c> and <c>INFO</c>, and whether INFO says <c>role:master</c>; null when INFO lacks the run id or the replication id. A failed reply throws.</summary>
     private static InvalidOperationException PartlyApplied(int applied, int count) =>
         new($"The batch was partly applied: {applied} of {count} transactions committed and the others did not, or may not have.");
 
+    /// <summary>The proof from the replies of <c>CLIENT ID</c> and <c>INFO</c>, and whether INFO says <c>role:master</c>; null when INFO lacks the run id or the replication id. A failed reply throws.</summary>
     private static async Task<Proven?> ProofOfAsync(Task<RedisResult> clientId, Task<RedisResult> info)
     {
         var text = (string?)await info.ConfigureAwait(false);
-        return FieldOf(text, "run_id:") is { } runId && FieldOf(text, "master_replid:") is { } replicationId
-            ? new Proven(new ConnectionProof((long)await clientId.ConfigureAwait(false), runId, replicationId), FieldOf(text, "role:") == "master")
+        return ConnectionProof.InfoField(text, "run_id:") is { } runId && ConnectionProof.InfoField(text, "master_replid:") is { } replicationId
+            ? new Proven(new ConnectionProof((long)await clientId.ConfigureAwait(false), runId, replicationId), ConnectionProof.InfoField(text, "role:") == "master")
             : null;
     }
 
     private static bool Transient(Exception ex) => ex is RedisException or RedisTimeoutException;
-
-    /// <summary>Whether a failed EXEC certainly sent nothing that applied: a queue-time abort, a redirect, or a connection error before the command was sent.</summary>
-    private static bool NotSent(Exception ex) => ex switch
-    {
-        RedisConnectionException connection => connection.CommandStatus == CommandStatus.WaitingToBeSent
-            || connection.Message.Contains("No connection is active/available", StringComparison.OrdinalIgnoreCase),
-        RedisServerException server => server.Message.StartsWith("EXECABORT", StringComparison.Ordinal)
-            || server.Message.StartsWith("MOVED", StringComparison.Ordinal)
-            || server.Message.StartsWith("ASK", StringComparison.Ordinal),
-        _ => false,
-    };
 
     private static bool Denies(Exception ex) =>
         ex is RedisServerException
@@ -293,6 +308,7 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
 
     private async Task<BarrierOutcome> RunAsync(IReadOnlyList<Action<ITransaction>> writes, RedisKey at, bool wayBack, Tally tally)
     {
+        SetProof(null);
         var failedAt = Interlocked.Read(ref _failedAt);
         if (wayBack && failedAt != long.MinValue && clock.GetElapsedTime(failedAt) < Episode)
         {
@@ -368,6 +384,14 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
         }
     }
 
+    private void SetProof(ConnectionProof? proof)
+    {
+        lock (_proofLock)
+        {
+            _lastProof = proof;
+        }
+    }
+
     private void Remember(Exception? error)
     {
         if (error is not null)
@@ -399,7 +423,13 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
             }
 
             var endpoint = await database.IdentifyEndpointAsync(at, Master).ConfigureAwait(false);
-            return Equals(endpoint, target.Server.EndPoint) ? await ConfirmAsync(target, proven).ConfigureAwait(false) : null;
+            var confirmed = Equals(endpoint, target.Server.EndPoint) ? await ConfirmAsync(target, proven).ConfigureAwait(false) : null;
+            if (confirmed is BarrierOutcome.Confirmed or BarrierOutcome.NoReplica)
+            {
+                SetProof(proven.Proof);
+            }
+
+            return confirmed;
         }
         catch (Exception ex) when (Transient(ex))
         {
