@@ -41,6 +41,9 @@ internal sealed class NodeListStore(IRedisConnector redis, RedisKey key)
 
     public RedisKey Key { get; } = key;
 
+    /// <summary>True once scripts were refused: then a read takes TIME and HGETALL as two commands, which on a cluster may reach two servers.</summary>
+    public bool ScriptsRefused => _scriptsRefused;
+
     private IDatabase Database => redis.Database;
 
     /// <summary>The same construction as the stream maintainer's lock key, so the connector's prefix and a cluster slot follow it.</summary>

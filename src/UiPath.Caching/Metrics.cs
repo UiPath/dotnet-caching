@@ -7,6 +7,7 @@ public static class Metrics
     public const string Stream = Prefix + "Stream";
     public const string StreamGroup = Prefix + "StreamGroup";
     public const string StreamConsumer = Prefix + "StreamConsumer";
+    public const string DepartedGroupDeleted = Prefix + "DepartedGroupDeleted";
     public const string RedisClient = Prefix + "RedisClient";
     public const string MemoryCache = Prefix + "MemoryCache";
     public const string RedisProfilerSessions = Prefix + "RedisProfilerSessions";

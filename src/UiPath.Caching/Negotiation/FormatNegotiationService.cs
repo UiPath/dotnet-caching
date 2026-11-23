@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Hosting;
+using UiPath.Caching.Broadcast.Redis;
 
 namespace UiPath.Caching.Negotiation;
 
@@ -146,8 +147,7 @@ internal sealed class FormatNegotiationService(FormatNegotiation negotiation) : 
         try
         {
             // An advertisement outlives the group of the node that wrote it, so a node that crashes is gone from the node list before it stops counting as one.
-            var fresh = options.LivenessWindow + TimeSpan.FromTicks(options.AdvertiseInterval.Ticks * 2);
-            var gone = TimeSpan.FromTicks(Math.Max(options.AdvertiseInterval.Ticks * 10, fresh.Ticks * 2));
+            var (fresh, gone) = DepartedOwners.Windows(options);
             var all = await negotiation.Store.ReadAsync(cancellationToken).ConfigureAwait(false);
             var current = all.Where(a => a.Age <= fresh).ToList();
             var readers = current.Where(a => !a.Advertisement.Left).ToList();

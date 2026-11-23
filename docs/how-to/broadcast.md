@@ -105,6 +105,8 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | `NotifySubscriberTimeout` | multiplexer timeout | Yes | Resubscribe interval. |
 | `NotifySubscriberDueTime` | half of timeout | Yes | First-subscribe delay. |
 
+Departed nodes. A consumer group is named for its node, so the maintainer also removes a group whose node has left, even when the group is caught up on a quiet stream. Once per pass, and only when a stream has a group with consumers, it reads the node list (one `TIME` and `HGETALL`). Only when every primary is connected and runs Redis 7.2 or later (where a consumer's idle time counts every read attempt, so a live owner that restarted is not mistaken for a gone one) does it judge a group at all; before that, groups are kept unless they are stuck. A group is departed when its node's entry says it left (`left=1`) or is older than the node list's gone window. A node whose entry was already pruned counts as departed only when the node list was read, some node in it is fresh, and every consumer of the group has been idle longer than the gone window and `MaintainerQuarantineInterval`; that costs one `XINFO CONSUMERS` per such group. Anything else is kept, including every group while the node list cannot be read. A departed group is quarantined first. After `MaintainerQuarantineInterval` the maintainer checks that it still holds its lock and reads the node list again, then deletes the group in one script on the stream's server that refuses if any of its consumers read within the quarantine (or within the idle horizon, for a pruned owner), so an owner that came back keeps its group. When scripts are refused, an entry's age may come from another server's clock, so no entry counts as stale then; the metric `Caching.Stats.DepartedGroupDeleted` counts deletions by `Reason` (`left`, `stale`, `absent_idle`).
+
 ### `RedisPubSubTopicOptions`
 
 | Field | Default | Per-topic | Notes |
@@ -399,8 +401,8 @@ Confirm `MaintainerEnabled: true` and that `StartAsync` was called (the service 
 **Some streams are trimmed and others are not, on the same cluster and the same options.**
 
 Versions before the per-primary scan (2.0.0 and earlier) discovered streams with a single server-scoped `SCAN`, which
-reached one primary only. On a Redis Cluster every stream whose slot lived on another shard was never trimmed, never
-group-reaped and never deleted; its size was held only by the `MAXLEN` each `XADD` carries, so it retained the last
+reached one primary only. On a Redis Cluster every stream whose slot lived on another shard was never trimmed, and
+its consumer groups were never deleted and the stream itself never deleted; its size was held only by the `MAXLEN` each `XADD` carries, so it retained the last
 `MaxLength` entries (32,768 by default) rather than `MaintainerTrimInterval`, on a key with no TTL. Which streams were
 affected moved whenever the cluster was resized and slots were remapped. Upgrade to a version with the per-primary
 scan; there is no configuration that works around it.
