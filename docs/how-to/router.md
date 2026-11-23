@@ -98,3 +98,19 @@ A call is decided by the first of these that applies, and the router logs this o
 ## Telemetry
 
 Meter `UiPath.Caching.Migration`, counters `local_hit`, `redis_hit`, `miss`, `factory_runs`, `unavailable`, `unreadable`, `publish_failed` and `pending`, each tagged `cache`, `group`, `path` and `path_reason` (`flag`, `predicate_error`, `bypass`, `bypass_flag_error`, `library_unavailable`, `other_client_read`, `other_client_unreadable`, `pin`, `pin_state_unknown`). `mode_change` (tags `mode`, `reason`) counts completed transitions and `library_start_failed` counts failed starts.
+
+## Key move stage checks
+
+When the stage driver reports a blocked start, close, or drain, use the check IDs below to identify the missing evidence.
+
+| IDs | What they check |
+| --- | --- |
+| `start.km_support`, `start.pins`, `start.node_list`, `start.foreign_node` | Fresh nodes support key move, pin the group without bypassing, form a complete list, and belong to the same scope. |
+| `start.release_floor`, `start.view_stable`, `start.snapshot_freshness` | The minimum release is attested, the node views have held steady, and advertised snapshots are fresh. |
+| `start.dry_run`, `start.memory_headroom`, `start.format_settled` | The dry run is recent, the memory estimate leaves enough headroom, and the format is settled. |
+| `start.group_listed`, `start.server_preflight`, `start.cache_set`, `start.native_empty` | All nodes list the group, Redis passes preflight, the registered cache sets agree, and the masters find no owned native keys. |
+| `close.acks`, `close.soak`, `close.canary`, `close.consent` | Every fresh node acknowledges the identity, the soak has elapsed, no canary activity occurred during it, and consent covers the stored residue. |
+| `close.node_readiness`, `close.inventory`, `close.views` | Fresh nodes can use key move without bypassing, current residue fits within the approved counts, and all views confirm the close stage. |
+| `drain.confirming_pass`, `drain.skipped_accounted`, `drain.promotions_idle`, `drain.canary_zero` | The confirming pass finds nothing movable, all skips are accounted for, no promotions remain in flight, and the forward canary is zero. The first two IDs are reported together because the mover supplies one verdict for both. |
+
+Approval commands take approval kinds. `start` supplies the release attestation. `start_unsettled` requires the exact `UpgradeHoldOverrideText` confirmation. `start_no_dry_run`, `start_memory`, and `control_records_evictable` authorize their respective exceptions. `close` attests that the source application code remains deployed and approves the stored residue. `close_force` also permits proceeding before the soak or with canary activity. `force_reverse` can override the key move support, pin, node list, and snapshot checks for reversal. An active hold blocks a forward drain.

@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Redis;
 
-/// <summary>The K2 map of a format move: the prefix of one format swapped for the other's, the name kept.</summary>
+/// <summary>The key map of a format move: the prefix of one format swapped for the other's, the name kept.</summary>
 internal sealed class RedisKeyMap
 {
     private readonly RedisKeyFormat _from;

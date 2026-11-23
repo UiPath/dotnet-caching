@@ -133,3 +133,9 @@ UiPath.Caching.Redis.RedisCacheOptions.KeyFormat.set -> void
 UiPath.Caching.Redis.RedisKeyFormat.CreateStrategy(string! app, string! keyspace) -> UiPath.Caching.Redis.IRedisKeyStrategy!
 override UiPath.Caching.Redis.RedisKeyFormat.Equals(object? obj) -> bool
 override UiPath.Caching.Redis.RedisKeyFormat.GetHashCode() -> int
+UiPath.Caching.KeyMove.IMigrationStageSource
+UiPath.Caching.KeyMove.IMigrationStageSource.GetStageAsync(string! group, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<int?>
+UiPath.Caching.KeyMove.IntFlagStageSource
+UiPath.Caching.KeyMove.IntFlagStageSource.GetStageAsync(string! group, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<int?>
+UiPath.Caching.KeyMove.IntFlagStageSource.IntFlagStageSource(System.Func<string!, int, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<int>>! getInt) -> void
+const UiPath.Caching.KeyMove.IntFlagStageSource.Sentinel = -1 -> int
