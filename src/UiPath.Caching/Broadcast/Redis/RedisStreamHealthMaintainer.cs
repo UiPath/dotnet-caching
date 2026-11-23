@@ -3,6 +3,7 @@ using System.Net;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Hosting;
 using UiPath.Caching.Negotiation;
+using UiPath.Caching.Redis;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast.Redis;
@@ -130,6 +131,12 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     internal async Task CheckStreamsAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (!BroadcastCapability.For(_redis).AllowsStreamWork)
+        {
+            // No streams to look after on a server that refuses them, and the commands would only fail.
+            return;
+        }
+
         bool ownsLock = false;
         try
         {
@@ -228,7 +235,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     }
 
     private static List<IServer> ConnectedPrimaries(IConnectionMultiplexer? multiplexer) =>
-        multiplexer?.GetServers().Where(static server => !server.IsReplica && server.IsConnected).ToList() ?? [];
+        multiplexer is null ? [] : [.. ClusterServers.Nodes(multiplexer.GetServers()).Where(static server => !server.IsReplica && server.IsConnected)];
 
     private static void AddProp(List<KeyValuePair<string, string>> properties, string key, string? value)
     {
@@ -332,8 +339,17 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         if (_supportsXtrimMinId.Value && TryParseDeliveredIdToDatetimeOffset(streamInfo.LastGeneratedId, out var dateTimeOffset) && dateTimeOffset > minOffset)
         {
             long minId = minOffset.ToUnixTimeMilliseconds();
-            var entriesDeleted = await Database.StreamTrimByMinIdAsync(context.StreamKey, minId, flags: CommandFlags.DemandMaster).ConfigureAwait(false);
-            LogEntriesDeleted(entriesDeleted, context.StreamKey, minId);
+            try
+            {
+                var entriesDeleted = await Database.StreamTrimByMinIdAsync(context.StreamKey, minId, flags: CommandFlags.DemandMaster).ConfigureAwait(false);
+                LogEntriesDeleted(entriesDeleted, context.StreamKey, minId);
+            }
+            catch (RedisServerException ex) when (RedisUtils.IsUnsupportedCommand(ex) || RedisUtils.IsDenied(ex) || ex.Message.Contains("syntax error", StringComparison.OrdinalIgnoreCase))
+            {
+                // The version is a hint: a server that reports 6.2 or later and still refuses MINID is trimmed by the group checks alone.
+                _supportsXtrimMinId = new Lazy<bool>(() => false);
+                LogXtrimMinIdUnavailable(ex, context.StreamKey);
+            }
         }
     }
 
@@ -763,6 +779,9 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Consumer group {Group} from stream {Stream} added in quarantine")]
     private partial void LogConsumerGroupQuarantined(string group, RedisKey stream);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "XTRIM MINID was refused on stream {StreamKey}; trimming by minimum id is off for this maintainer")]
+    private partial void LogXtrimMinIdUnavailable(Exception ex, RedisKey streamKey);
 
     private sealed record StreamContext(RedisKey StreamKey, RedisKey QuarantineKey);
 }

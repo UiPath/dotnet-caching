@@ -74,6 +74,9 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     /// <summary>Raised once a subscription is in place, after the server has confirmed it.</summary>
     internal event Action? Subscribed;
 
+    /// <summary>Raised when the server refuses the subscription (unknown command or missing permission), besides the usual log and retry.</summary>
+    internal event Action<Exception>? Refused;
+
     /// <summary>Whether the server has confirmed the subscription and no subscription connection is known to be down.</summary>
     internal bool IsSubscribed
     {
@@ -200,6 +203,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         catch (Exception ex)
         {
             LogSubscribeError(ex, _redisChannel);
+            NotifyRefused(ex);
         }
         finally
         {
@@ -209,6 +213,23 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
             }
 
             Interlocked.Exchange(ref _subscribing, 0);
+        }
+    }
+
+    private void NotifyRefused(Exception ex)
+    {
+        if (!RedisUtils.IsServerRefusal(ex))
+        {
+            return;
+        }
+
+        try
+        {
+            Refused?.Invoke(ex);
+        }
+        catch (Exception handlerEx)
+        {
+            LogSubscribeError(handlerEx, _redisChannel);
         }
     }
 

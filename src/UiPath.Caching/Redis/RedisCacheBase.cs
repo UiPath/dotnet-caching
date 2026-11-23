@@ -21,6 +21,8 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     private readonly RecentTouches? _recentTouches;
     private readonly bool _serializerMetrics;
     private bool? _supportsExpireTime;
+    // Set once the server refuses EXPIRETIME whatever version it reports; expirations then come from the TTL.
+    private volatile bool _noExpireTime;
     // Set once scripts turn out to be disabled or denied on this server; reads then send the value and TTL commands as a pair.
     private bool _noReadScript;
     // Set by the first script that succeeds; until then any failure of a script turns scripts off.
@@ -106,8 +108,8 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     protected bool KeyReadTelemetryEnabled { get; }
 
-    /// <summary>EXPIRETIME arrived in Redis 7; before it, an expiration is the TTL added to now. Read on first use, since resolving the server version connects.</summary>
-    protected bool SupportsExpireTime => _supportsExpireTime ??= RedisUtils.SupportsExpireTime(_redis.Version);
+    /// <summary>EXPIRETIME arrived in Redis 7; before it, an expiration is the TTL added to now. The version is a hint: a server that misreports it and refuses EXPIRETIME turns this off for good. Read on first use, since resolving the server version connects.</summary>
+    protected bool SupportsExpireTime => !_noExpireTime && (_supportsExpireTime ??= RedisUtils.SupportsExpireTime(_redis.Version));
 
     protected CachePolicy DefaultPolicy { get; }
 
@@ -116,6 +118,9 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     protected TimeProvider Clock { get; }
 
     protected IDatabase Database => _redis.Database;
+
+    /// <summary>Set by the cache to log the first refusal of EXPIRETIME; the base has no logger.</summary>
+    private protected Action<Exception>? LogExpireTimeUnavailable { get; set; }
 
     public void Dispose()
     {
@@ -230,7 +235,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     protected ValueTask<TimeSpan?> KeyTimeToLiveAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token) =>
         RunAsync(pipeline, operation, static (s, token) => TimeToLiveCommand(s.Self, s.Strategy, s.Key, token), (Self: this, Strategy: keyStrategy, Key: cacheKey), (TimeSpan?)null, static timeToLive => timeToLive != null, logFailure, answerCancellationWithFallback: true, token);
 
-    /// <summary>The key's expiration: EXPIRETIME on Redis 7, else the TTL added to now, under the same operation.</summary>
+    /// <summary>The key's expiration: EXPIRETIME on Redis 7, else the TTL added to now, under the same operation. A server that refuses EXPIRETIME is answered through the TTL from then on.</summary>
     protected async ValueTask<DateTimeOffset?> KeyExpireTimeAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token)
     {
         bool supported;
@@ -481,10 +486,24 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         return self.Database.KeyTimeToLiveAsync(key, self.ReadFlagsFor(key)).AsValueTask();
     }
 
-    private static ValueTask<DateTime?> ExpireTimeCommand(RedisCacheBase self, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, CancellationToken token)
+    private static async ValueTask<DateTime?> ExpireTimeCommand(RedisCacheBase self, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, CancellationToken token)
     {
         var key = ToRedisKey(keyStrategy, cacheKey, token);
-        return self.Database.KeyExpireTimeAsync(key, self.ReadFlagsFor(key)).AsValueTask();
+        try
+        {
+            return await self.Database.KeyExpireTimeAsync(key, self.ReadFlagsFor(key)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (RedisUtils.IsUnsupportedCommand(ex) || RedisUtils.IsDenied(ex))
+        {
+            if (!self._noExpireTime)
+            {
+                self._noExpireTime = true;
+                self.LogExpireTimeUnavailable?.Invoke(ex);
+            }
+
+            var timeToLive = await self.Database.KeyTimeToLiveAsync(key, self.ReadFlagsFor(key)).ConfigureAwait(false);
+            return timeToLive.HasValue ? self.Clock.ToDateTimeOffset(timeToLive.Value).UtcDateTime : null;
+        }
     }
 
     /// <summary>The key as the server hashes it, with the prefix the connector's <see cref="IDatabase"/> applies through <c>WithKeyPrefix</c>.</summary>

@@ -388,7 +388,7 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
     {
         if (_hasGroup)
         {
-            throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, StreamConstants.ConsumerGroupNameExistsErrorMessage);
+            throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, TestErrors.ConsumerGroupNameExists);
         }
 
         _exists = true;

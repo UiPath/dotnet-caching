@@ -112,7 +112,7 @@ public class ReadListLayeredIntegrationTests(RedisContainerFixture fixture)
     private static CachePolicy Policy(ServiceProvider provider, string name = "fastonly") => provider.GetRequiredService<ICachePolicyFactory>().Resolve(name)!;
 
     private static RedisKey RawKey(ConnectionMultiplexer raw, string key) =>
-        raw.GetServer(raw.GetEndPoints()[0]).Keys(pattern: $"*{key}*").Single();
+        RedisTestKeys.Keys(raw, $"*{key}*").Single();
 
     private static async Task<RedisKey> SeedAsync(ServiceProvider seeder, ConnectionMultiplexer raw, string key, bool readableA)
     {

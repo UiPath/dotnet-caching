@@ -112,8 +112,7 @@ public sealed class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture
     private async Task<bool> LockGoneAsync(string key)
     {
         await using var connection = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var server = connection.GetServer(connection.GetEndPoints()[0]);
-        return await EventuallyAsync(() => !server.Keys(pattern: $"*{key}*").Any(k => k.ToString().Contains("rehydrate", StringComparison.Ordinal)));
+        return await EventuallyAsync(() => !RedisTestKeys.Keys(connection, $"*{key}*").Any(k => k.ToString().Contains("rehydrate", StringComparison.Ordinal)));
     }
 
     private ICache Node(string source, bool broadcast, ICachingTelemetryProvider telemetry)
@@ -142,6 +141,7 @@ public sealed class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         return provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
     }
 }

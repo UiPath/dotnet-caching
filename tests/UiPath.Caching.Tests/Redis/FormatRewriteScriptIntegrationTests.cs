@@ -158,7 +158,8 @@ public class FormatRewriteScriptIntegrationTests(RedisContainerFixture fixture)
 
         ((byte[]?)await db.HashGetAsync(hash, "f")).Should().Equal(Old);
         ((byte[]?)await db.StringGetAsync(text)).Should().Equal(Old);
-        await db.KeyDeleteAsync([hash, text]);
+        await db.KeyDeleteAsync(hash);
+        await db.KeyDeleteAsync(text);
     }
 
     [Theory]
@@ -237,7 +238,8 @@ public class FormatRewriteScriptIntegrationTests(RedisContainerFixture fixture)
         (await FormatRewriteScripts.RewriteHashFieldsAsync(db, hash, [("f", Old, Rewritten)])).Should().Be(1);
         await db.StringSetAsync(text, Old);
         (await FormatRewriteScripts.RewriteStringAsync(db, text, Old, Rewritten)).Should().BeTrue();
-        await db.KeyDeleteAsync([text, hash]);
+        await db.KeyDeleteAsync(text);
+        await db.KeyDeleteAsync(hash);
     }
 
     [Theory]
@@ -272,9 +274,8 @@ public class FormatRewriteScriptIntegrationTests(RedisContainerFixture fixture)
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.SupportsAcl, "Needs ACL SETUSER, which this server does not allow.");
         await using var admin = await ConnectAsync();
-        var server = admin.GetServer(admin.GetEndPoints()[0]);
         var user = $"it-norewrite-{Guid.NewGuid():N}";
-        await server.ExecuteAsync("ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
+        await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
         try
         {
             await using var restricted = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},user={user},password=pw");
@@ -300,7 +301,7 @@ public class FormatRewriteScriptIntegrationTests(RedisContainerFixture fixture)
         }
         finally
         {
-            await server.ExecuteAsync("ACL", "DELUSER", user);
+            await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "DELUSER", user);
         }
     }
 

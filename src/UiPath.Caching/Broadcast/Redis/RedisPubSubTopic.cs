@@ -16,6 +16,8 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
     private readonly EventDispatcher<T> _dispatcher;
     private readonly IConnectionState _connectionState;
     private readonly RedisPubSubTopicOptions _options;
+    private readonly Lock _refusedGate = new();
+    private Action<Exception>? _refused;
     private bool _disposed;
 
     public RedisPubSubTopic(
@@ -53,11 +55,34 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
         remove => _subscriber.Subscribed -= value;
     }
 
+    /// <summary>Raised when the server refuses a publish or the subscription (unknown command or missing permission), besides the usual log and retry; nobody listening changes nothing.</summary>
+    event Action<Exception>? ITopic<T>.Refused
+    {
+        add
+        {
+            lock (_refusedGate)
+            {
+                _refused += value;
+                _subscriber.Refused += value;
+            }
+        }
+        remove
+        {
+            lock (_refusedGate)
+            {
+                _refused -= value;
+                _subscriber.Refused -= value;
+            }
+        }
+    }
+
     public TopicKey TopicKey { get; }
 
     public EventHandler? OnDisposed { get; set; }
 
     public bool IsSubscribed => _subscriber.IsSubscribed;
+
+    string? ITopic<T>.Transport => Metrics.TransportPubSub;
 
     internal string ChannelName => _redisChannel.ToString();
 
@@ -107,6 +132,7 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
         catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
         {
             LogPublishError(ex, TopicKey);
+            NotifyRefused(ex);
             return false;
         }
     }
@@ -127,6 +153,23 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
     }
 
     internal RedisPubSubTopicOptions GetResolvedOptionsForTests() => _options;
+
+    private void NotifyRefused(Exception ex)
+    {
+        if (!RedisUtils.IsServerRefusal(ex))
+        {
+            return;
+        }
+
+        try
+        {
+            Volatile.Read(ref _refused)?.Invoke(ex);
+        }
+        catch (Exception handlerEx)
+        {
+            LogPublishError(handlerEx, TopicKey);
+        }
+    }
 
     /// <summary>Tells an observer that joined as the subscription went in place that it may hold stale entries; what it throws is logged, not passed to Subscribe.</summary>
     private void TellMissed(IMissedEventsObserver missed, MissedEventsReason reason)

@@ -40,7 +40,7 @@ The same key also exists as a runtime property, `CacheOptions.BroadcastEnabled`,
 }
 ```
 
-Use it when a single provider should skip broadcast: a single-node deployment where cross-node invalidation buys nothing, or a Redis-compatible backend whose Streams support does not cover `XREADGROUP` (Garnet, for example) and you would rather drop invalidation than switch transport.
+Use it when a single provider should skip broadcast: a single-node deployment where cross-node invalidation buys nothing, or a Redis-compatible backend that has no Streams (Garnet, for example) and you would rather drop invalidation than fall back to Pub/Sub (see [When the server has no Streams](#when-the-server-has-no-streams)).
 
 Two things to know:
 
@@ -68,6 +68,32 @@ builder.Host.ConfigureCaching(x => x
 ```
 
 **When to prefer Pub/Sub:** the main use case is services that process events from an external Pub/Sub channel already and want to reuse the same Redis connection without the overhead of stream consumer groups. Pub/Sub can also be a reasonable default for services that restart frequently (e.g. short-lived batch jobs) where creating and cleaning up consumer groups would add noise. Outside these cases, Streams is almost always the better choice — at-least-once delivery and consumer group replay mean that a pod restart does not miss invalidations that arrived while it was down.
+
+## When the server has no Streams
+
+Streams is the default transport, and the library does not assume the server runs it. Each connection probes once, by behaviour and never by `INFO`: it creates a consumer group on a throwaway key under the streams prefix (`XGROUP CREATE ... MKSTREAM`), deletes the key, and checks that a stream deleted and written again answers `NOGROUP` to `XREADGROUP`. A server that refuses `XGROUP` (an unknown command, or `NOPERM` for a user that may not run it) has no usable Streams. A command the server refuses later (`XADD`, `XREADGROUP`, `XGROUP`) counts the same way. Timeouts, `LOADING` and `READONLY` decide nothing: the probe tries again with a growing delay.
+
+What happens then is `RedisStreamsTopicOptions.StreamsUnsupported`, app-wide (a per-topic entry is ignored):
+
+| Value | Behaviour |
+| --- | --- |
+| `PubSub` (default) | The Streams topics broadcast over plain Pub/Sub, with one warning. Pub/Sub does not have to be enabled: `AddRedisStreams` registers it as a standby the fallback uses, and `TopicFactory` still never picks it for a topic of its own. |
+| `Disable` | Broadcast for the topic turns off, with one warning. This node neither sends nor receives invalidations. |
+| `Fail` | Host start fails when a probe within 2 s proves Streams are missing. A server that is down at start never fails it. After start the topics stay as they are and log one error. |
+
+The order is Streams, then Pub/Sub, then off. A server that refuses Pub/Sub as well (a user without `PUBLISH` and `SUBSCRIBE`) turns the topic off, with one error. An off topic publishes `true`, like `NullTopic`.
+
+**The doorbell switches too.** A server that refuses `SPUBLISH`/`SSUBSCRIBE` moves the Streams doorbell (`NotifyShardedPubSub: true`) to plain `PUBLISH`/`SUBSCRIBE`, with one warning, and the topic goes on reading its stream.
+
+**Kvrocks.** Kvrocks accepts the Streams commands but keeps the consumer groups of a deleted stream, which the reader does not expect. The probe detects it and sends the topics to Pub/Sub. Set `UseStreamsOnQuirkServers: true` to skip that check and run Streams on such a server anyway.
+
+**What an app sees.**
+
+- Streams topics start on Streams without waiting for the probe, so on a normal Redis nothing changes. On a server without Streams, writes made in the first milliseconds, before the probe decides, can return `false`; the topic then moves and later writes go out over Pub/Sub.
+- A topic that leaves a transport it had used tells its subscribers once that events were missed (`MissedEventsReason.Lost`), so the local tier clears. A Kvrocks node at startup sees this once.
+- Telemetry. Topic metrics (`Caching.Stats.Topic.<name>.Write` and `.Read`) carry a `Transport` tag: `streams`, `pubsub` or `off`. Each switch tracks one `Caching.Stats.TransportChanged` event with `TopicName`, `From`, `To` and `Reason`.
+- Mixed server types in one fleet are not supported. Nodes of one app must reach servers of one kind: a node on Streams does not hear a node that fell back to Pub/Sub, or the reverse.
+- Entries already on streams stay in place. Nothing removes the stream keys of a topic that left Streams; delete them by hand once no node uses them.
 
 ## App-wide options
 
@@ -98,6 +124,8 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | `ProfilerEnabled` | `false` | Yes | Enable Redis command profiling. |
 | `EmitStreamReceivedEvent` | `false` | Yes | Emit a telemetry event per received stream entry. |
 | `NotifyEnabled` | `true` | Yes | Notify doorbell via Pub/Sub; `false` polls only. |
+| `StreamsUnsupported` | `PubSub` | No | What a server without Streams gets: `PubSub`, `Disable` or `Fail`. See [When the server has no Streams](#when-the-server-has-no-streams). |
+| `UseStreamsOnQuirkServers` | `false` | No | Skip the probe check that sends a Kvrocks-like server to Pub/Sub. |
 | `NotifyMinInterval` | zero | Yes | Least time between two doorbells. **Keep zero where a stale entry is wrong**; see [Doorbell spacing](#doorbell-spacing-notifymininterval). |
 | `NotifyChannelStrategy` | `null` | Yes | Code-only `IRedisChannelStrategy` for the channel. |
 | `NotifyChannelName` | `"notify"` | Yes | Channel suffix used by the default strategy. |
@@ -278,7 +306,7 @@ Stream keys that contain `{`/`}` but do not form a valid non-empty hash tag (e.g
 
 ## Stream maintainer
 
-**Subscription state.** `RedisPubSubTopic<T>` and `RedisStreamsTopic<T>` implement `ITopicSubscriptionState`: `IsSubscribed` is true once the server confirmed the Pub/Sub subscription, or while a Streams topic's consumer group existed at its last read, its connector is connected, its reader runs and its last read succeeded. It is a point in time, not a loss signal (`IMissedEventsObserver` is), and a Streams topic replays what the stream retained after a reconnect. A group deleted on the server goes unnoticed until the next read, so `IsSubscribed` can stay true that long. A decorator of a topic must forward the interface.
+**Subscription state.** `RedisPubSubTopic<T>` and `RedisStreamsTopic<T>` implement `ITopicSubscriptionState`: `IsSubscribed` is true once the server confirmed the Pub/Sub subscription, or while a Streams topic's consumer group existed at its last read, its connector is connected, its reader runs and its last read succeeded. It is a point in time, not a loss signal (`IMissedEventsObserver` is), and a Streams topic replays what the stream retained after a reconnect. A group deleted on the server goes unnoticed until the next read, so `IsSubscribed` can stay true that long. A decorator of a topic must forward the interface. A Streams topic that fell back to Pub/Sub reports the Pub/Sub topic's state; one that is off reports `false`.
 
 `RedisStreamHealthMaintainer` is a singleton hosted service that wakes on a `PeriodicTimer` every `MaintainerCheckInterval` (default 30 min). On each cycle it acquires a distributed lock — so only one instance in the cluster does the work — then:
 
@@ -413,11 +441,11 @@ These are cleaned up by the maintainer's quarantine logic. A group with no consu
 
 **`ERR unknown command` from the fetch loop against a Redis-compatible backend.**
 
-The server does not implement `XREADGROUP`. Some RESP-compatible stores support Streams writes and ranges without the consumer-group read side; Microsoft Garnet is the common case. The fetch loop reports this once at `Critical` and then retries every 30 s instead of once per `PollInterval`, so the log does not flood, and it recovers on its own if the connection later lands on a server that does support the command. Until then this node receives no invalidations over Streams.
+The server does not run Streams. Microsoft Garnet is the common case: it has no stream commands at all, neither writes nor reads. By default the library finds this by itself, logs one warning and moves the Streams topics to Pub/Sub (see [When the server has no Streams](#when-the-server-has-no-streams)). The error still shows when `StreamsUnsupported` is `Fail`: the fetch loop reports it once at `Critical` and retries every 30 s instead of once per `PollInterval`, so the log does not flood, and this node receives no invalidations over Streams.
 
-Three ways out, in order of preference: switch to Pub/Sub (see [Choosing a transport](#choosing-a-transport)), which those backends do support and which keeps cross-node invalidation; set `InMemoryRedis:BroadcastEnable: false` to keep L1+L2 without invalidation; or disable broadcast app-wide with `BroadcastEnabled: false`.
+To choose another outcome, set `StreamsUnsupported: Disable` to keep L1+L2 without invalidation, set `InMemoryRedis:BroadcastEnable: false`, or disable broadcast app-wide with `BroadcastEnabled: false`.
 
-Note that `RedisStreams:Enabled: false` is worth setting alongside either of the last two, otherwise `RedisStreamHealthMaintainer` still starts and runs `SCAN`/`XINFO` against the same backend.
+Note that `RedisStreams:Enabled: false` is worth setting alongside either of the last two, otherwise `RedisStreamHealthMaintainer` still starts. It skips its checks while the server is known not to run Streams.
 
 **`MaintainerSearchPattern` warning: SCAN is matching keys outside this app.**
 

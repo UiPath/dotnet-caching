@@ -768,7 +768,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
                 : Task.FromResult(Array.Empty<StreamEntry>()));
         // The group the subscribe makes stays: a NOGROUP answered to a read issued before it recreates nothing and stays silent.
         _database.StreamCreateConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>())
-            .ThrowsAsyncForAnyArgs(new RedisServerException(RedisErrorKind.None, CommandFlags.None, StreamConstants.ConsumerGroupNameExistsErrorMessage));
+            .ThrowsAsyncForAnyArgs(new RedisServerException(RedisErrorKind.None, CommandFlags.None, TestErrors.ConsumerGroupNameExists));
         _redisStreamsTopicOptions.PollInterval = TimeSpan.FromMilliseconds(20);
         _redisStreamsTopicOptions.NotifyEnabled = false;
 

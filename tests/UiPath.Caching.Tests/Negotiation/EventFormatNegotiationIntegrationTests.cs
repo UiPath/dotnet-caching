@@ -21,6 +21,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
     public async Task Sum_over_all_endpoints_counts_every_connection_that_subscribed()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.CountsSubscribersPerClient, "Counts the subscribers of a channel from PUBSUB NUMSUB, which this server does not answer with a client count.");
         await using var first = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         await using var second = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         await using var asking = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
@@ -39,13 +40,14 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         reading.Unaccounted.Should().BeTrue();
         var other = RedisChannel.Literal($"fe-{Guid.NewGuid():N}");
         await first.GetSubscriber().SubscribeAsync(other, (_, _) => { });
-        (await source.CountAsync(source.Endpoints()[0], [channel.ToString(), other.ToString(), $"fe-nobody-{Guid.NewGuid():N}"], Ct))!.Channels.Should().Equal(new long[] { 2, 1, 0 }, "one command, every channel, in the order asked");
+        (await SumAsync(source, [channel.ToString(), other.ToString(), $"fe-nobody-{Guid.NewGuid():N}"])).Should().Equal(new long[] { 2, 1, 0 }, "one command, every channel, in the order asked");
     }
 
     [Fact]
     public async Task A_connection_with_a_channel_prefix_is_counted_under_the_names_it_really_subscribed_to()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.CountsSubscribersPerClient, "Counts the subscribers of a channel from PUBSUB NUMSUB, which this server does not answer with a client count.");
         var options = ConfigurationOptions.Parse(fixture.ConnectionString);
         options.ChannelPrefix = RedisChannel.Literal($"pfx-{Guid.NewGuid():N}:");
         await using var prefixed = await ConnectionMultiplexer.ConnectAsync(options);
@@ -55,10 +57,10 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         await another.GetSubscriber().SubscribeAsync(RedisChannel.Literal(channel), (_, _) => { });
         var source = new RedisSubscriberSource(new Connector(prefixed));
 
-        var counted = await source.CountAsync(source.Endpoints()[0], [channel], Ct);
+        var counted = await SumAsync(source, [channel]);
 
         // The server knows the channel only with the prefix in front. Asked as the bare name, there is nobody on it.
-        counted!.Channels.Should().Equal(new long[] { 2 }, "two connections subscribed under the prefix, and the count is of those");
+        counted.Should().Equal(new long[] { 2 }, "two connections subscribed under the prefix, and the count is of those");
         await using var bare = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         (await new RedisSubscriberSource(new Connector(bare)).CountAsync(source.Endpoints()[0], [channel], Ct))!.Channels.Should().Equal(0L);
     }
@@ -67,6 +69,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
     public async Task A_pattern_subscriber_is_counted_by_the_server_and_claims_account_for_it()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.CountsSubscribersPerClient, "Counts the subscribers of a channel from PUBSUB NUMSUB, which this server does not answer with a client count.");
         await using var holder = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         await using var asking = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var pattern = RedisChannel.Pattern($"fe-{Guid.NewGuid():N}-*");
@@ -94,6 +97,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
     public async Task A_confirmed_subscription_is_already_counted_by_the_server()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.CountsSubscribersPerClient, "Counts the subscribers of a channel from PUBSUB NUMSUB, which this server does not answer with a client count.");
         var app = App();
         await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         using var node = Node(app, "node-a", pubSub: true, write: true);
@@ -112,7 +116,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
             await Task.Delay(1, Ct);
         }
 
-        (await raw.GetServer(raw.GetEndPoints()[0]).SubscriptionSubscriberCountAsync(RedisChannel.Literal(channel))).Should().Be(1);
+        (await RedisTestKeys.SubscribersAsync(raw, channel)).Should().Be(1);
         subscriptions.Confirmed().Should().BeEquivalentTo(new Dictionary<string, int> { [channel] = 1 });
     }
 
@@ -138,6 +142,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
     public async Task A_pub_sub_subscriber_that_advertises_nothing_keeps_events_json_until_it_leaves_and_returns_them_to_json_when_it_comes_back()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.CountsSubscribersPerClient, "Counts the subscribers of a channel from PUBSUB NUMSUB, which this server does not answer with a client count.");
         var app = App();
         var channel = RedisChannel.Literal($"{app}:ps:string");
         var topic = new TopicKey("string");
@@ -192,6 +197,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
     public async Task A_stream_group_that_advertises_nothing_keeps_events_json_until_it_goes_idle_and_a_returning_one_stops_the_binary_writes_at_once()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var app = App();
         var topic = new TopicKey("string");
         await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
@@ -232,7 +238,8 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         finally
         {
             await service.StopAsync(CancellationToken.None);
-            await db.KeyDeleteAsync([streamKey, nodeListKey]);
+            await db.KeyDeleteAsync(streamKey);
+            await db.KeyDeleteAsync(nodeListKey);
         }
     }
 
@@ -251,6 +258,12 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         }
 
         throw new TimeoutException("No event reached the stream.");
+    }
+
+    private static async Task<long[]> SumAsync(RedisSubscriberSource source, IReadOnlyList<string> channels)
+    {
+        var counts = await Task.WhenAll(source.Endpoints().Select(endpoint => source.CountAsync(endpoint, channels, Ct)));
+        return [.. channels.Select((_, i) => counts.Sum(count => count!.Channels[i]))];
     }
 
     private static async Task WaitAsync(Func<bool> condition, TimeSpan timeout)

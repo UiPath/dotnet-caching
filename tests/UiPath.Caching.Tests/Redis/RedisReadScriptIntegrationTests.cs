@@ -25,12 +25,11 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(scriptsAllowed || fixture.SupportsAcl, "Needs ACL SETUSER, which this server does not allow.");
         using var admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var server = admin.GetServer(admin.GetEndPoints()[0]);
         var user = $"it-noscript-{Guid.NewGuid():N}";
         var connectionString = fixture.ConnectionString;
         if (!scriptsAllowed)
         {
-            await server.ExecuteAsync("ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
+            await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
             connectionString += $",user={user},password=pw";
         }
 
@@ -67,7 +66,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         {
             if (!scriptsAllowed)
             {
-                await server.ExecuteAsync("ACL", "DELUSER", user);
+                await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "DELUSER", user);
             }
         }
     }
@@ -90,7 +89,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         (await cache.SetAsync("a", "value", expiration, policy: null, Ct)).Should().BeTrue();
         (await hashCache.SetAsync("h", fields, expiration, policy: null, Ct)).Should().BeTrue();
 
-        var rawKeys = mux.GetServer(mux.GetEndPoints()[0]).Keys(pattern: $"*{run}*").Select(k => k.ToString()).ToList();
+        var rawKeys = RedisTestKeys.Keys(mux, $"*{run}*").Select(k => k.ToString()).ToList();
         rawKeys.Should().HaveCount(2).And.OnlyContain(k => k.StartsWith(prefix, StringComparison.Ordinal) && k.Contains(app, StringComparison.Ordinal));
         (await cache.GetCacheEntryAsync<string>("a", policy: null, Ct)).Value.Should().Be("value");
         var batch = await cache.GetCacheEntriesAsync<string>(["a", "b"], policy: null, Ct);
@@ -125,7 +124,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         var expiration = DateTimeOffset.UtcNow.AddMinutes(5);
         (await cache.SetAsync(withTtl, "a", expiration, policy: null, Ct)).Should().BeTrue();
         (await cache.SetAsync(noTtl, "b", expiration, policy: null, Ct)).Should().BeTrue();
-        var rawKey = admin.GetServer(admin.GetEndPoints()[0]).Keys(pattern: $"*{tag}*forever*").Single();
+        var rawKey = RedisTestKeys.Keys(admin, $"*{tag}*forever*").Single();
         (await admin.GetDatabase().KeyPersistAsync(rawKey)).Should().BeTrue();
         // Warms the connection so the counted reads carry nothing else.
         await cache.GetCacheEntryAsync<string>(missing, policy: null, Ct);
@@ -153,6 +152,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
     public async Task A_read_with_read_scripts_enabled_uses_the_script_on_redis_7()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.SupportsEvalRo, "Needs EVAL_RO, which this server does not have.");
         Assert.SkipWhen(fixture.ServerVersion.Major < 7, "The read script needs PEXPIRETIME, which Redis 7.0 added.");
         using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var session = new ProfilingSession();

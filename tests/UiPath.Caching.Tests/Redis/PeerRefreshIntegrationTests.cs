@@ -12,6 +12,7 @@ public sealed class PeerRefreshIntegrationTests(RedisContainerFixture fixture) :
 {
     private readonly string _app = $"pr{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
+    private bool _onStreams = true;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -50,6 +51,7 @@ public sealed class PeerRefreshIntegrationTests(RedisContainerFixture fixture) :
         var telemetry = new RecordingTelemetryProvider();
         var writer = Node("a");
         var peer = Node("b", telemetry);
+        Assert.SkipUnless(_onStreams, "The two reads count the peer's refresh over one stream event; this server's topics broadcast over Pub/Sub, where a warm-up can miss events.");
         var before = await WarmAsync(writer, peer, telemetry);
         var keys = Enumerable.Range(0, 20).Select(i => (CacheKey)$"{{t{_app}}}-{i}-{Guid.NewGuid():N}").ToArray();
         // The peer's own write is not heard back, so no event of the old values can reach the copies.
@@ -158,6 +160,9 @@ public sealed class PeerRefreshIntegrationTests(RedisContainerFixture fixture) :
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
-        return provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
+        StreamsReady.Await(provider);
+        var cache = provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
+        _onStreams &= StreamsReady.Await(provider);
+        return cache;
     }
 }

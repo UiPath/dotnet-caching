@@ -66,6 +66,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
         _logger = logger;
         _logFailure = LogRedisCacheException;
         _logReadScriptUnavailable = LogReadScriptUnavailable;
+        base.LogExpireTimeUnavailable = LogExpireTimeUnavailableMessage;
         _rewriteScriptRefused = RewriteScriptsRefused;
         _serializer = serializer;
         _memorySerializer = serializer as IMemorySerializerProxy;
@@ -125,6 +126,9 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Scripts are unavailable; cache reads now use a GET and PTTL pair")]
     private partial void LogReadScriptUnavailable(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "EXPIRETIME is unavailable; cache expirations are now read from the TTL")]
+    private partial void LogExpireTimeUnavailableMessage(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The server refused the script that rewrites a value; rewrites now use a transaction")]
     private partial void LogRewriteScriptRefused(Exception ex);

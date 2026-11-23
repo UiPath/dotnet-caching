@@ -90,6 +90,7 @@ public class FormatNegotiationIntegrationTests(RedisContainerFixture fixture)
     public async Task A_stream_that_does_not_exist_has_no_groups_and_an_idle_group_reports_its_idle()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var source = new RedisStreamGroupSource(new PrefixingConnector(mux, null));
         RedisKey stream = $"fn-{Guid.NewGuid():N}";
@@ -117,6 +118,7 @@ public class FormatNegotiationIntegrationTests(RedisContainerFixture fixture)
     public async Task An_old_node_keeps_the_writer_on_json_until_it_goes_idle_and_a_returning_one_stops_the_writes_at_once()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var app = $"fn{Guid.NewGuid():N}"[..12];
         var topic = new TopicKey($"orders-{Guid.NewGuid():N}");
         await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
@@ -190,7 +192,8 @@ public class FormatNegotiationIntegrationTests(RedisContainerFixture fixture)
         finally
         {
             await service.StopAsync(CancellationToken.None);
-            await db.KeyDeleteAsync([streamKey, nodeListKey]);
+            await db.KeyDeleteAsync(streamKey);
+            await db.KeyDeleteAsync(nodeListKey);
         }
     }
 
@@ -230,7 +233,8 @@ public class FormatNegotiationIntegrationTests(RedisContainerFixture fixture)
         finally
         {
             await staysService.StopAsync(CancellationToken.None);
-            await db.KeyDeleteAsync([streamKey, nodeListKey]);
+            await db.KeyDeleteAsync(streamKey);
+            await db.KeyDeleteAsync(nodeListKey);
         }
     }
 
@@ -242,13 +246,12 @@ public class FormatNegotiationIntegrationTests(RedisContainerFixture fixture)
 
     private static async Task<byte[]?> RawAsync(IDatabase db, string app, string key)
     {
-        var server = db.Multiplexer.GetServer(db.Multiplexer.GetEndPoints()[0]);
-        var found = server.Keys(pattern: $"{app}:s:{key}").Cast<RedisKey?>().FirstOrDefault();
+        var found = RedisTestKeys.Keys(db.Multiplexer, $"{app}:s:{key}").Cast<RedisKey?>().FirstOrDefault();
         return found is null ? null : (byte[]?)await db.StringGetAsync(found.Value);
     }
 
     private static RedisKey HashKey(ConnectionMultiplexer raw, string app, string key) =>
-        raw.GetServer(raw.GetEndPoints()[0]).Keys(pattern: $"{app}:h:{key}").Single();
+        RedisTestKeys.Keys(raw, $"{app}:h:{key}").Single();
 
     private static async Task WaitAsync(Func<bool> condition, TimeSpan timeout)
     {

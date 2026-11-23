@@ -227,6 +227,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
                 o => o.AppShortName = _app)
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         var factory = provider.GetRequiredService<ICacheFactory>();
         var redis = factory.CreateCache(KnownCacheProviderNames.Redis);
         var layered = factory.CreateCache(KnownCacheProviderNames.InMemoryRedis);
@@ -730,9 +731,8 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     private async Task WithoutScriptsAsync(Func<RefusalLogs, Task> body)
     {
         await using var admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var server = admin.GetServer(admin.GetEndPoints()[0]);
         var user = $"it-fill-{Guid.NewGuid():N}";
-        await server.ExecuteAsync("ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
+        await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
         RestrictedConnection = $"{fixture.ConnectionString},user={user},password=pw";
         try
         {
@@ -741,23 +741,21 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         finally
         {
             RestrictedConnection = null;
-            await server.ExecuteAsync("ACL", "DELUSER", user);
+            await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "DELUSER", user);
         }
     }
 
     private async Task<RedisKey?> FindOrNullAsync(string key)
     {
         _ = Raw;
-        var server = _raw!.GetServer(_raw.GetEndPoints()[0]);
         await Task.CompletedTask;
-        return server.Keys(pattern: $"*{key}*").Cast<RedisKey?>().FirstOrDefault();
+        return RedisTestKeys.Keys(_raw!, $"*{key}*").Cast<RedisKey?>().FirstOrDefault();
     }
 
     private Task<RedisKey> FindAsync(string key)
     {
         _ = Raw;
-        var server = _raw!.GetServer(_raw.GetEndPoints()[0]);
-        return Task.FromResult(server.Keys(pattern: $"*{key}*").Single());
+        return Task.FromResult(RedisTestKeys.Keys(_raw!, $"*{key}*").Single());
     }
 
     private ICache Node(string source, bool scripts = false, bool pubsub = false) =>
@@ -812,6 +810,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         return provider;
     }
 

@@ -9,6 +9,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     private readonly Type? _entryType;
     private readonly CacheKey _callerKey;
     private readonly TopicKey _topic;
+    private readonly ITopic<ICacheEvent> _sourceTopic;
     private readonly Uri? _source;
     private readonly ISerializerProxy<T> _serializer;
     private readonly ILogger<ChangeToken<T>> _logger;
@@ -73,6 +74,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         _callerKey = callerKey;
         _key = key;
         _topic = topic.TopicKey;
+        _sourceTopic = topic;
         _source = source;
         _serializer = serializer;
         _logger = logger;
@@ -121,7 +123,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
             TransportId = cacheEvent.TransportId;
             LogClearLocalCacheKey(Logged(), _topic, cacheEvent.Id, cacheEvent.Source);
             Notify(data, cacheEvent.Type);
-            _telemetryProvider.TrackTopicReadMetric(_topic, TransportId);
+            _telemetryProvider.TrackTopicReadMetric(_topic, TransportId, _sourceTopic.Transport);
         }
         else
         {
@@ -135,7 +137,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
                 LogEventIgnored(_topic, cacheEvent.Id, cacheEvent.Source);
             }
 
-            _telemetryProvider.TrackTopicReadMetric(_topic, cacheEvent.TransportId);
+            _telemetryProvider.TrackTopicReadMetric(_topic, cacheEvent.TransportId, _sourceTopic.Transport);
         }
     }
 

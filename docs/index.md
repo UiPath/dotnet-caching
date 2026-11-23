@@ -36,6 +36,7 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 - Adding a new cache provider, topic provider, or serializer → [how-to/extending.md](how-to/extending.md).
 - Set ("queue") caches: what they are, how they stay coherent → [concepts.md#set-caches](concepts.md#set-caches), [reference/settings.md#queue-caches-uipathcachingqueue](reference/settings.md#queue-caches-uipathcachingqueue).
 - Passwordless Azure Managed Redis → [recipes/azure-entra-authentication.md](recipes/azure-entra-authentication.md).
+- IAM authentication for AWS ElastiCache, MemoryDB and Google Memorystore → [recipes/cloud-iam-authentication.md](recipes/cloud-iam-authentication.md).
 
 **I need a short pattern I can paste.** → [recipes/](recipes/):
 
@@ -52,9 +53,10 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 - [redis-health-check.md](recipes/redis-health-check.md) — wire `RedisHealthCheck` into the ASP.NET health probe.
 - [second-redis-connection.md](recipes/second-redis-connection.md) — `AddNamedCaching`: a complete second caching stack (caches, sets, locks, broadcast) on its own Redis server, picked by key.
 - [azure-entra-authentication.md](recipes/azure-entra-authentication.md) — passwordless Azure Managed Redis via Entra ID, and the custom-auth seam.
+- [cloud-iam-authentication.md](recipes/cloud-iam-authentication.md) — IAM tokens for AWS ElastiCache, MemoryDB and Google Memorystore through `IRedisConnectionConfigurator`.
 - [avoid-raw-iredisconnector.md](recipes/avoid-raw-iredisconnector.md) — three anti-patterns and their supported alternatives.
 
-**I need the full settings reference.** → [reference/settings.md](reference/settings.md) (one table per options class), [reference/interfaces.md](reference/interfaces.md) (public API surface), [reference/glossary.md](reference/glossary.md) (alphabetical term lookup).
+**I need the full settings reference.** → [reference/settings.md](reference/settings.md) (one table per options class), [reference/interfaces.md](reference/interfaces.md) (public API surface), [reference/glossary.md](reference/glossary.md) (alphabetical term lookup). Which servers work, with what fallbacks → [reference/server-support.md](reference/server-support.md).
 
 **I want to run the sample.** → [sample-app.md](sample-app.md).
 

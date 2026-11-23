@@ -54,6 +54,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect)
         {
             Invalidations = _innerTier.Shared,
+            RepeatInvalidation = _repeats is { } repeats ? repeats.Schedule : null,
             PeerApply = _versioned is null ? null : TryApplyPeerUpdate,
             PeerRefresh = _peerRefresher is null ? null : HandToRefresh,
             PeerRefreshChanged = _peerRefresher is { } changed ? changed.TokenChanged : null,

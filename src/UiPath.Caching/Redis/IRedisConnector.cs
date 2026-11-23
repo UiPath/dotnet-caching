@@ -13,6 +13,8 @@ public interface IRedisConnector : IConnectionState, IDisposable
         remove => _ = value;
     }
 
+    /// <summary>The server version as the server reports it.</summary>
+    /// <remarks>Redis-compatible servers may misstate it, so callers treat it as a hint and fall back when a command it gates is refused.</remarks>
     Version Version { get; }
 
     IDatabase Database { get; }

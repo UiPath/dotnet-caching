@@ -1,8 +1,10 @@
 using System.Globalization;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
 using UiPath.Caching.Redis;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Redis;
 
@@ -27,6 +29,24 @@ public class RedisConnectorIntegrationTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task SelectProbe_LogsNoError_WhenTheServerHonoursSelect()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipWhen(fixture.ServerKind == "kvrocks", "Kvrocks ignores SELECT, which is what the probe reports.");
+
+        var log = new RecordedLogger();
+        var options = Options.Create(new RedisConnectionOptions { ConnectionString = $"{fixture.ConnectionString},defaultDatabase=3", EnableHangDetection = false });
+        var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
+        var factory = new ConnectionMultiplexerFactory(options, NullRedisProfiler.Instance);
+        using var connector = new RedisConnector(NullTelemetryProvider.Instance, optionsProvider, factory, options, null, null, null, log);
+
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        await connector.SelectProbe!.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        log.Records.Should().NotContain(record => record.Level >= LogLevel.Error);
+    }
+
+    [Fact]
     public async Task ForceReconnect_StaysConnected_AgainstLiveRedis()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
@@ -48,6 +68,8 @@ public class RedisConnectorIntegrationTests(RedisContainerFixture fixture)
     public async Task RefreshClusterMembership_ReachesTheServer_UnderTheDefaultConnectionString()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipWhen(fixture.IsCluster, "Counts the CLUSTER calls of a server that has none to answer, which a cluster does not.");
+        Assert.SkipUnless(fixture.ReportsCommandStats, "Counts CLUSTER calls from INFO commandstats, which this server does not report.");
         Assert.SkipWhen(ConfigurationOptions.Parse(fixture.ConnectionString).AllowAdmin, "The point is the default allowAdmin=false.");
 
         using var connector = NewConnector();
@@ -90,10 +112,7 @@ public class RedisConnectorIntegrationTests(RedisContainerFixture fixture)
     /// <summary>Server-side count of CLUSTER commands, which the client only ever sends from its handshake.</summary>
     private static async Task<long> ClusterCommandCallsAsync(ConnectionMultiplexer observer)
     {
-        var sections = await observer.GetServer(observer.GetEndPoints()[0]).InfoAsync("commandstats");
-        return sections.SelectMany(section => section)
-            .Where(stat => stat.Key.StartsWith("cmdstat_cluster", StringComparison.OrdinalIgnoreCase))
-            .Sum(stat => long.Parse(stat.Value.Split(',')[0]["calls=".Length..], CultureInfo.InvariantCulture));
+        return await RedisTestKeys.CommandCallsAsync(observer, "cmdstat_cluster");
     }
     private RedisConnector NewConnector()
     {

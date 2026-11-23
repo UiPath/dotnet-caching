@@ -39,6 +39,9 @@ internal abstract class MemoryCacheSetter(
     /// <summary>Told which keys a received event invalidated, so the tier below can read them from the master for a moment.</summary>
     internal ISharedTier? Invalidations { get; init; }
 
+    /// <summary>Told the name of each key a peer's event invalidated, to drop its local entry again after a delay; not told of a loss, which clears everything.</summary>
+    internal Action<string>? RepeatInvalidation { get; init; }
+
     /// <summary>Takes a peer's write to a held key for a background refresh; false drops the entry.</summary>
     internal Func<RefreshMetadataState, bool>? PeerRefresh { get; init; }
 
@@ -177,7 +180,7 @@ internal abstract class MemoryCacheSetter(
     {
         // Boxed once for every callback that takes it.
         object state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey, refresh);
-        if (Invalidations != null && token is IPeerAwareToken source)
+        if ((Invalidations != null || RepeatInvalidation != null) && token is IPeerAwareToken source)
         {
             source.RegisterInvalidatingCallback(_invalidating ??= Invalidating, state);
         }
@@ -204,6 +207,7 @@ internal abstract class MemoryCacheSetter(
         else if (state is RefreshMetadataState metadataState)
         {
             Invalidations?.Invalidated(metadataState.CacheKey);
+            RepeatInvalidation?.Invoke(metadataState.CacheKey.Name);
         }
     }
 

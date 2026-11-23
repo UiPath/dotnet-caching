@@ -92,6 +92,10 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
     /// <remarks>Every write of a hash then also counts the hash's writes in a reserved <c>_version_</c> field. Set it only once every node that writes the hashes knows it: a write by a node that does not count leaves the copies of the others to be dropped by its event.</remarks>
     public bool PeerFieldUpdates { get; set; }
 
+    /// <summary>With Redis Active-Active, a node drops its local copy of a key again this long after a peer's invalidation of it, as well as at once, so a copy refilled from a replica that had not yet received the write is dropped and read again; null keeps the single drop.</summary>
+    /// <remarks>Set it above the replication lag, for example one second. It costs one extra Redis read per remote invalidation. Zero and negative values are rejected.</remarks>
+    public TimeSpan? RepeatInvalidationAfter { get; set; }
+
     /// <summary>The most fields a write may carry to the other nodes; a write of more is dropped by them.</summary>
     public int PeerFieldUpdateMaxFields { get; set; } = DefaultPeerFieldUpdateMaxFields;
 

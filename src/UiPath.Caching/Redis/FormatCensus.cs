@@ -99,7 +99,7 @@ internal sealed class FormatCensus(
         if (primaries.Count == 0)
         {
             // A connector written outside this library inherits the empty default, yet its multiplexer knows every shard.
-            primaries = [.. multiplexer.GetServers().Where(static server => !server.IsReplica && server.IsConnected)];
+            primaries = [.. ClusterServers.Nodes(multiplexer.GetServers()).Where(static server => !server.IsReplica && server.IsConnected)];
         }
 
         var counts = new Dictionary<string, long>(StringComparer.Ordinal);

@@ -26,6 +26,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private protected readonly BackgroundWrites _background;
     private protected readonly InnerTier _innerTier;
 
+    /// <summary>Drops a key's local entry again a while after a peer's invalidation of it; null when the option is off.</summary>
+    private protected readonly RepeatInvalidations? _repeats;
+
     // Hardcoded fallback values for the lock fields. Merged in as the lowest-priority policy
     // (after provider-specific + user DefaultCachePolicy) so every cache instance has a fully
     // resolved Lock — every field non-null — by the time validation runs.
@@ -113,6 +116,11 @@ public abstract partial class MultilayerCacheBase : IDisposable
             logger,
             telemetryProvider,
             clock);
+        if (redisOptions?.RepeatInvalidationAfter is { } repeatAfter && repeatAfter > TimeSpan.Zero)
+        {
+            _repeats = new RepeatInvalidations(clock, repeatAfter, RemoveRepeated);
+        }
+
         BatchChunkSize = Math.Max(1, redisOptions?.BatchChunkSize ?? InMemoryRedisCacheOptions.DefaultBatchChunkSize);
         BatchConcurrentChunks = Math.Max(1, redisOptions?.BatchConcurrentChunks ?? InMemoryRedisCacheOptions.DefaultBatchConcurrentChunks);
         BatchTopicInvalidationThreshold = redisOptions?.BatchTopicInvalidationThreshold;
@@ -231,6 +239,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
             Volatile.Write(ref _disposed, true);
             if (disposing)
             {
+                _repeats?.Dispose();
                 _peerWrites?.Dispose();
                 _background.Drain();
                 _monitor.Dispose();
@@ -344,6 +353,28 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private protected partial void LogSetEventError(Exception ex, LoggedKey cacheKey);
 
     private protected bool ApplyLocal<TState>(string key, TState state, Func<TState, bool> change) => _background.Apply(key, state, change);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Removed {CacheKey} from the local tier again after the repeat-invalidation delay.")]
+    private protected partial void LogInvalidationRepeated(LoggedKey cacheKey);
+
+    /// <summary>The second removal after a peer's invalidation: drops whatever the key holds now, a refill that raced the peer's write included.</summary>
+    private protected void RemoveRepeated(string key)
+    {
+        if (Disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            RemoveLocal(key);
+            LogInvalidationRepeated(LoggedKey.Composed(_masker, key));
+        }
+        catch (Exception) when (Disposed)
+        {
+            // The cache was disposed meanwhile.
+        }
+    }
 
     private protected void RemoveLocal(string key) =>
         _background.Apply(key, (Cache: this, Key: key), static s =>

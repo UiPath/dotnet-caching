@@ -168,7 +168,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         (await writer.Hashes.SetAsync<string>(key, Fields(("a", "1")), TimeSpan.FromMinutes(10), Ct)).Should().BeTrue();
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var composed = default(RedisKey);
-        await foreach (var found in redis.GetServers()[0].KeysAsync(pattern: $"*{key}"))
+        await foreach (var found in RedisTestKeys.KeysAsync(redis, $"*{key}"))
         {
             composed = found;
         }
@@ -393,6 +393,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     // A node's first subscription to a topic starts while its first read returns, and the gap it reports clears what the node holds.
     private static async Task WarmAsync(Peer writer, Peer node)
     {
+        Assert.SkipUnless(node.OnStreams, "Waits for the node's XREADGROUP, and this server's topics broadcast over Pub/Sub, not Streams.");
         var key = Unique();
         await writer.Hashes.SetAsync<string>(key, Fields(("w", "1")), TimeSpan.FromMinutes(10), Ct);
         await node.Hashes.GetAsync<string>(key, Ct);
@@ -408,6 +409,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     // The write that made the hash is announced too: its event drops a copy read before it arrived, so the test starts from a copy read after it.
     private static async Task EventsConsumedAsync(Peer node)
     {
+        Assert.SkipUnless(node.OnStreams, "Waits for the node's XACK, and this server's topics broadcast over Pub/Sub, not Streams.");
         var seen = new List<string>();
         (await UntilAsync(() =>
         {
@@ -448,7 +450,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     private async Task<long> HashLength(string key)
     {
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        await foreach (var found in redis.GetServers()[0].KeysAsync(pattern: $"*{key}"))
+        await foreach (var found in RedisTestKeys.KeysAsync(redis, $"*{key}"))
         {
             return await redis.GetDatabase().HashLengthAsync(found);
         }
@@ -460,7 +462,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     private async Task<byte[]?> RawField(string key, string field)
     {
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        await foreach (var found in redis.GetServers()[0].KeysAsync(pattern: $"*{key}"))
+        await foreach (var found in RedisTestKeys.KeysAsync(redis, $"*{key}"))
         {
             return await redis.GetDatabase().HashGetAsync(found, field);
         }
@@ -471,7 +473,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     private async Task SetRaw(string key, string field, long value)
     {
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        await foreach (var found in redis.GetServers()[0].KeysAsync(pattern: $"*{key}"))
+        await foreach (var found in RedisTestKeys.KeysAsync(redis, $"*{key}"))
         {
             await redis.GetDatabase().HashSetAsync(found, field, value);
         }
@@ -481,8 +483,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     private async Task<long?> Raw(string key, string field)
     {
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var server = redis.GetServers()[0];
-        await foreach (var found in server.KeysAsync(pattern: $"*{key}"))
+        await foreach (var found in RedisTestKeys.KeysAsync(redis, $"*{key}"))
         {
             var value = await redis.GetDatabase().HashGetAsync(found, field);
             return value.IsNull ? null : (long)value;
@@ -529,11 +530,12 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        var onStreams = StreamsReady.Await(provider);
         var factory = provider.GetRequiredService<ICacheFactory>();
-        return new Peer(factory.CreateHashCache(KnownCacheProviderNames.InMemoryRedis), factory.CreateHashCache(KnownCacheProviderNames.Redis), profiler);
+        return new Peer(factory.CreateHashCache(KnownCacheProviderNames.InMemoryRedis), factory.CreateHashCache(KnownCacheProviderNames.Redis), profiler, onStreams);
     }
 
-    private sealed record Peer(IHashCache Hashes, IHashCache Redis, CommandCountingProfiler Profiler);
+    private sealed record Peer(IHashCache Hashes, IHashCache Redis, CommandCountingProfiler Profiler, bool OnStreams);
 
     private sealed class CommandCountingProfiler : IRedisProfiler
     {

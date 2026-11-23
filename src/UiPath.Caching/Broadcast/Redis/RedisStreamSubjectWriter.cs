@@ -22,6 +22,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly RedisStreamContext _context;
     private readonly IRedisConnector _redis;
     private readonly IStreamPort _stream;
+    private readonly Action<Exception>? _onRefused;
+    private readonly Action? _onRead;
     private readonly IConnectionState _connectionState;
     private readonly ChannelWriter<T> _writer;
     private readonly IEventFormatterProxy<T> _formatter;
@@ -76,6 +78,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private bool _dispatchLost;
     // The batch came back empty without a read, so it says nothing about the group.
     private bool _readSkipped;
+    private bool _readReported;
     // A create at the head failed with the group perhaps made; the head read before it, for the group found later.
     private bool _createSent;
     private StreamHead? _sentHead;
@@ -109,8 +112,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         Action onMessagesMissed,
         CancellationToken stopToken,
         IStreamPort? stream = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        Action<Exception>? onRefused = null,
+        Action? onRead = null)
     {
+        _onRefused = onRefused;
+        _onRead = onRead;
         _context = context;
         _connectionState = connectionState;
         _redis = redis;
@@ -335,6 +342,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
 
         _consecutiveFailures = 0;
+        if (!_readReported && !_readSkipped)
+        {
+            _readReported = true;
+            _onRead?.Invoke();
+        }
+
         _autoAckReadInFlight = false;
         _inUse = true;
         if (_autoAckLossReported)
@@ -468,6 +481,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             ReportMessagesMissed();
         }
 
+        if (RedisUtils.IsUnsupportedCommand(ex) || RedisUtils.IsDenied(ex))
+        {
+            _onRefused?.Invoke(ex);
+        }
+
         if (RedisUtils.IsUnsupportedCommand(ex))
         {
             if (!_unsupportedCommand)
@@ -556,6 +574,13 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         else
         {
             _createdOnEmpty = IsEmptyHead(head);
+
+            // The count the group was made with, for a server that takes ENTRIESREAD but reports no count (Dragonfly): without
+            // it a check after a full trim sees the first new entry past the group's position and takes the trim for a loss.
+            if (head?.Start is { } start)
+            {
+                _readCount = start;
+            }
         }
 
         // Published before the instant is taken (the exchange fences it), so a subscriber that missed the group set it.
@@ -651,13 +676,18 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             var created = await _stream.CreateGroupAsync(id, head).ConfigureAwait(false);
             return (created ? Recreate.Made : Recreate.Failed, head, id);
         }
-        catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
+        catch (RedisServerException rex) when (RedisUtils.IsGroupExists(rex))
         {
             LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
             return (Recreate.Found, null, id);
         }
         catch (Exception ex2)
         {
+            if (RedisUtils.IsUnsupportedCommand(ex2) || RedisUtils.IsDenied(ex2))
+            {
+                _onRefused?.Invoke(ex2);
+            }
+
             if (atHead)
             {
                 // A timeout or a dropped connection may follow a create the server ran: the group found next, by a retry or
@@ -948,7 +978,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
                 // Acknowledged first, so a throw below cannot leave the entry pending.
                 ids.Add(@event.Id);
                 LogEventFromCurrentSource(null, _context.Topic, @event.Id);
-                _cachingTelemetryProvider.TrackTopicReadMetric(_topicName, @event.Id);
+                _cachingTelemetryProvider.TrackTopicReadMetric(_topicName, @event.Id, Metrics.TransportStreams);
                 return default;
             }
 
@@ -981,7 +1011,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
                 // Acknowledged first, so a throw below cannot leave the entry pending.
                 ids.Add(@event.Id);
                 LogEventFromCurrentSource(ev.Id, _context.Topic, @event.Id);
-                _cachingTelemetryProvider.TrackTopicReadMetric(_topicName, @event.Id);
+                _cachingTelemetryProvider.TrackTopicReadMetric(_topicName, @event.Id, Metrics.TransportStreams);
                 TraceReceipt(ev);
                 return default;
             }

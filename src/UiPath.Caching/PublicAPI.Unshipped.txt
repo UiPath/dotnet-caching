@@ -47,3 +47,21 @@ UiPath.Caching.Cache<T>.SetIfChangedAsync(UiPath.Caching.CacheKey cacheKey, T? v
 UiPath.Caching.Cache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 UiPath.Caching.Cache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 const UiPath.Caching.Metrics.DepartedGroupDeleted = "Caching.Stats.DepartedGroupDeleted" -> string!
+UiPath.Caching.Broadcast.Redis.StreamsUnsupportedAction
+UiPath.Caching.Broadcast.Redis.StreamsUnsupportedAction.Disable = 1 -> UiPath.Caching.Broadcast.Redis.StreamsUnsupportedAction
+UiPath.Caching.Broadcast.Redis.StreamsUnsupportedAction.Fail = 2 -> UiPath.Caching.Broadcast.Redis.StreamsUnsupportedAction
+UiPath.Caching.Broadcast.Redis.StreamsUnsupportedAction.PubSub = 0 -> UiPath.Caching.Broadcast.Redis.StreamsUnsupportedAction
+UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.StreamsUnsupported.get -> UiPath.Caching.Broadcast.Redis.StreamsUnsupportedAction
+UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.StreamsUnsupported.set -> void
+UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.UseStreamsOnQuirkServers.get -> bool
+UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.UseStreamsOnQuirkServers.set -> void
+const UiPath.Caching.Metrics.Transport = "Transport" -> string!
+const UiPath.Caching.Metrics.TransportChanged = "Caching.Stats.TransportChanged" -> string!
+const UiPath.Caching.Metrics.TransportFrom = "From" -> string!
+const UiPath.Caching.Metrics.TransportOff = "off" -> string!
+const UiPath.Caching.Metrics.TransportPubSub = "pubsub" -> string!
+const UiPath.Caching.Metrics.TransportReason = "Reason" -> string!
+const UiPath.Caching.Metrics.TransportStreams = "streams" -> string!
+const UiPath.Caching.Metrics.TransportTo = "To" -> string!
+UiPath.Caching.InMemoryRedisCacheOptions.RepeatInvalidationAfter.get -> System.TimeSpan?
+UiPath.Caching.InMemoryRedisCacheOptions.RepeatInvalidationAfter.set -> void

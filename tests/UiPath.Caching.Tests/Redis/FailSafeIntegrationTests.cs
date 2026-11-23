@@ -131,6 +131,7 @@ public sealed class FailSafeIntegrationTests(RedisContainerFixture fixture) : ID
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         return provider.GetRequiredService<ICacheFactory>().CreateCache(providerName);
     }
 }

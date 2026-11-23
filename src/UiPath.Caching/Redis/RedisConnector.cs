@@ -8,7 +8,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-public sealed class RedisConnector : IRedisConnector
+public sealed partial class RedisConnector : IRedisConnector
 {
     /// <summary>Consecutive refreshes a node may report no configuration before the scan concludes it never will.</summary>
     internal const int NullTopologyRefreshLimit = 3;
@@ -23,10 +23,13 @@ public sealed class RedisConnector : IRedisConnector
 
     private const long NoTopologyChange = long.MinValue;
 
+    private const string SelectProbeKeyPrefix = "uipath-caching-select-probe:";
+
     private static PropertyInfo? _memberConnection;
 
     private readonly RedisConnectionOptions _redisOptions;
     private readonly ICachingTelemetryProvider _telemetryProvider;
+    private readonly ILogger _logger;
 
     private readonly IRedisConfigurationOptionsProvider _redisConfigurationOptionsProvider;
     private readonly IConnectionMultiplexerFactory _connectionMultiplexerFactory;
@@ -53,6 +56,7 @@ public sealed class RedisConnector : IRedisConnector
 
     private volatile Lazy<Task<IConnectionMultiplexer>> _lazyCacheConnectionMultiplexer;
     private IConnectionMultiplexer? _newestMultiplexer;
+    private int _selectProbeStarted;
 
     // Swapped in tests: the reflective default cannot be driven from outside, because a member's connection is
     // a sealed ConnectionMultiplexer that cannot be substituted.
@@ -100,8 +104,10 @@ public sealed class RedisConnector : IRedisConnector
         IOptions<RedisConnectionOptions> redisOptions,
         IEnumerable<IRedisConnectionConfigurator>? configurators,
         TimeProvider? clock,
-        IClusterTopologyReader? topologyReader)
+        IClusterTopologyReader? topologyReader,
+        ILogger? logger = null)
     {
+        _logger = logger ?? NullLogger.Instance;
         _redisOptions = redisOptions.Value;
         _lifetimeToken = _lifetime.Token;
 
@@ -170,7 +176,7 @@ public sealed class RedisConnector : IRedisConnector
     {
         var lazy = _lazyCacheConnectionMultiplexer;
         return lazy.IsValueCreated && lazy.Value.IsCompletedSuccessfully
-            ? lazy.Value.Result.GetServers().Where(static server => !server.IsReplica && server.IsConnected).ToArray()
+            ? [.. ClusterServers.Nodes(lazy.Value.Result.GetServers()).Where(static server => !server.IsReplica && server.IsConnected)]
             : [];
     }
 
@@ -448,6 +454,12 @@ public sealed class RedisConnector : IRedisConnector
             // Dispose can run before this task is published, and then has nothing to dispose it through.
             TryDisposeMultiplexer(multiplexer);
             throw new ObjectDisposedException(nameof(RedisConnector));
+        }
+
+        if (Interlocked.Exchange(ref _selectProbeStarted, 1) == 0)
+        {
+            SelectProbe = Task.Run(() => ProbeSelectAsync(multiplexer), CancellationToken.None);
+            SelectProbe.Forget();
         }
 
         return multiplexer;

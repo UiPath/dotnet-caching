@@ -27,6 +27,7 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
     public async Task A_peer_applies_a_field_update_carried_by_a_binary_event()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var writer = Hashes(Node("a", Events.WriteBinary));
         var peer = Hashes(Node("b", Events.WriteBinary));
         var key = Unique();
@@ -89,6 +90,7 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
     public async Task With_cloud_events_in_either_order_a_peer_decodes_the_events_that_are_published(bool cloudEventsFirst, Events events, bool pubSub)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipWhen(!pubSub && !fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var writer = Cache(Node("a", events, pubSub: pubSub, cloudEventsFirst: cloudEventsFirst));
         var reader = Cache(Node("b", events, pubSub: pubSub, cloudEventsFirst: cloudEventsFirst));
         var key = Unique();
@@ -153,13 +155,17 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
     private async Task SubscribedAsync(int nodes)
     {
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var database = redis.GetDatabase();
         var until = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < until)
         {
-            var reply = (RedisResult[])(await database.ExecuteAsync("PUBSUB", "NUMSUB", $"{_app}:ps:string"))!;
-            if ((long)reply[1] >= nodes)
+            if (await RedisTestKeys.SubscribersAsync(redis, $"{_app}:ps:string") >= nodes)
             {
+                if (!fixture.CountsSubscribersPerClient)
+                {
+                    // The count runs ahead of the clients on a proxy such as Azure Managed Redis, so it cannot say they are all subscribed yet.
+                    await Task.Delay(TimeSpan.FromSeconds(3), Ct);
+                }
+
                 return;
             }
 
@@ -174,7 +180,7 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var database = redis.GetDatabase();
         var bodies = new List<byte[]>();
-        foreach (var key in redis.GetServer(redis.GetEndPoints()[0]).Keys(pattern: $"*{_app}*"))
+        foreach (var key in RedisTestKeys.Keys(redis, $"*{_app}*"))
         {
             if (await database.KeyTypeAsync(key) != RedisType.Stream)
             {
@@ -238,6 +244,7 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         return provider;
     }
 }

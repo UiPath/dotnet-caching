@@ -165,14 +165,14 @@ public sealed class MessagePackIntegrationTests(RedisContainerFixture fixture) :
     private async Task<byte> FirstByte(string key)
     {
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var found = redis.GetServer(redis.GetEndPoints()[0]).Keys(pattern: $"*{key}*").Single();
+        var found = RedisTestKeys.Keys(redis, $"*{key}*").Single();
         return ((byte[])(await redis.GetDatabase().StringGetAsync(found))!)[0];
     }
 
     private async Task<byte[]?> RawField(string key, string field)
     {
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var found = redis.GetServer(redis.GetEndPoints()[0]).Keys(pattern: $"*{key}*").Single();
+        var found = RedisTestKeys.Keys(redis, $"*{key}*").Single();
         return await redis.GetDatabase().HashGetAsync(found, field);
     }
 
@@ -205,6 +205,7 @@ public sealed class MessagePackIntegrationTests(RedisContainerFixture fixture) :
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         return provider;
     }
 

@@ -30,6 +30,18 @@ public static class Metrics
     public const string SequenceNumber = nameof(SequenceNumber);
     public const string Invalid = nameof(Invalid);
 
+    /// <summary>The tag naming what a topic's events travel over: <see cref="TransportStreams"/>, <see cref="TransportPubSub"/> or <see cref="TransportOff"/>.</summary>
+    public const string Transport = nameof(Transport);
+    public const string TransportStreams = "streams";
+    public const string TransportPubSub = "pubsub";
+    public const string TransportOff = "off";
+
+    /// <summary>Tracked once when a Redis Streams topic moves to another transport; its tags are <see cref="TransportFrom"/>, <see cref="TransportTo"/> and <see cref="TransportReason"/>.</summary>
+    public const string TransportChanged = Prefix + nameof(TransportChanged);
+    public const string TransportFrom = "From";
+    public const string TransportTo = "To";
+    public const string TransportReason = "Reason";
+
     private static readonly ConcurrentDictionary<string, string> _topicWriteMetricNames = new();
     private static readonly ConcurrentDictionary<string, string> _topicReadMetricNames = new();
 

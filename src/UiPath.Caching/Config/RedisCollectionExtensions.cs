@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Hosting;
+using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Config;
 
@@ -106,7 +107,15 @@ public static class RedisCollectionExtensions
         builder
             .AddRedisProfiler(redisConnectionOptions.ProfilerEnabled)
             .AddIRedisPlannedMaintenance(redisConnectionOptions.PlannedMaintenanceEnabled);
-        builder.Services.TryAddSingleton<IRedisConnector, RedisConnector>();
+        builder.Services.TryAddSingleton<IRedisConnector>(sp => new RedisConnector(
+            sp.GetRequiredService<ICachingTelemetryProvider>(),
+            sp.GetRequiredService<IRedisConfigurationOptionsProvider>(),
+            sp.GetRequiredService<IConnectionMultiplexerFactory>(),
+            sp.GetRequiredService<IOptions<RedisConnectionOptions>>(),
+            sp.GetService<IEnumerable<IRedisConnectionConfigurator>>(),
+            sp.GetService<TimeProvider>(),
+            topologyReader: null,
+            logger: sp.GetService<ILoggerFactory>()?.CreateLogger<RedisConnector>()));
         builder.Services.TryAddTransient<IRedisConfigurationOptionsProvider, RedisConfigurationOptionsProvider>();
         var factoryImplementationType = typeof(ConnectionMultiplexerFactory);
         if (!string.IsNullOrWhiteSpace(redisConnectionOptions.ConnectionMultiplexerFactoryType))

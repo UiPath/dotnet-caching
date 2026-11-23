@@ -24,9 +24,9 @@ internal sealed class PeerCluster : IDisposable
     /// <param name="monitorsConnection">The node follows <see cref="PeerInner.IsConnected"/>, and keeps its local tier when the connection returns.</param>
     /// <param name="timeout">The node's cache timeout, which also bounds a peer refresh's wait in the queue and its read; the options' default when null.</param>
     /// <param name="clock">The node's clock, for its local expirations; the system clock when null.</param>
-    public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024, bool monitorsConnection = false, Telemetry.RecordingTelemetryProvider? telemetry = null, TimeSpan? timeout = null, TimeProvider? clock = null)
+    public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024, bool monitorsConnection = false, Telemetry.RecordingTelemetryProvider? telemetry = null, TimeSpan? timeout = null, TimeProvider? clock = null, TimeSpan? repeatInvalidationAfter = null)
     {
-        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry, timeout, clock ?? TimeProvider.System);
+        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry, timeout, clock ?? TimeProvider.System, repeatInvalidationAfter);
         _nodes.Add(node);
         return node;
     }
@@ -270,11 +270,11 @@ internal sealed class PeerCluster : IDisposable
     {
         private readonly Telemetry.RecordingTelemetryProvider? _telemetry;
 
-        public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes, bool monitorsConnection, Telemetry.RecordingTelemetryProvider? telemetry, TimeSpan? timeout, TimeProvider clock)
+        public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes, bool monitorsConnection, Telemetry.RecordingTelemetryProvider? telemetry, TimeSpan? timeout, TimeProvider clock, TimeSpan? repeatInvalidationAfter = null)
         {
             Name = name;
             _telemetry = telemetry;
-            var options = new InMemoryRedisCacheOptions { PeerFieldUpdates = peerFieldUpdates, PeerFieldUpdateMaxFields = maxFields, PeerFieldUpdateMaxBytes = maxBytes, ClearLocalOnReconnect = monitorsConnection ? false : null };
+            var options = new InMemoryRedisCacheOptions { PeerFieldUpdates = peerFieldUpdates, PeerFieldUpdateMaxFields = maxFields, PeerFieldUpdateMaxBytes = maxBytes, ClearLocalOnReconnect = monitorsConnection ? false : null, RepeatInvalidationAfter = repeatInvalidationAfter };
             if (timeout is { } bound)
             {
                 options.Timeout = bound;

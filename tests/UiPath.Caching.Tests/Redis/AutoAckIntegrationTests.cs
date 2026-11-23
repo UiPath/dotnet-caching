@@ -18,6 +18,7 @@ public sealed class AutoAckIntegrationTests(RedisContainerFixture fixture) : IDi
     public async Task A_set_on_one_node_drops_the_peers_local_copy_and_leaves_no_pending_entries()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var a = Node("a");
         var b = Node("b");
         var key = (CacheKey)$"it-{Guid.NewGuid():N}";
@@ -30,7 +31,7 @@ public sealed class AutoAckIntegrationTests(RedisContainerFixture fixture) : IDi
 
         using var admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = admin.GetDatabase();
-        var streams = admin.GetServer(admin.GetEndPoints()[0]).Keys(pattern: $"*{_app}*").ToArray();
+        var streams = RedisTestKeys.Keys(admin, $"*{_app}*").ToArray();
         var groups = new List<StreamGroupInfo>();
         foreach (var stream in streams.Where(k => db.KeyType(k) == RedisType.Stream))
         {
