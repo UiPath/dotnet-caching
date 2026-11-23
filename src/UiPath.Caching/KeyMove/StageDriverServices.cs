@@ -8,7 +8,7 @@ internal sealed record StageDriverServices(
     StateStore Store,
     MoveScripts Scripts,
     MoveKeyNames Names,
-    TransitionSequence Sequence,
+    ITransitionSequence Sequence,
     PreflightChecker Preflight,
     BarrierLedger Ledger,
     IAdvertSource Adverts,

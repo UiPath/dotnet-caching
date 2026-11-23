@@ -79,16 +79,8 @@ internal sealed partial class MoveScripts
     /// <summary>TRANSIT as a write that runs alone or inside the transaction of a barrier; see <see cref="TransitAsync"/> for its codes.</summary>
     public Write TransitWrite(RedisKey state, StateExpectation expected, StateTarget target, LeaseFence? fence = null)
     {
-        if (expected.Ep is { } expectedEp && target.Ep <= expectedEp)
-        {
-            throw new ArgumentException($"A transition raises the epoch: {target.Ep} does not exceed {expectedEp}.", nameof(target));
-        }
-
-        var optional = TransitFields(target);
-        var clear = target.Clear ?? [];
-
-        var args = TransitArguments(expected, target, fence, clear, optional);
-        return new Write(this, TransitScript, KeysOf(state, fence), [.. args], () => PlanTransitAsync(state, expected, target, fence, clear, optional));
+        var (args, optional, clear) = TransitArguments(expected, target, fence);
+        return new Write(this, TransitScript, KeysOf(state, fence), args, () => PlanTransitAsync(state, expected, target, fence, clear, optional));
     }
 
     /// <summary>DURABLE: marks the stored identity committed and copies it into <c>prev</c>; a repeat writes both again, so a following WAIT has an offset to confirm.</summary>
@@ -273,13 +265,16 @@ internal sealed partial class MoveScripts
         return optional;
     }
 
-    private static List<RedisValue> TransitArguments(
-        StateExpectation expected,
-        StateTarget target,
-        LeaseFence? fence,
-        IReadOnlyList<string> clear,
-        List<(string Field, RedisValue Value)> optional)
+    private static (RedisValue[] Args, List<(string Field, RedisValue Value)> Optional, IReadOnlyList<string> Clear) TransitArguments(
+        StateExpectation expected, StateTarget target, LeaseFence? fence)
     {
+        if (expected.Ep is { } expectedEp && target.Ep <= expectedEp)
+        {
+            throw new ArgumentException($"A transition raises the epoch: {target.Ep} does not exceed {expectedEp}.", nameof(target));
+        }
+
+        var optional = TransitFields(target);
+        var clear = target.Clear ?? [];
         var args = new List<RedisValue>
         {
             fence?.Token ?? string.Empty, expected.IsAbsent ? "c" : "u", expected.Ep ?? 0, expected.Id ?? string.Empty, expected.Durable,
@@ -292,7 +287,7 @@ internal sealed partial class MoveScripts
             args.Add(value);
         }
 
-        return args;
+        return ([.. args], optional, clear);
     }
 
     private static bool IsRepeatedTransit(RedisValue[] held, StateTarget target) =>

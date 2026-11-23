@@ -8,6 +8,10 @@ internal static class StateFields
     public const string Id = "id";
     public const string Durable = "dur";
     public const string NPop = "nPop";
+
+    /// <summary>The <c>nPop</c> a control record holds (the state hash calls it <see cref="NPop"/>).</summary>
+    public const string RecordNPop = "np";
+
     public const string Prev = "prev";
     public const string MoveId = "moveId";
     public const string Caches = "caches";
@@ -15,6 +19,8 @@ internal static class StateFields
     public const string AllAck = "allAck";
     public const string Swept = "lswept";
     public const string Claim = "ct";
+    public const string PendToken = "pt";
+    public const string PendUncertain = "ptu";
     public const string Release = "rel";
     public const string Updated = "upd";
     public const string Move = "mv";

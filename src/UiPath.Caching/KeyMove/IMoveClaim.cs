@@ -3,6 +3,12 @@ namespace UiPath.Caching.KeyMove;
 /// <summary>The move claim of a router group behind a seam; every step is idempotent, carries its own replication wait, and takes the leader's lease fence for the claim script to check.</summary>
 internal interface IMoveClaim
 {
+    /// <summary>Returns the unfinished acquisition token when one exists, so a retry can recognize a pend whose reply was lost.</summary>
+    Task<string?> AcquireTokenAsync(string group, LeaseFence? fence, CancellationToken cancellationToken) => Task.FromResult<string?>(MoveScripts.NewNonce());
+
+    /// <summary>Returns a resumable stop when the marker proof fails the claim guard.</summary>
+    Task<TransitionResult?> CommitGuardAsync(string group, string token, ConnectionProof? marker, CancellationToken cancellationToken) => Task.FromResult<TransitionResult?>(null);
+
     /// <summary>CLAIMPEND with an ownership token, before TRANSIT.</summary>
     Task<ClaimOutcome> PendAsync(string group, string token, string descriptor, LeaseFence? fence, CancellationToken cancellationToken);
 

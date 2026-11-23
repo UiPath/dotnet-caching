@@ -1,9 +1,8 @@
 using System.Globalization;
-using StackExchange.Redis;
 
 namespace UiPath.Caching.KeyMove;
 
-internal sealed class StateRecovery(StateStore store, ControlSampler sampler, ControlRecordReader records, IDatabase controlDatabase, TransitionSequence sequence, MoveKeyNames names, TimeProvider time)
+internal sealed class StateRecovery(StateStore store, IStateReader samples, IRecordReader records, ITransitionSequence sequence, TimeProvider time, InstanceClaimReader? claims = null, InstanceClaimRecovery? claimRecovery = null)
 {
     private static readonly string[] AlwaysCleared = [StateFields.AllAck, StateFields.T3At, StateFields.Swept, StateFields.DrainedAt, StateFields.ClosedAt, StateFields.DryRun, StateFields.HoldAuto];
 
@@ -26,20 +25,22 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
             return new RecoveryResult(RecoveryOutcome.PeersDisagree);
         }
 
-        var sample = await sampler.SampleAsync(group, cancellationToken).ConfigureAwait(false);
+        var sample = await samples.SampleAsync(group, cancellationToken).ConfigureAwait(false);
         if (sample is not null && (sample.Conflicting || sample.Ep != identity.Ep || sample.Id != identity.Id || sample.State != identity.State || sample.Direction != identity.Direction))
         {
             return new RecoveryResult(RecoveryOutcome.RecordsDisagree);
         }
 
-        var (caches, failure) = await ReadRecreationCachesAsync(group, identity, sample, registeredCaches).ConfigureAwait(false);
+        var (caches, failure) = await ReadRecreationCachesAsync(group, identity, sample, registeredCaches, cancellationToken).ConfigureAwait(false);
         if (failure is not null)
         {
             return failure;
         }
 
-        var target = RecreatedTarget(identity, sample, caches!, claim);
+        claim ??= await ClaimAsync(group, cancellationToken).ConfigureAwait(false);
+        var target = RecreatedTarget(identity, sample, caches, claim);
         var result = await sequence.RunAsync(group, StateExpectation.Absent, target, sequenceOptions, cancellationToken).ConfigureAwait(false);
+        await RepairMirrorAsync(group, result, cancellationToken).ConfigureAwait(false);
         return new RecoveryResult(RecoveryOutcome.Done, result);
     }
 
@@ -63,9 +64,12 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
             return failure;
         }
 
+        claim ??= await ClaimAsync(group, cancellationToken).ConfigureAwait(false);
         var target = ReassertedTarget(evidence, stored, claim);
         var expected = ExpectationOf(stored);
-        return new RecoveryResult(RecoveryOutcome.Done, await sequence.RunAsync(group, expected, target, sequenceOptions, cancellationToken).ConfigureAwait(false));
+        var result = await sequence.RunAsync(group, expected, target, sequenceOptions, cancellationToken).ConfigureAwait(false);
+        await RepairMirrorAsync(group, result, cancellationToken).ConfigureAwait(false);
+        return new RecoveryResult(RecoveryOutcome.Done, result);
     }
 
     private static RecoveryEvidence? ReadRecoveryEvidence(IReadOnlyDictionary<string, string>[] found)
@@ -168,8 +172,8 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
             Clear: clear);
     }
 
-    private async Task<(string? Caches, RecoveryResult? Failure)> ReadRecreationCachesAsync(
-        string group, PeerIdentity identity, ControlSample? sample, IReadOnlyList<string> registeredCaches)
+    private async Task<(string Caches, RecoveryResult? Failure)> ReadRecreationCachesAsync(
+        string group, PeerIdentity identity, ControlSample? sample, IReadOnlyList<string> registeredCaches, CancellationToken cancellationToken)
     {
         if (identity.State == "S0")
         {
@@ -178,16 +182,15 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
 
         if (sample is null)
         {
-            return (null, new RecoveryResult(RecoveryOutcome.NeedsReassert));
+            return (string.Empty, new RecoveryResult(RecoveryOutcome.NeedsReassert));
         }
 
         // The identity and gates must come from one record read to reject a replacement or empty set.
-        var record = await controlDatabase.HashGetAllAsync(names.Control(group, sample.Slot), CommandFlags.DemandMaster).ConfigureAwait(false);
-        var fields = record.ToDictionary(e => e.Name.ToString(), e => (string?)e.Value);
+        var fields = await records.ReadSampledAsync(group, sample, cancellationToken).ConfigureAwait(false);
         var gates = fields.Keys.Where(k => k.StartsWith("c:", StringComparison.Ordinal)).Select(k => k[2..]).ToArray();
         if (fields.GetValueOrDefault(StateFields.Ep) != identity.Ep.ToString(CultureInfo.InvariantCulture) || fields.GetValueOrDefault(StateFields.Id) != identity.Id || gates.Length == 0)
         {
-            return (null, new RecoveryResult(RecoveryOutcome.NeedsReassert, Detail: "the record that named the managed set is gone, changed or holds no gate"));
+            return (string.Empty, new RecoveryResult(RecoveryOutcome.NeedsReassert, Detail: "the record that named the managed set is gone, changed or holds no gate"));
         }
 
         return (StateRecord.EncodeCaches(gates), null);
@@ -210,6 +213,17 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
             Move: claim?.Move,
             Release: claim?.Release,
             HoldOp: "recreated");
+    }
+
+    private Task<ClaimFields?> ClaimAsync(string group, CancellationToken cancellationToken) =>
+        claims is null ? Task.FromResult<ClaimFields?>(null) : claims.FieldsAsync(group, cancellationToken);
+
+    private async Task RepairMirrorAsync(string group, TransitionResult result, CancellationToken cancellationToken)
+    {
+        if (claimRecovery is not null && result.Outcome == TransitionOutcome.Completed)
+        {
+            await claimRecovery.RefreshAsync(group, await store.ReadAsync(group, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private readonly record struct RecoveryEvidence(string State, string Direction, int NPop, string Encoded, long Highest, long CommittedEp, string CommittedId);

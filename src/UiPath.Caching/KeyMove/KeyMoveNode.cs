@@ -184,7 +184,7 @@ internal sealed class KeyMoveNode
             new GroupDataOps(scanner, _setup.KeySpace, store, stateScripts, controlScripts, names, alert: _ambiguity.Raise),
             new KeyInventory(scanner, _setup.KeySpace, store, database, prefix, _time, _ambiguity.Raise),
             new StuckGateReopener(records, controlScripts, database, names, state, _time),
-            new StateRecovery(store, sampler, records, control, sequence, names, _time),
+            new StateRecovery(store, store, records, sequence, _time),
             new ClearCoordinator(store, stateScripts, controlScripts, records, names, state, _time),
             new GroupRemoval(store, stateScripts, controlScripts, names, _setup.DropClaim));
     }

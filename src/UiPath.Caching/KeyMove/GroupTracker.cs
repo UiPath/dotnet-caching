@@ -21,6 +21,10 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
     private long? _readAt;
     private long? _durZeroSince;
     private string? _durZeroIdentity;
+    private bool _dstReadFailed;
+    private bool _sampled;
+    private long? _sampleDurZeroSince;
+    private string? _sampleDurZeroIdentity;
 
     public GroupRegistration Registration { get; } = registration;
 
@@ -45,6 +49,7 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
             _answer = record is null ? StateAnswer.Absent : StateAnswer.Present;
             _state = record;
             _readAt = now;
+            _dstReadFailed = false;
             _regressed = false;
             _everPresent |= record is not null;
             TrackPendingIdentity(record, now);
@@ -74,7 +79,27 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
         lock (_gate)
         {
             _sample = sample;
+            _sampled = true;
             _recordFound |= sample is not null;
+            if (sample is null || sample.Durable)
+            {
+                _sampleDurZeroIdentity = null;
+                _sampleDurZeroSince = null;
+            }
+            else if (_sampleDurZeroIdentity != $"{sample.Ep}:{sample.Id}")
+            {
+                _sampleDurZeroIdentity = $"{sample.Ep}:{sample.Id}";
+                _sampleDurZeroSince = time.GetTimestamp();
+            }
+        }
+    }
+
+    // After a failed Dst read, a newer Src sample may be a pending transition.
+    public void ReadFailed()
+    {
+        lock (_gate)
+        {
+            _dstReadFailed = true;
         }
     }
 
@@ -97,7 +122,8 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
         lock (_gate)
         {
             var now = time.GetTimestamp();
-            var conflict = _regressed ? IdentityConflict : StateConflict(_state, _sample);
+            var pending = Registration.InstanceMove && _dstReadFailed;
+            var conflict = _regressed ? IdentityConflict : StateConflict(_state, _sample, pending);
             return new GroupView(
                 Registration,
                 _answer,
@@ -109,19 +135,22 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
                 conflict,
                 _readAt is { } read ? time.GetElapsedTime(read, now) : null,
                 _durZeroSince is { } since ? time.GetElapsedTime(since, now) : null,
-                time.GetElapsedTime(_startedAt, now));
+                time.GetElapsedTime(_startedAt, now),
+                _dstReadFailed,
+                _sampled,
+                _sampleDurZeroSince is { } sampleSince ? time.GetElapsedTime(sampleSince, now) : null);
         }
     }
 
     // A newer or conflicting record reveals a rollback. A committed record can also outlive the state commit marker.
-    private static string? StateConflict(StateRecord? state, ControlSample? sample) =>
-        state is null ? null : SampleConflict(state, sample);
+    private static string? StateConflict(StateRecord? state, ControlSample? sample, bool newerIsPending) =>
+        state is null ? null : SampleConflict(state, sample, newerIsPending);
 
-    private static string? SampleConflict(StateRecord state, ControlSample? sample) => sample switch
+    private static string? SampleConflict(StateRecord state, ControlSample? sample, bool newerIsPending = false) => sample switch
     {
         null => null,
         { Conflicting: true } => IdentityConflict,
-        _ when sample.Ep > state.Ep => IdentityConflict,
+        _ when sample.Ep > state.Ep && !newerIsPending => IdentityConflict,
         _ when sample.Ep == state.Ep && sample.Id != state.Id => IdentityConflict,
         _ when sample.Ep == state.Ep && sample.Durable && !state.Durable => "commit_mismatch",
         _ => null,

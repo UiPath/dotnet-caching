@@ -84,13 +84,12 @@ internal sealed partial class StageDriver
         var token = state.Claim;
         if (spec.TakeClaim)
         {
-            token = MoveScripts.NewNonce();
-            var pended = await services.Claim.PendAsync(group, token, services.Facts.ClaimDescriptor(group), Fence(group), cancellationToken).ConfigureAwait(false);
-            if (pended != ClaimOutcome.Done)
+            if (await AcquireClaimAsync(group, cancellationToken).ConfigureAwait(false) is not { } acquired)
             {
-                Notify(group, pended == ClaimOutcome.Refused ? "start_blocked" : "claim_failed", "claim_held");
                 return null;
             }
+
+            token = acquired;
         }
 
         var ep = state.Ep + 1;
@@ -114,6 +113,25 @@ internal sealed partial class StageDriver
         return result;
     }
 
+    private async Task<string?> AcquireClaimAsync(string group, CancellationToken cancellationToken)
+    {
+        // Persist the token before PEND so a retry recognizes a write whose reply was lost.
+        if (await services.Claim.AcquireTokenAsync(group, Fence(group), cancellationToken).ConfigureAwait(false) is not { } token)
+        {
+            Notify(group, "claim_failed", "claim_token");
+            return null;
+        }
+
+        var pended = Settle(group, await services.Claim.PendAsync(group, token, services.Facts.ClaimDescriptor(group), Fence(group), cancellationToken).ConfigureAwait(false));
+        if (pended == ClaimOutcome.Done)
+        {
+            return token;
+        }
+
+        Notify(group, pended == ClaimOutcome.Refused ? "start_blocked" : "claim_failed", "claim_held");
+        return null;
+    }
+
     private StateTarget CreateTransitTarget(string group, StateRecord state, TransitionSpec spec, string token, long ep) =>
         new(
             spec.State,
@@ -125,7 +143,8 @@ internal sealed partial class StageDriver
             time.GetUtcNow().ToUnixTimeMilliseconds(),
             MoveId: spec.NewMoveId ? ep : null,
             Claim: spec.TakeClaim ? token : null,
-            Move: spec.TakeClaim ? services.Facts.ClaimDescriptor(group) : null);
+            Move: spec.TakeClaim ? services.Facts.ClaimDescriptor(group) : null,
+            Clear: spec.TakeClaim ? [StateFields.PendToken, StateFields.PendUncertain] : null);
 
     private SequenceOptions SequenceFor(string group, TransitionSpec spec, string token, long ep)
     {
@@ -136,6 +155,7 @@ internal sealed partial class StageDriver
             beforeCommit = async ct => await services.Claim.OpenAsync(group, token, restore: false, Fence(group), ct).ConfigureAwait(false) switch
             {
                 ClaimOutcome.Done => null,
+                ClaimOutcome.DoneUnconfirmed => new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "the move claim open is not on a replica"),
                 ClaimOutcome.Refused => new TransitionResult(TransitionOutcome.StateChanged, Detail: ClaimRefused),
                 _ => new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "the move claim could not be opened"),
             };
@@ -156,11 +176,12 @@ internal sealed partial class StageDriver
             HoldsLease: () => services.HoldsLease(group),
             Fence: Fence(group),
             BeforeCommit: beforeCommit,
-            BeforeDurable: release.Length == 0 ? null : ct => CertifyAsync(group, token, ep, ct));
+            BeforeDurable: release.Length == 0 ? null : ct => CertifyAsync(group, token, ep, ct),
+            AfterMarker: spec.TakeClaim ? (marker, ct) => services.Claim.CommitGuardAsync(group, token, marker, ct) : null);
     }
 
     private async Task<TransitionResult?> CertifyAsync(string group, string token, long ep, CancellationToken cancellationToken) =>
-        await services.Claim.CertifyAsync(group, token, ep, "S0", Fence(group), cancellationToken).ConfigureAwait(false) switch
+        Settle(group, await services.Claim.CertifyAsync(group, token, ep, "S0", Fence(group), cancellationToken).ConfigureAwait(false)) switch
         {
             ClaimOutcome.Failed => new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "the move claim certificate could not be written"),
             _ => null,
@@ -245,7 +266,7 @@ internal sealed partial class StageDriver
             await services.Scripts.FieldsAsync(services.Names.State(group), id, fields, spec.PostDelete ?? [], Fence(group)).ConfigureAwait(false);
         }
 
-        if (spec.ReleaseClaim && token.Length > 0 && await services.Claim.ReleaseIdleAsync(group, token, Fence(group), cancellationToken).ConfigureAwait(false) == ClaimOutcome.Failed)
+        if (spec.ReleaseClaim && token.Length > 0 && Settle(group, await services.Claim.ReleaseIdleAsync(group, token, Fence(group), cancellationToken).ConfigureAwait(false)) == ClaimOutcome.Failed)
         {
             Notify(group, "claim_release_failed", $"{token}:{ep}");
         }
@@ -270,7 +291,7 @@ internal sealed partial class StageDriver
 
         if (result.Outcome == TransitionOutcome.Completed && abandoning && status != ClaimStatus.Absent)
         {
-            await services.Claim.ReleaseIdleAsync(group, token, Fence(group), cancellationToken).ConfigureAwait(false);
+            Settle(group, await services.Claim.ReleaseIdleAsync(group, token, Fence(group), cancellationToken).ConfigureAwait(false));
             if (status == ClaimStatus.Pending && await services.Store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is { } abandoned)
             {
                 await services.Scripts.FieldsAsync(services.Names.State(group), abandoned.Id, [], [StateFields.Claim], Fence(group)).ConfigureAwait(false);
@@ -296,7 +317,7 @@ internal sealed partial class StageDriver
 
         if (result.Outcome == TransitionOutcome.Completed && into0)
         {
-            await services.Claim.ReleaseIdleAsync(group, state.Claim, Fence(group), cancellationToken).ConfigureAwait(false);
+            Settle(group, await services.Claim.ReleaseIdleAsync(group, state.Claim, Fence(group), cancellationToken).ConfigureAwait(false));
         }
 
         if (result.Outcome == TransitionOutcome.Completed && kind == "X1")

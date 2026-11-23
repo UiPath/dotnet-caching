@@ -41,11 +41,18 @@ public class MoveScriptsHarmlessWriteTests(RedisContainerFixture fixture)
     {
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, allowAdmin: true);
         var server = env.Mux.GetServer(env.Mux.GetEndPoints()[0]);
-        var before = await HsetCallsAsync(server);
 
-        (await env.Scripts.ControlSyncAsync(env.Ctl, MoveTestEnvironment.Record(0, "id0", (MoveTestEnvironment.Cid, "n")))).Should().Be(0);
+        // The HSET count is server wide, and another test process may write a hash meanwhile. A write by the
+        // script raises the count on every attempt, so one attempt with no change proves it wrote nothing.
+        var unchanged = false;
+        for (var attempt = 0; attempt < 3 && !unchanged; attempt++)
+        {
+            var before = await HsetCallsAsync(server);
+            (await env.Scripts.ControlSyncAsync(env.Ctl, MoveTestEnvironment.Record(0, "id0", (MoveTestEnvironment.Cid, "n")))).Should().Be(0);
+            unchanged = await HsetCallsAsync(server) == before;
+        }
 
-        (await HsetCallsAsync(server)).Should().Be(before);
+        unchanged.Should().BeTrue("an older record is refused before any write");
     }
 
     private static async Task<long> HsetCallsAsync(IServer server)

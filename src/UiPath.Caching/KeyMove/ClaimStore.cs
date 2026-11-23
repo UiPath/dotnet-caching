@@ -58,6 +58,13 @@ internal sealed class ClaimStore
     public Task<long> PendAsync(string field, string token, string descriptor, string expectedPointer) =>
         RunAsync(ClaimScripts.Pend, [field, token, descriptor, expectedPointer], record => ClaimLogic.Pend(record, field, token, descriptor, expectedPointer));
 
+    // A repeated mirror pend rewrites the field so WAIT has an offset to confirm.
+    public Task<ClaimResult> PendConfirmedAsync(string field, string token, string descriptor)
+    {
+        RedisValue[] args = [field, token, descriptor, string.Empty];
+        return DurableAsync(() => RunAsync(ClaimScripts.Pend, args, record => ClaimLogic.Pend(record, field, token, descriptor, string.Empty), bound: true));
+    }
+
     public async Task<ClaimResult> OpenAsync(string field, string token, string descriptor, bool restore)
     {
         RedisValue[] args = [field, token, descriptor, restore ? "1" : "0"];
@@ -109,12 +116,6 @@ internal sealed class ClaimStore
         }
     }
 
-    private static string? FieldOf(string? info, string name)
-    {
-        var line = info?.Split('\n').FirstOrDefault(l => l.StartsWith(name, StringComparison.Ordinal));
-        return line?[name.Length..].Trim();
-    }
-
     // Recheck the physical connection and the master role after the wait.
     private static async Task<bool> StillBoundAsync(IServer server, ConnectionProof sent)
     {
@@ -125,7 +126,7 @@ internal sealed class ClaimStore
     private static async Task<ConnectionProof?> ProofOf(Task<RedisResult> clientId, Task<RedisResult> info)
     {
         var text = (string?)await info.ConfigureAwait(false);
-        return FieldOf(text, "run_id:") is { } runId && FieldOf(text, "master_replid:") is { } replicationId
+        return ConnectionProof.InfoField(text, "run_id:") is { } runId && ConnectionProof.InfoField(text, "master_replid:") is { } replicationId
             ? new ConnectionProof((long)await clientId.ConfigureAwait(false), runId, replicationId)
             : null;
     }

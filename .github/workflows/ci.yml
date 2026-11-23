@@ -132,6 +132,22 @@ jobs:
           /d:sonar.cs.vstest.reportsPaths="**/*.trx"
           /d:sonar.cpd.exclusions="src/UiPath.Caching.Abstractions/ICache.cs,src/UiPath.Caching.Abstractions/ICacheOfT.cs,src/UiPath.Caching.Abstractions/IHashCache.cs,src/UiPath.Caching.Abstractions/IHashCacheOfT.cs"
 
+      # The key move tests need more servers than the service: a replica of it, two independent servers for an
+      # instance move, and a master with its own replica. The replicas allow DEBUG, since the tests stall them.
+      - name: Start the extra Redis servers
+        run: |
+          docker run -d --name redis-replica --network host redis:7 redis-server --port 6380 --replicaof 127.0.0.1 6379 --enable-debug-command yes --appendonly no
+          docker run -d --name redis-src --network host redis:7 redis-server --port 6381 --appendonly no
+          docker run -d --name redis-dst --network host redis:7 redis-server --port 6382 --appendonly no
+          docker run -d --name redis-sides --network host redis:7 redis-server --port 6383 --appendonly no
+          docker run -d --name redis-sides-replica --network host redis:7 redis-server --port 6384 --replicaof 127.0.0.1 6383 --enable-debug-command yes --appendonly no
+          for port in 6380 6381 6382 6383 6384; do
+            until docker exec redis-src redis-cli -p "$port" ping | grep -q PONG; do sleep 1; done
+          done
+          for port in 6380 6384; do
+            until docker exec redis-src redis-cli -p "$port" info replication | grep -q 'master_link_status:up'; do sleep 1; done
+          done
+
       - name: Restore
         run: dotnet restore UiPath.Caching.slnx
 
@@ -139,10 +155,16 @@ jobs:
         run: dotnet build UiPath.Caching.slnx -c Release --no-restore
 
       - name: Test
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           RUN_REDIS_INTEGRATION_TESTS: '1'
           REDIS_CONNECTION_STRING: 'localhost:6379'
+          REDIS_REPLICA_CONNECTION_STRING: 'localhost:6380'
+          CLAIM_REPLICA_CONNECTION_STRING: 'localhost:6380'
+          TWO_SERVER_SRC: 'localhost:6381'
+          TWO_SERVER_DST: 'localhost:6382'
+          MOVE_SIDES_MASTER: 'localhost:6383'
+          MOVE_SIDES_REPLICA: 'localhost:6384'
         run: dotnet test --solution UiPath.Caching.slnx -c Release --no-build -- --results-directory TestResults --report-xunit-trx --coverage --coverage-output-format xml
 
       - name: SonarQube Cloud end

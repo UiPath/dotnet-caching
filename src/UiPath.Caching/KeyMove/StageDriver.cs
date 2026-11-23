@@ -129,6 +129,18 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
 
     private LeaseFence? Fence(string group) => services.Fence?.Invoke(group);
 
+    // Before commit an unconfirmed claim stops the sequence. Other claim steps report the skipped wait.
+    private ClaimOutcome Settle(string group, ClaimOutcome outcome)
+    {
+        if (outcome != ClaimOutcome.DoneUnconfirmed)
+        {
+            return outcome;
+        }
+
+        Notify(group, "wait_skipped", "claim");
+        return ClaimOutcome.Done;
+    }
+
     // The alerts the steps raise directly repeat on every step while their cause stands, so each is sent once a minute.
     private void Notify(string group, string code, string detail)
     {
