@@ -6,6 +6,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
     private readonly RouterCore _core;
     private readonly Dictionary<string, (Type Type, object Cache)> _caches = new(StringComparer.Ordinal);
+    private readonly IReadOnlyDictionary<string, string> _excluded;
 #if NET9_0_OR_GREATER
     private readonly Lock _stopGate = new();
 #else
@@ -14,14 +15,15 @@ internal sealed class Router : IRouter, IAsyncDisposable
     private TaskCompletionSource? _stop;
     private TaskCompletionSource? _cleaned;
 
-    public Router(RouterCore core, IEnumerable<Func<RouterCore, (string Name, Type Type, object Cache)>> registrations)
-        : this(core, registrations.Select(create => create(core)))
+    public Router(RouterCore core, IEnumerable<Func<RouterCore, (string Name, Type Type, object Cache)>> registrations, IReadOnlyDictionary<string, string>? excluded = null)
+        : this(core, registrations.Select(create => create(core)), excluded)
     {
     }
 
-    public Router(RouterCore core, IEnumerable<(string Name, Type Type, object Cache)> caches)
+    public Router(RouterCore core, IEnumerable<(string Name, Type Type, object Cache)> caches, IReadOnlyDictionary<string, string>? excluded = null)
     {
         _core = core;
+        _excluded = excluded ?? new Dictionary<string, string>();
         foreach (var (name, type, cache) in caches)
         {
             _caches.Add(name, (type, cache));
@@ -37,6 +39,12 @@ internal sealed class Router : IRouter, IAsyncDisposable
     public RouterMode Mode => _core.Mode;
 
     public RouterModeReason ModeReason => _core.ModeReason;
+
+    internal RouterAdvertiser? Advertiser { get; init; }
+
+    internal ISerializerProxy<byte[]>? Envelope { get; init; }
+
+    internal TimeProvider Clock => _core.Clock;
 
     public Task EnterBypassAsync(CancellationToken cancellationToken = default)
     {
@@ -55,6 +63,11 @@ internal sealed class Router : IRouter, IAsyncDisposable
         where T : class
     {
         _core.ThrowIfStopped();
+        if (_excluded.TryGetValue(cacheName, out var reason))
+        {
+            throw new InvalidOperationException($"Cache '{cacheName}' is excluded from the router and stays on the application's own client: {reason}");
+        }
+
         if (!_caches.TryGetValue(cacheName, out var entry))
         {
             throw new KeyNotFoundException($"No cache named '{cacheName}' is registered with the router.");
@@ -96,7 +109,45 @@ internal sealed class Router : IRouter, IAsyncDisposable
         await _cleaned!.Task.ConfigureAwait(false);
     }
 
-    internal void Start() => _core.Start();
+    internal RoutedCache<T>? Find<T>(string cacheName)
+        where T : class =>
+        _caches.TryGetValue(cacheName, out var entry) ? entry.Cache as RoutedCache<T> : null;
+
+    internal void Start()
+    {
+        // The switch state is read before the first call is admitted.
+        _core.Pins?.Initialize(_core.StartBound);
+        _core.Start();
+        AttachBridge();
+        if (Advertiser is { } advertiser)
+        {
+            _core.ModeChanged += (_, _) => advertiser.Nudge();
+            if (_core.Pins is { } changing)
+            {
+                changing.Changed += advertiser.Nudge;
+            }
+
+            advertiser.Start();
+        }
+
+        if (_core.Pins is { } pins)
+        {
+            _core.ModeChanged += (_, _) => pins.RequestRefresh();
+            pins.Start();
+        }
+    }
+
+    /// <summary>Delivers the older client's messages to this router's caches; needs no started library.</summary>
+    internal void AttachBridge() =>
+        _core.Bridge?.Attach(
+            name => _caches.TryGetValue(name, out var entry) ? entry.Cache as IRouterParticipant : null,
+            () =>
+            {
+                foreach (var (_, cache) in _caches.Values)
+                {
+                    (cache as IRouterParticipant)?.ResetLocal();
+                }
+            });
 
     private static Task PendingSettled(IRouterParticipant[] stoppables) => Task.WhenAll(stoppables.Select(stoppable => stoppable.WhenPendingSettledAsync()));
 
@@ -112,6 +163,14 @@ internal sealed class Router : IRouter, IAsyncDisposable
         {
             foreground.TrySetException(ex);
             cleaned.TrySetException(ex);
+        }
+        finally
+        {
+            // A stop that failed part way still takes the advertisement down; StopAsync never throws and runs once.
+            if (Advertiser is { Stopped: false } advertiser)
+            {
+                await advertiser.StopAsync(PhaseLimit).ConfigureAwait(false);
+            }
         }
     }
 
@@ -149,6 +208,18 @@ internal sealed class Router : IRouter, IAsyncDisposable
         }
 
         await background.ConfigureAwait(false);
+        _core.Bridge?.Detach();
+        if (Advertiser is { } advertiser)
+        {
+            // Departs only after every call has ended, so a reader never sees this node gone while it still serves.
+            var departed = advertiser.StopAsync(PhaseLimit);
+            if (!await WithinAsync(departed).ConfigureAwait(false))
+            {
+                foreground.TrySetResult();
+            }
+
+            await departed.ConfigureAwait(false);
+        }
 
         // A transition that an outside caller started holds the lock until it ends; the semaphore is disposed only after every one has.
         await BoundedStop.CompletesAsync(_core.TransitionsEnded, _core.CleanupBound).ConfigureAwait(false);

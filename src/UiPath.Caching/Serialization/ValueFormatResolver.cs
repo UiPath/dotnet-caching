@@ -26,6 +26,9 @@ internal sealed class ValueFormatResolver
     /// <summary>Null while no serializer is registered, unless the default JSON proxy was asked to classify headers anyway.</summary>
     public ValueReader? Reader { get; }
 
+    // A custom proxy is held back only when an outside gate asked for it: what the proxy writes then stands in for the held format.
+    private bool HoldsBack => _effective is not null && (_effective.Gated || Reader is { JsonProxyIsDefault: true });
+
     /// <summary>A write the node node list does not yet allow is JSON. A call without a policy takes the default policy's, and a policy that sets no write serializer falls back to the default's. A write that names a serializer nobody registered throws. A write that does not also read takes no read list, so a bad one fails the read, not the write.</summary>
     public ValueFormat For(CachePolicy? policy, bool forWrite, bool alsoReads = false)
     {
@@ -39,7 +42,7 @@ internal sealed class ValueFormatResolver
 
         // The policy still names the format, so a read still looks for headers; only the write is held to what every node reads.
         // A custom proxy has no JSON to fall back to: what it writes can read back as a header, so such a policy always writes its own format.
-        if (writer is not null && _effective is { } gate && Reader is { JsonProxyIsDefault: true } && !gate.Allows(writer))
+        if (writer is not null && _effective is { } gate && HoldsBack && !gate.Allows(writer))
         {
             writer = null;
         }
@@ -99,7 +102,7 @@ internal sealed class ValueFormatResolver
 
     private ReadableFormats Resolve(IReadOnlyList<string> read, CachePolicy effective, ICacheValueSerializer? migrateTo) =>
         // The configured format is readable even while the node list holds it back, and then the write is JSON.
-        ReadableFormats.Resolve(_registry, read, ConfiguredWriter(effective), jsonFallback: _effective is not null && Reader is { JsonProxyIsDefault: true }, migrateTo);
+        ReadableFormats.Resolve(_registry, read, ConfiguredWriter(effective), jsonFallback: HoldsBack, migrateTo);
 
     private ICacheValueSerializer? ConfiguredWriter(CachePolicy effective) =>
         effective.WriteSerializer

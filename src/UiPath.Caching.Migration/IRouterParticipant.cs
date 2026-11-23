@@ -21,6 +21,9 @@ internal interface IRouterParticipant
     /// <summary>Drops this node's local copies and joins to loads that began before.</summary>
     void ResetLocal();
 
+    /// <summary>Drops this node's copy of one key, and a load of it that began before.</summary>
+    void EvictLocal(string key);
+
     /// <summary>The final eviction and announcement of every pending key, and one pass over the invalidations that could not be published.</summary>
     Task FlushAsync();
 

@@ -19,6 +19,9 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
 
     public LocalTier Tier { get; } = new(clock);
 
+    /// <summary>The older client's channel, when the application has one; set before the router starts.</summary>
+    public BridgeHost? Bridge { get; set; }
+
     public bool IsIdle => _background.IsEmpty;
 
     public int BackgroundCount => _background.Count;

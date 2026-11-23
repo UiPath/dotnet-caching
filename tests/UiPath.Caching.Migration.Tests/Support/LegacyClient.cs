@@ -103,6 +103,14 @@ internal sealed class LegacySource(IConnectionMultiplexer redis, string cacheNam
         return WriteOutcome.Committed;
     }
 
+    public async ValueTask<AddResult> TryAddAsync(string key, List<long> value, CacheExpiry expiry, CancellationToken cancellationToken)
+    {
+        TimeSpan? ttl = expiry.Deadline is { } deadline ? deadline - DateTimeOffset.UtcNow : null;
+        return await redis.GetDatabase().StringSetAsync(RedisKey(key), LegacyEnvelope.Write(value), ttl, When.NotExists).ConfigureAwait(false)
+            ? AddOutcome.Added
+            : AddOutcome.Exists;
+    }
+
     public async ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken)
     {
         await redis.GetDatabase().KeyDeleteAsync(RedisKey(key)).ConfigureAwait(false);

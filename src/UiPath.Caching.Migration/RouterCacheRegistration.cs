@@ -18,6 +18,16 @@ public sealed class RouterCacheRegistration<T>
     /// <summary>The lifetime of a write that names none; null means no expiry.</summary>
     public TimeSpan? DefaultExpiry { get; init; }
 
+    /// <summary>
+    /// For a cache whose older client puts a type version in its keys: the version of this process. The key map writes it into the key as the older
+    /// client does; the router's events and topic take the name <c>{Name}@{version}</c>, so a peer on another version does not hear them. The group,
+    /// the predicate and the telemetry keep <see cref="Name"/>. Read once, when the router is built.
+    /// </summary>
+    public Func<string>? Version { get; init; }
+
+    /// <summary>A null the source stores is a hit, as the older client reads it, on both paths and in the local tier; the source reports it as <c>new SourceRead&lt;T&gt;(ReadOutcome.Found, null)</c>. A null from a factory is still not stored.</summary>
+    public bool CacheNulls { get; init; }
+
     /// <summary>How long after a write of unknown outcome the key stays off the local tier before its second eviction.</summary>
     public TimeSpan PendingWindow { get; init; } = TimeSpan.FromSeconds(30);
 }
