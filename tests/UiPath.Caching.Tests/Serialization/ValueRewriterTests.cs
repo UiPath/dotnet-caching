@@ -176,6 +176,26 @@ public class ValueRewriterTests
     }
 
     [Fact]
+    public void A_header_free_proxy_value_is_rewritten_when_the_proxy_writes_it_back_byte_for_byte()
+    {
+        var proxy = new HeaderFreeProxy();
+        var sut = new ValueRewriter(proxy, new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]));
+
+        sut.TryReencode<string>(proxy.Serialize("x")!, _fast, out var payload).Should().BeTrue();
+        payload.Memory.Span[0].Should().Be(0x10);
+        payload.Dispose();
+    }
+
+    [Fact]
+    public void A_header_free_proxy_value_the_proxy_writes_back_differently_is_lossy()
+    {
+        var proxy = new HeaderFreeProxy { Unstable = true };
+        var sut = new ValueRewriter(proxy, new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]));
+
+        sut.TryReencode<string>(proxy.Serialize("x")!, _fast, out _).Should().BeFalse("bytes the proxy does not write again cannot be shown to carry the same value");
+    }
+
+    [Fact]
     public void A_headered_value_is_rewritten_whatever_the_json_proxy_is()
     {
         var sut = new ValueRewriter(new SubclassedProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast), RegistryEntry.Of("other", _other)]));
@@ -248,10 +268,11 @@ public class ValueRewriterTests
     }
 
     [Fact]
-    public void Only_the_default_json_proxy_can_have_its_json_compared()
+    public void Only_the_default_json_proxy_or_a_marked_one_can_have_its_headerless_values_compared()
     {
-        new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)])).ComparesJson.Should().BeTrue();
-        new ValueRewriter(new SubclassedProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)])).ComparesJson.Should().BeFalse();
+        new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)])).ComparesHeaderless.Should().BeTrue();
+        new ValueRewriter(new SubclassedProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)])).ComparesHeaderless.Should().BeFalse();
+        new ValueRewriter(new HeaderFreeProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)])).ComparesHeaderless.Should().BeTrue("a marked proxy compares byte for byte");
     }
 
     private static byte[] Utf8(string text) => Encoding.UTF8.GetBytes(text);

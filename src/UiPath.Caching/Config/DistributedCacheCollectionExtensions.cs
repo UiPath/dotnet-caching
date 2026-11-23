@@ -312,6 +312,12 @@ public static class DistributedCacheCollectionExtensions
         string differentiator,
         IEnumerable<IReservedRedisKeyspace> reserved)
     {
+        if (source.KeyFormat is not null)
+        {
+            throw new InvalidOperationException(
+                $"The distributed cache composes its keys through a key strategy factory, so it does not support {nameof(RedisCacheOptions)}.{nameof(RedisCacheOptions.KeyFormat)}. Leave it unset on the Redis tier the distributed cache uses.");
+        }
+
         var applicationFactory = source.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory();
         var distributedFactory = options.RedisKeyStrategyFactory ?? applicationFactory;
         EnsureDifferentiatedKeyspace(

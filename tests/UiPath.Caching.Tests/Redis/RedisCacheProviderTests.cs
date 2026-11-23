@@ -81,6 +81,7 @@ public class RedisCacheProviderTests : IAsyncLifetime
     public ValueTask InitializeAsync()
     {
         _options = _fixture.Create<RedisCacheOptions>();
+        _options.KeyFormat = null;
         _fixture.Inject(Options.Create(_options));
         return ValueTask.CompletedTask;
     }

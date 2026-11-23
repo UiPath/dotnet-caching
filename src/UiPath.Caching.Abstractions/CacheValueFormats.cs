@@ -8,6 +8,6 @@ public static class CacheValueFormats
     public const int LastExtended = 0x1FF;
     public const string JsonName = "json";
 
-    /// <summary>What a census counts a value under when its format id is no registered one.</summary>
+    /// <summary>What an inventory counts a value under when its format id is no registered one.</summary>
     public const string UnknownName = "unknown";
 }

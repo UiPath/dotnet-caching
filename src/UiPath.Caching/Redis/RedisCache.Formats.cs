@@ -5,40 +5,8 @@ namespace UiPath.Caching.Redis;
 
 internal sealed partial class RedisCache
 {
-    private ValueFormat FormatFor(CachePolicy? policy, bool forWrite, bool alsoReads = false) => _formats.For(policy, forWrite, alsoReads);
-
-    private void TrackJsonWrite<TFormat>(TFormat format)
-        where TFormat : struct, IValueFormat
-    {
-        if (format.Readable is not null)
-        {
-            TrackSerializer(Metrics.SerializerWrite, CacheValueFormats.JsonName, Name);
-        }
-    }
-
-    // The job reads its own value from the bytes it was given, so nothing the caller holds is queued; the queue refuses what it saw lately, what the rate, the queue and the byte budget do not allow, and the copy is made only once the offer is taken.
-    private void OfferRewrite<T>(RedisKey key, byte[] stored, ICacheValueSerializer target, ValueMigration migration) =>
-        migration.Migrator.TryEnqueue(
-            this,
-            key,
-            Name,
-            stored.Length,
-            (Self: this, Key: key, Stored: stored, Target: target, Migration: migration),
-            static s =>
-            {
-                // The read's buffer may be one a connector decorator or a pooling client reuses; what the job compares and writes over must not change under it.
-                var original = (byte[])s.Stored.Clone();
-                var (self, key, target, migration) = (s.Self, s.Key, s.Target, s.Migration);
-                return token => self.RewriteStoredAsync<T>(key, original, target, migration, token);
-            });
-
-    private void RewriteScriptsRefused(Exception ex)
-    {
-        RewriteScriptRefused();
-        LogRewriteScriptRefused(ex);
-    }
-
-    private async ValueTask<RewriteTally> RewriteStoredAsync<T>(RedisKey key, byte[] original, ICacheValueSerializer target, ValueMigration migration, CancellationToken token)
+    /// <summary>Rewrites one stored value into <paramref name="target"/> if the node list still allows it and the value comes out the same, by compare-and-set; the one path a read's offer and a sweep share.</summary>
+    internal async ValueTask<RewriteTally> RewriteStoredAsync<T>(RedisKey key, byte[] original, ICacheValueSerializer target, ValueMigration migration, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         // The queue may have held this a while: what the node list allows is asked again, here and right before the write.
@@ -74,6 +42,39 @@ internal sealed partial class RedisCache
                 null => throw new InvalidOperationException("The write pipeline gave up on the rewrite."),
             };
         }
+    }
+
+    private ValueFormat FormatFor(CachePolicy? policy, bool forWrite, bool alsoReads = false) => _formats.For(policy, forWrite, alsoReads);
+
+    private void TrackJsonWrite<TFormat>(TFormat format)
+        where TFormat : struct, IValueFormat
+    {
+        if (format.Readable is not null)
+        {
+            TrackSerializer(Metrics.SerializerWrite, CacheValueFormats.JsonName, Name);
+        }
+    }
+
+    // The job reads its own value from the bytes it was given, so nothing the caller holds is queued; the queue refuses what it saw lately, what the rate, the queue and the byte budget do not allow, and the copy is made only once the offer is taken.
+    private void OfferRewrite<T>(RedisKey key, byte[] stored, ICacheValueSerializer target, ValueMigration migration) =>
+        migration.Migrator.TryEnqueue(
+            this,
+            key,
+            Name,
+            stored.Length,
+            (Self: this, Key: key, Stored: stored, Target: target, Migration: migration),
+            static s =>
+            {
+                // The read's buffer may be one a connector decorator or a pooling client reuses; what the job compares and writes over must not change under it.
+                var original = (byte[])s.Stored.Clone();
+                var (self, key, target, migration) = (s.Self, s.Key, s.Target, s.Migration);
+                return token => self.RewriteStoredAsync<T>(key, original, target, migration, token);
+            });
+
+    private void RewriteScriptsRefused(Exception ex)
+    {
+        RewriteScriptRefused();
+        LogRewriteScriptRefused(ex);
     }
 
     /// <summary>A read found a format no registered serializer owns: counted, and the key dropped when <see cref="RedisCacheOptions.RemoveUnreadable"/> is on and it still holds the bytes that were read, so the caller regenerates it. Best effort, like any remove.</summary>

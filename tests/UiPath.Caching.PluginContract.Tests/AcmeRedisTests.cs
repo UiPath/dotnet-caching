@@ -119,18 +119,18 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
     }
 
     [Fact]
-    public async Task The_census_counts_the_plugin_by_name_and_as_unknown_once_it_is_not_registered()
+    public async Task The_inventory_counts_the_plugin_by_name_and_as_unknown_once_it_is_not_registered()
     {
         Assert.SkipUnless(Fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var node = Node(new("a"));
         var cache = Cache(node);
-        var run = $"census-{Guid.NewGuid():N}";
+        var run = $"inventory-{Guid.NewGuid():N}";
         await cache.SetAsync($"{run}-1", new Profile("a", 1), PolicyOf(node, Policy), Ct);
         await cache.SetAsync($"{run}-2", new Profile("b", 2), PolicyOf(node, Policy), Ct);
         await cache.SetAsync($"{run}-3", new Profile("c", 3), policy: null, Ct);
 
-        var registered = await Census(node).CountFormatsAsync($"*{run}*", Ct);
-        var without = await Census(Node(new("b") { Acme = false })).CountFormatsAsync($"*{run}*", Ct);
+        var registered = await Inventory(node).CountFormatsAsync($"*{run}*", Ct);
+        var without = await Inventory(Node(new("b") { Acme = false })).CountFormatsAsync($"*{run}*", Ct);
 
         registered.Should().BeEquivalentTo(new Dictionary<string, long> { ["json"] = 1, [AcmeFormats.Name] = 2 });
         without.Should().BeEquivalentTo(new Dictionary<string, long> { ["json"] = 1, [CacheValueFormats.UnknownName] = 2 });
@@ -246,7 +246,7 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
         }
     }
 
-    private static RedisCacheProvider Census(ServiceProvider node) => node.GetServices<ICacheProvider>().OfType<RedisCacheProvider>().Single();
+    private static RedisCacheProvider Inventory(ServiceProvider node) => node.GetServices<ICacheProvider>().OfType<RedisCacheProvider>().Single();
 
     private static Dictionary<string, Profile?> Fields(string field) =>
         new() { [field] = new Profile(field, 1) };

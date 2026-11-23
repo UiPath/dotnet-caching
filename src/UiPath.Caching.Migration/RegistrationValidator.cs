@@ -19,6 +19,11 @@ internal static class RegistrationValidator
             violations.Add($"Redis.{nameof(RedisCacheOptions.RedisKeyStrategyFactory)} is replaced: the router's keys are the source's key text, verbatim.");
         }
 
+        if (redisOptions.KeyFormat is not null)
+        {
+            violations.Add($"Redis.{nameof(RedisCacheOptions.KeyFormat)} is set: the router's keys are the source's key text, verbatim.");
+        }
+
         if (redisOptions.CacheKeyStrategy is not null)
         {
             violations.Add($"Redis.{nameof(RedisCacheOptions.CacheKeyStrategy)} is set: it would transform the source's key text.");

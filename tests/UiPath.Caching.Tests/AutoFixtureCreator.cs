@@ -125,6 +125,12 @@ public class MultilayerCacheOptionsCustomization : ISpecimenBuilder
             {
                 return new OmitSpecimen();
             }
+
+            // A key format cannot be combined with a custom key strategy factory, which the fixture always supplies, so it stays unset unless a test sets it.
+            if (propertyInfo.Name == nameof(RedisCacheOptions.KeyFormat) && propertyInfo.DeclaringType == typeof(RedisCacheOptions))
+            {
+                return new OmitSpecimen();
+            }
         }
 
         return new NoSpecimen();

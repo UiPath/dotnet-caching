@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Reflection;
 using System.Text;
 using Microsoft.Extensions.Configuration;
@@ -249,6 +250,12 @@ public class AppSettingsAllJsonBindingTests
         if (underlying.IsGenericType && BindableGenerics.Contains(underlying.GetGenericTypeDefinition()))
         {
             return true;
+        }
+
+        // A class with no public constructor that cannot be converted from a string (as a Uri is) cannot be made by the binder, so it is set in code only.
+        if (underlying.IsClass && !underlying.IsArray && underlying.GetConstructors().Length == 0 && !TypeDescriptor.GetConverter(underlying).CanConvertFrom(typeof(string)))
+        {
+            return false;
         }
 
         return !underlying.IsInterface;

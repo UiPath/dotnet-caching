@@ -174,3 +174,5 @@ static UiPath.Caching.Migration.BridgeMessage.operator ==(UiPath.Caching.Migrati
 ~override UiPath.Caching.Migration.BridgeMessage.ToString() -> string
 UiPath.Caching.Migration.RouterBuilder.UseChannelBridge(UiPath.Caching.Migration.IChannelBridge! bridge, int maxPendingPublishes = 16) -> UiPath.Caching.Migration.RouterBuilder!
 UiPath.Caching.Migration.RouterBuilder.UsePinWhen(System.Func<string!, bool>! pinned) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.UseValueSerializers(System.Action<UiPath.Caching.Config.ICachingBuilder!>! register) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.UseWriteFormatWhen(System.Func<string!, string?>! format) -> UiPath.Caching.Migration.RouterBuilder!

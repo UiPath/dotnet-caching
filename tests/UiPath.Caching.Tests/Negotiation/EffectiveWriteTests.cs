@@ -286,6 +286,39 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public void A_header_free_proxy_sniffs_so_its_node_never_advertises_nosniff()
+    {
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
+        var policies = new DefaultCachePolicyFactory(new Dictionary<string, CachePolicy> { ["Plain"] = new() }, null, valueSerializers: registry);
+        var reader = new ValueReader(new HeaderFreeProxy(), registry);
+
+        var advertised = NegotiationPlan.Advertisement(registry, policies, reader, "3.2");
+
+        reader.SniffsFor(null).Should().BeTrue();
+        advertised.Strict.Values.Should().NotContain(tokens => tokens.Contains(NodeAdvertisement.NoSniff), "its reads tell its bytes from a header");
+        NegotiationPlan.Advertisement(registry, policies, new ValueReader(new EnvelopeProxy(), registry), "3.2").Strict["plain"]
+            .Should().Equal(["json", NodeAdvertisement.NoSniff], "the same envelope unmarked is not known to stay clear of header bytes");
+    }
+
+    [Fact]
+    public async Task A_policy_on_a_header_free_proxy_writes_the_proxy_bytes_while_the_node_list_holds_the_format()
+    {
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
+        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, TimeProvider.System);
+        negotiator.Observe(new NodeListView([new("old", new("3.2.0", "i", ["json"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true));
+        var sut = SimpleCache(registry, negotiator, new HeaderFreeProxy());
+        var written = CaptureSimpleWrites();
+        var policy = ResolvedPolicy(registry);
+
+        await sut.SetAsync("k", "v", TimeSpan.FromMinutes(1), policy, Token);
+        negotiator.Observe(new NodeListView([new("new", new("3.2.0", "i", ["json", "10"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true));
+        await sut.SetAsync("k", "v", TimeSpan.FromMinutes(1), policy, Token);
+
+        Encoding.UTF8.GetString(written[0]).Should().StartWith("env:", "a node that cannot read the format still reads the envelope");
+        written[1][0].Should().Be(0x10);
+    }
+
+    [Fact]
     public void A_node_that_does_not_sniff_advertises_json_only_for_the_policies_that_do_not()
     {
         var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);

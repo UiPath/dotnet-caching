@@ -226,9 +226,11 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     }
 
     public IRouterParticipant.IAttachment Prepare(LibraryParts library) =>
-        Prepare(new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin) { CacheNulls = _registration.CacheNulls }, library.Topics, library.Events, library.Source);
+        Prepare(new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin, WritePolicy(), ReadPolicy()) { CacheNulls = _registration.CacheNulls }, library.Topics, library.Events, library.Source);
 
     public Task WhenPendingSettledAsync() => _pending.WhenEmptyAsync();
+
+    public IReadOnlyList<(string Cache, string Key, DateTimeOffset Until)> PendingKeys() => [.. _pending.Snapshot().Select(p => (_registration.Name, p.Key, p.Until))];
 
     public async Task InvalidateAsync()
     {
@@ -286,6 +288,10 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     private IPathClient<T> Client(RoutePath path) => path == RoutePath.Library ? _library : _source;
 
     private IPathClient<T> Client(Route route) => route.Hold ? UnavailablePathClient<T>.Instance : Client(route.Path);
+
+    private Func<WriteLease>? WritePolicy() => _core.WriteFormats is { } formats && _pin is { } pin ? () => formats.Select(pin) : null;
+
+    private Func<CachePolicy?>? ReadPolicy() => _core.WriteFormats is not null && _pin is { } pin ? () => WriteFormatSelector.ReadPolicy(pin) : null;
 
     private bool MayFallBack(Route route) => route.Other != RoutePath.Source || _core.MaySourceFallback(_pin);
 

@@ -703,6 +703,49 @@ public class FormatMigratorTests
         sut.Stopped.IsCompletedSuccessfully.Should().BeTrue();
     }
 
+    [Fact]
+    public void A_direct_claim_shares_the_window_with_reads_but_not_their_rate()
+    {
+        using var sut = Migrator(rate: 1);
+        sut.TryClaim(Owner, "read", "Redis", 1).Should().Be(FormatMigrator.ClaimResult.Claimed);
+        sut.TryClaim(Owner, "second", "Redis", 1).Should().Be(FormatMigrator.ClaimResult.Refused, "the read rate is spent");
+
+        sut.TryClaimDirect(Owner, "second", 1, out _).Should().Be(FormatMigrator.ClaimResult.Claimed, "a sweep paces itself");
+        sut.TryClaimDirect(Owner, "read", 1, out _).Should().Be(FormatMigrator.ClaimResult.Recent, "a read offered it this window");
+        sut.TryClaim(Owner, "second", "Redis", 1).Should().Be(FormatMigrator.ClaimResult.Recent, "and a sweep took it");
+    }
+
+    [Fact]
+    public void A_direct_claim_counts_against_the_byte_budget_until_it_is_finished()
+    {
+        using var sut = Migrator(maxBytes: 10);
+        sut.TryClaimDirect(Owner, "a", 8, out _).Should().Be(FormatMigrator.ClaimResult.Claimed);
+        sut.TryClaimDirect(Owner, "b", 8, out _).Should().Be(FormatMigrator.ClaimResult.Refused);
+
+        sut.Finish(Owner, "a", 8, lossy: false);
+
+        sut.TryClaimDirect(Owner, "b", 8, out _).Should().Be(FormatMigrator.ClaimResult.Claimed);
+        sut.TryClaimDirect(Owner, "a", 1, out _).Should().Be(FormatMigrator.ClaimResult.Recent, "a finished key stays in the window");
+    }
+
+    [Fact]
+    public void A_direct_claim_finished_lossy_is_held_back_for_the_lossy_window_and_says_why()
+    {
+        using var sut = Migrator();
+        sut.TryClaimDirect(Owner, "a", 1, out _);
+        sut.Finish(Owner, "a", 1, lossy: true);
+
+        sut.TryClaimDirect(Owner, "a", 1, out var lossy).Should().Be(FormatMigrator.ClaimResult.Recent);
+        lossy.Should().BeTrue();
+        sut.LossyKeys.Should().Be(1);
+
+        _clock.Advance(FormatMigrator.LossyWindow + TimeSpan.FromSeconds(1));
+
+        sut.TryClaimDirect(Owner, "a", 1, out lossy).Should().Be(FormatMigrator.ClaimResult.Claimed);
+        lossy.Should().BeFalse();
+        sut.LossyKeys.Should().Be(0);
+    }
+
     private static FormatMigrator.OfferKey[] Claim(FormatMigrator sut, int fields, string hash = "hash")
     {
         var claimed = Enumerable.Range(0, fields).Select(i => new FormatMigrator.OfferKey(Owner, $"{hash}\0f{i}")).ToArray();

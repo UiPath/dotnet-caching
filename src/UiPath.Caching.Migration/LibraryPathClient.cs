@@ -1,7 +1,8 @@
 namespace UiPath.Caching.Migration;
 
 /// <summary>The library path: a failed snapshot read is unavailable and never absent, and a write that was not sent is told apart from one whose result is unknown, which is never replayed.</summary>
-internal sealed class LibraryPathClient<T>(IMigrationCache store, IConnectionState connection, Func<string, string> redisKey, Func<TimeSpan> settleWithin) : IPathClient<T>
+/// <remarks><paramref name="writePolicy"/> is asked at each write, so a group can write another format than the stack default, and <paramref name="readPolicy"/> at each read, so a group that is not ready is never rewritten on read; neither may throw.</remarks>
+internal sealed class LibraryPathClient<T>(IMigrationCache store, IConnectionState connection, Func<string, string> redisKey, Func<TimeSpan> settleWithin, Func<WriteLease>? writePolicy = null, Func<CachePolicy?>? readPolicy = null) : IPathClient<T>
     where T : class
 {
     public LibraryPathClient(IMigrationCache store, IConnectionState connection, Func<string, string> redisKey, TimeSpan settleWithin)
@@ -23,7 +24,7 @@ internal sealed class LibraryPathClient<T>(IMigrationCache store, IConnectionSta
 
         try
         {
-            var read = await store.ReadSnapshotAsync<T>(CacheKey.Verbatim(redisKey(key)), null, cancellationToken).ConfigureAwait(false);
+            var read = await store.ReadSnapshotAsync<T>(CacheKey.Verbatim(redisKey(key)), readPolicy?.Invoke(), cancellationToken).ConfigureAwait(false);
             return read.Outcome switch
             {
                 SnapshotOutcome.Found when read.Entry is { } entry && (entry.Value is not null || CacheNulls) => new PathRead<T>(ReadOutcome.Found, entry.Value, entry.Expiration == DateTimeOffset.MaxValue ? null : entry.Expiration),
@@ -39,7 +40,12 @@ internal sealed class LibraryPathClient<T>(IMigrationCache store, IConnectionSta
     }
 
     public ValueTask<WriteResult> SetAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken) =>
-        WriteAsync(key, (cacheKey, token) => store.WriteAsync<T>(cacheKey, value, deadline ?? DateTimeOffset.MaxValue, null, token), cancellationToken);
+        WriteAsync(
+            key,
+            writePolicy is null
+                ? (cacheKey, token) => store.WriteAsync<T>(cacheKey, value, deadline ?? DateTimeOffset.MaxValue, null, token)
+                : (cacheKey, token) => WriteLeasedAsync(writePolicy, cacheKey, value, deadline, token),
+            cancellationToken);
 
     public async ValueTask<AddResult> TryAddAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken)
     {
@@ -61,7 +67,10 @@ internal sealed class LibraryPathClient<T>(IMigrationCache store, IConnectionSta
         var bound = settleWithin();
         try
         {
-            var created = await store.TryCreateAsync<T>(cacheKey, value, deadline ?? DateTimeOffset.MaxValue, null, cancellationToken).ConfigureAwait(false);
+            // The group's write format, under the same lease as a write, so a create never writes a format the group is not ready for.
+            var created = writePolicy is null
+                ? await store.TryCreateAsync<T>(cacheKey, value, deadline ?? DateTimeOffset.MaxValue, null, cancellationToken).ConfigureAwait(false)
+                : await CreateLeasedAsync(writePolicy, cacheKey, value, deadline, cancellationToken).ConfigureAwait(false);
             return created switch
             {
                 AddOutcome.Added or AddOutcome.Exists or AddOutcome.NotSent => created,
@@ -76,6 +85,18 @@ internal sealed class LibraryPathClient<T>(IMigrationCache store, IConnectionSta
 
     public ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken) =>
         WriteAsync(key, (cacheKey, token) => store.DeleteAsync<T>(cacheKey, token), cancellationToken);
+
+    private async ValueTask<AddOutcome> CreateLeasedAsync(Func<WriteLease> policy, CacheKey cacheKey, T value, DateTimeOffset? deadline, CancellationToken cancellationToken)
+    {
+        using var lease = policy();
+        return await store.TryCreateAsync<T>(cacheKey, value, deadline ?? DateTimeOffset.MaxValue, lease.Policy, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<StoreOutcome> WriteLeasedAsync(Func<WriteLease> policy, CacheKey cacheKey, T value, DateTimeOffset? deadline, CancellationToken cancellationToken)
+    {
+        using var lease = policy();
+        return await store.WriteAsync<T>(cacheKey, value, deadline ?? DateTimeOffset.MaxValue, lease.Policy, cancellationToken).ConfigureAwait(false);
+    }
 
     private async ValueTask<WriteResult> WriteAsync(string key, Func<CacheKey, CancellationToken, ValueTask<StoreOutcome>> command, CancellationToken cancellationToken)
     {

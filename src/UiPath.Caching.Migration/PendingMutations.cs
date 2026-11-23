@@ -43,6 +43,15 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
         core.Run(ct => WaitAsync(key, entry, ct));
     }
 
+    /// <summary>The keys still pending and the time each window ends.</summary>
+    public IReadOnlyList<(string Key, DateTimeOffset Until)> Snapshot()
+    {
+        lock (_gate)
+        {
+            return [.. _entries.Where(e => !e.Value.Done).Select(e => (e.Key, e.Value.Until))];
+        }
+    }
+
     /// <summary>Completes when no key is pending and every final announcement, with the retry it may have registered, is done.</summary>
     public Task WhenEmptyAsync()
     {
