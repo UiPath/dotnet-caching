@@ -85,15 +85,15 @@ internal sealed partial class KeyMoveClient<T>
 
     private async ValueTask<TryAddResult<T>> PlainCreateAsync(string key, T value, long px, CancellationToken cancellationToken)
     {
-        if (Data is not { } data || !data.IsConnected())
+        if (!Source.IsAvailable)
         {
             return TryAddResult<T>.Failed(WriteOutcome.NotSent);
         }
 
         try
         {
-            var bytes = _p.InPlace.Encode(value);
-            var created = await data.Db.StringSetAsync(Key(InPlace(key)), bytes, Expiry(px), When.NotExists, Master).ConfigureAwait(false);
+            var bytes = Source.Codec.Encode(value);
+            var created = await Source.CreateAsync(key, bytes, px).ConfigureAwait(false);
             return created ? TryAddResult<T>.Created : TryAddResult<T>.Exists(null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -105,16 +105,10 @@ internal sealed partial class KeyMoveClient<T>
     private async ValueTask<TryAddResult<T>> TryAddOnceAsync(string key, T value, long px, KeyMovePlan plan, CancellationToken cancellationToken)
     {
         // The union check first: a value in either side is the answer, and a value found in Src is promoted by the read.
-        var readPlan = PlanFor(write: false);
-        var existing = readPlan.Mode == KeyMoveMode.Plain ? await _p.Plain.ReadAsync(key, cancellationToken).ConfigureAwait(false) : await ReadManagedAsync(key, readPlan, cancellationToken).ConfigureAwait(false);
-        if (existing.Kind == ReadOutcome.Found)
-        {
-            return TryAddResult<T>.Exists(existing.Value);
-        }
-
+        var existing = await ReadForCreateAsync(key, cancellationToken).ConfigureAwait(false);
         if (existing.Kind != ReadOutcome.Absent)
         {
-            return TryAddResult<T>.Failed(WriteOutcome.NotSent);
+            return existing.Kind == ReadOutcome.Found ? TryAddResult<T>.Exists(existing.Value) : TryAddResult<T>.Failed(WriteOutcome.NotSent);
         }
 
         var (admitted, replan) = await AdmitAsync(promotion: false, plan.Act?.Id, cancellationToken).ConfigureAwait(false);
@@ -124,36 +118,27 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         using var unit = admitted ?? throw Unavailable();
-        if (Data is not { } data || !data.IsConnected())
+        if (Data is not { } data || !data.IsConnected() || SourceUnavailable(plan.Mode is not (KeyMoveMode.S4 or KeyMoveMode.S5)))
         {
             return TryAddResult<T>.Failed(WriteOutcome.NotSent);
         }
 
-        var l = InPlace(key);
         var n = Native(key);
         try
         {
-            long code;
-            switch (plan.Mode)
+            var mode = plan.Mode;
+            if (mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.S4 or KeyMoveMode.S5)
             {
-                case KeyMoveMode.S1:
-                case KeyMoveMode.S2:
-                    await At(SchedulePointStep.SourceSet).ConfigureAwait(false);
-                    code = await data.Scripts.SourceSetAsync(Key(l), ControlOf(data, l), unit.Id, _p.InPlace.Encode(value), px, true).ConfigureAwait(false);
-                    break;
-                case KeyMoveMode.S5:
-                    await At(SchedulePointStep.NativeWrite).ConfigureAwait(false);
-                    code = await data.Db.StringSetAsync(Key(n), _p.Native.Encode(value), Expiry(px), When.NotExists, Master).ConfigureAwait(false) ? MoveScripts.Published : MoveScripts.DestinationExists;
-                    break;
-                case KeyMoveMode.S4:
-                    await At(SchedulePointStep.Fill).ConfigureAwait(false);
-                    code = await data.Scripts.FillAsync(Fenced(data, n), unit.Id, _p.Native.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false);
-                    break;
-                default:
-                    code = await CaptureAndPublishAsync(data, n, l, value, px, unit, cancellationToken).ConfigureAwait(false);
-                    break;
+                await At(FillPoint(mode)).ConfigureAwait(false);
             }
 
+            var code = mode switch
+            {
+                KeyMoveMode.S1 or KeyMoveMode.S2 => await Source.SetAsync(key, unit.Id, Source.Codec.Encode(value), px, true).ConfigureAwait(false),
+                KeyMoveMode.S5 => CreatedCode(await data.Db.StringSetAsync(Key(n), _p.Native.Encode(value), Expiry(px), When.NotExists, Master).ConfigureAwait(false)),
+                KeyMoveMode.S4 => await data.Scripts.FillAsync(Fenced(data, n), unit.Id, _p.Native.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
+                _ => await CaptureAndPublishAsync(data, n, key, value, px, unit, cancellationToken).ConfigureAwait(false),
+            };
             return CreateOutcome(code, unit);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -162,8 +147,14 @@ internal sealed partial class KeyMoveClient<T>
         }
     }
 
+    private ValueTask<PathRead<T>> ReadForCreateAsync(string key, CancellationToken cancellationToken)
+    {
+        var plan = PlanFor(write: false);
+        return plan.Mode == KeyMoveMode.Plain ? _p.Plain.ReadAsync(key, cancellationToken) : ReadManagedAsync(key, plan, cancellationToken);
+    }
+
     // In S3, capture the destination fence, check for an existing key on both masters, and recheck N after probing L. Then publish with NX and a relative TTL (tcap -1, no deadline, no -3).
-    private async ValueTask<long> CaptureAndPublishAsync(KeyMoveData data, string n, string l, T value, long px, AdmittedUnit unit, CancellationToken cancellationToken)
+    private async ValueTask<long> CaptureAndPublishAsync(KeyMoveData data, string n, string key, T value, long px, AdmittedUnit unit, CancellationToken cancellationToken)
     {
         var keys = Fenced(data, n);
         for (var attempt = 0; attempt <= _options.MaxFenceRetries; attempt++)
@@ -180,7 +171,7 @@ internal sealed partial class KeyMoveClient<T>
                 throw Unavailable();
             }
 
-            if (capture.DestinationExists || await ExistsAsync(l, SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false) != false)
+            if (capture.DestinationExists || await SourceExistsAsync(key, SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false) != false)
             {
                 // Something exists now: the claim is not ours. A value still in Src is promoted by the next read.
                 return MoveScripts.DestinationExists;

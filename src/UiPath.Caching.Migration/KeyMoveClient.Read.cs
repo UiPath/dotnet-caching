@@ -46,9 +46,9 @@ internal sealed partial class KeyMoveClient<T>
     // S1 and S2 read only L before promotion starts. On a NoOrigin miss, check the identity before returning because a promotion may have moved the key.
     private async ValueTask<ReadStep<T>> ReadLegacyOnlyAsync(string key, KeyMovePlan plan, CancellationToken cancellationToken)
     {
-        var snap = await SnapAsync(InPlace(key), replica: false, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);
-        var read = Interpret(snap, _p.InPlace);
-        if (read.Kind != ReadOutcome.Absent || !_p.NoOrigin || Data is not { } data)
+        var snap = await SourceSnapAsync(key, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);
+        var read = Interpret(snap, Source.Codec);
+        if (read.Kind != ReadOutcome.Absent || !_p.NoOrigin || Data is null)
         {
             return ReadStep<T>.Of(read);
         }
@@ -57,7 +57,7 @@ internal sealed partial class KeyMoveClient<T>
         try
         {
             await At(SchedulePointStep.ControlCheck).ConfigureAwait(false);
-            id = await data.Db.HashGetAsync(ControlOf(data, InPlace(key)), "id", Master).ConfigureAwait(false);
+            id = await Source.ControlIdAsync(key).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -90,7 +90,7 @@ internal sealed partial class KeyMoveClient<T>
             return ReadStep<T>.Of(master);
         }
 
-        var source = Interpret(await SnapAsync(InPlace(key), replica: false, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false), _p.InPlace);
+        var source = Interpret(await SourceSnapAsync(key, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false), Source.Codec);
         if (source.Kind != ReadOutcome.Absent)
         {
             return ReadStep<T>.Of(source);
