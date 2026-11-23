@@ -20,7 +20,7 @@ internal sealed class DriverKit : IAsyncDisposable
         Facts = new FakeGroupFacts { ReleaseFloorAttested = true };
         var flags = new FlagViews(options, kit.Time);
         Driver = new StageDriver(
-            new StageDriverServices(kit.Store, kit.Scripts, kit.Names, kit.Sequence, kit.Preflight, kit.Ledger, Fleet, Facts, Claim, Data, Mover, _ => HoldsLease, Monitor, null, a => Alerts.Add((a.Code, a.Detail)), _ => Fence, kit.Upkeep),
+            new StageDriverServices(kit.Store, kit.Scripts, kit.Names, kit.Sequence, kit.Preflight, kit.Ledger, Fleet, Facts, Claim, Data, Mover, _ => LeaseCheck?.Invoke() ?? HoldsLease, Monitor, null, a => Alerts.Add((a.Code, a.Detail)), _ => Fence, kit.Upkeep),
             options,
             kit.Options,
             flags,
@@ -50,6 +50,9 @@ internal sealed class DriverKit : IAsyncDisposable
     public StageCommands Commands { get; }
 
     public bool HoldsLease { get; set; } = true;
+
+    /// <summary>Runs in place of the lease answer at the start of every step, for a test that needs to act inside a step.</summary>
+    public Func<bool>? LeaseCheck { get; set; }
 
     public LeaseFence? Fence { get; set; }
 
