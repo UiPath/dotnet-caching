@@ -190,7 +190,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     public async Task Quarantine_timestamp_is_read_from_the_primary()
     {
         // Every write to this hash demands the primary. A replica that has not caught up reports a timestamp the
-        // primary already deleted, and the group is then reaped without ever serving its quarantine.
+        // primary already deleted, and the group is then deleted without ever serving its quarantine.
         var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 0);
         _streamGroupInfos = [g1];
         _quarantineValue = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMilliseconds(10)).ToString("O");

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Hosting;
+using UiPath.Caching.Negotiation;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast.Redis;
@@ -9,6 +10,20 @@ namespace UiPath.Caching.Broadcast.Redis;
 public partial class RedisStreamHealthMaintainer : IHostedService
 {
     private const string StreamKeyTerminator = "$";
+
+    private const string DestroyIfIdleScript = """
+        local ok, consumers = pcall(redis.call, 'XINFO', 'CONSUMERS', KEYS[1], ARGV[1])
+        if not ok or #consumers == 0 then return 0 end
+        for _, consumer in ipairs(consumers) do
+            for i = 1, #consumer, 2 do
+                if consumer[i] == 'idle' and tonumber(consumer[i + 1]) < tonumber(ARGV[2]) then return 0 end
+            end
+        end
+        return redis.call('XGROUP', 'DESTROY', KEYS[1], ARGV[1])
+        """;
+
+    // From 7.2 a consumer's idle time counts every read attempt, so a live consumer on a quiet stream is never idle for long.
+    private static readonly Version IdleCountsAttempts = new(7, 2);
 
     private readonly IRedisConnector _redis;
     private readonly ConnectorKeyPrefix _connectorPrefix;
@@ -18,6 +33,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private readonly ILogger<RedisStreamHealthMaintainer> _logger;
     private readonly CancellationToken _cancellationToken;
     private readonly RedisValue _sourceUri;
+    private readonly RedisValue _lockValue;
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly SemaphoreSlim _semaphore;
@@ -30,6 +46,9 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private string _quarantineMarker = string.Empty;
 
     private Lazy<bool> _supportsXtrimMinId = new(() => false);
+    private NodeListStore? _nodeList;
+    private Task<DepartedOwners?>? _departed;
+    private bool _idleCountsAttempts;
 
     public RedisStreamHealthMaintainer(
         IRedisConnector redis,
@@ -49,6 +68,9 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         _cacheOptions = cacheOptionsAccessor.Value;
         _cancellationToken = _cancellationTokenSource.Token;
         _sourceUri = (_cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString();
+
+        // The token tells two maintainers on one host apart, which the source URI of a shared machine cannot.
+        _lockValue = $"{_sourceUri}|{Guid.NewGuid():N}";
         _clock = clock;
         _semaphore = new SemaphoreSlim(1);
     }
@@ -56,6 +78,8 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     internal Task Task { get; private set; } = Task.CompletedTask;
 
     internal RedisKey LockKey => _lockKey;
+
+    internal bool HoldsDepartedSnapshot => _departed is not null;
 
     private IDatabase Database => _redis.Database;
 
@@ -96,6 +120,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             _streamsSearchPattern = _streamOptions.MaintainerSearchPattern;
         }
 
+        _nodeList = new NodeListStore(_redis, NodeListStore.KeyFor(_cacheOptions, _redisOptions));
         _lockKey = stringKeyStrategy.GetRedisKey(EscapeBraces(string.Join(_cacheOptions.Separator, nameof(RedisStreamHealthMaintainer), "Lock2")));
         _hashKeyStrategy = hashKeyStrategy;
         _quarantineMarker = string.Join(_cacheOptions.Separator, "caching", "meta", "stream") + "$";
@@ -108,13 +133,17 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         bool ownsLock = false;
         try
         {
-            ownsLock = await Database.LockTakeAsync(_lockKey, _sourceUri, _streamOptions.MaintainerCheckInterval, CommandFlags.DemandMaster).ConfigureAwait(false);
+            ownsLock = await Database.LockTakeAsync(_lockKey, _lockValue, _streamOptions.MaintainerCheckInterval, CommandFlags.DemandMaster).ConfigureAwait(false);
             if (!ownsLock)
             {
                 return;
             }
 
             var minOffset = _clock.GetUtcNow().Subtract(_streamOptions.MaintainerTrimInterval);
+
+            // Every primary, connected or not: one whose version cannot be read now may be older, and then absent owners are kept.
+            var primaries = Database.Multiplexer?.GetServers().Where(static server => !server.IsReplica).ToList() ?? [];
+            _idleCountsAttempts = primaries.Count > 0 && primaries.TrueForAll(static server => server.IsConnected && server.Version >= IdleCountsAttempts);
             var streams = await GetAllStreamsAsync(cancellationToken).ConfigureAwait(false);
             foreach (var stream in streams)
             {
@@ -128,7 +157,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             {
                 try
                 {
-                    await Database.LockReleaseAsync(_lockKey, _sourceUri, CommandFlags.DemandMaster).ConfigureAwait(false);
+                    await Database.LockReleaseAsync(_lockKey, _lockValue, CommandFlags.DemandMaster).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -138,6 +167,8 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
         finally
         {
+            // Read at most once per pass, and only once a group with consumers asks; nothing is held between passes.
+            _departed = null;
             _semaphore.Release();
         }
     }
@@ -384,11 +415,18 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             return;
         }
 
+        var (reason, fetched) = await DepartureAsync(context, groupInfo, cancellationToken).ConfigureAwait(false);
+        if (reason is not null)
+        {
+            await DeleteDepartedAsync(context, groupInfo, reason, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         await Database.HashDeleteAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
 
         if (_streamOptions.TrackStatistics)
         {
-            var streamConsumerInfos = await Database.StreamConsumerInfoAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+            var streamConsumerInfos = fetched ?? await Database.StreamConsumerInfoAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
             foreach (var consumerInfo in streamConsumerInfos)
             {
                 CheckConsumer(context.StreamKey, groupInfo, consumerInfo);
@@ -429,12 +467,134 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private async Task<DateTimeOffset?> GetQuarantinedAtAsync(StreamContext context, StreamGroupInfo groupInfo)
     {
         // From the primary, like every write to this hash: a replica that has not caught up reports a
-        // timestamp the primary already deleted, and the group is reaped without serving its wait.
+        // timestamp the primary already deleted, and the group is deleted without serving its wait.
         var value = await Database.HashGetAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
         return value.HasValue
             && DateTimeOffset.TryParse(value.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var quarantinedAt)
                 ? quarantinedAt
                 : null;
+    }
+
+    /// <summary>Why the group's owner counts as departed, or null to keep it.</summary>
+    /// <remarks>
+    /// Kept: a fresh owner, one that cannot be judged, a node list that cannot be read, and every group before Redis 7.2, where a consumer's idle time
+    /// ignores read attempts and so cannot protect a live owner that restarted. The consumers read on the way are returned for reuse.
+    /// </remarks>
+    private async Task<(string? Reason, StreamConsumerInfo[]? Consumers)> DepartureAsync(StreamContext context, StreamGroupInfo groupInfo, CancellationToken cancellationToken)
+    {
+        if (_nodeList is null || !_idleCountsAttempts || string.IsNullOrEmpty(groupInfo.Name))
+        {
+            return (null, null);
+        }
+
+        _departed ??= DepartedOwners.ReadAsync(_nodeList, _redisOptions.FormatNegotiation, _streamOptions.MaintainerQuarantineInterval, cancellationToken);
+        return await _departed.ConfigureAwait(false) is { } owners ? await JudgeAsync(owners, context, groupInfo).ConfigureAwait(false) : (null, null);
+    }
+
+    private async Task<(string? Reason, StreamConsumerInfo[]? Consumers)> JudgeAsync(DepartedOwners owners, StreamContext context, StreamGroupInfo groupInfo)
+    {
+        var verdict = owners.Judge(groupInfo.Name);
+        StreamConsumerInfo[]? consumers = null;
+        if (verdict == DepartedOwners.Verdict.Unknown && owners.IsAbsent(groupInfo.Name) && owners.AnyFresh && _idleCountsAttempts)
+        {
+            try
+            {
+                consumers = await Database.StreamConsumerInfoAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+            }
+            catch (RedisServerException ex) when (ex.Message.StartsWith("NOGROUP", StringComparison.OrdinalIgnoreCase))
+            {
+                // Deleted since the group list was read: nothing left to judge.
+                return (null, null);
+            }
+
+            verdict = owners.JudgeAbsent(consumers, _idleCountsAttempts);
+        }
+
+        var reason = verdict switch
+        {
+            DepartedOwners.Verdict.Left => "left",
+            DepartedOwners.Verdict.Stale => "stale",
+            DepartedOwners.Verdict.AbsentIdle => "absent_idle",
+            _ => null,
+        };
+        return (reason, consumers);
+    }
+
+    /// <summary>The quarantine every departed-group delete takes.</summary>
+    /// <remarks>Recorded on the first pass that finds the owner departed, deleted once it has served its wait and still is.</remarks>
+    private async Task DeleteDepartedAsync(StreamContext context, StreamGroupInfo groupInfo, string reason, CancellationToken cancellationToken)
+    {
+        var quarantinedAt = await GetQuarantinedAtAsync(context, groupInfo).ConfigureAwait(false);
+        if (quarantinedAt is null)
+        {
+            await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.GetUtcNow().ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
+            LogDepartedGroupQuarantined(groupInfo.Name, context.StreamKey, reason);
+            return;
+        }
+
+        if (!QuarantineElapsed(quarantinedAt.Value))
+        {
+            return;
+        }
+
+        if (!await StillDepartedAsync(context, groupInfo, reason, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        if (await DestroyIfIdleAsync(context.StreamKey, groupInfo.Name, reason).ConfigureAwait(false))
+        {
+            await Database.HashDeleteAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+            LogDepartedGroupDeleted(groupInfo.Name, context.StreamKey, reason);
+            var props = new List<KeyValuePair<string, string>>(2);
+            AddProp(props, "Stream", context.StreamKey.ToString());
+            AddProp(props, "Reason", reason);
+            _telemetryProvider.TrackMetric(Metrics.DepartedGroupDeleted, 1, CollectionsMarshal.AsSpan(props));
+        }
+    }
+
+    /// <summary>Right before the delete, whether the group is still the delete's to take.</summary>
+    /// <remarks>
+    /// This maintainer still holds the lock (no overlapping pass), and a fresh read of the node list still finds the owner departed for the same reason, so
+    /// an owner that came back with the same id is kept.
+    /// </remarks>
+    private async Task<bool> StillDepartedAsync(StreamContext context, StreamGroupInfo groupInfo, string reason, CancellationToken cancellationToken)
+    {
+        if (await Database.LockQueryAsync(_lockKey, CommandFlags.DemandMaster).ConfigureAwait(false) != _lockValue)
+        {
+            return false;
+        }
+
+        var owners = await DepartedOwners.ReadAsync(_nodeList!, _redisOptions.FormatNegotiation, _streamOptions.MaintainerQuarantineInterval, cancellationToken).ConfigureAwait(false);
+        return owners is not null && (await JudgeAsync(owners, context, groupInfo).ConfigureAwait(false)).Reason == reason;
+    }
+
+    /// <summary>Deletes the group in one script on the stream's server unless a consumer of it read within the floor, or it has none.</summary>
+    /// <remarks>An owner that restarted and read again keeps its group. Without scripts the check and the delete are two commands.</remarks>
+    private async Task<bool> DestroyIfIdleAsync(RedisKey stream, string group, string reason)
+    {
+        var floor = (long)(reason == "absent_idle"
+            ? DepartedOwners.IdleHorizon(_redisOptions.FormatNegotiation, _streamOptions.MaintainerQuarantineInterval)
+            : _streamOptions.MaintainerQuarantineInterval).TotalMilliseconds;
+        try
+        {
+            var result = await Database.ScriptEvaluateAsync(DestroyIfIdleScript, [stream], [group, floor], CommandFlags.DemandMaster).ConfigureAwait(false);
+            return (long)result == 1;
+        }
+        catch (Exception ex) when (NodeListStore.IsScriptRefusal(ex))
+        {
+            try
+            {
+                var consumers = await Database.StreamConsumerInfoAsync(stream, group, CommandFlags.DemandMaster).ConfigureAwait(false);
+                return consumers.Length > 0
+                    && Array.TrueForAll(consumers, c => c.IdleTimeInMilliseconds >= floor)
+                    && await Database.StreamDeleteConsumerGroupAsync(stream, group, CommandFlags.DemandMaster).ConfigureAwait(false);
+            }
+            catch (RedisServerException missing) when (missing.Message.StartsWith("NOGROUP", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
     }
 
     private bool QuarantineElapsed(DateTimeOffset quarantinedAt) =>
@@ -579,6 +739,12 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "No primary could be enumerated for stream discovery; scanning only the routed server, which on a cluster reaches one shard")]
     private partial void LogNoPrimariesToScan();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Consumer group {Group} of stream {StreamKey} quarantined: its node has departed ({Reason})")]
+    private partial void LogDepartedGroupQuarantined(string? group, RedisKey streamKey, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Consumer group {Group} of stream {StreamKey} deleted: its node departed ({Reason}) and the quarantine has passed")]
+    private partial void LogDepartedGroupDeleted(string? group, RedisKey streamKey, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Stream {StreamKey} has no consumers")]
     private partial void LogStreamHasNoConsumers(RedisKey streamKey);
