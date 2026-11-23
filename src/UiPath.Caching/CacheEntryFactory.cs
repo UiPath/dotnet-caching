@@ -10,10 +10,11 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
     private struct Marks : IEquatable<Marks>
     {
         public int Read;
+        // Beside Read, in the slot its padding leaves: after the longs it would grow every entry by 8 bytes.
+        public int TokenChanged;
         public long ReplacedBy;
         public long Replaces;
         public long LocalDeadline;
-        public int TokenChanged;
 
         public readonly bool Equals(Marks other) => true;
 
