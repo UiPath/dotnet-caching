@@ -19,6 +19,7 @@ internal sealed partial class StageDriver
             StepKind.Abandon => await AbandonAsync(group, state, input, cancellationToken).ConfigureAwait(false),
             StepKind.Resume => await ResumeAsync(group, state, input, plan.SkipBarriers, true, cancellationToken).ConfigureAwait(false),
             StepKind.ColdStart => await ColdStartAsync(group, state, input, cancellationToken).ConfigureAwait(false),
+            StepKind.RebuildCaches => await RebuildCachesAsync(group, state, plan, cancellationToken).ConfigureAwait(false),
             _ => null,
         };
     }
@@ -48,7 +49,9 @@ internal sealed partial class StageDriver
 
         if (plan.AllAck)
         {
-            await services.Store.AllAckAsync(group, state.Id, Fence(group)).ConfigureAwait(false);
+            // T3 of the canary is stored with the acknowledgement itself, so one never exists without the other.
+            long? t3 = state.State == "S3" ? time.GetUtcNow().ToUnixTimeMilliseconds() : null;
+            await services.Store.AllAckAsync(group, state.Id, Fence(group), t3).ConfigureAwait(false);
         }
 
         if (plan.FieldList.Count > 0)
@@ -57,6 +60,18 @@ internal sealed partial class StageDriver
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    // X12 in S1 or S2 for the cache set the fresh nodes agree on; every node acknowledges the new identity before X3.
+    private async Task<TransitionResult?> RebuildCachesAsync(string group, StateRecord state, StepPlan plan, CancellationToken cancellationToken)
+    {
+        if (services.Upkeep is null || plan.Caches is null)
+        {
+            return null;
+        }
+
+        var sequence = new SequenceOptions(Ledger: services.Ledger, HoldsLease: () => services.HoldsLease(group), Fence: Fence(group));
+        return await services.Upkeep.RebuildAsync(group, state, plan.Caches, sequence, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<TransitionResult?> TransitAsync(string group, StateRecord state, StepInput input, TransitionSpec spec, GroupMemory memory, CancellationToken cancellationToken)
@@ -91,7 +106,7 @@ internal sealed partial class StageDriver
         {
             await AfterCompletedAsync(group, spec, token, ep, target.Id, cancellationToken).ConfigureAwait(false);
         }
-        else if (result.Outcome is TransitionOutcome.BarrierStuck or TransitionOutcome.CommitIncomplete)
+        else if (result.Outcome is TransitionOutcome.BarrierStuck or TransitionOutcome.CommitIncomplete or TransitionOutcome.CommitUncertain)
         {
             memory.Seed($"{ep}:{target.Id}", time);
         }
@@ -203,8 +218,26 @@ internal sealed partial class StageDriver
         return null;
     }
 
+    // The evidence a Start consumed goes into the state under the identity of the move, fenced, so no later Start on any node can use it again.
+    private async Task RecordStartAsync(string group, string id, CancellationToken cancellationToken)
+    {
+        var entries = services.Facts.StartTaken(group);
+        if (entries.Count == 0 || await services.Store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is not { } current || current.Id != id)
+        {
+            return;
+        }
+
+        var joined = RegisteredGroupFacts.Join(current.Field(StateFields.Attested), entries);
+        await services.Scripts.FieldsAsync(services.Names.State(group), id, [(StateFields.Attested, joined)], [], Fence(group)).ConfigureAwait(false);
+    }
+
     private async Task AfterCompletedAsync(string group, TransitionSpec spec, string token, long ep, string id, CancellationToken cancellationToken)
     {
+        if (spec.Code == "X1")
+        {
+            await RecordStartAsync(group, id, cancellationToken).ConfigureAwait(false);
+        }
+
         if (spec.PostFields is { Count: > 0 } || spec.PostDelete is { Count: > 0 })
         {
             // The reverse inventory is evidence for the release only when it was written under the identity it was taken for.
@@ -264,6 +297,12 @@ internal sealed partial class StageDriver
         if (result.Outcome == TransitionOutcome.Completed && into0)
         {
             await services.Claim.ReleaseIdleAsync(group, state.Claim, Fence(group), cancellationToken).ConfigureAwait(false);
+        }
+
+        if (result.Outcome == TransitionOutcome.Completed && kind == "X1")
+        {
+            // An X1 that was stuck and then completed is a Start taken, as much as one that completed at once.
+            await RecordStartAsync(group, state.Id, cancellationToken).ConfigureAwait(false);
         }
 
         return result;

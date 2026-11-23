@@ -10,6 +10,7 @@ using StackExchange.Redis;
 using UiPath.Caching.Broadcast;
 using UiPath.Caching.Broadcast.Redis;
 using UiPath.Caching.Config;
+using UiPath.Caching.KeyMove;
 using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Migration;
@@ -18,10 +19,7 @@ public static class RouterServiceCollectionExtensions
 {
     internal const string StackName = "UiPath.Caching.Migration";
 
-    /// <summary>
-    /// Routes the registered caches between the application source and a Redis-only library stack on the application own connector.
-    /// <c>AddCaching</c> with <c>AddRedisConnection</c> must be registered too.
-    /// </summary>
+    /// <summary>Routes the registered caches between the application source and a Redis-only library stack on the application own connector. <c>AddCaching</c> with <c>AddRedisConnection</c> must be registered too.</summary>
     public static IServiceCollection AddCachingRouter(
         this IServiceCollection services,
         IConfiguration configuration,
@@ -50,55 +48,10 @@ public static class RouterServiceCollectionExtensions
             throw new InvalidOperationException("UseWriteFormatWhen needs UseValueSerializers: the router's stack must register the format its groups write.");
         }
 
+        builder.BuildKeyMove();
         var processId = builder.NodeIdentity ?? $"{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}";
         var gate = builder.PinPredicate is null ? null : new PinFormatGate();
-        var registered = services.Count;
-        services
-            .AddNamedCachingOnPrimaryConnection(
-                StackName,
-                configuration,
-                chain =>
-                {
-                    chain.AddRedis(options =>
-                    {
-                        ConfigureStackRedis(options);
-
-                        // With a write format setting, the stack's negotiation takes the timings the pin was validated against, so the hold the pin checks is the hold the stack applies; a router without one keeps the stack's own defaults.
-                        if (builder.WriteFormatPredicate is not null)
-                        {
-                            configuration.GetSection(sectionName).GetSection("Redis:FormatNegotiation").Bind(options.FormatNegotiation);
-                        }
-                    });
-                    builder.ValueSerializers?.Invoke(chain);
-                    chain.AddBroadcast();
-                    chain.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
-                    chain.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
-                },
-                sectionName,
-                (stack, _) =>
-                {
-                    AddEnvelope(stack, envelope);
-                    if (gate is not null)
-                    {
-                        stack.AddSingleton<IFormatWriteGate>(gate);
-                    }
-
-                    // After the stack's own `?stack=` post-configure, so the process id lands in the host part of the identity.
-                    stack.PostConfigure<CacheOptions>(options => options.SourceUri = WithProcess(options.SourceUri ?? CacheOptions.MachineUri, processId));
-                })
-            .Expose<ICacheEventFactory>()
-            .Expose<IOptions<CacheOptions>>()
-            .Expose<IOptions<RedisCacheOptions>>()
-            .Expose(stack => new StackServices([.. stack.GetServices<IHostedService>()]));
-
-        // The router builds and starts its stack itself, behind its guarded start; a hosted service of the host would build it first and fail the host.
-        for (var index = services.Count - 1; index >= registered; index--)
-        {
-            if (services[index].ServiceType == typeof(IHostedService))
-            {
-                services.RemoveAt(index);
-            }
-        }
+        RegisterLibraryStack(services, configuration, sectionName, builder, envelope, processId, gate);
 
         var section = configuration.GetSection(sectionName);
         services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId, gate, section));
@@ -185,6 +138,62 @@ public static class RouterServiceCollectionExtensions
         }
     }
 
+    private static void RegisterLibraryStack(IServiceCollection services, IConfiguration configuration, string sectionName, RouterBuilder builder, ISerializerProxy<byte[]> envelope, string processId, PinFormatGate? gate)
+    {
+        var registered = services.Count;
+        services
+            .AddNamedCachingOnPrimaryConnection(
+                StackName,
+                configuration,
+                chain =>
+                {
+                    chain.AddRedis(options =>
+                    {
+                        ConfigureStackRedis(options);
+
+                        // With a write format setting, the stack's negotiation takes the timings the pin was validated against, so the hold the pin checks is the hold the stack applies; a router without one keeps the stack's own defaults.
+                        if (builder.WriteFormatPredicate is not null)
+                        {
+                            configuration.GetSection(sectionName).GetSection("Redis:FormatNegotiation").Bind(options.FormatNegotiation);
+                        }
+                    });
+                    builder.ValueSerializers?.Invoke(chain);
+                    chain.AddBroadcast();
+                    chain.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
+                    chain.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
+                },
+                sectionName,
+                (stack, _) =>
+                {
+                    AddEnvelope(stack, envelope);
+                    if (gate is not null)
+                    {
+                        stack.AddSingleton<IFormatWriteGate>(gate);
+                    }
+
+                    // After the stack's own `?stack=` post-configure, so the process id lands in the host part of the identity.
+                    stack.PostConfigure<CacheOptions>(options => options.SourceUri = WithProcess(options.SourceUri ?? CacheOptions.MachineUri, processId));
+                })
+            .Expose<ICacheEventFactory>()
+            .Expose<IOptions<CacheOptions>>()
+            .Expose<IOptions<RedisCacheOptions>>()
+            .Expose(stack => new StackServices([.. stack.GetServices<IHostedService>()]));
+
+        RemoveStackHostedServices(services, registered);
+    }
+
+    private static void RemoveStackHostedServices(IServiceCollection services, int registered)
+    {
+        // The router builds and starts its stack itself, behind its guarded start; a hosted service of the host would build it first and fail the host.
+        for (var index = services.Count - 1; index >= registered; index--)
+        {
+            if (services[index].ServiceType == typeof(IHostedService))
+            {
+                services.RemoveAt(index);
+            }
+        }
+    }
+
     private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, PinFormatGate? gate, IConfigurationSection section)
     {
         var logger = root.GetService<ILoggerFactory>()?.CreateLogger("UiPath.Caching.Migration") ?? NullLogger.Instance;
@@ -194,53 +203,30 @@ public static class RouterServiceCollectionExtensions
             SourceTimeout = builder.SourceTimeout ?? TimeSpan.FromSeconds(30),
             CleanupBound = builder.CleanupBound,
         };
+        AdvertisementSetup? setup = null;
+        var keyMove = builder.KeyMove is { } phaseSetup ? new KeyMoveNode(phaseSetup, root.GetRequiredService<TimeProvider>()) : null;
         try
         {
-            // The one check that fails the host: a setting no library start could ever satisfy.
-            if (builder.SettleBound is null)
-            {
-                ThrowIfSettleBeyondHorizon(root);
-            }
-
-            // The other check that fails the host: settings that would make the library write what the source cannot read.
-            // Bound as the named stack binds them, without building it: a stack that cannot be built must not fail the host here.
-            var stackCache = new CacheOptions();
-            section.Bind(stackCache);
-            var stackRedis = new RedisCacheOptions();
-            ConfigureStackRedis(stackRedis);
-            RegistrationValidator.ThrowIfInvalid(stackCache, stackRedis);
-            logger.LogInformation("Caching router library options: {Options}", RegistrationValidator.Describe(stackCache, stackRedis));
+            ValidateLibraryOptions(root, builder, section, logger);
 
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
-            core.UseLibrary(token => StartLibraryAsync(root, builder, token));
+            core.UseLibrary(token => StartLibraryAsync(root, builder, keyMove, setup, token));
             if (builder.Bridge is { } bridge)
             {
                 core.Bridge = new BridgeHost(bridge, RouterIdentity(section, processId), core, logger) { MaxPending = builder.BridgeMaxPending };
             }
 
-            var setup = AdvertisementSetup.TryCreate(root, builder, processId, section, logger);
-            if (builder.PinPredicate is { } pinWhen)
-            {
-                ValidatePinSetup(section, setup, logger);
+            setup = AdvertisementSetup.TryCreate(root, builder, processId, section, logger);
+            ConfigurePin(builder, core, gate, setup, section, logger);
 
-                // Before the caches, which take their group's pin from it.
-                var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger) { WriteFormat = builder.WriteFormatPredicate };
-                core.Pins = pins;
-                if (builder.WriteFormatPredicate is { } writeFormat)
-                {
-                    core.WriteFormats = new WriteFormatSelector(writeFormat, pins, logger);
-                }
-                gate!.Attach(pins);
-            }
-
-            var advertiser = setup is null ? null : CreateAdvertiser(setup, core, logger);
+            var advertiser = setup is null ? null : CreateAdvertiser(setup, core, keyMove, logger);
             if (advertiser is not null && core.Pins is { } attached)
             {
                 attached.OwnField = advertiser.Field;
                 attached.Fresh = advertiser.Fresh;
             }
 
-            var router = new Router(core, builder.Registrations, builder.Excluded) { Advertiser = advertiser, Envelope = builder.Envelope };
+            var router = new Router(core, builder.Registrations, builder.Excluded) { Advertiser = advertiser, Envelope = builder.Envelope, KeyMove = keyMove };
 
             RouterBanner.Log(logger, builder, processId);
             router.Start();
@@ -251,6 +237,41 @@ public static class RouterServiceCollectionExtensions
             core.CancelBackground();
             core.DisposeResources();
             throw;
+        }
+    }
+
+    private static void ValidateLibraryOptions(IServiceProvider root, RouterBuilder builder, IConfigurationSection section, ILogger logger)
+    {
+        // The one check that fails the host: a setting no library start could ever satisfy.
+        if (builder.SettleBound is null)
+        {
+            ThrowIfSettleBeyondHorizon(root);
+        }
+
+        // The other check that fails the host: settings that would make the library write what the source cannot read.
+        // Bound as the named stack binds them, without building it: a stack that cannot be built must not fail the host here.
+        var stackCache = new CacheOptions();
+        section.Bind(stackCache);
+        var stackRedis = new RedisCacheOptions();
+        ConfigureStackRedis(stackRedis);
+        RegistrationValidator.ThrowIfInvalid(stackCache, stackRedis);
+        logger.LogInformation("Caching router library options: {Options}", RegistrationValidator.Describe(stackCache, stackRedis));
+    }
+
+    private static void ConfigurePin(RouterBuilder builder, RouterCore core, PinFormatGate? gate, AdvertisementSetup? setup, IConfigurationSection section, ILogger logger)
+    {
+        if (builder.PinPredicate is { } pinWhen)
+        {
+            ValidatePinSetup(section, setup, logger);
+
+            // Before the caches, which take their group's pin from it.
+            var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger) { WriteFormat = builder.WriteFormatPredicate };
+            core.Pins = pins;
+            if (builder.WriteFormatPredicate is { } writeFormat)
+            {
+                core.WriteFormats = new WriteFormatSelector(writeFormat, pins, logger);
+            }
+            gate!.Attach(pins);
         }
     }
 
@@ -279,7 +300,7 @@ public static class RouterServiceCollectionExtensions
             logger.LogWarning("UsePinWhen is set but the application has no AppShortName, so the pin gate cannot attribute nodes to this application and stays closed.");
         }
     }
-    private static RouterAdvertiser CreateAdvertiser(AdvertisementSetup setup, RouterCore core, ILogger logger)
+    private static RouterAdvertiser CreateAdvertiser(AdvertisementSetup setup, RouterCore core, KeyMoveNode? keyMove, ILogger logger)
     {
         var sources = new List<IAdvertisementTokens> { new BypassTokens(core), new ScopeTokens(setup.Scope) };
         if (core.Pins is { } pins)
@@ -287,10 +308,33 @@ public static class RouterServiceCollectionExtensions
             sources.Add(pins);
         }
 
+        if (keyMove is { HasGroups: true })
+        {
+            sources.Add(new KeyMoveTokens(keyMove.Tokens));
+        }
+
         return new RouterAdvertiser(setup.Store, setup.NodeId, setup.Build, sources, setup.RefreshInterval, setup.LivenessWindow, core.Clock, logger);
     }
 
-    private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, CancellationToken cancellationToken)
+    private static LibraryParts CollectLibraryParts(IServiceProvider root, RouterBuilder builder, IRedisConnector connector, List<IHostedService> started)
+    {
+        var options = root.GetRequiredKeyedService<IOptions<CacheOptions>>(StackName).Value;
+        var source = options.SourceUri ?? CacheOptions.MachineUri;
+        var topics = root.GetRequiredKeyedService<ITopicFactory>(StackName).Get();
+        var streams = new PrefixStrategy(RedisKeyspaces.Streams, options);
+        var group = source.ToString().ToLowerInvariant();
+        return new LibraryParts(
+            root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis).AsMigrationCache(),
+            connector,
+            topics,
+            root.GetRequiredKeyedService<ICacheEventFactory>(StackName),
+            source,
+            LibrarySettleWithin(root, builder.SettleBound),
+            started,
+            (key, cancellationToken) => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key, cancellationToken));
+    }
+
+    private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, KeyMoveNode? keyMove, AdvertisementSetup? setup, CancellationToken cancellationToken)
     {
         var started = new List<IHostedService>();
         try
@@ -301,21 +345,17 @@ public static class RouterServiceCollectionExtensions
                 started.Add(service);
             }
 
-            var options = root.GetRequiredKeyedService<IOptions<CacheOptions>>(StackName).Value;
-            var source = options.SourceUri ?? CacheOptions.MachineUri;
-            var topics = root.GetRequiredKeyedService<ITopicFactory>(StackName).Get();
             var connector = root.GetRequiredService<IRedisConnector>();
-            var streams = new PrefixStrategy(RedisKeyspaces.Streams, options);
-            var group = source.ToString().ToLowerInvariant();
-            return new LibraryParts(
-                root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis).AsMigrationCache(),
-                connector,
-                topics,
-                root.GetRequiredKeyedService<ICacheEventFactory>(StackName),
-                source,
-                LibrarySettleWithin(root, builder.SettleBound),
-                started,
-                (key, cancellationToken) => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key, cancellationToken));
+            if (keyMove is { HasGroups: true })
+            {
+                // The leader needs the node entries of the router; without the advertisement it still acknowledges and polls, and leads nothing.
+                var prefix = root.GetService<IOptions<RedisCacheOptions>>()?.Value.KeyPrefix ?? string.Empty;
+                var hosted = new KeyMoveHostedService(keyMove, connector, prefix, setup is null ? null : new RouterAdvertSource(setup.Store), setup?.Scope);
+                await hosted.StartAsync(cancellationToken).ConfigureAwait(false);
+                started.Add(hosted);
+            }
+
+            return CollectLibraryParts(root, builder, connector, started);
         }
         catch
         {

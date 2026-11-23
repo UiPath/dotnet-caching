@@ -70,10 +70,10 @@ internal sealed class StateKit : IAsyncDisposable
 
     public RedisKey StateKey => Names.State(Group);
 
-    public static async Task<StateKit> StandaloneAsync(RedisContainerFixture fixture, bool useScripts, KeyMoveStateOptions? options = null, string prefix = "")
+    public static async Task<StateKit> StandaloneAsync(RedisContainerFixture fixture, bool useScripts, KeyMoveStateOptions? options = null, string prefix = "", string? connectionString = null)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var mux = await ConnectionMultiplexer.ConnectAsync(connectionString ?? fixture.ConnectionString);
         return new StateKit(mux, new MoveKeyNames(prefix, Library, cluster: false), options ?? new KeyMoveStateOptions { ExpectedReplicasPerMaster = 0 }, useScripts, fixture.ServerVersion, prefix);
     }
 

@@ -190,12 +190,32 @@ public sealed class RouterHostTests
 
     private sealed class CapturedLogs : ILoggerProvider
     {
-        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+        private readonly List<(LogLevel Level, string Message)> _entries = [];
+
+        // Logging continues on background threads while a test reads, so a read takes a copy under the same lock the writes use.
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get
+            {
+                lock (_entries)
+                {
+                    return [.. _entries];
+                }
+            }
+        }
 
         public ILogger CreateLogger(string categoryName) => new Capture(this);
 
         public void Dispose()
         {
+        }
+
+        private void Add(LogLevel level, string message)
+        {
+            lock (_entries)
+            {
+                _entries.Add((level, message));
+            }
         }
 
         private sealed class Capture(CapturedLogs owner) : ILogger
@@ -207,10 +227,7 @@ public sealed class RouterHostTests
 
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
             {
-                lock (owner.Entries)
-                {
-                    owner.Entries.Add((logLevel, formatter(state, exception)));
-                }
+                owner.Add(logLevel, formatter(state, exception));
             }
         }
     }

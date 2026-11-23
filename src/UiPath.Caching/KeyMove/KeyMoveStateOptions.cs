@@ -2,7 +2,16 @@ namespace UiPath.Caching.KeyMove;
 
 internal sealed class KeyMoveStateOptions
 {
-    public int StateWaitReplicas { get; init; } = 1;
+    private readonly int _stateWaitReplicas = 1;
+
+    /// <summary>1 to wait for a replica at every barrier, 0 for none; the server barrier waits for exactly one replica, so no other count is accepted.</summary>
+    public int StateWaitReplicas
+    {
+        get => _stateWaitReplicas;
+        init => _stateWaitReplicas = value is 0 or 1
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(StateWaitReplicas), value, "The state barrier waits for one replica (WAIT 1); StateWaitReplicas can only be 0 or 1.");
+    }
 
     /// <summary>How many times a barrier is tried in all, each on a replaced connection after the first.</summary>
     public int BarrierRetries { get; init; } = 3;
@@ -29,6 +38,16 @@ internal sealed class KeyMoveStateOptions
     public TimeSpan LeaseRenewInterval { get; init; } = TimeSpan.FromSeconds(10);
 
     public TimeSpan UpkeepInterval { get; init; } = TimeSpan.FromSeconds(60);
+
+    public TimeSpan ClearLockTtl { get; init; } = TimeSpan.FromSeconds(120);
+
+    public TimeSpan ClearLockRenewInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>How many times a Clear closes the gates and sweeps again when a transition replaced the gates during the sweep.</summary>
+    public int ClearRetries { get; init; } = 3;
+
+    /// <summary>A gate closed for longer than this raises <c>gate_stuck</c>.</summary>
+    public TimeSpan GateStuckAfter { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>How long a master that failed a barrier counts as failing for the way back.</summary>
     public TimeSpan BarrierFailureWindow { get; init; } = TimeSpan.FromMinutes(10);

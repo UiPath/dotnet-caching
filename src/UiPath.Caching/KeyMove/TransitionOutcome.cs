@@ -16,6 +16,9 @@ internal enum TransitionOutcome
     /// <summary>A CTLCOMMIT was refused or a slot could not be committed after the retries; the transition stays committed-in-part and is resumed.</summary>
     CommitIncomplete,
 
+    /// <summary>A CTLCOMMIT batch may have applied in part and a slot is not committed: nothing is sent again in this call, the driver reports it and a resume decides.</summary>
+    CommitUncertain,
+
     /// <summary>The abandon was asked for a transition that is past the commit, that a node acknowledged, or that does not exist.</summary>
     AbandonRefused,
 

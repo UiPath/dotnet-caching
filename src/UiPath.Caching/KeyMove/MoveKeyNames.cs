@@ -106,6 +106,14 @@ internal sealed class MoveKeyNames
         return $"{LibraryPrefix}{Keyspace}:{{{group}}}:lead";
     }
 
+    /// <summary>The lock of one Clear at a time for a cache, in the slot of the group's state hash.</summary>
+    public RedisKey ClearLock(string group, string cacheId)
+    {
+        ValidateName(group, nameof(group));
+        ValidateName(cacheId, nameof(cacheId));
+        return $"{LibraryPrefix}{Keyspace}:{{{group}}}:clrlock:{cacheId}";
+    }
+
     /// <summary>The control record of <paramref name="group"/> in the slot of <paramref name="dataKey"/>.</summary>
     public RedisKey ControlFor(string group, string dataKey) => Control(group, SlotOf(dataKey));
 
@@ -141,6 +149,18 @@ internal sealed class MoveKeyNames
     /// <summary>The control records of the group, one per slot of <see cref="SlotSet"/>.</summary>
     public IReadOnlyList<(int Slot, RedisKey Key)> ControlRecords(string group) =>
         [.. SlotSet().Select(slot => (slot, Control(group, slot)))];
+
+    /// <summary>The app's claim key: the library prefix, <c>mx</c> and a tag of the lowercased app name; with the prefix <c>{app}:</c> it is <c>{app}:mx:{{app}}</c>.</summary>
+    public string Claim(string app)
+    {
+        var name = app.ToLowerInvariant();
+        if (!ClaimGrammar.ValidGroup(name))
+        {
+            throw new ArgumentException($"The app name '{app}' cannot hold a claim: it must be 1 to 200 of letters, digits and . _ : > @ + -.", nameof(app));
+        }
+
+        return $"{LibraryPrefix}mx:{{{name}}}";
+    }
 
     // True for a prefix that tags every key; false for one with no braces; throws for one whose braces would take part of the key into the tag.
     private static bool PrefixTag(string prefix)

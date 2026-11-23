@@ -56,6 +56,9 @@ internal sealed class MultiplexerTopology(
         options.EndPoints.Clear();
         options.EndPoints.Add(master);
 
+        // CLIENT ID and INFO prove that a WAIT ran on the connection that wrote; both are admin commands for the client, and this connection runs nothing else.
+        options.AllowAdmin = true;
+
         // WAIT blocks its connection for the barrier time; a command timeout below that would fail every barrier on a slow replica.
         if (barrierWait is { } wait)
         {

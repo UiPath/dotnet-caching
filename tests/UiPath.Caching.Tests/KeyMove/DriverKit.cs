@@ -6,15 +6,21 @@ namespace UiPath.Caching.Tests.KeyMove;
 // The leader's loop over a real state store with a simulated fleet and the seams faked; time is the kit's manual clock.
 internal sealed class DriverKit : IAsyncDisposable
 {
-    private DriverKit(StateKit kit, StageDriverOptions options)
+    private DriverKit(StateKit kit, StageDriverOptions options, bool withMonitor)
     {
+        if (withMonitor)
+        {
+            Monitor = new GroupStateMonitor(kit.Store, kit.Options, kit.Time);
+            Monitor.Register([new GroupRegistration(kit.Group, false, true)]);
+        }
+
         Kit = kit;
         Options = options;
         Fleet = new SimulatedFleet(kit.Store, kit.Group);
         Facts = new FakeGroupFacts { ReleaseFloorAttested = true };
         var flags = new FlagViews(options, kit.Time);
         Driver = new StageDriver(
-            new StageDriverServices(kit.Store, kit.Scripts, kit.Names, kit.Sequence, kit.Preflight, kit.Ledger, Fleet, Facts, Claim, Data, Mover, _ => HoldsLease, null, null, (_, code, detail) => Alerts.Add((code, detail)), _ => Fence),
+            new StageDriverServices(kit.Store, kit.Scripts, kit.Names, kit.Sequence, kit.Preflight, kit.Ledger, Fleet, Facts, Claim, Data, Mover, _ => HoldsLease, Monitor, null, a => Alerts.Add((a.Code, a.Detail)), _ => Fence, kit.Upkeep),
             options,
             kit.Options,
             flags,
@@ -37,6 +43,8 @@ internal sealed class DriverKit : IAsyncDisposable
 
     public FakeMoverStatus Mover { get; } = new();
 
+    public GroupStateMonitor? Monitor { get; }
+
     public StageDriver Driver { get; }
 
     public StageCommands Commands { get; }
@@ -49,10 +57,10 @@ internal sealed class DriverKit : IAsyncDisposable
 
     public string Group => Kit.Group;
 
-    public static async Task<DriverKit> CreateAsync(RedisContainerFixture fixture, bool useScripts = true, StageDriverOptions? options = null, KeyMoveStateOptions? state = null)
+    public static async Task<DriverKit> CreateAsync(RedisContainerFixture fixture, bool useScripts = true, StageDriverOptions? options = null, KeyMoveStateOptions? state = null, bool withMonitor = false)
     {
         var kit = await StateKit.StandaloneAsync(fixture, useScripts, state ?? new KeyMoveStateOptions { ExpectedReplicasPerMaster = 0, EvictionPolicyAttested = true });
-        return new DriverKit(kit, options ?? new StageDriverOptions { UpgradeHold = TimeSpan.Zero, AckStable = TimeSpan.Zero, DrainedSoak = TimeSpan.Zero });
+        return new DriverKit(kit, options ?? new StageDriverOptions { UpgradeHold = TimeSpan.Zero, AckStable = TimeSpan.Zero, DrainedSoak = TimeSpan.Zero }, withMonitor);
     }
 
     public async Task<StateRecord> StateAsync() => (await Kit.Store.ReadAsync(Group, CancellationToken.None))!;

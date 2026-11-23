@@ -1,3 +1,5 @@
+using UiPath.Caching.KeyMove;
+
 namespace UiPath.Caching.Migration;
 
 internal sealed class Router : IRouter, IAsyncDisposable
@@ -45,6 +47,8 @@ internal sealed class Router : IRouter, IAsyncDisposable
     internal ISerializerProxy<byte[]>? Envelope { get; init; }
 
     internal TimeProvider Clock => _core.Clock;
+
+    internal KeyMoveNode? KeyMove { get; init; }
 
     public Task EnterBypassAsync(CancellationToken cancellationToken = default)
     {

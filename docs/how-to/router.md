@@ -109,6 +109,7 @@ When the stage driver reports a blocked start, close, or drain, use the check ID
 | `start.release_floor`, `start.view_stable`, `start.snapshot_freshness` | The minimum release is attested, the node views have held steady, and advertised snapshots are fresh. |
 | `start.dry_run`, `start.memory_headroom`, `start.format_settled` | The dry run is recent, the memory estimate leaves enough headroom, and the format is settled. |
 | `start.group_listed`, `start.server_preflight`, `start.cache_set`, `start.native_empty` | All nodes list the group, Redis passes preflight, the registered cache sets agree, and the masters find no owned native keys. |
+| `start.claim_available` | Groups that require a move claim have a claim provider configured. |
 | `close.acks`, `close.soak`, `close.canary`, `close.consent` | Every fresh node acknowledges the identity, the soak has elapsed, no canary activity occurred during it, and consent covers the stored residue. |
 | `close.node_readiness`, `close.inventory`, `close.views` | Fresh nodes can use key move without bypassing, current residue fits within the approved counts, and all views confirm the close stage. |
 | `drain.confirming_pass`, `drain.skipped_accounted`, `drain.promotions_idle`, `drain.canary_zero` | The confirming pass finds nothing movable, all skips are accounted for, no promotions remain in flight, and the forward canary is zero. The first two IDs are reported together because the mover supplies one verdict for both. |

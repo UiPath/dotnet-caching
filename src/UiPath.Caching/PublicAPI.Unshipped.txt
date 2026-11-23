@@ -139,3 +139,7 @@ UiPath.Caching.KeyMove.IntFlagStageSource
 UiPath.Caching.KeyMove.IntFlagStageSource.GetStageAsync(string! group, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<int?>
 UiPath.Caching.KeyMove.IntFlagStageSource.IntFlagStageSource(System.Func<string!, int, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<int>>! getInt) -> void
 const UiPath.Caching.KeyMove.IntFlagStageSource.Sentinel = -1 -> int
+UiPath.Caching.KeyMove.KeyMoveAlert
+UiPath.Caching.KeyMove.KeyMoveAlert.Code.get -> string!
+UiPath.Caching.KeyMove.KeyMoveAlert.Detail.get -> string!
+UiPath.Caching.KeyMove.KeyMoveAlert.Group.get -> string!

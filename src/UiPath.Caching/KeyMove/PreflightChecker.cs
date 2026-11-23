@@ -49,7 +49,7 @@ internal sealed class PreflightChecker(IStateTopology topology, KeyMoveStateOpti
         }
     }
 
-    // Scripts or the 6.0.9 fallback, and a WAIT that answers on a dedicated connection.
+    // Scripts or the 6.0.9 fallback, and a WAIT that answers on a dedicated connection together with the CLIENT ID and INFO that prove it ran on the connection that wrote.
     private async Task CheckProtocolAsync(List<PreflightFailure> failures, EndPoint master, CancellationToken cancellationToken)
     {
         try
@@ -60,7 +60,10 @@ internal sealed class PreflightChecker(IStateTopology topology, KeyMoveStateOpti
                 failures.Add(new PreflightFailure("scripts_unsupported", $"{master}: scripts are refused and the server is older than {MoveScripts.FallbackMinimum}"));
             }
 
-            await channel.WaitAsync(0, TimeSpan.FromMilliseconds(1), cancellationToken).ConfigureAwait(false);
+            var server = channel.StateDatabase.Multiplexer.GetServer(master);
+            await server.ExecuteAsync("WAIT", 0, 1L).WaitAsync(cancellationToken).ConfigureAwait(false);
+            await server.ExecuteAsync("CLIENT", "ID").WaitAsync(cancellationToken).ConfigureAwait(false);
+            await server.ExecuteAsync("INFO").WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is StackExchange.Redis.RedisException or TimeoutException)
         {

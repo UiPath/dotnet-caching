@@ -24,8 +24,24 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     private readonly object _gate = new();
     private readonly List<ManualTimer> _timers = [];
     private TimeSpan _elapsed;
+    private int _created;
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+    /// <summary>How many timers were ever created, so a test can tell a new timer from one that already existed.</summary>
+    public int TimersCreated => Volatile.Read(ref _created);
+
+    /// <summary>How many timers are waiting to fire.</summary>
+    public int TimerCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Count;
+            }
+        }
+    }
 
     /// <summary>Whether a timer is waiting to fire.</summary>
     public bool HasTimers
@@ -58,6 +74,7 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         var timer = new ManualTimer(this, callback, state);
+        Interlocked.Increment(ref _created);
         timer.Change(dueTime, period);
         return timer;
     }

@@ -20,6 +20,10 @@ internal sealed class FakeGroupFacts : IGroupFacts
 
     public TimeSpan? SourceTtl { get; set; }
 
+    public List<string> Started { get; } = [];
+
+    public List<string> Evidence { get; } = [];
+
     public bool HasNoOrigin(string group, IReadOnlyList<string> cacheIds) => NoOrigin;
 
     public bool TakesClaim(string group) => Claims;
@@ -30,9 +34,17 @@ internal sealed class FakeGroupFacts : IGroupFacts
 
     public bool AllAcceptRefill(string group, IReadOnlyList<string> cacheIds) => AcceptRefill;
 
-    public bool FormatSettled(string group) => Settled;
+    public IReadOnlyList<string> StartTaken(string group)
+    {
+        Started.Add(group);
+        return Evidence;
+    }
 
-    public bool NodeListComplete(string group) => NodeListSettled;
+    public bool ClaimWired(string group) => true;
 
-    public bool MemoryFits(string group, long estimatedBytes, double headroom) => Fits;
+    public bool FormatSettled(string group, StateRecord state) => Settled;
+
+    public bool NodeListComplete(string group, StateRecord state) => NodeListSettled;
+
+    public bool MemoryFits(string group, string reportId, long estimatedBytes, double headroom) => Fits;
 }

@@ -5,6 +5,9 @@ namespace UiPath.Caching.KeyMove;
 /// <summary>The <c>dry</c> field: <c>&lt;unix ms&gt;|&lt;estimated N bytes&gt;|&lt;summary&gt;</c>.</summary>
 internal sealed record DryRunStamp(DateTimeOffset At, long EstimatedBytes, string Summary)
 {
+    /// <summary>The identity of the report: the time it was stored, so a newer dry run is another report.</summary>
+    public string ReportId => At.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+
     public string Encode() => string.Create(CultureInfo.InvariantCulture, $"{At.ToUnixTimeMilliseconds()}|{EstimatedBytes}|{Summary}");
 
     public static DryRunStamp? TryParse(string text)

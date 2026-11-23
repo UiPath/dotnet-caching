@@ -123,20 +123,24 @@ public class StageFlagPollerTests
     {
         var reads = 0;
         var active = true;
-        var poller = new StageFlagPoller(new Source(() => ++reads), _ => active, _options, _time);
+        var createdAtRead = 0;
+        var poller = new StageFlagPoller(new Source(() => { createdAtRead = _time.TimersCreated; return ++reads; }), _ => active, _options, _time);
         poller.IntervalFor(Group).Should().Be(TimeSpan.FromSeconds(2));
         poller.Start([Group], CancellationToken.None);
         try
         {
             await TimeSteps.UntilAsync(() => reads == 1);
-            await TimeSteps.AdvanceArmedAsync(_time, TimeSpan.FromSeconds(2));
+            await TimeSteps.DelayArmedAfterAsync(_time, createdAtRead);
+            _time.Advance(TimeSpan.FromSeconds(2));
             await TimeSteps.UntilAsync(() => reads == 2);
 
+            // The 2 s delay must be armed before the group turns slow, or the loop would arm 60 s instead.
+            await TimeSteps.DelayArmedAfterAsync(_time, createdAtRead);
             active = false;
             poller.IntervalFor(Group).Should().Be(TimeSpan.FromSeconds(60));
-            await TimeSteps.AdvanceArmedAsync(_time, TimeSpan.FromSeconds(2));
+            _time.Advance(TimeSpan.FromSeconds(2));
             await TimeSteps.UntilAsync(() => reads == 3);
-            await TimeSteps.ArmedAsync(_time);
+            await TimeSteps.DelayArmedAfterAsync(_time, createdAtRead);
             _time.Advance(TimeSpan.FromSeconds(59));
             await Task.Delay(50, TestContext.Current.CancellationToken);
             reads.Should().Be(3, "the slow interval has not elapsed");
@@ -157,7 +161,14 @@ public class StageFlagPollerTests
 
         public Func<CancellationToken, Task<int?>>? GateWithToken { get; init; }
 
-        public ValueTask<int?> GetStageAsync(string group, CancellationToken cancellationToken) =>
-            GateWithToken is { } withToken ? new ValueTask<int?>(withToken(cancellationToken)) : Gate is { } gate ? new ValueTask<int?>(gate()) : ValueTask.FromResult(read());
+        public ValueTask<int?> GetStageAsync(string group, CancellationToken cancellationToken)
+        {
+            if (GateWithToken is { } withToken)
+            {
+                return new ValueTask<int?>(withToken(cancellationToken));
+            }
+
+            return Gate is { } gate ? new ValueTask<int?>(gate()) : ValueTask.FromResult(read());
+        }
     }
 }
