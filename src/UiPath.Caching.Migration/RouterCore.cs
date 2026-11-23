@@ -30,39 +30,6 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
 
     public void ThrowIfStopped() => ObjectDisposedException.ThrowIf(IsStopped, typeof(IRouter));
 
-    /// <summary>Admits one operation, or throws before anything is sent when the router is stopped.</summary>
-    public Admission Admit()
-    {
-        Interlocked.Increment(ref _active);
-        if (IsStopped)
-        {
-            Exit();
-            throw new ObjectDisposedException(nameof(IRouter));
-        }
-
-        return new Admission(this);
-    }
-
-    public void Exit()
-    {
-        if (Interlocked.Decrement(ref _active) == 0 && IsStopped)
-        {
-            _operationsDrained.TrySetResult();
-        }
-    }
-
-    public Route ChoosePath(string group)
-    {
-        try
-        {
-            return new Route(useLibrary(group) ? RoutePath.Library : RoutePath.Source, Route.Flag);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            return new Route(RoutePath.Source, Route.PredicateError);
-        }
-    }
-
     public void Run(Func<CancellationToken, Task> work)
     {
         if (_stopping.IsCancellationRequested)
@@ -86,6 +53,11 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
     public void BeginStop()
     {
         Interlocked.Exchange(ref _stopped, 1);
+        if (Volatile.Read(ref _transitions) == 0)
+        {
+            _transitionsEnded.TrySetResult();
+        }
+
         if (Volatile.Read(ref _active) == 0)
         {
             _operationsDrained.TrySetResult();
@@ -122,6 +94,11 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
     public void DisposeResources()
     {
         _stopping.Dispose();
+        if (Volatile.Read(ref _transitions) == 0)
+        {
+            _transition.Dispose();
+        }
+
         Tier.Dispose();
     }
 

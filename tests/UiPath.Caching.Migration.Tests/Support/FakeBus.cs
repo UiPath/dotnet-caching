@@ -9,6 +9,9 @@ internal sealed class FakeBus
 
     public bool FailPublish { get; set; }
 
+    /// <summary>What the topics report through <see cref="ITopicSubscriptionState"/>.</summary>
+    public bool Subscribed { get; set; } = true;
+
     /// <summary>When set, a publish throws it, as a timeout does.</summary>
     public Exception? FailWith { get; set; }
 
@@ -16,6 +19,15 @@ internal sealed class FakeBus
     public TaskCompletionSource? Hold { get; set; }
 
     public int Published { get; private set; }
+
+    /// <summary>Subscriptions that are in place.</summary>
+    public int Subscriptions => Snapshot().Length;
+
+    /// <summary>When set, creating a topic throws it.</summary>
+    public Exception? FailCreate { get; set; }
+
+    /// <summary>Limits <see cref="FailCreate"/> to topics whose name contains this text.</summary>
+    public string FailCreateFor { get; set; } = string.Empty;
 
     /// <summary>Publishes that reached the broker call, whether they were held, failed or went out.</summary>
     public int Attempts { get; private set; }
@@ -93,7 +105,7 @@ internal sealed class FakeBus
 
         public ICollection<TopicKey> Keys => [];
 
-        public ITopic<ICacheEvent> Create(TopicKey topicKey) => new Topic(bus, node, topicKey);
+        public ITopic<ICacheEvent> Create(TopicKey topicKey) => bus.FailCreate is { } failure && topicKey.Name.Contains(bus.FailCreateFor, StringComparison.Ordinal) ? throw failure : new Topic(bus, node, topicKey);
 
         public void Remove(TopicKey topicKey)
         {
@@ -104,8 +116,10 @@ internal sealed class FakeBus
         }
     }
 
-    private sealed class Topic(FakeBus bus, Uri node, TopicKey key) : ITopic<ICacheEvent>
+    private sealed class Topic(FakeBus bus, Uri node, TopicKey key) : ITopic<ICacheEvent>, ITopicSubscriptionState
     {
+        public bool IsSubscribed => bus.Subscribed;
+
         public TopicKey TopicKey => key;
 
         public EventHandler? OnDisposed { get; set; }

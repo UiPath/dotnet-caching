@@ -97,3 +97,19 @@ static UiPath.Caching.Migration.WriteResult.operator ==(UiPath.Caching.Migration
 ~static UiPath.Caching.Migration.SourceRead<T>.operator !=(UiPath.Caching.Migration.SourceRead<T> left, UiPath.Caching.Migration.SourceRead<T> right) -> bool
 ~static UiPath.Caching.Migration.SourceRead<T>.operator ==(UiPath.Caching.Migration.SourceRead<T> left, UiPath.Caching.Migration.SourceRead<T> right) -> bool
 UiPath.Caching.Migration.RouterBuilder.UseLibrarySettleBound(System.TimeSpan bound) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.IRouter.EnterBypassAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+UiPath.Caching.Migration.IRouter.LeaveBypassAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+UiPath.Caching.Migration.IRouter.Mode.get -> UiPath.Caching.Migration.RouterMode
+UiPath.Caching.Migration.IRouter.ModeChanged -> System.Action<UiPath.Caching.Migration.RouterMode, UiPath.Caching.Migration.RouterModeReason>?
+UiPath.Caching.Migration.IRouter.ModeReason.get -> UiPath.Caching.Migration.RouterModeReason
+UiPath.Caching.Migration.RouterBuilder.UseBypassWhen(System.Func<bool>! flag) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.UseNodeIdentity(string! processId) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.UseSourceTimeout(System.TimeSpan timeout) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterMode
+UiPath.Caching.Migration.RouterMode.BypassLibrary = 1 -> UiPath.Caching.Migration.RouterMode
+UiPath.Caching.Migration.RouterMode.Library = 0 -> UiPath.Caching.Migration.RouterMode
+UiPath.Caching.Migration.RouterModeReason
+UiPath.Caching.Migration.RouterModeReason.Default = 0 -> UiPath.Caching.Migration.RouterModeReason
+UiPath.Caching.Migration.RouterModeReason.Flag = 1 -> UiPath.Caching.Migration.RouterModeReason
+UiPath.Caching.Migration.RouterModeReason.LibraryUnavailable = 3 -> UiPath.Caching.Migration.RouterModeReason
+UiPath.Caching.Migration.RouterModeReason.Requested = 2 -> UiPath.Caching.Migration.RouterModeReason

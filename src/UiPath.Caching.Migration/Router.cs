@@ -14,8 +14,8 @@ internal sealed class Router : IRouter, IAsyncDisposable
     private TaskCompletionSource? _stop;
     private TaskCompletionSource? _cleaned;
 
-    public Router(RouterCore core, IEnumerable<Func<RouterContext, (string Name, Type Type, object Cache)>> registrations, RouterContext context)
-        : this(core, registrations.Select(create => create(context)))
+    public Router(RouterCore core, IEnumerable<Func<RouterCore, (string Name, Type Type, object Cache)>> registrations)
+        : this(core, registrations.Select(create => create(core)))
     {
     }
 
@@ -27,6 +27,29 @@ internal sealed class Router : IRouter, IAsyncDisposable
             _caches.Add(name, (type, cache));
         }
     }
+
+    public event Action<RouterMode, RouterModeReason>? ModeChanged
+    {
+        add => _core.ModeChanged += value;
+        remove => _core.ModeChanged -= value;
+    }
+
+    public RouterMode Mode => _core.Mode;
+
+    public RouterModeReason ModeReason => _core.ModeReason;
+
+    public Task EnterBypassAsync(CancellationToken cancellationToken = default)
+    {
+        _core.ThrowIfStopped();
+        return _core.EnterBypassAsync(cancellationToken);
+    }
+
+    public Task LeaveBypassAsync(CancellationToken cancellationToken = default)
+    {
+        _core.ThrowIfStopped();
+        return _core.LeaveBypassAsync(cancellationToken);
+    }
+
 
     public IRoutedCache<T> Get<T>(string cacheName)
         where T : class
@@ -73,7 +96,9 @@ internal sealed class Router : IRouter, IAsyncDisposable
         await _cleaned!.Task.ConfigureAwait(false);
     }
 
-    private static Task PendingSettled(IStoppable[] stoppables) => Task.WhenAll(stoppables.Select(stoppable => stoppable.WhenPendingSettledAsync()));
+    internal void Start() => _core.Start();
+
+    private static Task PendingSettled(IRouterParticipant[] stoppables) => Task.WhenAll(stoppables.Select(stoppable => stoppable.WhenPendingSettledAsync()));
 
     private async Task CleanupAsync(TaskCompletionSource foreground, TaskCompletionSource cleaned)
     {
@@ -94,7 +119,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
     private async Task StepsAsync(TaskCompletionSource foreground)
     {
         _core.BeginStop();
-        var stoppables = _caches.Values.Select(entry => entry.Cache).OfType<IStoppable>().ToArray();
+        var stoppables = _caches.Values.Select(entry => entry.Cache).OfType<IRouterParticipant>().ToArray();
 
         // Calls that were admitted finish first; a pending key stays protected until its own command can no longer land.
         var drained = await WithinAsync(_core.OperationsDrained).ConfigureAwait(false);
@@ -124,11 +149,21 @@ internal sealed class Router : IRouter, IAsyncDisposable
         }
 
         await background.ConfigureAwait(false);
+
+        // A transition that an outside caller started holds the lock until it ends; the semaphore is disposed only after every one has.
+        await BoundedStop.CompletesAsync(_core.TransitionsEnded, _core.CleanupBound).ConfigureAwait(false);
         foreach (var (_, cache) in _caches.Values)
         {
             (cache as IDisposable)?.Dispose();
         }
 
+        var release = _core.ReleaseLibraryAsync();
+        if (!await WithinAsync(release).ConfigureAwait(false))
+        {
+            foreground.TrySetResult();
+        }
+
+        await release.ConfigureAwait(false);
         _core.DisposeResources();
     }
 
@@ -136,7 +171,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
     {
         try
         {
-            await task.WaitAsync(PhaseLimit, _core.Clock).ConfigureAwait(false);
+            await task.WaitAsync(PhaseLimit, _core.Clock, CancellationToken.None).ConfigureAwait(false);
             return true;
         }
         catch (TimeoutException)
