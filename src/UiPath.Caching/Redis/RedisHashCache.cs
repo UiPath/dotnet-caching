@@ -131,6 +131,15 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             : GetInnerCacheEntryAsync<T?, PlainFormat>(cacheKey, default, token, atomic: true);
     }
 
+    public ValueTask<bool> RemoveIfUnreadableAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var format = FormatFor(policy, forWrite: false);
+        return format.Sniff
+            ? RemoveIfUnreadableCoreAsync<T, ValueFormat>(cacheKey, format, token)
+            : RemoveIfUnreadableCoreAsync<T, PlainFormat>(cacheKey, default, token);
+    }
+
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
@@ -226,6 +235,13 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         var report = new WriteReport(limits);
         var written = await SetCountingAsync(cacheKey, values, options, policy, report, token).ConfigureAwait(false);
         return new VersionedWrite(written, report.Version, report.Fields);
+    }
+
+    public async ValueTask<VersionedWrite> FillVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default)
+    {
+        var report = new WriteReport(limits) { OnlyIfAbsent = true };
+        var written = await SetCountingAsync(cacheKey, values, options, policy, report, token).ConfigureAwait(false);
+        return new VersionedWrite(written, report.Version, report.Fields, report.Existed);
     }
 
     public ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>

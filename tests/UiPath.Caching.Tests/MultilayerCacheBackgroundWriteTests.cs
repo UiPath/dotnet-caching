@@ -1112,6 +1112,15 @@ public class MultilayerCacheBackgroundWriteTests
                     return new ValueTask<bool>(OnWrite!($"{key}={value}", call.ArgAt<CancellationToken>(4)));
                 });
             ValueTaskStubs.Returns(
+                inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
+                call =>
+                {
+                    var key = call.ArgAt<CacheKey>(0).Name;
+                    var value = call.ArgAt<string?>(1);
+                    Add($"write:{key}={value}");
+                    return AsFill(OnWrite!($"{key}={value}", call.ArgAt<CancellationToken>(4)));
+                });
+            ValueTaskStubs.Returns(
                 inner.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
                 _ =>
                 {
@@ -1286,6 +1295,9 @@ public class MultilayerCacheBackgroundWriteTests
         }
 
         public void Dispose() => Cache.Dispose();
+
+        private static async ValueTask<FillResult<string>> AsFill(Task<bool> write) =>
+            new(await write.ConfigureAwait(false) ? FillOutcome.Added : FillOutcome.Failed, null);
 
         private void Add(string entry)
         {

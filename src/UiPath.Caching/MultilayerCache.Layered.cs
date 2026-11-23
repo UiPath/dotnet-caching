@@ -14,6 +14,8 @@ internal sealed partial class MultilayerCache
 
         public bool CanAdopt => cache._innerCache is IMigrationCache;
 
+        public bool CanStamp => cache._innerCache is IStampedTier;
+
         public bool IsEmpty(T? value) => value is null;
 
         public T? Present(T? value) => value;
@@ -24,8 +26,43 @@ internal sealed partial class MultilayerCache
         public ValueTask<ICacheEntry<T?>> ReadInnerAsync(CacheEntryOptions options, CachePolicy policy) =>
             cache._innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token);
 
-        public ValueTask<ICacheEntry<T?>> ReadForAdoptionAsync(CacheEntryOptions options, CachePolicy policy) =>
-            AdoptionEntryAsync(((IMigrationCache)cache._innerCache).ReadSnapshotAsync<T>(options.CacheKey, policy, options.Token));
+        public ValueTask<ICacheEntry<T?>> ReadForAdoptionAsync(CacheEntryOptions options, CachePolicy policy, StampBox stamp) =>
+            cache._innerCache is IStampedTier tier
+                ? ReadStampedForAdoptionAsync(tier, options, policy, stamp)
+                : AdoptionEntryAsync(((IMigrationCache)cache._innerCache).ReadSnapshotAsync<T>(options.CacheKey, policy, options.Token));
+
+        public async ValueTask<StampedWrite> StoreStampedAsync(CacheEntryOptions options, T? value, CachePolicy policy, StampBox stamp)
+        {
+            try
+            {
+                stamp.TryGet(out var seen);
+                return await cache._background.WriteAsync(
+                    options.CacheKey.Name,
+                    (Cache: cache, Shape: this, Options: options, Value: value, Policy: policy, Seen: seen),
+                    null,
+                    static (s, _) => ((IStampedTier)s.Cache._innerCache).WriteIfStampAsync<T?>(s.Options.CacheKey, s.Value, s.Options.Expiration, s.Policy, s.Seen, s.Options.Token),
+                    static (s, written, keeper) =>
+                    {
+                        if (written == StampedWrite.Won)
+                        {
+                            s.Cache.KeepAfterInnerWrite(true, false, s.Policy, (s.Shape, s.Options, s.Value, Keeper: keeper, s.Policy), static (x, max) => x.Shape.KeepWritten(x.Keeper, x.Options, x.Value, max, null, 0, x.Policy), s.Options.Token);
+                        }
+
+                        return written;
+                    },
+                    options.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (options.Token.IsCancellationRequested)
+            {
+                return StampedWrite.Failed;
+            }
+            catch (Exception ex)
+            {
+                cache.LogInnerCacheSetError(ex, cache.Logged(options, typeof(T)));
+                return StampedWrite.Failed;
+            }
+        }
+
 
         public void Adopt(ref CacheEntryOptions options, ICacheEntry<T?> fetched) => options.Expiration = fetched.Expiration;
 
@@ -70,5 +107,16 @@ internal sealed partial class MultilayerCache
         }
 
         public ValueTask<bool> AnnounceSetAsync(CacheEntryOptions options, VersionedWrite counted) => cache._eventPublisher.CacheSetAsync(options, typeof(T));
+
+        private static async ValueTask<ICacheEntry<T?>> ReadStampedForAdoptionAsync(IStampedTier tier, CacheEntryOptions options, CachePolicy policy, StampBox stamp)
+        {
+            var (snapshot, seen) = await tier.ReadStampedAsync<T>(options.CacheKey, policy, options.Token).ConfigureAwait(false);
+            if (snapshot.Outcome != SnapshotOutcome.Failed)
+            {
+                stamp.Record(seen);
+            }
+
+            return await AdoptionEntryAsync(new ValueTask<SnapshotRead<T>>(snapshot)).ConfigureAwait(false);
+        }
     }
 }

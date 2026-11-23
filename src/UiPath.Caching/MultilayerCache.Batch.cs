@@ -389,17 +389,33 @@ internal sealed partial class MultilayerCache
             LogBatchCacheMissed(Logged(missedOptions, typeof(T)), stillMissing.Count);
         }
 
-        var produced = await InvokeFactoryAsync(telemetryKey, ct => generator(requestStates, ct), policy.FactoryTimeout, token).ConfigureAwait(false);
-        var producedByState = SelectRequestedProduced(produced, requestStates);
-
-        var toStore = SelectEntriesToStore<T, TState>(missOptions, missStates, stillMissing, producedByState);
-        if (toStore.Count > 0)
+        var watched = BeginBatchFill(missOptions, stillMissing);
+        try
         {
-            var innerCacheDisconnected = GetInnerCacheDisconnected();
-            await InternalSetAsync<T>(toStore.ToArray(), innerCacheDisconnected, policy, keepRefused: true, token).ConfigureAwait(false);
-        }
+            var produced = await InvokeFactoryAsync(telemetryKey, ct => generator(requestStates, ct), policy.FactoryTimeout, token).ConfigureAwait(false);
+            var producedByState = SelectRequestedProduced(produced, requestStates);
 
-        return BuildBatchEntries<T, TState>(missOptions, missStates, probe, producedByState);
+            var toStore = SelectEntriesToStore<T, TState>(missOptions, missStates, stillMissing, producedByState);
+            Dictionary<string, ICacheEntry<T?>>? adopted = null;
+            if (toStore.Count > 0)
+            {
+                var innerCacheDisconnected = GetInnerCacheDisconnected();
+                if (innerCacheDisconnected)
+                {
+                    await InternalSetAsync<T>(toStore.ToArray(), innerCacheDisconnected, policy, keepRefused: true, token).ConfigureAwait(false);
+                }
+                else
+                {
+                    adopted = await FillBatchAsync(toStore.ToArray(), watched, policy, token).ConfigureAwait(false);
+                }
+            }
+
+            return BuildBatchEntries<T, TState>(missOptions, missStates, probe, producedByState, adopted);
+        }
+        finally
+        {
+            EndBatchFill(watched);
+        }
     }
 
     /// <summary>The write set: the answered still-missing slots, minus the nulls this cache does not store.</summary>
@@ -429,7 +445,8 @@ internal sealed partial class MultilayerCache
         CacheEntryOptions[] missOptions,
         TState[] missStates,
         KeyValuePair<CacheKey, ICacheEntry<T?>>[] probe,
-        Dictionary<TState, T?> producedByState)
+        Dictionary<TState, T?> producedByState,
+        Dictionary<string, ICacheEntry<T?>>? adopted = null)
         where TState : notnull
     {
         var results = new KeyValuePair<CacheKey, ICacheEntry<T?>>[missOptions.Length];
@@ -440,6 +457,14 @@ internal sealed partial class MultilayerCache
                 results[i] = probe[i];
                 continue;
             }
+
+            // A peer stored the key first: its value is the answer, not the one this call generated.
+            if (adopted is not null && adopted.TryGetValue(missOptions[i].CacheKey.Name, out var stored))
+            {
+                results[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(missOptions[i].CacheKey, stored);
+                continue;
+            }
+
             var wasProduced = producedByState.TryGetValue(missStates[i], out var value);
             results[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(
                 missOptions[i].CacheKey,

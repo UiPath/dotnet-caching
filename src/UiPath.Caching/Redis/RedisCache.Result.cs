@@ -108,9 +108,11 @@ internal sealed partial class RedisCache : IResultCache
             else
             {
                 LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
-                ret = await RunGeneratorAsync(cacheKey, recorder.Generator, static (g, ct) => g(ct), factoryTimeout, token).ConfigureAwait(false);
+                ret = await (_tombstoneGrace is null
+                    ? RunGeneratorAsync(cacheKey, recorder.Generator, static (g, ct) => g(ct), factoryTimeout, token)
+                    : GenerateAndFillAsync(cacheKey, redisKey, recorder.Generator, static (g, ct) => g(ct), factoryTimeout, duration, format, run)).ConfigureAwait(false);
                 // Only a value that was written has an expiration to report.
-                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(cacheKey, redisKey, ret, duration, format, token).ConfigureAwait(false))
+                if (_tombstoneGrace is null && (!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(cacheKey, redisKey, ret, duration, format, token).ConfigureAwait(false))
                 {
                     run.Expiration = StoredDeadline(duration);
                 }

@@ -67,7 +67,7 @@ internal sealed partial class RedisCache
                 ret = await _write.ExecuteAsync(static (s, token) =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return s.Self.Database.KeyPersistAsync(s.Key, s.Self.RefreshFlags).AsValueTask();
+                    return s.Self._tombstoneGrace is null ? s.Self.Database.KeyPersistAsync(s.Key, s.Self.RefreshFlags).AsValueTask() : s.Self.PersistUnlessTombstoneAsync(s.Key);
                 },
                 (Self: this, Key: redisKey),
                 default,
@@ -78,7 +78,7 @@ internal sealed partial class RedisCache
                 ret = await _write.ExecuteAsync(static (s, token) =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return s.Self.Database.KeyExpireAsync(s.Key, s.Expiration.UtcDateTime, s.Self.RefreshFlags).AsValueTask();
+                    return s.Self._tombstoneGrace is null ? s.Self.Database.KeyExpireAsync(s.Key, s.Expiration.UtcDateTime, s.Self.RefreshFlags).AsValueTask() : s.Self.ExpireUnlessTombstoneAsync(s.Key, s.Expiration.UtcDateTime);
                 },
                 (Self: this, Key: redisKey, Expiration: expiration),
                 default,
@@ -296,7 +296,7 @@ internal sealed partial class RedisCache
                 }
                 else
                 {
-                    transaction.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).Forget();
+                    QueueRemove(transaction, redisKey);
                 }
             }
             else
@@ -355,7 +355,9 @@ internal sealed partial class RedisCache
                     ret = await _write.ExecuteAsync(static (s, token) =>
                     {
                         token.ThrowIfCancellationRequested();
-                        return s.Self.Database.StringSetAsync(s.Key, s.Serialized, s.Expiration, When.NotExists, CommandFlags.DemandMaster).AsValueTask();
+                        return s.Self._tombstoneGrace is null
+                            ? s.Self.Database.StringSetAsync(s.Key, s.Serialized, s.Expiration, When.NotExists, CommandFlags.DemandMaster).AsValueTask()
+                            : s.Self.AddOverTombstoneAsync(s.Key, s.Serialized, s.Expiration);
                     },
                     (Self: this, Key: redisKey, Serialized: serialized, Expiration: expiration),
                     default,
@@ -395,7 +397,7 @@ internal sealed partial class RedisCache
             ret = await _write.ExecuteAsync(static async (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                await s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).ConfigureAwait(false);
+                await s.Self.RemoveKeyAsync(s.Key).ConfigureAwait(false);
                 return true;
             },
             (Self: this, Key: redisKey),
@@ -437,7 +439,7 @@ internal sealed partial class RedisCache
                 static (s, group) => s.Self._write.ExecuteAsync(static (r, token) =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return r.Self.Database.KeyDeleteAsync(r.Keys, CommandFlags.DemandMaster).AsValueTask();
+                    return r.Self.RemoveKeysAsync(r.Keys).AsValueTask();
                 },
                 (s.Self, Keys: Pick(s.Keys, group)),
                 -1L,

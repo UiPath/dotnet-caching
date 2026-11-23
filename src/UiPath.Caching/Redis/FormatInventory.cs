@@ -63,6 +63,12 @@ internal sealed class FormatInventory(
             return CacheValueFormats.JsonName;
         }
 
+        // A remove tombstone holds no value, so it is no format of one.
+        if (formatId == FormatIdRules.TombstoneId)
+        {
+            return null;
+        }
+
         return formatId < 0 || !registry.TryGetByFormat(formatId, out _) ? CacheValueFormats.UnknownName : registry.NameOf(formatId);
     }
 

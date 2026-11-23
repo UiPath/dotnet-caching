@@ -237,7 +237,7 @@ internal sealed partial class RedisCache
             {
                 token.ThrowIfCancellationRequested();
                 s.Trace.MarkSent();
-                return s.Trace.AcknowledgeRanAsync(s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster));
+                return s.Trace.AcknowledgeRanAsync(s.Self.RemoveKeyAsync(s.Key));
             },
             (Self: this, Key: redisKey, Trace: trace),
             default,

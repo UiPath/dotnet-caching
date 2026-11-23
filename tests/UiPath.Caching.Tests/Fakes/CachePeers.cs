@@ -21,6 +21,9 @@ internal sealed class CachePeers : IDisposable
 
     public SharedStore Store { get; } = new();
 
+    /// <summary>Whether the nodes' inner tier leaves remove tombstones, so a fill is told how long its generator ran.</summary>
+    public bool Fenced { get; set; }
+
     /// <summary>When off, events wait in <see cref="Node.Published"/> for <see cref="Deliver"/>.</summary>
     public bool AutoDeliver { get; set; } = true;
 
@@ -104,6 +107,9 @@ internal sealed class CachePeers : IDisposable
 
     internal sealed class SharedStore
     {
+        /// <summary>What a key holds when no serializer reads its bytes.</summary>
+        public static object Unreadable { get; } = new();
+
         public ConcurrentDictionary<string, object?> Values { get; } = new(StringComparer.Ordinal);
 
         /// <summary>The lifetime a read reports for a key, from the read; an hour for a key not listed.</summary>
@@ -130,6 +136,7 @@ internal sealed class CachePeers : IDisposable
             var inner = DispatchProxy.Create<ICache, NodeInner>();
             Inner = (NodeInner)(object)inner;
             Inner.Store = peers.Store;
+            Inner.Fenced = peers.Fenced;
 
             var events = new CacheEventFactory(Options.Create(cacheOptions));
             var tokens = new ChangeTokenFactory<byte[]>(Options.Create(cacheOptions), new SystemJsonByteSerializerProxy(), NullLoggerFactory.Instance, Substitute.For<ICachingTelemetryProvider>());
@@ -386,11 +393,12 @@ internal sealed class CachePeers : IDisposable
     }
 
     /// <summary>The inner tier of a node over the shared store: counts its reads, can hold or fail them, and reports a connection state the test sets.</summary>
-    internal class NodeInner : DispatchProxy, IConnectionState, ISharedTier, IMigrationCache
+    internal class NodeInner : DispatchProxy, IConnectionState, ISharedTier, IMigrationCache, IStampedTier, IFillManyTier, IFencedFillTier
     {
         private static readonly MethodInfo ReadOne = typeof(NodeInner).GetMethod(nameof(ReadOneAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
         private static readonly MethodInfo ReadMany = typeof(NodeInner).GetMethod(nameof(ReadManyAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
         private static readonly MethodInfo WriteMany = typeof(NodeInner).GetMethod(nameof(WriteAll), BindingFlags.Static | BindingFlags.NonPublic)!;
+        private static readonly MethodInfo FillOne = typeof(NodeInner).GetMethod(nameof(FillOneAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
 
         private readonly AsyncLocal<bool> _masterDemanded = new();
         private readonly ConcurrentQueue<bool> _readsOnMaster = new();
@@ -400,6 +408,8 @@ internal sealed class CachePeers : IDisposable
         private Task? _afterNextRead;
         private int _singleReads;
         private int _batchReads;
+        private int _fills;
+        private int _fillBatches;
 
         public event EventHandler? OnConnectionFailed;
 
@@ -413,9 +423,25 @@ internal sealed class CachePeers : IDisposable
 
         public SharedStore Store { get; set; } = null!;
 
+        public bool Fenced { get; set; }
+
+        /// <summary>The generator age each fill that was told one carried, in order.</summary>
+        public ConcurrentQueue<TimeSpan> GeneratorAges { get; } = [];
+
+        /// <summary>Whether a fill of the key finds a tombstone written after its generator started.</summary>
+        public Func<CacheKey, bool>? RemovedWhileLoading { get; set; }
+
+        bool IFencedFillTier.IsFenced => Fenced;
+
         public int SingleReads => Volatile.Read(ref _singleReads);
 
         public int BatchReads => Volatile.Read(ref _batchReads);
+
+        /// <summary>The keys a fill command reached, whether it wrote them or found them held.</summary>
+        public int Fills => Volatile.Read(ref _fills);
+
+        /// <summary>The batch fill commands, each of which reached one or more keys.</summary>
+        public int FillBatches => Volatile.Read(ref _fillBatches);
 
         public int[] BatchSizes => [.. _batchSizes];
 
@@ -451,6 +477,9 @@ internal sealed class CachePeers : IDisposable
         /// <summary>When set, a removal waits for it before it reaches the store.</summary>
         public Task? RemoveHold { get; set; }
 
+        /// <summary>When set, a conditional write runs it before it compares.</summary>
+        public Func<Task>? BeforeStampedWrite { get; set; }
+
         /// <summary>When set, a single-key write reaches the store and then waits for it before it answers.</summary>
         public Task? AfterWrite { get; set; }
 
@@ -469,6 +498,59 @@ internal sealed class CachePeers : IDisposable
         {
             var entry = await ReadOneAsync<T>(cacheKey, token);
             return entry.Found ? new SnapshotRead<T>(SnapshotOutcome.Found, entry) : new SnapshotRead<T>(SnapshotOutcome.Absent, null);
+        }
+
+        ValueTask<FillResult<T>> IFencedFillTier.TryFillAfterAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, TimeSpan generatorElapsed, CachePolicy? policy, CancellationToken token)
+            where T : default
+        {
+            GeneratorAges.Enqueue(generatorElapsed);
+            return RemovedWhileLoading?.Invoke(cacheKey) == true ? new(new FillResult<T>(FillOutcome.Removed, default)) : FillOneAsync(cacheKey, value);
+        }
+
+        async ValueTask<(SnapshotRead<T> Snapshot, object? Stamp)> IStampedTier.ReadStampedAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+        {
+            var (entry, seen) = await ReadOneStampedAsync<T>(cacheKey, token);
+            if (ReferenceEquals(seen, SharedStore.Unreadable))
+            {
+                // What the read saw is what it stamps, whatever lands while its answer is held.
+                return (new SnapshotRead<T>(SnapshotOutcome.Unreadable, null), new Seen(seen));
+            }
+
+            return entry.Found && Store.Values.TryGetValue(cacheKey.Name, out var held)
+                ? (new SnapshotRead<T>(SnapshotOutcome.Found, entry), new Seen(held))
+                : (new SnapshotRead<T>(SnapshotOutcome.Absent, null), null);
+        }
+
+        async ValueTask<StampedWrite> IStampedTier.WriteIfStampAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, object? stamp, CancellationToken token)
+            where T : default
+        {
+            if (BeforeStampedWrite is { } before)
+            {
+                await before();
+            }
+
+            var won = stamp is Seen seen
+                ? Store.Values.TryUpdate(cacheKey.Name, value, seen.Value)
+                : Store.Values.TryAdd(cacheKey.Name, value);
+            return won ? StampedWrite.Won : StampedWrite.Lost;
+        }
+
+        ValueTask<FillResult<T>[]> IFillManyTier.TryFillManyAsync<T>(KeyValuePair<CacheKey, T?>[] entries, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token, TimeSpan? generatorElapsed)
+            where T : default
+        {
+            Interlocked.Increment(ref _fillBatches);
+            if (generatorElapsed is { } age)
+            {
+                GeneratorAges.Enqueue(age);
+            }
+
+            var results = new FillResult<T>[entries.Length];
+            for (var i = 0; i < entries.Length; i++)
+            {
+                results[i] = RemovedWhileLoading?.Invoke(entries[i].Key) == true ? new FillResult<T>(FillOutcome.Removed, default) : FillOneAsync(entries[i].Key, entries[i].Value).AsTask().Result;
+            }
+
+            return new(results);
         }
 
         async ValueTask<StoreOutcome> IMigrationCache.WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
@@ -536,6 +618,11 @@ internal sealed class CachePeers : IDisposable
                 case nameof(ICache.SetAsync) when args![0] is CacheKey key:
                     Store.Values[key.Name] = args[1];
                     return AfterWrite is { } after ? new ValueTask<bool>(after.ContinueWith(static _ => true, TaskScheduler.Default)) : new ValueTask<bool>(true);
+                case nameof(ICache.TryFillAsync) when targetMethod.ReturnType == typeof(ValueTask<FillResult<string>>):
+                    // The common shape without reflection, so a test that measures allocations measures the cache.
+                    return FillString((CacheKey)args![0]!, (string?)args[1]);
+                case nameof(ICache.TryFillAsync):
+                    return FillOne.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(this, [args![0], args[1]]);
                 case nameof(ICache.SetAsync):
                     WriteMany.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(null, [Store, args[0]]);
                     return new ValueTask<bool>(true);
@@ -558,13 +645,51 @@ internal sealed class CachePeers : IDisposable
 
         private static TestCacheEntry<T?> EntryFor<T>(SharedStore store, CacheKey key)
         {
-            if (!store.Values.TryGetValue(key.Name, out var value))
+            if (!store.Values.TryGetValue(key.Name, out var value) || ReferenceEquals(value, SharedStore.Unreadable))
             {
                 return new TestCacheEntry<T?> { Expiration = DateTimeOffset.MinValue, Found = false };
             }
 
             var remaining = store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
             return new TestCacheEntry<T?> { Value = (T?)value, Expiration = DateTimeOffset.UtcNow + remaining, Found = true };
+        }
+
+        private ValueTask<FillResult<string>> FillString(CacheKey key, string? value)
+        {
+            Interlocked.Increment(ref _fills);
+            if (!Store.Values.TryAdd(key.Name, value))
+            {
+                if (ReferenceEquals(Store.Values[key.Name], SharedStore.Unreadable))
+                {
+                    return new(new FillResult<string>(FillOutcome.Unreadable, null));
+                }
+
+                var remaining = Store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
+                return new(new FillResult<string>(FillOutcome.Existed, (string?)Store.Values[key.Name], DateTimeOffset.UtcNow + remaining));
+            }
+
+            return AfterWrite is { } after
+                ? new(after.ContinueWith(static _ => new FillResult<string>(FillOutcome.Added, null), TaskScheduler.Default))
+                : new(new FillResult<string>(FillOutcome.Added, null));
+        }
+
+        private ValueTask<FillResult<T>> FillOneAsync<T>(CacheKey key, T? value)
+        {
+            Interlocked.Increment(ref _fills);
+            // A write when the key is absent, as the store's NX is; one that finds it answers with the stored value.
+            if (!Store.Values.TryAdd(key.Name, value))
+            {
+                if (ReferenceEquals(Store.Values[key.Name], SharedStore.Unreadable))
+                {
+                    return new(new FillResult<T>(FillOutcome.Unreadable, default));
+                }
+
+                var remaining = Store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
+                return new(new FillResult<T>(FillOutcome.Existed, (T?)Store.Values[key.Name], DateTimeOffset.UtcNow + remaining));
+            }
+
+            var added = new FillResult<T>(FillOutcome.Added, default);
+            return AfterWrite is { } after ? new(after.ContinueWith(_ => added, TaskScheduler.Default)) : new(added);
         }
 
         private ValueTask<bool> RemoveAfter(CacheKey[] keys)
@@ -589,19 +714,22 @@ internal sealed class CachePeers : IDisposable
             }
         }
 
-        private async ValueTask<ICacheEntry<T?>> ReadOneAsync<T>(CacheKey key, CancellationToken token)
+        private async ValueTask<ICacheEntry<T?>> ReadOneAsync<T>(CacheKey key, CancellationToken token) => (await ReadOneStampedAsync<T>(key, token)).Entry;
+
+        private async ValueTask<(ICacheEntry<T?> Entry, object? Held)> ReadOneStampedAsync<T>(CacheKey key, CancellationToken token)
         {
             // The hold is chosen before the count a test waits on.
             var (hold, ignoresCancellation) = (Hold, HoldIgnoresCancellation);
             Interlocked.Increment(ref _singleReads);
             await BeforeReadAsync(hold, ignoresCancellation, token);
             var entry = EntryFor<T>(Store, key);
+            Store.Values.TryGetValue(key.Name, out var held);
             if (Interlocked.Exchange(ref _afterNextRead, null) is { } afterRead)
             {
                 await afterRead;
             }
 
-            return entry;
+            return (entry, held);
         }
 
         private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> ReadManyAsync<T>(CacheKey[] keys, CancellationToken token)
@@ -632,6 +760,8 @@ internal sealed class CachePeers : IDisposable
                 throw new InvalidOperationException("read failed");
             }
         }
+
+        private sealed record Seen(object? Value);
 
         private sealed class MasterScope(NodeInner inner) : IDisposable
         {

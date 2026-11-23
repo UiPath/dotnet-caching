@@ -290,24 +290,44 @@ internal sealed partial class MultilayerHashCache
     private async ValueTask<object?> RunHashGeneratorAndStoreEntryAsync<T>(InternalHashCacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, GenerationScope scope)
     {
         LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
-        var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, scope.Token).ConfigureAwait(false);
-
-        // A generator that ignores its token can finish after every caller left and a newer run took the key: its value must not replace theirs.
-        if ((!IsNullOrEmpty(ret) || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned)
+        var fill = BeginFill(cacheEntryOptions);
+        try
         {
-            var innerCacheDisconnected = GetInnerCacheDisconnected();
-            // The starter's token, unless it cancelled while callers that joined still wait for the value: then the run's, which outlives it.
-            var store = cacheEntryOptions.Token.IsCancellationRequested && !scope.IsAbandoned ? cacheEntryOptions with { Token = scope.Token } : cacheEntryOptions;
-            // A peer that takes the distributed lock next must find the value.
-            if (!innerCacheDisconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && _background.TryReserve())
+            var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, scope.Token).ConfigureAwait(false);
+
+            ICacheEntry<IDictionary<string, T?>>? stored = null;
+            // A generator that ignores its token can finish after every caller left and a newer run took the key: its value must not replace theirs.
+            if ((!IsNullOrEmpty(ret) || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned)
             {
-                FillInBackground(store, ret ?? Empty<T>(), policy);
+                var innerCacheDisconnected = GetInnerCacheDisconnected();
+                // The starter's token, unless it cancelled while callers that joined still wait for the value: then the run's, which outlives it.
+                var store = cacheEntryOptions.Token.IsCancellationRequested && !scope.IsAbandoned ? cacheEntryOptions with { Token = scope.Token } : cacheEntryOptions;
+                if (!innerCacheDisconnected && !_background.FillIntact(cacheEntryOptions.CacheKey.Name, fill))
+                {
+                    // Written or removed since the generator started, so this hash may be older than what it left: neither stored nor kept.
+                    _background.FillSuperseded();
+                }
+                else if (!innerCacheDisconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && _background.TryReserve())
+                {
+                    // A peer that takes the distributed lock next must find the value.
+                    FillInBackground(store, ret ?? Empty<T>(), policy, fill);
+                }
+                else if (!innerCacheDisconnected && _innerCache is ISharedHashTier tier)
+                {
+                    // Written only if the key is absent: a hash a peer stored meanwhile is the answer, and is not replaced.
+                    stored = await FillHashAsync(store, ret ?? Empty<T>(), policy, tier, fill).ConfigureAwait(false);
+                }
+                else
+                {
+                    await Layered<T>().InternalSetAsync(store, ret ?? Empty<T>(), innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
+                }
             }
-            else
-            {
-                await Layered<T>().InternalSetAsync(store, ret ?? Empty<T>(), innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
-            }
+
+            return stored ?? _cacheEntryFactory.Create<IDictionary<string, T?>>(ret ?? Empty<T>(), cacheEntryOptions.Expiration, cacheEntryOptions.Metadata);
         }
-        return _cacheEntryFactory.Create<IDictionary<string, T?>>(ret ?? Empty<T>(), cacheEntryOptions.Expiration, cacheEntryOptions.Metadata);
+        finally
+        {
+            EndFill(cacheEntryOptions.CacheKey.Name, fill);
+        }
     }
 }

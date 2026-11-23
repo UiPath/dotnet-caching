@@ -5,7 +5,13 @@ namespace UiPath.Caching.Redis;
 /// <summary>What a counted hash write tells its caller: the write count it reached, and the fields a peer can apply.</summary>
 internal sealed class WriteReport(PeerFieldLimits limits)
 {
+    /// <summary>The write fills an absent key and leaves a held one alone.</summary>
+    public bool OnlyIfAbsent { get; init; }
+
     public long Version { get; set; }
+
+    /// <summary>Set when a write that is <see cref="OnlyIfAbsent"/> found the key held.</summary>
+    public bool Existed { get; set; }
 
     public IReadOnlyDictionary<string, byte[]?>? Fields { get; private set; }
 

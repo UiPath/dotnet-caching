@@ -151,6 +151,21 @@ internal class AdoptionHashProxy : AdoptionProxyBase, ISharedHashTier
         return new VersionedWrite(written, 0, null);
     }
 
+    async ValueTask<VersionedWrite> ISharedHashTier.FillVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token)
+        where T : default
+    {
+        if (Target is ISharedHashTier shared)
+        {
+            return await shared.FillVersionedAsync(cacheKey, values, options, policy, limits, token).ConfigureAwait(false);
+        }
+
+        var written = await ((IHashCache)Target!).SetAsync<T>(cacheKey, values, options, policy, token).ConfigureAwait(false);
+        return new VersionedWrite(written, 0, null);
+    }
+
+    ValueTask<bool> ISharedHashTier.RemoveIfUnreadableAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token) =>
+        Target is ISharedHashTier shared ? shared.RemoveIfUnreadableAsync<T>(cacheKey, policy, token) : new(false);
+
     ValueTask<bool> ISharedHashTier.RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token)
         where T : default =>
         Target is ISharedHashTier shared

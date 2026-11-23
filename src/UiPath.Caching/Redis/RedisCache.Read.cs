@@ -47,7 +47,7 @@ internal sealed partial class RedisCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.KeyExistsAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask(), (Self: this, Key: redisKey), false, static hit => hit, _logFailure, token);
+        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.ExistsAsync(s.Key).AsValueTask(), (Self: this, Key: redisKey), false, static hit => hit, _logFailure, token);
     }
 
     public ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -194,7 +194,7 @@ internal sealed partial class RedisCache
         where TFormat : struct, IValueFormat
     {
         undecoded = false;
-        if (value.IsNull)
+        if (value.IsNull || (_tombstoneGrace is not null && TombstoneValue.Is(value)))
         {
             return (false, default, 0);
         }
@@ -211,19 +211,20 @@ internal sealed partial class RedisCache
             var outcome = _formats.Reader!.Read<T>(stored!, format.Readable);
             if (outcome.IsMiss)
             {
-                ReportReadMiss(outcome);
-                undecoded = true;
-                return (false, default, outcome.UnreadableFormat);
+                return InterpretSniffedMiss(value, outcome, out undecoded);
             }
 
             deserialized = outcome.Value;
-            if (SerializerMetricsOn)
-            {
-                TrackSerializer(Metrics.SerializerRead, _formats.Reader.NameOf(outcome.SourceFormat), Name);
-            }
+            TrackSniffedRead(outcome);
         }
         else
         {
+            // Before the deserialiser, which may throw on a tombstone: a node with the option has returned above.
+            if (TombstoneValue.Is(value))
+            {
+                return (false, default, 0);
+            }
+
             deserialized = _serializer.Deserialize<T>(value);
         }
 
@@ -239,6 +240,28 @@ internal sealed partial class RedisCache
         }
 
         return (true, deserialized, 0);
+    }
+
+    private (bool Found, T? Value, int Unreadable) InterpretSniffedMiss<T>(in RedisValue value, in ReadOutcome<T> outcome, out bool undecoded)
+    {
+        // A tombstone a node with the option left is also a miss, even when this node does not set one.
+        if (TombstoneValue.Is(value))
+        {
+            undecoded = false;
+            return (false, default, 0);
+        }
+
+        ReportReadMiss(outcome);
+        undecoded = true;
+        return (false, default, outcome.UnreadableFormat);
+    }
+
+    private void TrackSniffedRead<T>(in ReadOutcome<T> outcome)
+    {
+        if (SerializerMetricsOn)
+        {
+            TrackSerializer(Metrics.SerializerRead, _formats.Reader!.NameOf(outcome.SourceFormat), Name);
+        }
     }
 
     private void ReportReadMiss<T>(ReadOutcome<T> outcome)
@@ -505,7 +528,7 @@ internal sealed partial class RedisCache
         return ret;
     }
 
-    private async ValueTask<SnapshotRead<T>> ReadSnapshotInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token)
+    private async ValueTask<SnapshotRead<T>> ReadSnapshotInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token, StrongBox<RedisValue>? raw = null)
         where TFormat : struct, IValueFormat
     {
         token.ThrowIfCancellationRequested();
@@ -547,6 +570,11 @@ internal sealed partial class RedisCache
             }
 
             var (value, expiration) = result.Value;
+            if (raw is not null)
+            {
+                raw.Value = value;
+            }
+
             var snapshot = InterpretSnapshot<T, TFormat>(redisKey, value, Clock.ToDateTimeOffset(expiration), format);
             found = snapshot.Outcome == SnapshotOutcome.Found;
             operation.Stop();

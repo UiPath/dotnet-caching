@@ -36,7 +36,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await Sut.GetOrAddAsync(_cacheKey, generator, policy, token);
 
-        await _innerCache.Received(1).SetAsync<string?>(
+        await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
             Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > policyTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)),
@@ -57,7 +57,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await Sut.GetOrAddAsync(_cacheKey, generator, callerTtl, policy, token);
 
-        await _innerCache.Received(1).SetAsync<string?>(
+        await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
             Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)),
@@ -82,7 +82,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, token: token);
 
-        await _innerCache.Received(1).SetAsync<string?>(
+        await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
             Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > defaultTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < defaultTtl + TimeSpan.FromSeconds(5)),
@@ -106,7 +106,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, token: token);
 
         var optionsTtl = _options.DefaultExpiration!.Value;
-        await _innerCache.Received(1).SetAsync<string?>(
+        await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
             Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > optionsTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < optionsTtl + TimeSpan.FromSeconds(5)),
@@ -362,7 +362,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, token: TestContext.Current.CancellationToken);
 
-        await _innerCache.Received(1).SetAsync<string?>(
+        await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
             Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
@@ -502,7 +502,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await Sut.GetOrAddAsync(_cacheKey, Generator, TimeSpan.MaxValue, policy: null, TestContext.Current.CancellationToken);
 
-        await _innerCache.Received(1).SetAsync<string?>(
+        await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey, "v", DateTimeOffset.MaxValue, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 

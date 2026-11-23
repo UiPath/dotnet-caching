@@ -40,6 +40,8 @@ UiPath.Caching.Broadcast.Redis.RedisPubSubTopic<T>.IsSubscribed.get -> bool
 UiPath.Caching.Broadcast.Redis.RedisStreamsTopic<T>.IsSubscribed.get -> bool
 static UiPath.Caching.Config.NamedCachingCollectionExtensions.AddNamedCachingOnPrimaryConnection(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! name, Microsoft.Extensions.Configuration.IConfiguration! configuration, System.Action<UiPath.Caching.Config.ICachingBuilder!>! configure, string! sectionName = "Caching", System.Action<Microsoft.Extensions.DependencyInjection.IServiceCollection!, System.IServiceProvider!>? configureServices = null) -> UiPath.Caching.Config.INamedCaching!
 UiPath.Caching.Redis.RedisCacheProvider.CountFormatsByKeyAsync(UiPath.Caching.CacheKey keyPattern, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyDictionary<string!, long>!>!
+UiPath.Caching.Redis.RedisCacheOptions.RemoveTombstone.get -> System.TimeSpan?
+UiPath.Caching.Redis.RedisCacheOptions.RemoveTombstone.set -> void
 UiPath.Caching.Redis.RedisCacheOptions.RemoveUnreadable.get -> bool
 UiPath.Caching.Redis.RedisCacheOptions.RemoveUnreadable.set -> void
 UiPath.Caching.Cache<T>.SetIfChangedAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>

@@ -480,10 +480,14 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         return multiplexer.GetHashSlot(WithConnectorPrefix(prefix, first)) == multiplexer.GetHashSlot(WithConnectorPrefix(prefix, second));
     }
 
+    private protected virtual Task<TimeSpan?> TimeToLiveOfAsync(RedisKey key) => Database.KeyTimeToLiveAsync(key, ReadFlagsFor(key));
+
+    private protected virtual Task<DateTime?> ExpireTimeOfAsync(RedisKey key) => Database.KeyExpireTimeAsync(key, ReadFlagsFor(key));
+
     private static ValueTask<TimeSpan?> TimeToLiveCommand(RedisCacheBase self, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, CancellationToken token)
     {
         var key = ToRedisKey(keyStrategy, cacheKey, token);
-        return self.Database.KeyTimeToLiveAsync(key, self.ReadFlagsFor(key)).AsValueTask();
+        return self.TimeToLiveOfAsync(key).AsValueTask();
     }
 
     private static async ValueTask<DateTime?> ExpireTimeCommand(RedisCacheBase self, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, CancellationToken token)
@@ -491,7 +495,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         var key = ToRedisKey(keyStrategy, cacheKey, token);
         try
         {
-            return await self.Database.KeyExpireTimeAsync(key, self.ReadFlagsFor(key)).ConfigureAwait(false);
+            return await self.ExpireTimeOfAsync(key).ConfigureAwait(false);
         }
         catch (Exception ex) when (RedisUtils.IsUnsupportedCommand(ex) || RedisUtils.IsDenied(ex))
         {
@@ -501,7 +505,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
                 self.LogExpireTimeUnavailable?.Invoke(ex);
             }
 
-            var timeToLive = await self.Database.KeyTimeToLiveAsync(key, self.ReadFlagsFor(key)).ConfigureAwait(false);
+            var timeToLive = await self.TimeToLiveOfAsync(key).ConfigureAwait(false);
             return timeToLive.HasValue ? self.Clock.ToDateTimeOffset(timeToLive.Value).UtcDateTime : null;
         }
     }

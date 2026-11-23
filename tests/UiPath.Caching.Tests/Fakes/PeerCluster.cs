@@ -131,10 +131,33 @@ internal sealed class PeerCluster : IDisposable
             }
         }
 
-        public VersionedWrite Write(string key, IDictionary<string, string?> values, HashCacheEntryOptions options, PeerFieldLimits limits, bool counted)
+        /// <summary>A hash one of whose fields no serializer reads, which nobody is told of.</summary>
+        public void WriteUnreadableQuietly(string key)
         {
             lock (_gate)
             {
+                _hashes[key] = new Hash { Unreadable = true };
+            }
+        }
+
+        /// <summary>Removes the key only while it holds an unreadable field.</summary>
+        public bool RemoveIfUnreadable(string key)
+        {
+            lock (_gate)
+            {
+                return _hashes.TryGetValue(key, out var hash) && hash.Unreadable && _hashes.Remove(key);
+            }
+        }
+
+        public VersionedWrite Write(string key, IDictionary<string, string?> values, HashCacheEntryOptions options, PeerFieldLimits limits, bool counted, bool onlyIfAbsent = false)
+        {
+            lock (_gate)
+            {
+                if (onlyIfAbsent && _hashes.ContainsKey(key))
+                {
+                    return new VersionedWrite(false, 0, null, Existed: true);
+                }
+
                 var merge = options.SetOption == HashCacheSetOption.HashReplace;
                 if (!_hashes.TryGetValue(key, out var hash) || !merge)
                 {
@@ -146,6 +169,7 @@ internal sealed class PeerCluster : IDisposable
                     hash.Fields[field] = value;
                 }
 
+                hash.Unreadable = false;
                 hash.Expiration = options.ExpireTime ?? DateTimeOffset.MaxValue;
                 if (options.Metadata is not null)
                 {
@@ -239,6 +263,11 @@ internal sealed class PeerCluster : IDisposable
                     return new TestCacheEntry<IDictionary<string, string?>>();
                 }
 
+                if (hash.Unreadable)
+                {
+                    return new UnreadableEntry<IDictionary<string, string?>>(new TestCacheEntry<IDictionary<string, string?>>());
+                }
+
                 var entry = new TestCacheEntry<IDictionary<string, string?>>
                 {
                     Value = new Dictionary<string, string?>(hash.Fields),
@@ -259,6 +288,8 @@ internal sealed class PeerCluster : IDisposable
             public Dictionary<string, string?> Fields { get; } = [];
 
             public long Version { get; set; }
+
+            public bool Unreadable { get; set; }
 
             public DateTimeOffset Expiration { get; set; } = DateTimeOffset.MaxValue;
 
@@ -458,32 +489,13 @@ internal sealed class PeerCluster : IDisposable
 
         IDisposable ISharedTier.DemandMaster() => NoMasterScope.Instance;
 
-        public async ValueTask<VersionedWrite> SetVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default)
-        {
-            Interlocked.Increment(ref _countedWrites);
-            if (Hold is { } hold)
-            {
-                await hold.WaitAsync(token);
-            }
+        public ValueTask<VersionedWrite> SetVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default) =>
+            WriteVersionedAsync(cacheKey, values, options, limits, onlyIfAbsent: false, token);
 
-            if (Refuses)
-            {
-                return default;
-            }
+        public ValueTask<VersionedWrite> FillVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default) =>
+            WriteVersionedAsync(cacheKey, values, options, limits, onlyIfAbsent: true, token);
 
-            var written = Store.Write(cacheKey.Name, (IDictionary<string, string?>)values, options, limits, counted: true);
-            if (AfterWrite?.Invoke((IDictionary<string, string?>)values) is { } after)
-            {
-                await after.WaitAsync(token);
-            }
-
-            if (ReportsVersion is { } report)
-            {
-                written = written with { Version = report(written.Version) };
-            }
-
-            return ReportsUnwritten ? written with { Written = false } : written;
-        }
+        public ValueTask<bool> RemoveIfUnreadableAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token) => new(Store.RemoveIfUnreadable(cacheKey.Name));
 
         public ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default)
         {
@@ -583,6 +595,33 @@ internal sealed class PeerCluster : IDisposable
                 default:
                     throw new NotSupportedException(targetMethod.Name);
             }
+        }
+
+        private async ValueTask<VersionedWrite> WriteVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, PeerFieldLimits limits, bool onlyIfAbsent, CancellationToken token)
+        {
+            Interlocked.Increment(ref _countedWrites);
+            if (Hold is { } hold)
+            {
+                await hold.WaitAsync(token);
+            }
+
+            if (Refuses)
+            {
+                return default;
+            }
+
+            var written = Store.Write(cacheKey.Name, (IDictionary<string, string?>)values, options, limits, counted: true, onlyIfAbsent);
+            if (AfterWrite?.Invoke((IDictionary<string, string?>)values) is { } after)
+            {
+                await after.WaitAsync(token);
+            }
+
+            if (ReportsVersion is { } report)
+            {
+                written = written with { Version = report(written.Version) };
+            }
+
+            return ReportsUnwritten ? written with { Written = false } : written;
         }
 
         private ValueTask<bool> RemoveFieldsAfter(string key, string[] fields, bool counted)

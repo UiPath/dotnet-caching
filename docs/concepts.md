@@ -471,7 +471,7 @@ its policy says, because its payload may be memory the caller reclaims on return
   topics built on the library's own Redis providers hear these events before the keys' tokens; a custom `ITopic` gets no such
   guarantee, and a fill that commits while its event is delivered may then keep the older value. Each refused fill is counted in the
   `cache.background_write.fill_refused` metric, tagged `reason`: `changed` when the stripe's change counter moved since the read began (a peer's event, a local apply, a write's end or a touch),
-  `in_flight` when this node's write to the key or its stripe was still running, `untracked` when the read began before counting started. A queued background write of a key that a newer write of the key replaces is counted in the `cache.background_write.coalesced` metric.
+  `in_flight` when this node's write to the key or its stripe was still running, `untracked` when the read began before counting started, and `superseded` for a miss fill whose own key was written or removed while its generator ran (see [Miss fills](#miss-fills)). A queued background write of a key that a newer write of the key replaces is counted in the `cache.background_write.coalesced` metric.
 
 ### Refresh on a peer's write
 
@@ -513,6 +513,16 @@ See also: [how-to/resilience.md#named-policies](how-to/resilience.md#named-polic
 `SetIfChangedAsync` announces only a replacement, exactly as `SetAsync` does, so peers refresh or drop their copy of a value that really changed. A filled key and an equal value cost nothing.
 
 These calls keep the value they read or wrote in the local tier under the rule a read hit follows: a mark is taken before the call to the distributed tier, and the value is installed only if no local write, removal or peer event for the key (or a key sharing its stripe) advanced it meanwhile. A refused keep does not change the outcome; a refused replacement also evicts the local copy it would have replaced, and is still announced. A local-only cache holds the key's local turn across the check and the write, so two concurrent fills of one key get one `Added`.
+
+### Miss fills
+
+The write after a `GetOrAddAsync` miss, in the foreground and under `BackgroundDistributedWrite`, a late fail-safe store, each key of a batch and a hash cache's whole-hash fill write only if the key is absent, and send no event. With scripts off (`ReadScriptsEnabled`, the default) that is `SET NX`, one command on a win, and an atomic read of the value and its TTL after a loss; with them on, one script does both. A call that loses returns the value found and keeps it locally, and the value its generator made is discarded, so nodes that miss together converge on the first write. A replayed or timed-out write cannot overwrite a newer one. A cached null counts as a value. A stored value no serializer reads is replaced, as a plain write replaced it. A batch is written in one pipelined call per cluster slot (one flush for the keys of a slot), and each key is decided on its own, so one key losing does not change the others.
+
+A fill also watches its own key from before its generator runs until the value is kept locally. A local `SetAsync`, `RemoveAsync`, `TryAddAsync` or batch write of the key, a peer's event for it, a topic invalidation or a gap in the subscription marks the fill superseded: its value is returned to the caller and is neither written nor kept, and a later read generates again. The flag is per key, so unlike the stripe counter that guards a read fill it is not tripped by a key that shares the stripe. It is checked before the write is queued, again under the key's turn just before the command, and again before the keep; a fill whose key changed sends no command at all, so it does not even write an absent key, and a key a removal has just deleted stays deleted. A change that lands after the last check before the command still wins no more than the command allows, since a peer's own write follows or precedes it in the store. The fill's own write, and the fill of another call, are not changes. A fill that finds the key deleted by another client or evicted, or removed after the check, still writes.
+
+Hash caches write the whole hash only if the key is absent (a transaction on `EXISTS`, which adds a `WATCH` round trip to a win, or `RENAMENX` of the staging key for a hash too large for one transaction), and watch their key like any fill; a hash with no fields, or one whose expiration has passed, still deletes the key; a hash a peer wrote meanwhile is read whole, kept and returned, and `HashReplace` on `GetOrAddAsync` therefore means fill only if absent. A stored hash with a field no serializer reads is replaced.
+
+A rehydration whose adoption read came from the library's Redis cache stores its generated value with a compare-and-set against the bytes that read saw, or `SET NX` when it saw nothing, and `SET NX` once more when the key is gone when the compare loses; when it loses, the write that landed is kept locally instead, and nothing is announced. This applies to single-key rehydration of the plain cache.
 ---
 
 ## Value serializers and the format header

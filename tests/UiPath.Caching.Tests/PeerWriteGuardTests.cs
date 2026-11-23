@@ -112,6 +112,59 @@ public class PeerWriteGuardTests
         _current.Subscribes.Should().Be(1);
     }
 
+    [Fact]
+    public void A_peers_write_or_removal_of_a_key_supersedes_only_the_fill_of_that_key()
+    {
+        using var guard = Guard();
+        guard.Watch(Topic);
+        var held = _writes.BeginFill(Key);
+        var other = _writes.BeginFill("other");
+
+        _current.Subject.OnNext(Event(KnownEventTypes.CacheRemoved));
+
+        _writes.FillIntact(Key, held).Should().BeFalse();
+        _writes.FillIntact("other", other).Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_peers_invalidation_of_the_topic_supersedes_every_fill_in_progress()
+    {
+        using var guard = Guard();
+        guard.Watch(Topic);
+        var held = _writes.BeginFill(Key);
+        var other = _writes.BeginFill("other");
+
+        _current.Subject.OnNext(Event(KnownEventTypes.TopicInvalidated));
+
+        _writes.FillIntact(Key, held).Should().BeFalse();
+        _writes.FillIntact("other", other).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Events_that_were_not_heard_supersede_every_fill_in_progress()
+    {
+        using var guard = Guard();
+        guard.Watch(Topic);
+        var held = _writes.BeginFill(Key);
+        var other = _writes.BeginFill("other");
+
+        _current.Subject.Invalidate(MissedEventsReason.Lost);
+
+        _writes.FillIntact(Key, held).Should().BeFalse();
+        _writes.FillIntact("other", other).Should().BeFalse();
+    }
+
+    [Fact]
+    public void An_event_this_node_published_leaves_a_fill_in_progress_intact()
+    {
+        using var guard = Guard();
+        guard.Watch(Topic);
+        var held = _writes.BeginFill(Key);
+
+        _current.Subject.OnNext(Event(KnownEventTypes.CacheSet, new Uri("urn:node:b")));
+
+        _writes.FillIntact(Key, held).Should().BeTrue();
+    }
     private static TestCacheEvent Event(string type, Uri? source = null, bool metadata = false) => new()
     {
         Id = Guid.NewGuid().ToString(),

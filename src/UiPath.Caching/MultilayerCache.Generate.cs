@@ -192,6 +192,7 @@ internal sealed partial class MultilayerCache
     private async ValueTask<object?> RunOrdinaryGeneratorAsync<T, TState>(CacheEntryOptions cacheEntryOptions, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy policy, GenerationScope scope, bool localOnly)
     {
         ICacheEntry<T?> entry;
+        scope = BeginFill(cacheEntryOptions, scope, localOnly);
         try
         {
             LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
@@ -203,6 +204,10 @@ internal sealed partial class MultilayerCache
             scope.Fail(ex);
             throw;
         }
+        finally
+        {
+            EndFill(cacheEntryOptions.CacheKey.Name, scope);
+        }
 
         scope.Complete(entry);
         return entry;
@@ -213,32 +218,75 @@ internal sealed partial class MultilayerCache
         // One entry for the local tier and the caller: both see the same value and deadline.
         var entry = _cacheEntryFactory.Create<T?>(ret, cacheEntryOptions.Expiration);
 
-        // A generator that ignores its token can finish after every caller left and a newer run took the key: its value must not replace theirs.
-        if ((ret is not null || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned)
+        if (TryPrepareGeneratedStore(cacheEntryOptions, ret, policy, scope, localOnly, entry, out var store, out var innerCacheDisconnected))
         {
-            var innerCacheDisconnected = GetInnerCacheDisconnected();
-            if (localOnly && !innerCacheDisconnected)
+            if (innerCacheDisconnected)
             {
-                KeepGeneratedLocally(cacheEntryOptions, ret, policy, entry);
-                return entry;
+                await StoreGeneratedForegroundAsync(store, ret, true, policy, entry).ConfigureAwait(false);
             }
+            else
+            {
+                var (adopted, won) = await FillInnerAsync(store, ret, policy, entry, scope.Fill).ConfigureAwait(false);
+                if (adopted is not null)
+                {
+                    entry = adopted;
+                }
 
-            // The starter's token, unless it cancelled while callers that joined still wait for the value: then the run's, which outlives it.
-            var store = cacheEntryOptions.Token.IsCancellationRequested && !scope.IsAbandoned ? cacheEntryOptions with { Token = scope.Token } : cacheEntryOptions;
-            // A peer that takes the distributed lock next must find the value; a late fail-safe value checks in its foreground turn that it is still current.
-            var detached = !innerCacheDisconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && !InLateStore && _background.TryReserve(cacheEntryOptions.CacheKey.Name, false) && FillInBackground(store, ret, policy, entry);
-            if (!detached)
-            {
-                await StoreGeneratedForegroundAsync(store, ret, innerCacheDisconnected, policy, entry).ConfigureAwait(false);
+                // Peers in a cooldown serve the value this one replaces, and need the event.
+                if (won && InLateStore)
+                {
+                    await Layered<T>().PublishSetAsync(store).ConfigureAwait(false);
+                }
             }
-        }
-        else if (!scope.IsAbandoned)
-        {
-            // The source's answer is newer than the value fail-safe kept, though it is not stored.
-            DropKeptForUnstored(cacheEntryOptions.CacheKey.Name);
         }
 
         return entry;
+    }
+
+    private bool TryPrepareGeneratedStore<T>(
+        in CacheEntryOptions options,
+        T? value,
+        CachePolicy policy,
+        in GenerationScope scope,
+        bool localOnly,
+        ICacheEntry<T?> entry,
+        out CacheEntryOptions store,
+        out bool disconnected)
+    {
+        store = default;
+        disconnected = false;
+
+        // A generator that ignores its token can finish after every caller left and a newer run took the key: its value must not replace theirs.
+        if (!((value is not null || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned))
+        {
+            if (!scope.IsAbandoned)
+            {
+                // The source's answer is newer than the value fail-safe kept, though it is not stored.
+                DropKeptForUnstored(options.CacheKey.Name);
+            }
+
+            return false;
+        }
+
+        disconnected = GetInnerCacheDisconnected();
+        if (localOnly && !disconnected)
+        {
+            KeepGeneratedLocally(options, value, policy, entry);
+            return false;
+        }
+
+        // The starter's token, unless it cancelled while callers that joined still wait for the value: then the run's, which outlives it.
+        store = options.Token.IsCancellationRequested && !scope.IsAbandoned ? options with { Token = scope.Token } : options;
+        if (!disconnected && !_background.FillIntact(options.CacheKey.Name, scope.Fill))
+        {
+            // Written or removed since the generator started, so this value may be older than what it left: neither stored nor kept.
+            _background.FillSuperseded();
+            return false;
+        }
+
+        // A peer that takes the distributed lock next must find the value; a late fail-safe value checks in its foreground turn that it is still current.
+        var detached = !disconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && !InLateStore && _background.TryReserve(options.CacheKey.Name, false) && FillInBackground(store, value, policy, entry, scope.Fill);
+        return !detached;
     }
 
     // Not async, so the late store adds no state to its caller's frame.
@@ -348,6 +396,7 @@ internal sealed partial class MultilayerCache
     private async ValueTask<object?> RunOrdinaryGeneratedAsync<T, TState>(CacheEntryOptions cacheEntryOptions, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy policy, GenerationScope scope, bool localOnly)
     {
         ICacheEntry<T?> entry;
+        scope = BeginFill(cacheEntryOptions, scope, localOnly);
         try
         {
             LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
@@ -358,6 +407,10 @@ internal sealed partial class MultilayerCache
         {
             scope.Fail(ex);
             throw;
+        }
+        finally
+        {
+            EndFill(cacheEntryOptions.CacheKey.Name, scope);
         }
 
         scope.Complete(entry);

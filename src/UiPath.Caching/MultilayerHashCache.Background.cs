@@ -49,7 +49,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
         return true;
     }
 
-    private void FillInBackground<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy)
+    private void FillInBackground<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy, long fill)
     {
         var local = new LocalEntry<T> { Entry = NewEntry(options, values) };
         if (_versioned is not null)
@@ -58,8 +58,18 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
             options.Own = [local.Pending];
         }
 
-        _background.RunAppending(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.MemorySet(s.Options, s.Local.Entry!, s.Cache.DisconnectedLifetime(s.Policy), s.Policy), static (s, token) =>
-            s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), publish: null, token));
+        if (fill != BackgroundWrites.Untracked)
+        {
+            _background.RetainFill(options.CacheKey.Name);
+        }
+
+        _background.RunAppending(
+            options.CacheKey.Name,
+            (Cache: this, Options: options, Value: values, Policy: policy, Local: local, Fill: fill),
+            static s => s.Cache.MemorySet(s.Options, s.Local.Entry!, s.Cache.DisconnectedLifetime(s.Policy), s.Policy),
+            static (s, token) => s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.FillDetachedAsync(s.Options, s.Value, s.Policy, s.Local, s.Fill, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), publish: null, token),
+            static s => s.Cache.EndFill(s.Options.CacheKey.Name, s.Fill),
+            fill: true);
     }
 
     private ICacheEntry<IDictionary<string, T?>> NewEntry<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values)

@@ -7,6 +7,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 {
     private readonly ICache _innerCache;
 
+    private readonly bool _fencedInner;
+
     private readonly bool _sharedInner;
 
     private readonly InFlight<InFlightKey, object?> _generations = new();
@@ -36,6 +38,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, distributedLock, policyFactory, clock, logger, keyMaskingPolicy)
     {
         _innerCache = innerCache;
+        _fencedInner = innerCache is IFencedFillTier { IsFenced: true };
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
         var topicKeyStrategy = _multiLayerCacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy(cacheOptions.Separator);
         _entryBuilder = new CacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);

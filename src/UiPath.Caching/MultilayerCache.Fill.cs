@@ -96,6 +96,7 @@ internal sealed partial class MultilayerCache
                 break;
             case FillOutcome.Existed:
             case FillOutcome.Unreadable:
+            case FillOutcome.Removed:
                 break;
             default:
                 if (options.Expiration > _clock.GetUtcNow())
@@ -121,6 +122,7 @@ internal sealed partial class MultilayerCache
         }
 
         _background.Track();
+        _background.NoteChange(options.CacheKey.Name);
         if (!_sharedInner)
         {
             return await ChangeLocallyAsync(options, value, comparer, policy).ConfigureAwait(false);

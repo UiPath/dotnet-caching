@@ -308,8 +308,9 @@ See [reference/settings.md](../reference/settings.md) for the full reference.
 `RetryCount` defaults to `1` and the retry strategy handles every exception except the per-attempt
 `RequestTimeout` (`TimeoutRejectedException`), whose command is still in flight, and a cancellation the
 caller asked for. For idempotent commands this is safe —
-replaying `SADD`/`SREM`/`SET`/`DEL`/`EXPIRE` converges to the same end state (only the returned
-count may differ). It is **not** safe for destructive-read commands like `SPOP` (and the planned
+replaying `SADD`/`SREM`/`DEL`/`EXPIRE` converges to the same end state (only the returned
+count may differ). A replayed `SET` converges only until another writer interleaves, so the write of a
+miss fill is `SET NX`: a replay of it cannot overwrite what another node stored since. It is **not** safe for destructive-read commands like `SPOP` (and the planned
 `LPOP`/`RPOP`): if the server executed the pop but the response was lost to a timeout or a
 connection drop, a retry pops a *different* set of members and the first batch is gone forever —
 silent data loss.

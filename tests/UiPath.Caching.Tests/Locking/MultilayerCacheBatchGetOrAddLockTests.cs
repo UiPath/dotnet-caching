@@ -343,6 +343,14 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
                 return true;
             });
 
+        // A fill of an absent key, as the store's NX is: the fixture would otherwise answer with an outcome and value of its own.
+        _innerCache.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(c =>
+            {
+                _stored[c.Arg<CacheKey>()] = c.ArgAt<string?>(1);
+                return new FillResult<string>(FillOutcome.Added, null);
+            });
+
         return ValueTask.CompletedTask;
     }
 

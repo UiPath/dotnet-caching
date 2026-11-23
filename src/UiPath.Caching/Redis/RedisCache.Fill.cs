@@ -21,10 +21,13 @@ internal sealed partial class RedisCache
     }
 
     public ValueTask<FillResult<T>> TryFillAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        TryFillCoreAsync(cacheKey, value, GetExpiration(expiration), policy, token);
+        TryFillCoreAsync(cacheKey, value, GetExpiration(expiration), policy, default, token);
 
     public ValueTask<FillResult<T>> TryFillAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        TryFillCoreAsync(cacheKey, value, GetExpiration(expiration), policy, token);
+        TryFillCoreAsync(cacheKey, value, GetExpiration(expiration), policy, default, token);
+
+    public ValueTask<FillResult<T>> TryFillAfterAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, TimeSpan generatorElapsed, CachePolicy? policy, CancellationToken token) =>
+        TryFillCoreAsync(cacheKey, value, GetExpiration(expiration), policy, NewFence(generatorElapsed), token);
 
     public ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetIfChangedCoreAsync(cacheKey, value, comparer, GetExpiration(expiration), policy, token);
@@ -32,7 +35,107 @@ internal sealed partial class RedisCache
     public ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetIfChangedCoreAsync(cacheKey, value, comparer, GetExpiration(expiration), policy, token);
 
-    private static async ValueTask<FillRaw?> FillOnceAsync(RedisCache self, RedisKey key, RedisValue serialized, DateTimeOffset until)
+    /// <summary>The attempts after a plain NX lost: one read of the winner, then whole attempts if it was gone again.</summary>
+    private static async ValueTask<FillRaw?> FillAfterAsync(RedisCache self, RedisKey key, RedisValue serialized, DateTimeOffset until, bool lost, FillFence fence, CancellationToken token)
+    {
+        var read = lost;
+        for (var attempt = 0; attempt < FillAttempts; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+            FillRaw? filled;
+            if (read)
+            {
+                filled = self.RemainingOrZero(until) <= TimeSpan.Zero ? FillRaw.Lapsed : await ReadWinnerAsync(self, key, fence).ConfigureAwait(false);
+            }
+            else
+            {
+                filled = await FillOnceAsync(self, key, serialized, until, fence).ConfigureAwait(false);
+            }
+
+            read = false;
+            if (filled is { IsTombstone: true } held)
+            {
+                filled = await SettleTombstoneAsync(self, key, held, serialized, until).ConfigureAwait(false);
+            }
+
+            if (filled is { } done)
+            {
+                return done;
+            }
+        }
+
+        return null;
+    }
+
+    private static ValueTask<FillRaw?> ReadWinnerAsync(RedisCache self, RedisKey key, FillFence fence) =>
+        self._tombstoneGrace is null ? ReadPlainWinnerAsync(self, key) : ReadFencedWinnerAsync(self, key, fence);
+
+    private static async ValueTask<FillRaw?> ReadPlainWinnerAsync(RedisCache self, RedisKey key)
+    {
+        var read = new StrongBox<StrongBox<(RedisValue Value, DateTimeOffset? Expiration)>?>();
+        await ReadOnceAsync(self, key, read, atomic: true).ConfigureAwait(false);
+        var (value, deadline) = read.Value!.Value;
+        // Gone again since the NX lost: the caller tries once more.
+        if (value.IsNull)
+        {
+            return null;
+        }
+
+        return new FillRaw(false, value, self.Clock.ToDateTimeOffset(deadline));
+    }
+
+    private static async ValueTask<FillRaw?> ReadFencedWinnerAsync(RedisCache self, RedisKey key, FillFence fence)
+    {
+        var (value, left) = await self.ReadWithLifetimeAsync(key).ConfigureAwait(false);
+        if (value.IsNull)
+        {
+            return null;
+        }
+
+        return TombstoneValue.TryRead(value, out var grace) ? JudgeTombstone(self, value, grace, left, fence) : new FillRaw(false, value, self.Clock.ToDateTimeOffset(left));
+    }
+
+    /// <summary>The fill's verdict on the tombstone it met, as a marker for <see cref="SettleTombstoneAsync"/>.</summary>
+    private static FillRaw JudgeTombstone(RedisCache self, RedisValue tombstone, long grace, TimeSpan? left, FillFence fence)
+    {
+        self.AfterFillRead?.Invoke();
+        return TombstoneValue.Judge(grace, left, fence.Active ? fence.ElapsedMilliseconds(self) : null) switch
+        {
+            TombstoneVerdict.Replace => new FillRaw(false, tombstone, DateTimeOffset.MinValue, IsTombstone: true),
+            TombstoneVerdict.Young => FillRaw.Removed,
+            _ => new FillRaw(false, tombstone, DateTimeOffset.MinValue, IsRemoved: true, IsTombstone: true),
+        };
+    }
+
+    /// <summary>Null when the tombstone changed since it was read, for another attempt.</summary>
+    private static async ValueTask<FillRaw?> SettleTombstoneAsync(RedisCache self, RedisKey key, FillRaw held, RedisValue serialized, DateTimeOffset until)
+    {
+        if (held.IsRemoved)
+        {
+            // A tombstone with no deadline or one past its grace is what a refresh race leaves; it is put back to its grace and the fill is refused.
+            if (TombstoneValue.TryRead(held.Value, out var grace))
+            {
+                await self.RestoreGraceQuietlyAsync(key, held.Value, grace).ConfigureAwait(false);
+            }
+
+            return FillRaw.Removed;
+        }
+
+        if (self.BeforeTombstoneSwap is { } hook)
+        {
+            await hook().ConfigureAwait(false);
+        }
+
+        var replaced = await FormatRewriteScripts.ReplaceStringAsync(self.Database, key, held.Value, serialized, () => self.RemainingOrZero(until), self.RewriteScriptsOn, self._rewriteScriptRefused).ConfigureAwait(false);
+        return replaced switch
+        {
+            true => new FillRaw(true, RedisValue.Null, DateTimeOffset.MaxValue),
+            null => FillRaw.Lapsed,
+            false => null,
+        };
+    }
+
+    private static async ValueTask<FillRaw?> FillOnceAsync(RedisCache self, RedisKey key, RedisValue serialized, DateTimeOffset until, FillFence fence)
     {
         var expiration = self.RemainingOrZero(until);
         if (expiration <= TimeSpan.Zero)
@@ -53,7 +156,11 @@ internal sealed partial class RedisCache
 
                 var parts = ((RedisResult[]?)reply)!;
                 var ttl = (long)parts[1];
-                return new FillRaw(false, (RedisValue)parts[0], self.Clock.ToDateTimeOffset(ttl < 0 ? null : TimeSpan.FromMilliseconds(ttl)));
+                var stored = (RedisValue)parts[0];
+                TimeSpan? left = ttl < 0 ? null : TimeSpan.FromMilliseconds(ttl);
+                return self._tombstoneGrace is not null && TombstoneValue.TryRead(stored, out var grace)
+                    ? JudgeTombstone(self, stored, grace, left, fence)
+                    : new FillRaw(false, stored, self.Clock.ToDateTimeOffset(left));
             }
             catch (Exception ex) when (RedisUtils.RefusesScript(ex))
             {
@@ -74,21 +181,19 @@ internal sealed partial class RedisCache
             return new FillRaw(true, RedisValue.Null, DateTimeOffset.MaxValue);
         }
 
-        var read = new StrongBox<StrongBox<(RedisValue Value, DateTimeOffset? Expiration)>?>();
-        await ReadOnceAsync(self, key, read, atomic: true).ConfigureAwait(false);
-        var (value, deadline) = read.Value!.Value;
-        // Gone again since the NX lost: the caller tries once more.
-        return value.IsNull ? null : new FillRaw(false, value, self.Clock.ToDateTimeOffset(deadline));
+        return await ReadWinnerAsync(self, key, fence).ConfigureAwait(false);
     }
 
-    private ValueTask<FillResult<T>> TryFillCoreAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset deadline, CachePolicy? policy, CancellationToken token)
+    private FillFence NewFence(TimeSpan generatorElapsed) => _tombstoneGrace is null ? default : new FillFence(generatorElapsed, Clock.GetTimestamp(), true);
+
+    private ValueTask<FillResult<T>> TryFillCoreAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset deadline, CachePolicy? policy, FillFence fence, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var format = FormatFor(policy, forWrite: true, alsoReads: true);
         return format.IsDefault
-            ? TryFillInternalAsync(cacheKey, redisKey, value, deadline, default(PlainFormat), token)
-            : TryFillInternalAsync(cacheKey, redisKey, value, deadline, format, token);
+            ? TryFillInternalAsync(cacheKey, redisKey, value, deadline, default(PlainFormat), fence, token)
+            : TryFillInternalAsync(cacheKey, redisKey, value, deadline, format, fence, token);
     }
 
     private ValueTask<ChangeResult<T>> SetIfChangedCoreAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset deadline, CachePolicy? policy, CancellationToken token)
@@ -102,7 +207,8 @@ internal sealed partial class RedisCache
             : SetIfChangedInternalAsync(cacheKey, redisKey, value, comparer, deadline, format, token);
     }
 
-    private async ValueTask<FillResult<T>> TryFillInternalAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, T? value, DateTimeOffset deadline, TFormat format, CancellationToken token)
+    [AsyncMethodBuilder(typeof(Pooled<>))]
+    private async ValueTask<FillResult<T>> TryFillInternalAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, T? value, DateTimeOffset deadline, TFormat format, FillFence fence, CancellationToken token)
         where TFormat : struct, IValueFormat
     {
         token.ThrowIfCancellationRequested();
@@ -128,31 +234,28 @@ internal sealed partial class RedisCache
             _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), serialized);
             using (payload)
             {
-                var raw = await _write.ExecuteAsync(static async (s, token) =>
-                {
-                    for (var attempt = 0; attempt < FillAttempts; attempt++)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        if (await FillOnceAsync(s.Self, s.Key, s.Serialized, s.Deadline).ConfigureAwait(false) is { } filled)
+                // Scripts off: one plain NX, which a win answers as a write does. Null is a command the pipeline gave up on, which is not a loss.
+                var plain = !RewriteScriptsOn;
+                bool? won = plain
+                    ? await _write.ExecuteAsync(
+                        [AsyncMethodBuilder(typeof(Pooled<>))] static async ValueTask<bool?> (s, token) =>
                         {
-                            return filled;
-                        }
-                    }
+                            token.ThrowIfCancellationRequested();
+                            var remaining = s.Self.RemainingOrZero(s.Deadline);
+                            return remaining > TimeSpan.Zero && await s.Self.Database.StringSetAsync(s.Key, s.Serialized, remaining, When.NotExists, CommandFlags.DemandMaster).ConfigureAwait(false);
+                        },
+                        (Self: this, Key: redisKey, Serialized: serialized, Deadline: deadline),
+                        null,
+                        token).ConfigureAwait(false)
+                    : false;
 
-                    return (FillRaw?)null;
-                },
-                (Self: this, Key: redisKey, Serialized: serialized, Deadline: deadline),
-                null,
-                token).ConfigureAwait(false);
-
-                if (raw is { IsLapsed: true })
+                if (won == true)
                 {
-                    LogFillSkipped(Logged(cacheKey, redisKey, typeof(T)), ExpirationPassed);
-                    result = default;
+                    result = new(FillOutcome.Added, default, deadline);
                 }
-                else if (raw is { } stored)
+                else if (won is not null)
                 {
-                    result = stored.Added ? new(FillOutcome.Added, default, deadline) : ExistingEntry<T, TFormat>(redisKey, stored, format);
+                    result = await FillAfterNxAsync<T, TFormat>(cacheKey, redisKey, serialized, deadline, plain, format, fence, token).ConfigureAwait(false);
                 }
             }
 
@@ -176,6 +279,35 @@ internal sealed partial class RedisCache
         }
 
         return result;
+    }
+
+    /// <summary>The fill when its plain NX lost, or when scripts are on and the script decides: the stored value is the answer.</summary>
+    private async ValueTask<FillResult<T>> FillAfterNxAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, RedisValue serialized, DateTimeOffset deadline, bool lost, TFormat format, FillFence fence, CancellationToken token)
+        where TFormat : struct, IValueFormat
+    {
+        var raw = await _write.ExecuteAsync(static (s, token) => FillAfterAsync(s.Self, s.Key, s.Serialized, s.Deadline, s.Lost, s.Fence, token),
+        (Self: this, Key: redisKey, Serialized: serialized, Deadline: deadline, Lost: lost, Fence: fence),
+        null,
+        token).ConfigureAwait(false);
+
+        if (raw is { IsLapsed: true })
+        {
+            LogFillSkipped(Logged(cacheKey, redisKey, typeof(T)), ExpirationPassed);
+            return default;
+        }
+
+        if (raw is { IsRemoved: true })
+        {
+            LogFillSkipped(Logged(cacheKey, redisKey, typeof(T)), "the key was removed while its generator ran");
+            return new(FillOutcome.Removed, default);
+        }
+
+        if (raw is not { } stored)
+        {
+            return default;
+        }
+
+        return stored.Added ? new(FillOutcome.Added, default, deadline) : ExistingEntry<T, TFormat>(redisKey, stored, format);
     }
 
     /// <summary>A stored value as a read sees it; one its serializer throws on is logged and unreadable.</summary>
@@ -332,7 +464,7 @@ internal sealed partial class RedisCache
             return (ChangeStep.Lost, default);
         }
 
-        return (ChangeStep.Settled, new ChangeResult<T>(snapshot.Value.IsNull ? ChangeOutcome.Filled : ChangeOutcome.Replaced, value, deadline));
+        return (ChangeStep.Settled, new ChangeResult<T>(snapshot.Value.IsNull || (_tombstoneGrace is not null && TombstoneValue.Is(snapshot.Value)) ? ChangeOutcome.Filled : ChangeOutcome.Replaced, value, deadline));
     }
 
     private ChangeResult<T>? UnchangedAgainst<T, TFormat>(RedisKey redisKey, (RedisValue Value, DateTimeOffset Expiration) snapshot, T? value, IEqualityComparer<T> comparer, TFormat format, ChangeRun run)
@@ -424,9 +556,17 @@ internal sealed partial class RedisCache
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryFill or SetIfChanged skipped for {RedisKey}: {Reason}.")]
     private partial void LogFillSkipped(LoggedKey redisKey, string reason);
 
-    private readonly record struct FillRaw(bool Added, RedisValue Value, DateTimeOffset Expiration, bool IsLapsed = false)
+    private readonly record struct FillRaw(bool Added, RedisValue Value, DateTimeOffset Expiration, bool IsLapsed = false, bool IsRemoved = false, bool IsTombstone = false)
     {
         public static FillRaw Lapsed { get; } = new(false, RedisValue.Null, DateTimeOffset.MinValue, true);
+
+        public static FillRaw Removed { get; } = new(false, RedisValue.Null, DateTimeOffset.MinValue, false, true);
+    }
+
+    /// <summary>How long a fill's generator had run when the fill arrived; inactive with no generator or no tombstone.</summary>
+    private readonly record struct FillFence(TimeSpan Elapsed, long ReceivedAt, bool Active)
+    {
+        public long ElapsedMilliseconds(RedisCache self) => (long)Math.Ceiling((Elapsed + self.Clock.GetElapsedTime(ReceivedAt)).TotalMilliseconds);
     }
 
     private sealed class ChangeRun

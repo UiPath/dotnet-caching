@@ -84,7 +84,7 @@ public class ValueSerializerRegistryTests
         act.Should().Throw<OptionsValidationException>().WithMessage("*a*");
     }
 
-    [Theory, InlineData(0x09), InlineData(0x0A), InlineData(0x0D), InlineData(0x1F), InlineData(0x00), InlineData(0x20), InlineData(0x200), InlineData(-1)]
+    [Theory, InlineData(0x09), InlineData(0x0A), InlineData(0x0D), InlineData(0x0F), InlineData(0x1F), InlineData(0x00), InlineData(0x20), InlineData(0x200), InlineData(-1)]
     public void Invalid_ids_are_rejected(int id)
     {
         var act = () => new ValueSerializerRegistry([RegistryEntry.Of("a", Fake(id))]);
@@ -92,7 +92,7 @@ public class ValueSerializerRegistryTests
         act.Should().Throw<OptionsValidationException>();
     }
 
-    [Theory, InlineData(0x01), InlineData(0x02), InlineData(0x0F), InlineData(0x10), InlineData(0x1E), InlineData(0x100), InlineData(0x1FF)]
+    [Theory, InlineData(0x01), InlineData(0x02), InlineData(0x0E), InlineData(0x10), InlineData(0x1E), InlineData(0x100), InlineData(0x1FF)]
     public void Allowed_ids_are_accepted(int id)
     {
         var serializer = Fake(id);

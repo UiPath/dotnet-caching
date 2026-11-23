@@ -301,6 +301,52 @@ public class FailSafePeerTests
         a.Published.Skip(announced).Should().ContainSingle("only the removal is announced").Which.Type.Should().Be(KnownEventTypes.CacheRemoved);
     }
 
+    [Fact]
+    public async Task A_late_value_is_stored_as_a_fill_told_how_long_its_generator_ran()
+    {
+        using var peers = new CachePeers { Fenced = true };
+        var a = peers.Add("a", clock: _clock, localClock: _clock);
+        var policy = new CachePolicy { FailSafeEnabled = true, LocalExpiration = LocalLifetime, FailSafeTimeout = TimeSpan.FromMilliseconds(50) };
+        await WarmAsync(a, "v1");
+        await ExpireAsync(peers);
+        var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var call = a.Cache.GetOrAddAsync(Key, _ => release.Task, policy, Ct).AsTask();
+        await CachePeers.Until(() => _clock.HasTimers);
+        _clock.Advance(TimeSpan.FromSeconds(1));
+        (await call).Should().Be("v1");
+        var told = a.Inner.GeneratorAges.Count;
+
+        _clock.Advance(TimeSpan.FromSeconds(2));
+        release.SetResult("v2");
+        await CachePeers.Until(() => a.Cache.LateGenerations == 0);
+        await a.Settled();
+
+        a.Inner.GeneratorAges.Skip(told).Should().ContainSingle("the late store is a fill that carries the generator's age").Which.Should().BeCloseTo(TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(1));
+        peers.Store.Values.Values.Should().ContainSingle().Which.Should().Be("v2");
+    }
+
+    [Fact]
+    public async Task A_late_value_the_inner_tier_finds_removed_while_loading_is_stored_nowhere()
+    {
+        using var peers = new CachePeers { Fenced = true };
+        var a = peers.Add("a", clock: _clock, localClock: _clock);
+        var policy = new CachePolicy { FailSafeEnabled = true, LocalExpiration = LocalLifetime, FailSafeTimeout = TimeSpan.FromMilliseconds(50) };
+        await WarmAsync(a, "v1");
+        await ExpireAsync(peers);
+        a.Inner.RemovedWhileLoading = _ => true;
+        var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var call = a.Cache.GetOrAddAsync(Key, _ => release.Task, policy, Ct).AsTask();
+        await CachePeers.Until(() => _clock.HasTimers);
+        _clock.Advance(TimeSpan.FromSeconds(1));
+        (await call).Should().Be("v1");
+
+        release.SetResult("v2");
+        await CachePeers.Until(() => a.Cache.LateGenerations == 0);
+        await a.Settled();
+
+        peers.Store.Values.Should().BeEmpty("a removal that landed while the generator ran leaves the key to it, late store or not");
+    }
+
     [Theory]
     [InlineData(false, true)]
     [InlineData(true, true)]

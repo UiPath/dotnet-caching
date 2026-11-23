@@ -42,6 +42,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
 
     private readonly bool _removeUnreadable;
 
+    private readonly TimeSpan? _tombstoneGrace;
+
     private readonly ConcurrentDictionary<Type, object> _generations = new();
 
     private ValueSerializerRegistry _valueSerializers = ValueSerializerRegistry.Empty;
@@ -71,6 +73,17 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
         _serializer = serializer;
         _memorySerializer = serializer as IMemorySerializerProxy;
         _removeUnreadable = redisCacheOptions.RemoveUnreadable;
+        if (redisCacheOptions.RemoveTombstone is { } grace)
+        {
+            if (grace <= TimeSpan.Zero)
+            {
+                throw new InvalidOperationException($"RedisCacheOptions.{nameof(RedisCacheOptions.RemoveTombstone)} must be positive; it is {grace}.");
+            }
+
+            var milliseconds = Math.Max(1, (long)Math.Ceiling(grace.TotalMilliseconds));
+            _tombstoneGrace = TimeSpan.FromMilliseconds(milliseconds);
+        }
+
         _formats = new ValueFormatResolver(serializer, ValueSerializerRegistry.Empty, DefaultPolicy, classifyHeadersWithNoRegistry: !_removeUnreadable);
         _read = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Read));
         _write = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Write));
