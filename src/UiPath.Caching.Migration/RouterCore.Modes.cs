@@ -323,7 +323,7 @@ internal sealed partial class RouterCore
         Enqueue(RouterMode.BypassLibrary, reason);
     }
 
-    /// <summary>The leave order of the design, under one deadline; false when it could not leave in time.</summary>
+    /// <summary>Waits for subscriptions and pending writes, then switches to library mode, drains bypass operations, and resets the local tier. Returns false if the initial wait exhausts the shared deadline.</summary>
     private async Task<bool> LeaveAsync(CancellationToken cancellationToken)
     {
         var begun = Clock.GetTimestamp();
