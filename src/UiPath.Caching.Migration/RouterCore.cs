@@ -112,6 +112,8 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
         }
     }
 
+    public void LogRetriesInFlight(string cache, string keys) => RetriesInFlightLog(cache, keys);
+
     /// <summary>Only after <see cref="DrainAsync"/> has completed: no task is left to use them.</summary>
     public void DisposeResources()
     {
@@ -135,6 +137,9 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
             // Whatever ended the task, it has ended.
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The stop of cache {Cache} went past its bound with a write still in flight for key(s) {Keys}; shutdown keeps waiting for it, and the key is announced once it has returned.")]
+    private partial void RetriesInFlightLog(string cache, string keys);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Publishing an invalidation for cache {Cache} failed; peers may serve a local copy until its cap, and the publish is retried.")]
     private partial void PublishFailedLog(string cache);

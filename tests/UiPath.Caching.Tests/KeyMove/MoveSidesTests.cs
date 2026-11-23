@@ -35,7 +35,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
     private static string? NoPexpireat => Environment.GetEnvironmentVariable("MOVE_SIDES_NOPEXPIREAT");
 
     [Fact]
-    public void S3_G6_is_the_conjunction_of_both_sides_and_names_the_failing_side()
+    public void Forward_move_checks_require_both_sides_and_name_the_failing_side()
     {
         SideCaps.Gate(Good, Good).Should().BeEmpty();
         SideCaps.Gate(Good, Side(GoodMaster with { Wait = false })).Should().BeEmpty("WAIT needs an approval, not the gate");

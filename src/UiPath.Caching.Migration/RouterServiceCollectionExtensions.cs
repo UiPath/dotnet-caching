@@ -316,7 +316,7 @@ public static class RouterServiceCollectionExtensions
         return new RouterAdvertiser(setup.Store, setup.NodeId, setup.Build, sources, setup.RefreshInterval, setup.LivenessWindow, core.Clock, logger);
     }
 
-    private static LibraryParts CollectLibraryParts(IServiceProvider root, RouterBuilder builder, IRedisConnector connector, List<IHostedService> started)
+    private static LibraryParts CollectLibraryParts(IServiceProvider root, RouterBuilder builder, IRedisConnector connector, List<IHostedService> started, KeyMoveNode? keyMove)
     {
         var options = root.GetRequiredKeyedService<IOptions<CacheOptions>>(StackName).Value;
         var source = options.SourceUri ?? CacheOptions.MachineUri;
@@ -331,7 +331,8 @@ public static class RouterServiceCollectionExtensions
             source,
             LibrarySettleWithin(root, builder.SettleBound),
             started,
-            (key, cancellationToken) => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key, cancellationToken));
+            (key, cancellationToken) => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key, cancellationToken),
+            keyMove is { HasGroups: true } ? new NodePlane(keyMove, root.GetRequiredService<TimeProvider>(), builder.KeyMove?.Alert) : null);
     }
 
     private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, KeyMoveNode? keyMove, AdvertisementSetup? setup, CancellationToken cancellationToken)
@@ -355,7 +356,7 @@ public static class RouterServiceCollectionExtensions
                 started.Add(hosted);
             }
 
-            return CollectLibraryParts(root, builder, connector, started);
+            return CollectLibraryParts(root, builder, connector, started, keyMove);
         }
         catch
         {

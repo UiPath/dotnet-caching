@@ -135,7 +135,7 @@ public class KeyInventoryTests(RedisContainerFixture fixture)
     }
 
     [Fact]
-    public async Task A_completed_mover_pass_with_only_invalid_mappings_left_does_not_pass_D1_and_D2()
+    public async Task A_completed_mover_pass_with_only_invalid_mappings_left_cannot_confirm_the_drain()
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
         var state = await kit.StateAsync();

@@ -31,6 +31,7 @@ internal sealed class KeyMoveNode
     private string? _ownScope;
     private Dictionary<string, LeaderLease> _leases = [];
     private volatile Wiring? _wiring;
+    private KeyMoveDataAccess? _access;
 
     public KeyMoveNode(KeyMoveSetup setup, TimeProvider time)
     {
@@ -61,6 +62,27 @@ internal sealed class KeyMoveNode
 
     /// <summary>True when the setup names a group, so the node has anything to run.</summary>
     public bool HasGroups => _setup.Groups.Count > 0;
+
+    /// <summary>The data view, scripts and key names of the current connection, for the router's data path; null before the node is started.</summary>
+    internal KeyMoveDataAccess? DataAccess
+    {
+        get
+        {
+            if (_wiring is not { } w)
+            {
+                return null;
+            }
+
+            var held = _access;
+            if (held is not null && ReferenceEquals(held.Scripts, w.ControlScripts))
+            {
+                return held;
+            }
+
+            _access = new KeyMoveDataAccess(w.Control, w.ControlScripts, w.Names, w.Mux);
+            return _access;
+        }
+    }
 
     /// <param name="adverts">The router entries of the node hash; null starts the snapshot and the acknowledgements and no leader.</param>
     /// <param name="ownScope">The scope token of this node's adverts.</param>
@@ -186,7 +208,8 @@ internal sealed class KeyMoveNode
             new StuckGateReopener(records, controlScripts, database, names, state, _time),
             new StateRecovery(store, store, records, sequence, _time),
             new ClearCoordinator(store, stateScripts, controlScripts, records, names, state, _time),
-            new GroupRemoval(store, stateScripts, controlScripts, names, _setup.DropClaim));
+            new GroupRemoval(store, stateScripts, controlScripts, names, _setup.DropClaim),
+            control);
     }
 
     private void StartDriver(Wiring wiring, string[] names, CancellationToken token)
@@ -402,5 +425,6 @@ internal sealed class KeyMoveNode
         StuckGateReopener Stuck,
         StateRecovery Recovery,
         ClearCoordinator Clear,
-        GroupRemoval Removal);
+        GroupRemoval Removal,
+        IDatabase Control);
 }

@@ -30,4 +30,7 @@ public sealed class RouterCacheRegistration<T>
 
     /// <summary>How long after a write of unknown outcome the key stays off the local tier before its second eviction.</summary>
     public TimeSpan PendingWindow { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>The codecs and key maps of the key move forms; without them the cache keeps the router's per-group path whatever its group's state.</summary>
+    internal KeyMoveBinding<T>? KeyMove { get; init; }
 }

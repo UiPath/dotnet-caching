@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
@@ -9,6 +10,7 @@ internal static class RouterTelemetry
 
     private static readonly Meter RouterMeter = new(MeterName);
 
+    private static readonly ConcurrentDictionary<string, Counter<long>> MoveCounters = new(StringComparer.Ordinal);
     private static readonly Counter<long> LocalHit = RouterMeter.CreateCounter<long>("local_hit");
     private static readonly Counter<long> RedisHit = RouterMeter.CreateCounter<long>("redis_hit");
     private static readonly Counter<long> Miss = RouterMeter.CreateCounter<long>("miss");
@@ -44,6 +46,16 @@ internal static class RouterTelemetry
         if (ModeChange.Enabled)
         {
             ModeChange.Add(1, new TagList { { "mode", mode == RouterMode.Library ? "library" : "bypass_library" }, { "reason", reason.ToString() } });
+        }
+    }
+
+    /// <summary>A counter of the key move data path: <c>capture_slow</c>, <c>fence_refused</c>, <c>promotion_expiring</c>, <c>identity_rerun</c>, <c>retry_exhausted</c>, <c>unreadable_source</c>.</summary>
+    public static void CountMove(string counter, string cache, string group)
+    {
+        var made = MoveCounters.GetOrAdd(counter, name => RouterMeter.CreateCounter<long>("move_" + name));
+        if (made.Enabled)
+        {
+            made.Add(1, new TagList { { "cache", cache }, { "group", group } });
         }
     }
 

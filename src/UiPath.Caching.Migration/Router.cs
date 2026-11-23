@@ -14,6 +14,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
 #else
     private readonly object _stopGate = new();
 #endif
+    private long _stopBegan;
     private TaskCompletionSource? _stop;
     private TaskCompletionSource? _cleaned;
 
@@ -106,7 +107,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
         return stopped.Task.WaitAsync(cancellationToken);
     }
 
-    /// <summary>Waits for the whole cleanup, not only the bounded stop: what the router uses is released with the provider, after this returns.</summary>
+    /// <summary>Waits for in-flight writes and retries before releasing router resources.</summary>
     public async ValueTask DisposeAsync()
     {
         await StopAsync(CancellationToken.None).ConfigureAwait(false);
@@ -153,6 +154,16 @@ internal sealed class Router : IRouter, IAsyncDisposable
                 }
             });
 
+    private static void WarnInFlight(IRouterParticipant[] stoppables)
+    {
+        foreach (var stoppable in stoppables)
+        {
+            stoppable.WarnRetriesInFlight();
+        }
+    }
+
+    private static Task StopRetries(IRouterParticipant[] stoppables) => Task.WhenAll(stoppables.Select(stoppable => stoppable.StopRetriesAsync()));
+
     private static Task PendingSettled(IRouterParticipant[] stoppables) => Task.WhenAll(stoppables.Select(stoppable => stoppable.WhenPendingSettledAsync()));
 
     private async Task CleanupAsync(TaskCompletionSource foreground, TaskCompletionSource cleaned)
@@ -182,51 +193,59 @@ internal sealed class Router : IRouter, IAsyncDisposable
     private async Task StepsAsync(TaskCompletionSource foreground)
     {
         _core.BeginStop();
+        _stopBegan = _core.Clock.GetTimestamp();
         var stoppables = _caches.Values.Select(entry => entry.Cache).OfType<IRouterParticipant>().ToArray();
 
+        await DrainOperationsAsync(stoppables, foreground).ConfigureAwait(false);
+        await FinishStopAsync(stoppables, foreground).ConfigureAwait(false);
+    }
+
+    private async Task DrainOperationsAsync(IRouterParticipant[] stoppables, TaskCompletionSource foreground)
+    {
         // Calls that were admitted finish first; a pending key stays protected until its own command can no longer land.
         var drained = await WithinAsync(_core.OperationsDrained).ConfigureAwait(false);
+        var retries = drained ? StopRetries(stoppables) : Task.CompletedTask;
+
         var settled = await WithinAsync(PendingSettled(stoppables)).ConfigureAwait(false);
         if (!drained || !settled)
         {
+            WarnInFlight(stoppables);
+            // A later key-level invalidation covers any write still in flight.
             var invalidate = Task.WhenAll(stoppables.Select(stoppable => stoppable.InvalidateAsync()));
             await WithinAsync(invalidate).ConfigureAwait(false);
             foreground.TrySetResult();
             await invalidate.ConfigureAwait(false);
 
-            // Calls still running use the router's resources, and a pending key's announcement must wait for its window: both are waited for.
             await _core.OperationsDrained.ConfigureAwait(false);
+            retries = StopRetries(stoppables);
             await _core.SettlePendingAsync(stoppables).ConfigureAwait(false);
         }
 
-        var flush = Task.WhenAll(stoppables.Select(stoppable => stoppable.FlushAsync()));
-        if (!await WithinAsync(flush).ConfigureAwait(false))
+        // Foreground stop may time out while a retry still uses the router's resources.
+        if (!await WithinAsync(retries).ConfigureAwait(false))
         {
+            WarnInFlight(stoppables);
             foreground.TrySetResult();
         }
 
-        await flush.ConfigureAwait(false);
+        await retries.ConfigureAwait(false);
+    }
+
+    private async Task FinishStopAsync(IRouterParticipant[] stoppables, TaskCompletionSource foreground)
+    {
+        var flush = Task.WhenAll(stoppables.Select(stoppable => stoppable.FlushAsync()));
+        await CompleteStopPhaseAsync(flush, foreground).ConfigureAwait(false);
         _core.CancelBackground();
 
         // Started on the pool, so the phase bound runs even if the drain does not yield. The token is None on purpose: the drain runs to the end.
         var background = Task.Run(_core.DrainAsync, CancellationToken.None);
-        if (!await WithinAsync(background).ConfigureAwait(false))
-        {
-            foreground.TrySetResult();
-        }
-
-        await background.ConfigureAwait(false);
+        await CompleteStopPhaseAsync(background, foreground).ConfigureAwait(false);
         _core.Bridge?.Detach();
         if (Advertiser is { } advertiser)
         {
             // Departs only after every call has ended, so a reader never sees this node gone while it still serves.
             var departed = advertiser.StopAsync(PhaseLimit);
-            if (!await WithinAsync(departed).ConfigureAwait(false))
-            {
-                foreground.TrySetResult();
-            }
-
-            await departed.ConfigureAwait(false);
+            await CompleteStopPhaseAsync(departed, foreground).ConfigureAwait(false);
         }
 
         // A transition that an outside caller started holds the lock until it ends; the semaphore is disposed only after every one has.
@@ -237,20 +256,32 @@ internal sealed class Router : IRouter, IAsyncDisposable
         }
 
         var release = _core.ReleaseLibraryAsync();
-        if (!await WithinAsync(release).ConfigureAwait(false))
+        await CompleteStopPhaseAsync(release, foreground).ConfigureAwait(false);
+        _core.DisposeResources();
+    }
+
+    private async Task CompleteStopPhaseAsync(Task phase, TaskCompletionSource foreground)
+    {
+        if (!await WithinAsync(phase).ConfigureAwait(false))
         {
             foreground.TrySetResult();
         }
 
-        await release.ConfigureAwait(false);
-        _core.DisposeResources();
+        await phase.ConfigureAwait(false);
     }
 
+    // Shutdown phases share the same foreground deadline.
     private async Task<bool> WithinAsync(Task task)
     {
+        var left = PhaseLimit - _core.Clock.GetElapsedTime(Volatile.Read(ref _stopBegan));
+        if (left <= TimeSpan.Zero)
+        {
+            return task.IsCompleted;
+        }
+
         try
         {
-            await task.WaitAsync(PhaseLimit, _core.Clock, CancellationToken.None).ConfigureAwait(false);
+            await task.WaitAsync(left, _core.Clock, CancellationToken.None).ConfigureAwait(false);
             return true;
         }
         catch (TimeoutException)
