@@ -81,6 +81,11 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
                     // Whatever failed, the group's loop goes on: a leader that stops stepping silently leaves the group where it is.
                     Notify(group, "step_failed", ex.Message);
                 }
+                catch (Exception) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Once stop began, a step's fault is the shutdown itself (a cancelled call, a connection already disposed): the loop ends.
+                    return;
+                }
 
                 await Task.Delay(options.StepInterval, time, cancellationToken).ConfigureAwait(false);
             }
