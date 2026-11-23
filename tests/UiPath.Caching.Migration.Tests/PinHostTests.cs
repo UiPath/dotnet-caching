@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using UiPath.Caching.Config;
 using UiPath.Caching.Migration.Tests.Support;
+using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Migration.Tests;
 
@@ -108,6 +109,75 @@ public sealed class PinHostTests
 
         create.Should().Throw<InvalidOperationException>().WithMessage("*pin store*advertisement*");
     }
+
+    [Fact]
+    public void A_write_format_setting_without_a_pin_setting_fails_router_registration()
+    {
+        var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+
+        var build = () => Build(source, "g", router => router.UseValueSerializers(_ => { }).UseWriteFormatWhen(_ => "messagepack"));
+
+        build.Should().Throw<InvalidOperationException>().WithMessage("*UseWriteFormatWhen*UsePinWhen*");
+    }
+
+    [Fact]
+    public void A_write_format_setting_without_value_serializers_fails_router_registration()
+    {
+        var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+
+        var build = () => Build(source, "g", router => router.UsePinWhen(_ => true).UseWriteFormatWhen(_ => "messagepack"));
+
+        build.Should().Throw<InvalidOperationException>().WithMessage("*UseWriteFormatWhen*UseValueSerializers*");
+    }
+
+    [Fact]
+    public async Task With_a_write_format_setting_and_no_reachable_redis_a_pinned_group_still_fails_closed_and_never_reaches_the_source()
+    {
+        var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+        var provider = Build(source, "g", router => router.UsePinWhen(_ => true).UseValueSerializers(stack => stack.AddValueSerializer("messagepack", [TestFormatSerializer.Id], _ => new TestFormatSerializer())).UseWriteFormatWhen(_ => throw new InvalidOperationException("no setting")));
+        try
+        {
+            var router = provider.GetRequiredService<IRouter>();
+
+            // Written only once the connector knows Redis cannot be reached: before that a first write may be sent and end unknown.
+            var connector = provider.GetRequiredService<IRedisConnector>();
+            await Task.Run(
+                async () =>
+                {
+                    while (connector.IsConnected)
+                    {
+                        await Task.Delay(20, Ct);
+                    }
+                },
+                Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+            var write = await router.Get<Item>("items").SetAsync("k", new Item("v"), default, Ct);
+            write.Should().Be(WriteOutcome.NotSent);
+            source.Writes.Should().Be(0);
+        }
+        finally
+        {
+            // One bounded dispose: a dispose that hangs fails the test instead of the run.
+            await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
+        }
+    }
+
+    [Fact]
+    public void The_write_format_and_the_value_serializers_must_not_be_null()
+    {
+        var builder = new RouterBuilder();
+
+        builder.Invoking(b => b.UseWriteFormatWhen(null!)).Should().Throw<ArgumentNullException>();
+        builder.Invoking(b => b.UseValueSerializers(null!)).Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void The_banner_says_whether_a_write_format_setting_is_registered()
+    {
+        RouterBanner.Describe(new RouterBuilder(), "p1").Should().Contain("write format=stack default");
+        RouterBanner.Describe(new RouterBuilder().UseWriteFormatWhen(_ => null), "p1").Should().Contain("write format=UseWriteFormatWhen");
+    }
+
     [Fact]
     public void The_pin_setting_must_not_be_null()
     {

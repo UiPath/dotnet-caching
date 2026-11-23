@@ -1,5 +1,6 @@
 using System.Buffers;
 using StackExchange.Redis;
+using UiPath.Caching.Config;
 
 namespace UiPath.Caching.Migration;
 
@@ -20,6 +21,10 @@ public sealed class RouterBuilder
     internal Func<string, bool>? PinPredicate { get; private set; }
 
     internal ISerializerProxy<byte[]>? Envelope { get; private set; }
+
+    internal Func<string, string?>? WriteFormatPredicate { get; private set; }
+
+    internal Action<ICachingBuilder>? ValueSerializers { get; private set; }
 
     internal TimeSpan? SettleBound { get; private set; }
 
@@ -151,10 +156,30 @@ public sealed class RouterBuilder
         return this;
     }
 
-    /// <summary>The serializer that writes and reads the older client's value envelope.</summary>
+    /// <summary>The serializer of the older client's value envelope; it must never start a value with a format header byte, and a write that does fails.</summary>
     public RouterBuilder UseEnvelope(ISerializerProxy<byte[]> envelope)
     {
         Envelope = envelope ?? throw new ArgumentNullException(nameof(envelope));
+        return this;
+    }
+
+    /// <summary>Registers value serializers, such as MessagePack, in the router's own stack, so the stack reads them and advertises them in the node list.</summary>
+    /// <remarks>Needed by <see cref="UseWriteFormatWhen"/>. The stack is separate from the application's, so a serializer registered there is not seen by the router.</remarks>
+    public RouterBuilder UseValueSerializers(Action<ICachingBuilder> register)
+    {
+        ValueSerializers = register ?? throw new ArgumentNullException(nameof(register));
+        return this;
+    }
+
+    /// <summary>A live setting read on every library write: the group's value format, <c>"messagepack"</c>, <c>"json"</c> or null for <c>"json"</c>.</summary>
+    /// <remarks>
+    /// <c>"json"</c> writes the older client's envelope. <c>"messagepack"</c> writes MessagePack only while the group is pinned, acknowledged and switched, every node reads it, and the gate
+    /// over the groups that ask for it is open; until then the group writes the envelope. Setting it back to <c>"json"</c> downgrades at once, and the group never returns to the older client.
+    /// An answer that throws or is not one of these names writes the envelope. Needs <see cref="UsePinWhen"/> and <see cref="UseValueSerializers"/>.
+    /// </remarks>
+    public RouterBuilder UseWriteFormatWhen(Func<string, string?> format)
+    {
+        WriteFormatPredicate = format ?? throw new ArgumentNullException(nameof(format));
         return this;
     }
 

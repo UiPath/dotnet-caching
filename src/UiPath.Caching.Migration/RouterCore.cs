@@ -70,11 +70,30 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
     public void CancelBackground() => _stopping.Cancel();
 
     /// <summary>Completes when the background work has ended; a task that fails or is stopped counts as ended.</summary>
+    /// <remarks>Removes the completed tasks itself: their removal continuation may not have run yet, and waiting on them again would spin.</remarks>
     public async Task DrainAsync()
     {
-        while (!_background.IsEmpty)
+        while (true)
         {
-            await Task.WhenAll(_background.Keys.Select(Ended)).ConfigureAwait(false);
+            var running = new List<Task>();
+            foreach (var task in _background.Keys)
+            {
+                if (task.IsCompleted)
+                {
+                    _background.TryRemove(task, out _);
+                }
+                else
+                {
+                    running.Add(task);
+                }
+            }
+
+            if (running.Count == 0)
+            {
+                return;
+            }
+
+            await Task.WhenAll(running.Select(Ended)).ConfigureAwait(false);
         }
     }
 

@@ -40,6 +40,16 @@ public static class RouterServiceCollectionExtensions
             throw new InvalidOperationException("The router has no registered cache.");
         }
 
+        if (builder.WriteFormatPredicate is not null && builder.PinPredicate is null)
+        {
+            throw new InvalidOperationException("UseWriteFormatWhen needs UsePinWhen: a group writes MessagePack only while it is pinned and switched.");
+        }
+
+        if (builder.WriteFormatPredicate is not null && builder.ValueSerializers is null)
+        {
+            throw new InvalidOperationException("UseWriteFormatWhen needs UseValueSerializers: the router's stack must register the format its groups write.");
+        }
+
         var processId = builder.NodeIdentity ?? $"{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}";
         var gate = builder.PinPredicate is null ? null : new PinFormatGate();
         var registered = services.Count;
@@ -49,7 +59,17 @@ public static class RouterServiceCollectionExtensions
                 configuration,
                 chain =>
                 {
-                    chain.AddRedis(ConfigureStackRedis);
+                    chain.AddRedis(options =>
+                    {
+                        ConfigureStackRedis(options);
+
+                        // With a write format setting, the stack's negotiation takes the timings the pin was validated against, so the hold the pin checks is the hold the stack applies; a router without one keeps the stack's own defaults.
+                        if (builder.WriteFormatPredicate is not null)
+                        {
+                            configuration.GetSection(sectionName).GetSection("Redis:FormatNegotiation").Bind(options.FormatNegotiation);
+                        }
+                    });
+                    builder.ValueSerializers?.Invoke(chain);
                     chain.AddBroadcast();
                     chain.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
                     chain.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
@@ -57,7 +77,7 @@ public static class RouterServiceCollectionExtensions
                 sectionName,
                 (stack, _) =>
                 {
-                    stack.AddSingleton<ISerializerProxy<byte[]>>(envelope);
+                    AddEnvelope(stack, envelope);
                     if (gate is not null)
                     {
                         stack.AddSingleton<IFormatWriteGate>(gate);
@@ -85,6 +105,9 @@ public static class RouterServiceCollectionExtensions
         services.AddHostedService<RouterHostedService>();
         return services;
     }
+
+    /// <summary>The envelope in the stack's container, marked header-free so the stack reads it beside a registered format.</summary>
+    internal static void AddEnvelope(IServiceCollection stack, ISerializerProxy<byte[]> envelope) => stack.AddSingleton(HeaderFreeEnvelope.Wrap(envelope));
 
     internal static Func<TimeSpan> LibrarySettleWithin(IServiceProvider root, TimeSpan? explicitBound)
     {
@@ -146,6 +169,22 @@ public static class RouterServiceCollectionExtensions
         options.CacheNullValues = true;
     }
 
+    /// <summary>The topic is removed first, so its reader is gone before the group is, and cannot make it again.</summary>
+    /// <remarks>The connection is awaited, never read synchronously, so a Redis that cannot be reached leaves a task the caller's bound covers.</remarks>
+    internal static async Task ReleaseTopicAsync(ITopicProvider topics, IRedisConnector connector, RedisKey stream, string group, TopicKey key, CancellationToken cancellationToken)
+    {
+        topics.Remove(key);
+        try
+        {
+            await connector.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            await connector.Database.ExecuteAsync("XGROUP", "DESTROY", stream, group).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (RedisServerException)
+        {
+            // No such stream or group: nothing of ours is left.
+        }
+    }
+
     private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, PinFormatGate? gate, IConfigurationSection section)
     {
         var logger = root.GetService<ILoggerFactory>()?.CreateLogger("UiPath.Caching.Migration") ?? NullLogger.Instance;
@@ -185,8 +224,12 @@ public static class RouterServiceCollectionExtensions
                 ValidatePinSetup(section, setup, logger);
 
                 // Before the caches, which take their group's pin from it.
-                var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger);
+                var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger) { WriteFormat = builder.WriteFormatPredicate };
                 core.Pins = pins;
+                if (builder.WriteFormatPredicate is { } writeFormat)
+                {
+                    core.WriteFormats = new WriteFormatSelector(writeFormat, pins, logger);
+                }
                 gate!.Attach(pins);
             }
 
@@ -272,7 +315,7 @@ public static class RouterServiceCollectionExtensions
                 source,
                 LibrarySettleWithin(root, builder.SettleBound),
                 started,
-                key => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key));
+                (key, cancellationToken) => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key, cancellationToken));
         }
         catch
         {
@@ -290,20 +333,6 @@ public static class RouterServiceCollectionExtensions
             }
 
             throw;
-        }
-    }
-
-    /// <summary>The topic is removed first, so its reader is gone before the group is, and cannot make it again.</summary>
-    private static async Task ReleaseTopicAsync(ITopicProvider topics, IRedisConnector connector, RedisKey stream, string group, TopicKey key)
-    {
-        topics.Remove(key);
-        try
-        {
-            await connector.Database.ExecuteAsync("XGROUP", "DESTROY", stream, group).ConfigureAwait(false);
-        }
-        catch (RedisServerException)
-        {
-            // No such stream or group: nothing of ours is left.
         }
     }
 }

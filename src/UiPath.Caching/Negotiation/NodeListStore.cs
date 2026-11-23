@@ -49,9 +49,8 @@ internal sealed class NodeListStore(IRedisConnector redis, RedisKey key)
     /// <summary>The same construction as the stream maintainer's lock key, so the connector's prefix and a cluster slot follow it.</summary>
     public static RedisKey KeyFor(CacheOptions cacheOptions, RedisCacheOptions redisOptions)
     {
-        var factory = redisOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory();
-        return factory.Create(cacheOptions, RedisKeyspaces.String)
-            .GetRedisKey(KeyEscaping.EscapeBraces(string.Join(cacheOptions.Separator, "Caching", "Nodes")));
+        return RedisKeyStrategies.Resolve(redisOptions, cacheOptions, RedisKeyspaces.String, redisOptions.PinnedKeyFormat)
+            .GetRedisKey(LibraryKeyNames.NodeList(cacheOptions.Separator));
     }
 
     public static bool IsScriptRefusal(Exception ex) =>

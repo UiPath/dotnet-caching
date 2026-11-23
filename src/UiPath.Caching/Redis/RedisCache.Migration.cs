@@ -233,13 +233,11 @@ internal sealed partial class RedisCache
         var operation = StartOperation<T>();
         try
         {
-            ret = await _write.ExecuteAsync(static async (s, token) =>
+            ret = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
                 s.Trace.MarkSent();
-                await s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).ConfigureAwait(false);
-                s.Trace.MarkAnswered(true);
-                return true;
+                return s.Trace.AcknowledgeRanAsync(s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster));
             },
             (Self: this, Key: redisKey, Trace: trace),
             default,

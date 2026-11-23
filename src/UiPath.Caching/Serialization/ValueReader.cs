@@ -7,18 +7,22 @@ internal sealed class ValueReader(ISerializerProxy<byte[]> json, ValueSerializer
 {
     public const string UnreadableMetric = "cache.serializer.unreadable";
 
-    // The one proxy whose output is known to be JSON; a subclass or another proxy may store bytes that start with a header byte.
-    private readonly bool _jsonProxyIsDefault = json.GetType() == typeof(SystemJsonByteSerializerProxy);
+    // The default proxy writes JSON, and a marked proxy promises the same first bytes; a subclass or another proxy may store bytes that start with a header byte.
+    private readonly bool _proxyIsHeaderFree = IsHeaderFree(json);
 
     // Only a policy that writes a non-JSON format puts headers where a custom proxy could not tell them from its own bytes; Read lists never open the gate.
-    /// <summary>False for a custom proxy or a subclass: its bytes are not known to be JSON, so a write it makes cannot stand in for one with a header.</summary>
-    public bool JsonProxyIsDefault => _jsonProxyIsDefault;
+    /// <summary>False for an unmarked custom proxy or a subclass: its bytes may start with a header byte, so a write it makes cannot stand in for one with a header.</summary>
+    public bool ProxyIsHeaderFree => _proxyIsHeaderFree;
+
+    /// <summary>The default JSON proxy, or one marked <see cref="IHeaderFreeSerializerProxy"/>; a subclass of the default is not, unless marked.</summary>
+    public static bool IsHeaderFree(ISerializerProxy<byte[]> proxy) =>
+        proxy.GetType() == typeof(SystemJsonByteSerializerProxy) || proxy is IHeaderFreeSerializerProxy;
 
     /// <summary>The name a format is counted under: <c>json</c>, or what its serializer is registered as.</summary>
     public string NameOf(int formatId) => registry.NameOf(formatId);
 
     public bool SniffsFor(CachePolicy? policy) =>
-        !registry.IsEmpty && (_jsonProxyIsDefault || WritesHeaders(policy));
+        !registry.IsEmpty && (_proxyIsHeaderFree || WritesHeaders(policy));
 
     /// <param name="readable">A known format outside it is an excluded miss, which keeps the key; null accepts every registered format.</param>
     public ReadOutcome<T> Read<T>(byte[] value, ReadableFormats? readable = null)

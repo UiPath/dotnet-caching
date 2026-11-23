@@ -42,7 +42,13 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
 
         _pop = resiliencePipelineProvider.Get(setCacheOptions.ResilienceKeyName);
         _cacheOptions = cacheOptions;
-        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, RedisSetKeyspace);
+        _redisKeyStrategy = (redisCacheOptions.KeyFormat, redisCacheOptions.RedisKeyStrategyFactory) switch
+        {
+            (null, var factory) => (factory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, RedisSetKeyspace),
+            (var format, null) => format.CreateStrategy(_cacheOptions.AppShortName, RedisSetKeyspace),
+            _ => throw new InvalidOperationException(
+                $"{nameof(RedisCacheOptions)}.{nameof(RedisCacheOptions.KeyFormat)} cannot be combined with a custom {nameof(RedisCacheOptions.RedisKeyStrategyFactory)}."),
+        };
     }
 
     public string Name => KnownCacheProviderNames.Redis;

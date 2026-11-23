@@ -22,6 +22,9 @@ public static class Metrics
     public const string FormatNodes = "cache.format.nodes";
     public const string FormatBlockers = Prefix + "FormatBlockers";
 
+    public const string FormatSweep = "cache.format.sweep";
+    public const string FormatInventory = "cache.format.inventory";
+
     public const string SerializerRead = "cache.serializer.read";
     public const string SerializerWrite = "cache.serializer.write";
     public const string SerializerRewrite = "cache.serializer.rewrite";

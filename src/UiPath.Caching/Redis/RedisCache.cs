@@ -75,7 +75,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
         _read = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Read));
         _write = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Write));
         _largeValueThreshold = cacheOptions.LargeValueThreshold;
-        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, GetType());
+        _redisKeyStrategy = RedisKeyStrategies.Resolve(redisCacheOptions, cacheOptions, GetType());
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _cacheNullValues = redisCacheOptions.CacheNullValues;
 

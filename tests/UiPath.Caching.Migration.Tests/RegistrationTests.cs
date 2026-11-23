@@ -17,7 +17,7 @@ public sealed class RegistrationTests
     [
         "Redis.AwaitRefresh=false", "Redis.CacheKeyStrategy=none", "Redis.CacheNullValues=false", "Redis.ConnectionMonitorEnabled=none",
         "Redis.DefaultExpiration=01:00:00", "Redis.Enabled=true", "Redis.EntryFactory=none", "Redis.FormatNegotiation=FormatNegotiationOptions",
-        "Redis.HashFieldBatchSize=1000", "Redis.KeyPrefix=", "Redis.KeyReadTelemetryEnabled=false", "Redis.MasterReadWindow=00:00:01",
+        "Redis.HashFieldBatchSize=1000", "Redis.KeyFormat=none", "Redis.KeyPrefix=", "Redis.KeyReadTelemetryEnabled=false", "Redis.MasterReadWindow=00:00:01",
         "Redis.ReadFrom=Master", "Redis.ReadScriptsEnabled=false", "Redis.RedisKeyStrategyFactory=none", "Redis.RemoveUnreadable=true", "Redis.Timeout=00:00:01",
         "Redis.FormatNegotiation.AdvertiseInterval=00:00:15", "Redis.FormatNegotiation.AssumeAllNodesCanRead=false", "Redis.FormatNegotiation.LivenessWindow=00:02:00",
         "Redis.FormatNegotiation.MaxViewAge=00:02:00", "Redis.FormatNegotiation.Mode=Auto", "Redis.FormatNegotiation.UpgradeHold=01:00:00",
@@ -64,6 +64,7 @@ public sealed class RegistrationTests
             EntryFactory = new CacheEntryFactory(),
             RemoveUnreadable = true,
             ReadFrom = RedisReadFrom.Replica,
+            KeyFormat = RedisKeyFormat.Dollar,
         };
         var cache = new CacheOptions
         {
@@ -72,11 +73,11 @@ public sealed class RegistrationTests
 
         var violations = RegistrationValidator.Violations(cache, stack);
 
-        violations.Should().HaveCount(6);
+        violations.Should().HaveCount(7);
         string[] named =
         [
             nameof(RedisCacheOptions.RedisKeyStrategyFactory), nameof(RedisCacheOptions.CacheKeyStrategy), nameof(RedisCacheOptions.EntryFactory),
-            nameof(RedisCacheOptions.RemoveUnreadable), nameof(RedisCacheOptions.ReadFrom), nameof(CachePolicy.Serializer),
+            nameof(RedisCacheOptions.RemoveUnreadable), nameof(RedisCacheOptions.ReadFrom), nameof(CachePolicy.Serializer), nameof(RedisCacheOptions.KeyFormat),
         ];
         foreach (var name in named)
         {

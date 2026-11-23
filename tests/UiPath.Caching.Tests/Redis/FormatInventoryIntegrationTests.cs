@@ -16,7 +16,7 @@ namespace UiPath.Caching.Tests.Redis;
 
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
+public class FormatInventoryIntegrationTests(RedisContainerFixture fixture)
 {
     private static readonly byte[] Json = "\"x\""u8.ToArray();
     private static readonly byte[] Fast = [0x10, (byte)'x'];
@@ -51,8 +51,8 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = mux.GetDatabase();
         var run = Run();
-        await db.StringSetAsync($"census:s: Mix{run}:A", Json, TimeSpan.FromMinutes(5));
-        await db.StringSetAsync($"census:s: Mix{run}:B", Fast, TimeSpan.FromMinutes(5));
+        await db.StringSetAsync($"inventory:s: Mix{run}:A", Json, TimeSpan.FromMinutes(5));
+        await db.StringSetAsync($"inventory:s: Mix{run}:B", Fast, TimeSpan.FromMinutes(5));
         using var connector = new Connector(mux);
         var sut = Provider(connector);
 
@@ -89,11 +89,11 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = mux.GetDatabase();
         var run = Run();
-        await db.HashSetAsync($"census:h:{run}:h-json", [new("_version_", 3), new("_metadata_", Fast), new("a", Json)]);
-        await db.HashSetAsync($"census:h:{run}:h-fast", [new("_metadata_", Json), new("_version_", 1), new("a", Fast), new("b", Fast)]);
-        await db.HashSetAsync($"census:h:{run}:h-unknown", [new("a", Unknown)]);
-        await db.HashSetAsync($"census:h:{run}:h-only-system", [new("_version_", 3), new("_metadata_", Json)]);
-        await db.HashSetAsync($"census:h:{run}:h-marker", [new("_metadata_", RedisValue.EmptyString)]);
+        await db.HashSetAsync($"inventory:h:{run}:h-json", [new("_version_", 3), new("_metadata_", Fast), new("a", Json)]);
+        await db.HashSetAsync($"inventory:h:{run}:h-fast", [new("_metadata_", Json), new("_version_", 1), new("a", Fast), new("b", Fast)]);
+        await db.HashSetAsync($"inventory:h:{run}:h-unknown", [new("a", Unknown)]);
+        await db.HashSetAsync($"inventory:h:{run}:h-only-system", [new("_version_", 3), new("_metadata_", Json)]);
+        await db.HashSetAsync($"inventory:h:{run}:h-marker", [new("_metadata_", RedisValue.EmptyString)]);
         using var connector = new Connector(mux);
         var sut = Provider(connector);
 
@@ -110,9 +110,9 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         var db = mux.GetDatabase();
         var run = Run();
         // Whichever field a scan meets first, the hash still has JSON in it.
-        await db.HashSetAsync($"census:h:{run}:a-first", [new("a", Fast), new("b", Json)]);
-        await db.HashSetAsync($"census:h:{run}:a-last", [new("a", Json), new("b", Fast)]);
-        await db.HashSetAsync($"census:h:{run}:three", [new("a", Fast), new("b", Other), new("c", Unknown), new("_version_", 2)]);
+        await db.HashSetAsync($"inventory:h:{run}:a-first", [new("a", Fast), new("b", Json)]);
+        await db.HashSetAsync($"inventory:h:{run}:a-last", [new("a", Json), new("b", Fast)]);
+        await db.HashSetAsync($"inventory:h:{run}:three", [new("a", Fast), new("b", Other), new("c", Unknown), new("_version_", 2)]);
         using var connector = new Connector(mux);
 
         var counts = await Provider(connector).CountFormatsAsync($"{run}:*", Ct);
@@ -128,8 +128,8 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = mux.GetDatabase();
         var run = Run();
-        var entries = Enumerable.Range(0, FormatCensus.MaxHashFields * 3).Select(i => new HashEntry($"f{i:D4}", Fast)).ToArray();
-        await db.HashSetAsync($"census:h:{run}:huge", entries);
+        var entries = Enumerable.Range(0, FormatInventory.MaxHashFields * 3).Select(i => new HashEntry($"f{i:D4}", Fast)).ToArray();
+        await db.HashSetAsync($"inventory:h:{run}:huge", entries);
         using var connector = new Connector(mux);
         var before = await HScansAsync();
 
@@ -164,7 +164,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var run = Run();
-        var prefix = $"census-[{Guid.NewGuid():N}]*?:";
+        var prefix = $"inventory-[{Guid.NewGuid():N}]*?:";
         using var prefixed = new Connector(mux, prefix);
         await SetAsync(prefixed.Database, run, "k", 3, Json);
         await SetAsync(mux.GetDatabase(), run, "bare", 4, Fast);
@@ -225,7 +225,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         var page = RedisResult.Create(
         [
             RedisResult.Create((RedisValue)"0", ResultType.BulkString),
-            RedisResult.Create([.. Enumerable.Range(0, 300).Select(i => RedisResult.Create((RedisValue)$"census:s:{run}:k{i}", ResultType.BulkString))]),
+            RedisResult.Create([.. Enumerable.Range(0, 300).Select(i => RedisResult.Create((RedisValue)$"inventory:s:{run}:k{i}", ResultType.BulkString))]),
         ]);
         var empty = RedisResult.Create([RedisResult.Create((RedisValue)"0", ResultType.BulkString), RedisResult.Create(Array.Empty<RedisResult>())]);
         var server = Forwarding<IServer>.Wrap(
@@ -279,12 +279,12 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var run = Run();
-        var prefix = $"census-[{Guid.NewGuid():N}]*?:";
+        var prefix = $"inventory-[{Guid.NewGuid():N}]*?:";
         using var connector = new Connector(mux, prefix);
         await SetAsync(connector.Database, run, "k", 3, Json);
         // A key that the prefix would match if its characters were read as a glob.
         await SetAsync(mux.GetDatabase(), run, "decoy", 4, Fast);
-        await mux.GetDatabase().StringSetAsync($"census-1{Guid.NewGuid():N}x:census:s:{run}:decoy", Fast);
+        await mux.GetDatabase().StringSetAsync($"inventory-1{Guid.NewGuid():N}x:inventory:s:{run}:decoy", Fast);
 
         var counts = await Provider(connector, keyPrefix: prefix).CountFormatsAsync($"{run}:*", Ct);
 
@@ -299,7 +299,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         var db = mux.GetDatabase();
         var run = Run();
         var entries = Enumerable.Range(0, 600).Select(i => new HashEntry($"f{i:D4}", Fast)).Append(new("_version_", 9)).Append(new("_metadata_", Json)).ToArray();
-        await db.HashSetAsync($"census:h:{run}:big", entries);
+        await db.HashSetAsync($"inventory:h:{run}:big", entries);
         using var connector = new Connector(mux);
         var sut = Provider(connector);
 
@@ -316,14 +316,14 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = mux.GetDatabase();
         var run = Run();
-        await db.StringSetAsync($"census:s:{run}:one", Json);
-        await db.StringSetAsync($"census:s:{run}:empty", RedisValue.EmptyString);
-        await db.SetAddAsync($"census:s:{run}:set", "member");
-        await db.SetAddAsync($"census:h:{run}:set", "member");
-        await db.ListRightPushAsync($"census:s:{run}:list", "item");
-        await db.SortedSetAddAsync($"census:s:{run}:zset", "m", 1);
-        await db.StreamAddAsync($"census:s:{run}:stream", "k", "v");
-        await db.StringSetAsync($"census:s:{Run()}:elsewhere", Fast);
+        await db.StringSetAsync($"inventory:s:{run}:one", Json);
+        await db.StringSetAsync($"inventory:s:{run}:empty", RedisValue.EmptyString);
+        await db.SetAddAsync($"inventory:s:{run}:set", "member");
+        await db.SetAddAsync($"inventory:h:{run}:set", "member");
+        await db.ListRightPushAsync($"inventory:s:{run}:list", "item");
+        await db.SortedSetAddAsync($"inventory:s:{run}:zset", "m", 1);
+        await db.StreamAddAsync($"inventory:s:{run}:stream", "k", "v");
+        await db.StringSetAsync($"inventory:s:{Run()}:elsewhere", Fast);
         using var connector = new Connector(mux);
         var sut = Provider(connector);
 
@@ -352,7 +352,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var run = Run();
-        var prefix = $"census-{Guid.NewGuid():N}:";
+        var prefix = $"inventory-{Guid.NewGuid():N}:";
         using var connector = new Connector(mux, prefix, exposePrimaries);
         await SetAsync(connector.Database, run, "k", 2, Json);
         await SetAsync(mux.GetDatabase(), run, "bare", 5, Fast);
@@ -361,7 +361,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         var counts = await sut.CountFormatsAsync($"{run}:*", Ct);
 
         counts.Should().BeEquivalentTo(new Dictionary<string, long> { ["json"] = 2 });
-        (await mux.GetDatabase().KeyExistsAsync($"{prefix}census:s:{run}:k0")).Should().BeTrue("the keys live under the prefix");
+        (await mux.GetDatabase().KeyExistsAsync($"{prefix}inventory:s:{run}:k0")).Should().BeTrue("the keys live under the prefix");
     }
 
     [Fact]
@@ -392,13 +392,13 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         using var connector = new Connector(mux);
         using var cancel = new CancellationTokenSource();
         var pages = 0;
-        var census = Census(connector, onPage: () =>
+        var inventory = Inventory(connector, onPage: () =>
         {
             pages++;
             cancel.Cancel();
         });
 
-        var act = () => census.CountAsync($"{run}:*", cancel.Token);
+        var act = () => inventory.CountAsync($"{run}:*", cancel.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         pages.Should().Be(1);
@@ -414,10 +414,10 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         await SetAsync(db, run, "k", 2_000, Json);
         using var connector = new Connector(mux);
         var pages = 0;
-        var census = Census(connector, onPage: () => pages++);
+        var inventory = Inventory(connector, onPage: () => pages++);
         var keys = await mux.GetServer(mux.GetEndPoints()[0]).DatabaseSizeAsync();
 
-        var counts = await census.CountAsync($"{run}:*", Ct);
+        var counts = await inventory.CountAsync($"{run}:*", Ct);
 
         counts["json"].Should().Be(2_000);
         // Two passes, one per type; the default page of ten keys would take a hundred times as many as this.
@@ -454,12 +454,12 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         var arguments = scans.Select(s => ((IEnumerable<object>)s[2]!).Select(a => a.ToString()!).ToList()).ToList();
         arguments.Should().OnlyContain(a => a.Contains("TYPE") && a.Contains("COUNT") && a.Contains("MATCH"));
         arguments.Select(a => a[a.IndexOf("TYPE") + 1]).Distinct().Should().BeEquivalentTo("string", "hash");
-        arguments.Select(a => a[a.IndexOf("COUNT") + 1]).Distinct().Should().Equal(FormatCensus.ScanCount.ToString(CultureInfo.InvariantCulture));
+        arguments.Select(a => a[a.IndexOf("COUNT") + 1]).Distinct().Should().Equal(FormatInventory.ScanCount.ToString(CultureInfo.InvariantCulture));
 
         scans.Clear();
         using var cancel = new CancellationTokenSource();
-        var census = Census(connector, onPage: cancel.Cancel);
-        var act = () => census.CountAsync($"{run}:*", cancel.Token);
+        var inventory = Inventory(connector, onPage: cancel.Cancel);
+        var act = () => inventory.CountAsync($"{run}:*", cancel.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         scans.Should().HaveCount(1, "the page in hand is finished and no other is asked for");
@@ -471,7 +471,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var run = Run();
-        var prefix = $"census-{Guid.NewGuid():N}:";
+        var prefix = $"inventory-{Guid.NewGuid():N}:";
         using var prefixed = new Connector(mux, prefix);
         await SetAsync(prefixed.Database, run, "k", 3, Json);
         // A database that is not StackExchange.Redis's own, and that does not answer the probe, says nothing of its prefix.
@@ -538,14 +538,14 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
     {
         var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", new PassthroughValueSerializer(0x10)), RegistryEntry.Of("other", new PassthroughValueSerializer(0x12)), RegistryEntry.Of("wide", new PassthroughValueSerializer(0x101))]);
 
-        FormatCensus.Classify(head, registry).Should().Be(expected);
+        FormatInventory.Classify(head, registry).Should().Be(expected);
     }
 
-    private static FormatCensus Census(IRedisConnector connector, Action? onPage = null)
+    private static FormatInventory Inventory(IRedisConnector connector, Action? onPage = null)
     {
         var factory = new DefaultRedisKeyStrategyFactory();
-        var options = new CacheOptions { AppShortName = "census" };
-        return new FormatCensus(
+        var options = new CacheOptions { AppShortName = "inventory" };
+        return new FormatInventory(
             connector,
             string.Empty,
             new ValueSerializerRegistry([]),
@@ -555,17 +555,17 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
             onPage);
     }
 
-    private static string Run() => $"census{Guid.NewGuid():N}"[..24];
+    private static string Run() => $"inventory{Guid.NewGuid():N}"[..24];
 
     private static async Task SetAsync(IDatabase db, string run, string name, int count, byte[] value)
     {
         for (var i = 0; i < count; i++)
         {
-            await db.StringSetAsync($"census:s:{run}:{name}{i}", value, TimeSpan.FromMinutes(5));
+            await db.StringSetAsync($"inventory:s:{run}:{name}{i}", value, TimeSpan.FromMinutes(5));
         }
     }
 
-    private static RedisCacheProvider Provider(IRedisConnector connector, string keyPrefix = "", bool extended = false, string app = "census", IRedisKeyStrategyFactory? strategies = null)
+    private static RedisCacheProvider Provider(IRedisConnector connector, string keyPrefix = "", bool extended = false, string app = "inventory", IRedisKeyStrategyFactory? strategies = null)
     {
         var registry = new ValueSerializerRegistry(
             [
@@ -610,7 +610,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
 
     private sealed class Connector(IConnectionMultiplexer mux, string? prefix = null, bool exposePrimaries = true, IServer[]? primaries = null, IDatabase? database = null) : IRedisConnector
     {
-#pragma warning disable S108 // The census never raises connection events, so the subscriptions are no-ops.
+#pragma warning disable S108 // The inventory never raises connection events, so the subscriptions are no-ops.
         public event EventHandler? OnConnectionFailed
         {
             add { }

@@ -189,8 +189,10 @@ internal sealed class Router : IRouter, IAsyncDisposable
             await WithinAsync(invalidate).ConfigureAwait(false);
             foreground.TrySetResult();
             await invalidate.ConfigureAwait(false);
+
+            // Calls still running use the router's resources, and a pending key's announcement must wait for its window: both are waited for.
             await _core.OperationsDrained.ConfigureAwait(false);
-            await PendingSettled(stoppables).ConfigureAwait(false);
+            await _core.SettlePendingAsync(stoppables).ConfigureAwait(false);
         }
 
         var flush = Task.WhenAll(stoppables.Select(stoppable => stoppable.FlushAsync()));
@@ -201,7 +203,9 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
         await flush.ConfigureAwait(false);
         _core.CancelBackground();
-        var background = _core.DrainAsync();
+
+        // Started on the pool, so the phase bound runs even if the drain does not yield. The token is None on purpose: the drain runs to the end.
+        var background = Task.Run(_core.DrainAsync, CancellationToken.None);
         if (!await WithinAsync(background).ConfigureAwait(false))
         {
             foreground.TrySetResult();
