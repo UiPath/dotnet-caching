@@ -13,4 +13,7 @@ public enum FillOutcome
 
     /// <summary>The key holds a value no registered serializer reads; nothing was written.</summary>
     Unreadable,
+
+    /// <summary>The key was removed after the generator of the value started, so nothing was written; only a fill that follows a generator reports it, and only with a remove tombstone configured.</summary>
+    Removed,
 }

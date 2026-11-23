@@ -71,12 +71,12 @@ public class ReserveFirstTests
         var inner = MissingInner();
         var stored = 0;
         ValueTaskStubs.Returns(
-            inner.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
+            inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
             ci =>
             {
                 ci.ArgAt<CancellationToken>(4).ThrowIfCancellationRequested();
                 Interlocked.Increment(ref stored);
-                return new ValueTask<bool>(true);
+                return new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Added, null));
             });
         using var cache = InMemoryMultilayer.Cache(inner: inner);
         using var leaving = new CancellationTokenSource();
@@ -147,7 +147,7 @@ public class ReserveFirstTests
                 lateReadStarted.TrySetResult();
                 return new ValueTask<ICacheEntry<string?>>(lateRead.Task);
             });
-        ValueTaskStubs.Returns(inner.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), true);
+        ValueTaskStubs.Returns(inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new FillResult<string>(FillOutcome.Added, null));
         using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalMaxExpiration = TimeSpan.FromMilliseconds(1), LocalMaxExpirationDisconnected = TimeSpan.FromMilliseconds(1) }, inner);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -416,7 +416,7 @@ public class ReserveFirstTests
         ValueTaskStubs.Returns(
             inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
             new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-        ValueTaskStubs.Returns(inner.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), true);
+        ValueTaskStubs.Returns(inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new FillResult<string>(FillOutcome.Added, null));
         return inner;
     }
 

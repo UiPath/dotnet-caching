@@ -428,14 +428,14 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
 
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = default });
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(_ => innerCacheSet);
+        _innerCache.TryFillAsync<string>(_innerCacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new FillResult<string>(innerCacheSet ? FillOutcome.Added : FillOutcome.Failed, null));
 
         var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeTrue();
         // A value the inner tier refused is still kept locally, for the disconnected lifetime, so waiters on the lock reuse it.
         _memoryCache.Received(1).CreateEntry(_innerCacheKey.Name);
-        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).TryFillAsync<string>(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         actual.Should().Be(generatorExpected);
         _logger.ReceivedCalls().Should().Contain(c => c.GetMethodInfo().Name == "Log" && (LogLevel)c.GetArguments()[0]! == LogLevel.Debug);
     }
@@ -495,7 +495,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
 
         generatorWasCalled.Should().BeTrue();
         actual.Should().BeNull();
-        await _innerCache.Received().SetAsync<string?>(_innerCacheKey, default, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received().TryFillAsync<string>(_innerCacheKey, default, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1547,8 +1547,8 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
 
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = default });
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(true);
+        _innerCache.TryFillAsync<string>(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(new FillResult<string>(FillOutcome.Added, null));
 
         var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeTrue();
@@ -1557,11 +1557,11 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
 
         if (innerCacheDisconnected)
         {
-            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            await _innerCache.DidNotReceive().TryFillAsync<string>(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         }
         else
         {
-            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            await _innerCache.Received(1).TryFillAsync<string>(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         }
     }
 

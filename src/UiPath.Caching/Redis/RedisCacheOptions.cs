@@ -67,6 +67,15 @@ public class RedisCacheOptions : ICacheOptions
     /// </remarks>
     public bool RemoveUnreadable { get; set; } = true;
 
+    /// <summary>Off by default (<see langword="null"/>). When set, a remove leaves a tombstone that lives this long, so a fill whose generator started before the remove does not put the value back.</summary>
+    /// <remarks>
+    /// Every read treats the tombstone as a miss. A fill after a generator refuses to write over a tombstone written after that generator started, or one whose age cannot be told, and a tombstone older than the generator is replaced.
+    /// Set it to the longest generator time; it must be positive, and the same on every node that shares the keys. The key lives this long after a remove, about thirty bytes per removed key.
+    /// Fenced: the value a generator makes, stored by the layered caches and by the Redis-only string cache, <c>GetOrAdd</c> in every overload, including a replacement of bytes no serializer can read, which is a compare-and-set. A refresh never changes a tombstone. Not fenced: hash caches, which are still deleted, an explicit <c>Set</c>, <c>TryAdd</c> and <c>SetIfChanged</c>, and a generator that outlives the grace.
+    /// A node that does not set it reads a tombstone as a miss and leaves it, but a fill on that node writes over it. An eviction policy that evicts keys with a TTL (<c>volatile-*</c> or <c>allkeys-*</c>) can drop a tombstone, as can a failover that loses it, which then fences nothing.
+    /// </remarks>
+    public TimeSpan? RemoveTombstone { get; set; }
+
     public FormatNegotiationOptions FormatNegotiation { get; set; } = new();
 
     /// <summary>The format of the node list and the stream maintainer's keys while a format move runs; null follows <see cref="KeyFormat"/>.</summary>

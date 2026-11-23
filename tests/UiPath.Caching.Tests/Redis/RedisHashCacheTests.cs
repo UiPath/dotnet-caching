@@ -704,6 +704,70 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_fill_writes_in_one_transaction_that_requires_the_key_to_be_absent(bool committed)
+    {
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(committed);
+        // AutoFixture cannot build a ConditionResult, and the cache discards it.
+        _transaction.AddCondition(Arg.Any<Condition>()).Returns((ConditionResult)null!);
+        var values = new Dictionary<string, string?> { ["f"] = "v" };
+
+        var written = await Sut.FillVersionedAsync(_cacheKey, values, new HashCacheEntryOptions(ExpireTime: _now.AddMinutes(5)), policy: null, new PeerFieldLimits(2, 1024), testContextAccessor.Current.CancellationToken);
+
+        written.Written.Should().Be(committed);
+        written.Existed.Should().Be(!committed, "a transaction whose condition fails found the key held");
+        _transaction.Received(1).AddCondition(Arg.Any<Condition>());
+        var calls = _transaction.ReceivedCalls().Select(c => c.GetMethodInfo().Name).ToArray();
+        calls.Should().Contain(nameof(IDatabaseAsync.HashSetAsync));
+        await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_fill_whose_deadline_passed_deletes_nothing_a_peer_may_have_stored()
+    {
+        var values = new Dictionary<string, string?> { ["f"] = "v" };
+
+        var written = await Sut.FillVersionedAsync(_cacheKey, values, new HashCacheEntryOptions(ExpireTime: _now.AddMinutes(-1)), policy: null, new PeerFieldLimits(2, 1024), testContextAccessor.Current.CancellationToken);
+
+        written.Written.Should().BeFalse();
+        written.Existed.Should().BeFalse();
+        await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        _database.DidNotReceive().CreateTransaction();
+    }
+
+    [Fact]
+    public async Task A_write_whose_deadline_passed_still_deletes_the_key()
+    {
+        var values = new Dictionary<string, string?> { ["f"] = "v" };
+
+        await Sut.SetVersionedAsync(_cacheKey, values, new HashCacheEntryOptions(ExpireTime: _now.AddMinutes(-1)), policy: null, new PeerFieldLimits(2, 1024), testContextAccessor.Current.CancellationToken);
+
+        await _database.Received(1).KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_fill_of_many_fields_renames_the_staging_key_only_if_the_key_is_absent(bool renamed)
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _database.KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(renamed);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        var written = await Sut.FillVersionedAsync(_cacheKey, values, new HashCacheEntryOptions(ExpireTime: _now.AddMinutes(5), SetOption: HashCacheSetOption.HashReplace), policy: null, new PeerFieldLimits(2, 1024), testContextAccessor.Current.CancellationToken);
+
+        written.Written.Should().Be(renamed);
+        written.Existed.Should().Be(!renamed);
+        await _database.Received(1).KeyRenameAsync(Arg.Is<RedisKey>(k => k != _redisKey), _redisKey, When.NotExists, CommandFlags.DemandMaster);
+        await _database.DidNotReceive().KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), When.Always, Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().HashSetAsync(_redisKey, Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Theory]
     [InlineData(HashCacheSetOption.HashReplace)]
     [InlineData(HashCacheSetOption.KeyReplace)]
     public async Task Every_chunk_of_many_fields_sets_the_lifetime_of_the_key_it_writes(HashCacheSetOption setOption)

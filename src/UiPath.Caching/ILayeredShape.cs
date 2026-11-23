@@ -17,6 +17,9 @@ internal interface ILayeredShape<TValue, TOptions, TWrite>
     /// <summary>Whether the inner cache offers the snapshot read adoption needs; one that does not never adopts.</summary>
     bool CanAdopt { get; }
 
+    /// <summary>Whether a store after a generator can compare against what <see cref="ReadForAdoptionAsync"/> saw.</summary>
+    bool CanStamp { get; }
+
     /// <summary>Whether the value is nothing a caller could use: null for a plain entry, null or no fields for a hash.</summary>
     bool IsEmpty(TValue? value);
 
@@ -27,8 +30,11 @@ internal interface ILayeredShape<TValue, TOptions, TWrite>
 
     ValueTask<ICacheEntry<TValue>> ReadInnerAsync(TOptions options, CachePolicy policy);
 
-    /// <summary>The read that decides an adoption: an atomic snapshot of value and lifetime, and a failure thrown rather than answered as a miss.</summary>
-    ValueTask<ICacheEntry<TValue>> ReadForAdoptionAsync(TOptions options, CachePolicy policy);
+    /// <summary>The read that decides an adoption: an atomic snapshot of value and lifetime, and a failure thrown rather than answered as a miss; what it saw goes in <paramref name="stamp"/> when the shape can compare against it.</summary>
+    ValueTask<ICacheEntry<TValue>> ReadForAdoptionAsync(TOptions options, CachePolicy policy, StampBox stamp);
+
+    /// <summary>Stores the value only if the key still holds what the adoption read saw, and keeps it locally when it does; only for a shape that <see cref="CanStamp"/>.</summary>
+    ValueTask<StampedWrite> StoreStampedAsync(TOptions options, TValue value, CachePolicy policy, StampBox stamp);
 
     /// <summary>Takes what the inner tier holds into the options of the local copy: its deadline, and what only this kind of entry has.</summary>
     void Adopt(ref TOptions options, ICacheEntry<TValue> fetched);

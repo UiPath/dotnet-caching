@@ -14,8 +14,8 @@ internal sealed partial class MultilayerCache
     // Per policy instance, so a value that skips fail-safe is written under an equal policy without it and allocates nothing after the first.
     private static readonly ConditionalWeakTable<CachePolicy, CachePolicy> FailSafeOff = [];
 
-    // The kept value a late store replaces, in that store's flow; the count of late stores spares other writes the lookup.
-    private static readonly AsyncLocal<StaleValue?> LateOf = new();
+    // The kept value a late store replaces and how long its generator had run (read at that time: the generator's watch has ended, and its fill still compares with a tombstone), in that store's flow; the count of late stores spares other writes the lookup.
+    private static readonly AsyncLocal<LateStore?> LateOf = new();
 
     private CancellationTokenSource? _lateShutdown;
     private int _lateGenerations;
@@ -71,6 +71,7 @@ internal sealed partial class MultilayerCache
         Func<MultilayerCache, CacheEntryOptions, TResult, CachePolicy, GenerationScope, bool, ValueTask<ICacheEntry<T?>>> store)
     {
         ICacheEntry<T?> entry;
+        scope = BeginFill(options, scope, localOnly);
         try
         {
             LogCacheMissed(Logged(options, typeof(T)));
@@ -81,6 +82,10 @@ internal sealed partial class MultilayerCache
         {
             scope.Fail(ex);
             throw;
+        }
+        finally
+        {
+            EndFill(options.CacheKey.Name, scope);
         }
 
         scope.Complete(entry);
@@ -162,7 +167,7 @@ internal sealed partial class MultilayerCache
                         // For a caller that joined the run without fail-safe; observed here, since such a caller may stop waiting for it.
                         var answer = LateEntryAsync(generation, entryOf, options.Expiration);
                         answer.Forget();
-                        StartLateFinish(generation, own, options, typeof(T), policy, localOnly, replaced, store);
+                        StartLateFinish(generation, own, options, typeof(T), policy, localOnly, replaced, _background.FillElapsed(name, scope.Fill), store);
                         return (default!, ServeStale(Logged(options, typeof(T)), current, kept, policy, ReasonTimeout, null, answer));
                     }
                 }
@@ -217,10 +222,10 @@ internal sealed partial class MultilayerCache
         return StaleOrNull?.IsCurrent(name, kept) == true ? false : null;
     }
 
-    private void StartLateFinish<T, TResult>(Task<TResult> generation, CancellationTokenSource own, CacheEntryOptions options, Type entryType, CachePolicy policy, bool localOnly, StaleValue replaced, Func<MultilayerCache, CacheEntryOptions, TResult, CachePolicy, GenerationScope, bool, ValueTask<ICacheEntry<T?>>> store)
+    private void StartLateFinish<T, TResult>(Task<TResult> generation, CancellationTokenSource own, CacheEntryOptions options, Type entryType, CachePolicy policy, bool localOnly, StaleValue replaced, TimeSpan? ran, Func<MultilayerCache, CacheEntryOptions, TResult, CachePolicy, GenerationScope, bool, ValueTask<ICacheEntry<T?>>> store)
     {
         Interlocked.Increment(ref _lateGenerations);
-        FinishLateAsync(generation, own, options.WithToken(CancellationToken.None), entryType, policy, localOnly, replaced, store).Forget();
+        FinishLateAsync(generation, own, options.WithToken(CancellationToken.None), entryType, policy, localOnly, replaced, ran is { } elapsed ? (elapsed, _clock.GetTimestamp()) : null, store).Forget();
     }
 
     /// <summary>From here only the cache's disposal cancels the generator, at once when it has begun.</summary>
@@ -264,7 +269,7 @@ internal sealed partial class MultilayerCache
         return won.Token;
     }
 
-    private async Task FinishLateAsync<T, TResult>(Task<TResult> generation, CancellationTokenSource own, CacheEntryOptions options, Type entryType, CachePolicy policy, bool localOnly, StaleValue replaced, Func<MultilayerCache, CacheEntryOptions, TResult, CachePolicy, GenerationScope, bool, ValueTask<ICacheEntry<T?>>> store)
+    private async Task FinishLateAsync<T, TResult>(Task<TResult> generation, CancellationTokenSource own, CacheEntryOptions options, Type entryType, CachePolicy policy, bool localOnly, StaleValue replaced, (TimeSpan Elapsed, long At)? ran, Func<MultilayerCache, CacheEntryOptions, TResult, CachePolicy, GenerationScope, bool, ValueTask<ICacheEntry<T?>>> store)
     {
         var outcome = "failed";
         var shutdown = default(CancellationTokenRegistration);
@@ -278,7 +283,7 @@ internal sealed partial class MultilayerCache
                 LateStoreStarting?.Invoke();
                 // The write checks again in the key's turn; this check only spares a store that cannot be kept.
                 Interlocked.Increment(ref _lateStores);
-                LateOf.Value = replaced;
+                LateOf.Value = new LateStore(replaced, ran);
                 try
                 {
                     await store(this, options, result, policy, new GenerationScope(null, options.Token), localOnly).ConfigureAwait(false);
@@ -314,16 +319,20 @@ internal sealed partial class MultilayerCache
         }
     }
 
+    /// <summary>How long the generator of a late store had run by now, which a fill compares with a tombstone; null for any other write.</summary>
+    private TimeSpan? LateGeneratorElapsed() =>
+        Volatile.Read(ref _lateStores) != 0 && LateOf.Value?.Ran is { } ran ? ran.Elapsed + _clock.GetElapsedTime(ran.At) : null;
+
     /// <summary>Whether a write may go on: true unless it is a late store whose replaced value is no longer the one kept. Checked in the key's write turn.</summary>
     private bool LateStillCurrent(in CacheEntryOptions options) =>
-        Volatile.Read(ref _lateStores) == 0 || LateOf.Value is not { } replaced || (!Disposed && StillKept(options.CacheKey.Name, replaced));
+        Volatile.Read(ref _lateStores) == 0 || LateOf.Value is not { } late || (!Disposed && StillKept(options.CacheKey.Name, late.Replaced));
 
     /// <summary>Drops the key's kept value for a generator answer the cache does not store, unless a write since the generator started kept it: a late answer drops only the value its generator replaced, any other only a value with no live entry.</summary>
     private void DropKeptForUnstored(string name)
     {
-        if (Volatile.Read(ref _lateStores) != 0 && LateOf.Value is { } replaced)
+        if (Volatile.Read(ref _lateStores) != 0 && LateOf.Value is { } late)
         {
-            StaleOrNull?.Drop(name, replaced);
+            StaleOrNull?.Drop(name, late.Replaced);
         }
         else
         {
@@ -347,4 +356,6 @@ internal sealed partial class MultilayerCache
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The generator of {CacheKey} that fail-safe stopped waiting for failed.")]
     private partial void LogLateGenerationFailed(Exception ex, LoggedKey cacheKey);
+
+    private readonly record struct LateStore(StaleValue Replaced, (TimeSpan Elapsed, long At)? Ran);
 }

@@ -186,15 +186,19 @@ internal sealed partial class RedisHashCache
 
     private async ValueTask<bool> WriteAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, DateTimeOffset now, WriteReport? report, bool dropMetadata, CancellationToken token)
     {
+        var absent = report?.OnlyIfAbsent == true;
         if (expiration < now || hashEntries.Length == 0)
         {
-            return await DeleteKeyAsync(redisKey, token).ConfigureAwait(false);
+            // A fill of an absent key mutates nothing it did not find absent: a hash a peer stored while its generator ran stays.
+            return !absent && await DeleteKeyAsync(redisKey, token).ConfigureAwait(false);
         }
 
-        if (hashEntries.Length > _fieldBatchSize && TryChunkedWriteKeys(redisKey, setOption, out var staging))
+        // Written to a staging key and renamed under the key, so a hash that appeared meanwhile is never merged into.
+        var chunkOption = absent ? HashCacheSetOption.KeyReplace : setOption;
+        if (hashEntries.Length > _fieldBatchSize && TryChunkedWriteKeys(redisKey, chunkOption, out var staging))
         {
             await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
-            return await _write.ExecuteAsync(static (s, token) => s.Self.WriteInChunksAsync(s.Key, s.Staging, s.Entries, s.Option, s.Expiration, s.Report, token), (Self: this, Key: redisKey, Staging: staging, Entries: hashEntries, Option: setOption, Expiration: expiration, Report: report), default, token).ConfigureAwait(false);
+            return await _write.ExecuteAsync(static (s, token) => s.Self.WriteInChunksAsync(s.Key, s.Staging, s.Entries, s.Option, s.Expiration, s.Report, token), (Self: this, Key: redisKey, Staging: staging, Entries: hashEntries, Option: chunkOption, Expiration: expiration, Report: report), default, token).ConfigureAwait(false);
         }
 
         return await WriteInTransactionAsync(redisKey, hashEntries, setOption, expiration, report, dropMetadata, token).ConfigureAwait(false);
@@ -215,6 +219,11 @@ internal sealed partial class RedisHashCache
     {
         await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
         var transaction = Database.CreateTransaction();
+        if (report?.OnlyIfAbsent == true)
+        {
+            transaction.AddCondition(Condition.KeyNotExists(redisKey));
+        }
+
         if (setOption == HashCacheSetOption.KeyReplace)
         {
             transaction.KeyDeleteAsync(redisKey).Forget();
@@ -254,7 +263,12 @@ internal sealed partial class RedisHashCache
             transaction,
             default,
             token).ConfigureAwait(false);
-        if (!committed)
+        if (!committed && report?.OnlyIfAbsent == true)
+        {
+            // Its condition failed: the key is held.
+            report.Existed = true;
+        }
+        else if (!committed)
         {
             LogRedisTransactionFailed();
         }

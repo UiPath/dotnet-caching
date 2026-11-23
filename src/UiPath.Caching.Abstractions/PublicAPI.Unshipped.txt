@@ -79,6 +79,7 @@ UiPath.Caching.FillOutcome
 UiPath.Caching.FillOutcome.Added = 1 -> UiPath.Caching.FillOutcome
 UiPath.Caching.FillOutcome.Existed = 2 -> UiPath.Caching.FillOutcome
 UiPath.Caching.FillOutcome.Failed = 0 -> UiPath.Caching.FillOutcome
+UiPath.Caching.FillOutcome.Removed = 4 -> UiPath.Caching.FillOutcome
 UiPath.Caching.FillOutcome.Unreadable = 3 -> UiPath.Caching.FillOutcome
 UiPath.Caching.FillResult<T>
 UiPath.Caching.FillResult<T>.Deconstruct(out UiPath.Caching.FillOutcome Outcome, out T? Existing, out System.DateTimeOffset? Expiration) -> void

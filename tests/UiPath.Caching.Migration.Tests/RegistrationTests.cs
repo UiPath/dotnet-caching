@@ -18,7 +18,7 @@ public sealed class RegistrationTests
         "Redis.AwaitRefresh=false", "Redis.CacheKeyStrategy=none", "Redis.CacheNullValues=false", "Redis.ConnectionMonitorEnabled=none",
         "Redis.DefaultExpiration=01:00:00", "Redis.Enabled=true", "Redis.EntryFactory=none", "Redis.FormatNegotiation=FormatNegotiationOptions",
         "Redis.HashFieldBatchSize=1000", "Redis.KeyFormat=none", "Redis.KeyPrefix=", "Redis.KeyReadTelemetryEnabled=false", "Redis.MasterReadWindow=00:00:01",
-        "Redis.ReadFrom=Master", "Redis.ReadScriptsEnabled=false", "Redis.RedisKeyStrategyFactory=none", "Redis.RemoveUnreadable=true", "Redis.Timeout=00:00:01",
+        "Redis.ReadFrom=Master", "Redis.ReadScriptsEnabled=false", "Redis.RedisKeyStrategyFactory=none", "Redis.RemoveTombstone=none", "Redis.RemoveUnreadable=true", "Redis.Timeout=00:00:01",
         "Redis.FormatNegotiation.AdvertiseInterval=00:00:15", "Redis.FormatNegotiation.AssumeAllNodesCanRead=false", "Redis.FormatNegotiation.LivenessWindow=00:02:00",
         "Redis.FormatNegotiation.MaxViewAge=00:02:00", "Redis.FormatNegotiation.Mode=Auto", "Redis.FormatNegotiation.UpgradeHold=01:00:00",
         "Redis.FormatNegotiation.ViewInterval=00:00:15",

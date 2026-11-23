@@ -1115,7 +1115,8 @@ public class PeerFieldUpdateTests
         var (writer, other) = (c.Add("a", timeout: Timeout.InfiniteTimeSpan), c.Add("b"));
         var release = new TaskCompletionSource();
         var readGate = new TaskCompletionSource();
-        writer.Inner.Hold = release.Task;
+        // The fill reaches the store first and waits to answer: a fill that finds the key held loses and drops its copy, which leaves no refresh to race it.
+        writer.Inner.AfterWrite = _ => release.Task;
         await writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Background, Ct);
         var reads = writer.InnerReads;
         writer.Inner.ReadHold = readGate.Task;

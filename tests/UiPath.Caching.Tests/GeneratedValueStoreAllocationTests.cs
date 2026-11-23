@@ -9,8 +9,9 @@ public class GeneratedValueStoreAllocationTests
     // Measured by this test on the commit fail-safe branched from (4301cc87), on net8.0 and net10.0 alike, in this same harness. A field or an
     // awaiter added to a frame the ordinary run shares shows as 8 bytes or more; a frame added shows as a state machine. A change to the harness
     // moves both numbers: measure them again on a build without the change under test. Both include the 8 bytes of the local deadline an entry carries.
-    private const long PlainBytes = 4072;
-    private const long GeneratedBytes = 4200;
+    // The inner tier answers a fill with a FillResult where a write answered a bool: the fake's boxed answer and its held task carry 56 bytes more, as a probe of the fake alone measured.
+    private const long PlainBytes = 4072 + 56;
+    private const long GeneratedBytes = 4200 + 56;
 
     private static readonly Task<string?> Plain = Task.FromResult<string?>("v");
     private static readonly Task<GeneratedValue<string>> Generated = Task.FromResult(new GeneratedValue<string>("v"));

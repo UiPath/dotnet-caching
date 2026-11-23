@@ -27,6 +27,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
     private readonly List<CacheKey[]> _innerSetCalls = [];
 
     private ICache _innerCache = default!;
+    private FillManyInner _many = default!;
     private MemoryCache _memoryCache = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;
@@ -385,11 +386,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         await Sut.GetOrAddAsync<string, long>([new((CacheKey)"b", 2L)], Generate, TimeSpan.FromMinutes(3), null, token);
 
         _innerSetCalls.Should().HaveCount(2);
-        await _innerCache.Received(1).SetAsync<string?>(
-            Arg.Any<KeyValuePair<CacheKey, string?>[]>(),
-            Arg.Is<DateTimeOffset>(d => d == expiration),
-            Arg.Any<CachePolicy?>(),
-            Arg.Any<CancellationToken>());
+        _many.Calls.Count(c => c.Expiration == expiration).Should().Be(1);
     }
 
     [Fact]
@@ -414,7 +411,8 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(_ => new TestChangeToken { ActiveChangeCallbacks = true, HasChanged = false });
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
-        _innerCache = _fixture.Freeze<ICache>();
+        _innerCache = Substitute.For<ICache>();
+        _fixture.Inject(FillManyInner.Wrap(_innerCache, out _many));
         _options = new InMemoryRedisCacheOptions
         {
             DefaultExpiration = TimeSpan.FromMinutes(10),
@@ -456,14 +454,12 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
                         : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue }))
                 .ToArray());
 
-        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(c =>
-            {
-                var pairs = c.Arg<KeyValuePair<CacheKey, string?>[]>()!;
-                _innerSetCalls.Add(pairs.Select(p => p.Key).ToArray());
-                foreach (var pair in pairs) { _stored[pair.Key] = pair.Value; }
-                return true;
-            });
+        _many.Answer = (keys, values, _) =>
+        {
+            _innerSetCalls.Add(keys);
+            for (var i = 0; i < keys.Length; i++) { _stored[keys[i]] = (string?)values[i]; }
+            return Array.ConvertAll(keys, _ => FillOutcome.Added);
+        };
 
         return ValueTask.CompletedTask;
     }

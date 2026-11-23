@@ -370,9 +370,9 @@ The library writes and strips the format header; the serializer only produces an
 builder.AddValueSerializer("fast", [0x10], _ => new MyValueSerializer());
 ```
 
-`formatIds` are the ids the serializer writes and reads, checked at the call: each is `0x01`-`0x0F` (except `0x09`, `0x0A`, `0x0D`), `0x10`-`0x1E` or
+`formatIds` are the ids the serializer writes and reads, checked at the call: each is `0x01`-`0x0E` (except `0x09`, `0x0A`, `0x0D`), `0x10`-`0x1E` or
 `0x100`-`0x1FF`, all of one header length, none used twice or claimed by another serializer. A call that fails registers nothing. The serializer's own
-`FormatIds` must equal them as a set, which is checked when the registry is built. The ids `0x01`-`0x0F` are allocated: use one only if it has a row in
+`FormatIds` must equal them as a set, which is checked when the registry is built. The ids `0x01`-`0x0E` are allocated (`0x0F` is reserved for a remove tombstone and is refused): use one only if it has a row in
 [format ids](../reference/format-ids.md); an application's own serializer takes `0x10`-`0x1E` or `0x100`-`0x1FF`.
 
 The registry owns whatever the factory returns and disposes it with the container, through `DisposeAsync` when
@@ -409,7 +409,7 @@ With `write: true` and `FormatNegotiation:Mode` `Auto` the node writes JSON unti
 A plugin is a package that calls `AddValueSerializer`, `AddEventFormat` or both, through public API only; the first-party MessagePack package is built the same way.
 `tests/UiPath.Caching.PluginContract.Tests` holds a fake third-party plugin that exercises every seam: registration, round trip, `Read` lists, `MigrateOnRead`, the inventory, the negotiated switch, named stacks and the JSON decoder next to a plugin's events. It runs against the library, not against your plugin, but it is the one to copy from.
 
-- **Value ids.** Take two-byte ids, `0x100`-`0x17F`, and ask for a row in [format ids](../reference/format-ids.md) by pull request. `0x01`-`0x0F` (except `0x09`, `0x0A`, `0x0D`) is allocated by that table and `0x10`-`0x1E` is for an application's own serializers. Make the ids an option with the row as default, so an application can move a plugin whose ids clash with its own. A second id of your own is how a plugin keeps a variant, such as a compressed one; the library never looks inside the payload.
+- **Value ids.** Take two-byte ids, `0x100`-`0x17F`, and ask for a row in [format ids](../reference/format-ids.md) by pull request. `0x01`-`0x0E` (except `0x09`, `0x0A`, `0x0D`) is allocated by that table and `0x0F` is reserved for a remove tombstone and `0x10`-`0x1E` is for an application's own serializers. Make the ids an option with the row as default, so an application can move a plugin whose ids clash with its own. A second id of your own is how a plugin keeps a variant, such as a compressed one; the library never looks inside the payload.
 - **Event id.** One byte, `0x01`-`0x0F` (except `0x09`, `0x0A`, `0x0D`) or `0x10`-`0x1E`. A published plugin takes it from the allocated range by a row, like a value id; value and event ids are separate. The fake plugin uses the application-private `0x11` for its events because it is never published.
 - **Round trip.** `Deserialize(Serialize(x))` must give back `x`, and `Serialize` must give the same bytes for the same value on every call. `MigrateOnRead` rewrites a value only when that holds and counts one that fails it as lossy. `Deserialize` throws on an id it does not own and on corrupt or truncated input, never returning part of a value; the reader turns the throw into a miss and keeps the key.
 - **Ids declared once.** `FormatIds` must equal the ids passed to `AddValueSerializer`; a mismatch throws when the registry is built, on first cache use, and disposes what was built. An event `Encode` must start with `formatId`; one that does not is written as JSON and logged once as an error, so an invalidation is never lost.
@@ -524,8 +524,8 @@ Rules a serializer follows:
 
 - **Format ids.** A serializer lists the ids it writes in `FormatIds`, all with the same header length.
   Application-private serializers take `0x10`-`0x1E` (one byte) or `0x100`-`0x1FF` (the marker byte `0x1F`, then the low
-  byte). `0x01`-`0x0F`, except `0x09`, `0x0A` and `0x0D`, are allocated by the table in
-  [format ids](../reference/format-ids.md). Every other first byte,
+  byte). `0x01`-`0x0E`, except `0x09`, `0x0A` and `0x0D`, are allocated by the table in
+  [format ids](../reference/format-ids.md), and `0x0F` is reserved for a remove tombstone. Every other first byte,
   including `0x00`, JSON whitespace (`0x09`, `0x0A`, `0x0D`) and `0x20` onward, is JSON, which has no header. An
   id is never reused: a leftover value written under a retired id would be misread by whatever took it over.
 - **`Serialize` returns the id it wrote**, one of `FormatIds`; a serializer that picks between a plain and a

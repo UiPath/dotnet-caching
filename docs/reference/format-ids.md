@@ -6,11 +6,12 @@ It checks one builder, including the serializers a named stack inherits, and can
 
 | Range | Use |
 |---|---|
-| `0x01`-`0x0F`, except `0x09`, `0x0A`, `0x0D` | Allocated: an id is taken only by a row in the table below |
+| `0x01`-`0x0E`, except `0x09`, `0x0A`, `0x0D` | Allocated: an id is taken only by a row in the table below |
+| `0x0F` | Reserved: the first byte of a remove tombstone (`RedisCacheOptions.RemoveTombstone`), never the id of a value serializer |
 | `0x10`-`0x1E` | Application-private serializers |
 | `0x100`-`0x1FF` | Two-byte ids, written as `0x1F` then the low byte: published plugins by convention in `0x100`-`0x17F`, application-private in `0x180`-`0x1FF` |
 
-`0x09`, `0x0A` and `0x0D` are never ids: they begin JSON whitespace. Value ids and event ids are separate namespaces, so one number may be both. An event id must be one byte, because an event body starts with it: `0x01`-`0x0F` allocated, `0x10`-`0x1E` application-private. The `0x100`-`0x17F` advice for published plugins applies to value ids only.
+`0x09`, `0x0A` and `0x0D` are never ids: they begin JSON whitespace. Value ids and event ids are separate namespaces, so one number may be both. An event id must be one byte, because an event body starts with it: `0x01`-`0x0F` allocated (`0x0F` is reserved for values only: a tombstone is never an event), `0x10`-`0x1E` application-private. The `0x100`-`0x17F` advice for published plugins applies to value ids only.
 
 A published plugin makes its ids an option with the row as the default, so an application can move a plugin whose ids clash with its own.
 

@@ -3,8 +3,11 @@ namespace UiPath.Caching.Serialization;
 /// <summary>The value format id rules, shared by the builder, which throws argument exceptions, and the registry, which reports options failures.</summary>
 internal static class FormatIdRules
 {
+    /// <summary>The header byte of a remove tombstone: no value serializer may claim it, so no value reads as one.</summary>
+    public const int TombstoneId = 0x0F;
+
     public static bool IsAllowed(int id) =>
-        id is >= 0x01 and <= 0x0F and not 0x09 and not 0x0A and not 0x0D
+        id is >= 0x01 and <= 0x0F and not 0x09 and not 0x0A and not 0x0D and not TombstoneId
             or >= CacheValueFormats.FirstConsumer and <= CacheValueFormats.LastConsumer
             or >= CacheValueFormats.FirstExtended and <= CacheValueFormats.LastExtended;
 
@@ -30,7 +33,7 @@ internal static class FormatIdRules
             {
                 return new(
                     true,
-                    $"Value serializer '{name}' declares format id {Hex(id)}, which is not one of 0x01-0x0F (except 0x09, 0x0A, 0x0D), 0x10-0x1E or 0x100-0x1FF.");
+                    $"Value serializer '{name}' declares format id {Hex(id)}, which is not one of 0x01-0x0E (except 0x09, 0x0A, 0x0D), 0x10-0x1E or 0x100-0x1FF; 0x0F is reserved for a remove tombstone.");
             }
 
             if ((id >= CacheValueFormats.FirstExtended) != extended)

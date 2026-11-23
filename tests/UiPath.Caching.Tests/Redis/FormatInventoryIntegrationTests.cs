@@ -45,6 +45,22 @@ public class FormatInventoryIntegrationTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task A_remove_tombstone_is_counted_under_no_format()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = mux.GetDatabase();
+        var run = Run();
+        await SetAsync(db, run, "json", 2, Json);
+        await SetAsync(db, run, "tombstone", 3, TombstoneValue.Create(30_000));
+        using var connector = new Connector(mux);
+
+        var counts = await Provider(connector).CountFormatsAsync($"{run}:*", Ct);
+
+        counts.Should().BeEquivalentTo(new Dictionary<string, long> { ["json"] = 2 }, "a tombstone holds no value, so it is neither a format nor an unknown one that would keep a rollout from finishing");
+    }
+
+    [Fact]
     public async Task A_verbatim_pattern_counts_mixed_case_and_padded_keys_that_a_normalized_one_cannot()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");

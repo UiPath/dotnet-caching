@@ -34,29 +34,29 @@ internal sealed partial class RedisCache
     /// <inheritdoc cref="ICache.GetOrAddAsync{T, TState}(KeyValuePair{CacheKey, TState}[], Func{TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy?, CancellationToken)"/>
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull =>
-        GetOrAddBatchAsync(entries, generator, (pairs, t) => SetAsync(pairs, policy, t), policy, token);
+        GetOrAddBatchAsync(entries, generator, (pairs, t) => SetAsync(pairs, policy, t), default, policy, token);
 
     /// <inheritdoc cref="ICache.GetOrAddAsync{T, TState}(KeyValuePair{CacheKey, TState}[], Func{TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy?, CancellationToken)"/>
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull =>
-        GetOrAddBatchAsync(entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+        GetOrAddBatchAsync(entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), new StoreLifetime(expiration), policy, token);
 
     /// <inheritdoc cref="ICache.GetOrAddAsync{T, TState}(KeyValuePair{CacheKey, TState}[], Func{TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy?, CancellationToken)"/>
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull =>
-        GetOrAddBatchAsync(entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+        GetOrAddBatchAsync(entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), new StoreLifetime(expiration), policy, token);
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull =>
-        GetOrAddBatchAsync(entries, argument, generator, (pairs, t) => SetAsync(pairs, policy, t), policy, token);
+        GetOrAddBatchAsync(entries, argument, generator, (pairs, t) => SetAsync(pairs, policy, t), default, policy, token);
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull =>
-        GetOrAddBatchAsync(entries, argument, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+        GetOrAddBatchAsync(entries, argument, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), new StoreLifetime(expiration), policy, token);
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull =>
-        GetOrAddBatchAsync(entries, argument, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+        GetOrAddBatchAsync(entries, argument, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), new StoreLifetime(expiration), policy, token);
 
     public ValueTask<T?> GetOrAddWithExpirationAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
     {
@@ -82,12 +82,13 @@ internal sealed partial class RedisCache
         KeyValuePair<CacheKey, TState>[] entries,
         Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         Func<KeyValuePair<CacheKey, T?>[], CancellationToken, ValueTask<bool>> setAsync,
+        StoreLifetime lifetime,
         CachePolicy? policy,
         CancellationToken token)
         where TState : notnull
     {
         ArgumentNullException.ThrowIfNull(generator);
-        return GetOrAddBatchAsync(entries, generator, DirectBatch<T, TState>.Invoke, setAsync, policy, token);
+        return GetOrAddBatchAsync(entries, generator, DirectBatch<T, TState>.Invoke, setAsync, lifetime, policy, token);
     }
 
     private ValueTask<KeyValuePair<TState, T?>[]> GetOrAddBatchAsync<T, TState, TArg>(
@@ -95,13 +96,16 @@ internal sealed partial class RedisCache
         TArg argument,
         Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         Func<KeyValuePair<CacheKey, T?>[], CancellationToken, ValueTask<bool>> setAsync,
+        StoreLifetime lifetime,
         CachePolicy? policy,
         CancellationToken token)
         where TState : notnull
     {
         ArgumentNullException.ThrowIfNull(generator);
         var wrappedGenerator = WrapBatchWithFactoryTimeout(entries, generator, (policy ?? DefaultPolicy)?.FactoryTimeout);
-        return BatchGetOrAdd.RunAsync(this, entries, argument, wrappedGenerator, setAsync, policy, token);
+        return _tombstoneGrace is null
+            ? BatchGetOrAdd.RunAsync(this, entries, argument, wrappedGenerator, setAsync, policy, token)
+            : GetOrAddFencedBatchAsync(entries, argument, wrappedGenerator, lifetime, policy, token);
     }
 
     private Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> WrapBatchWithFactoryTimeout<T, TState, TArg>(
@@ -197,9 +201,12 @@ internal sealed partial class RedisCache
             else
             {
                 LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
-                ret = await RunGeneratorAsync(cacheKey, state, generator, factoryTimeout, token).ConfigureAwait(false);
+                // With a remove tombstone the generator's value is stored as a fill that knows how long the generator ran; the same await either way.
+                ret = await (_tombstoneGrace is null
+                    ? RunGeneratorAsync(cacheKey, state, generator, factoryTimeout, token)
+                    : GenerateAndFillAsync(cacheKey, redisKey, state, generator, factoryTimeout, expiration, format, run)).ConfigureAwait(false);
 
-                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(cacheKey, redisKey, ret, expiration, format, token).ConfigureAwait(false))
+                if (ShouldStoreGenerated(ret) && await SetInternalAsync(cacheKey, redisKey, ret, expiration, format, token).ConfigureAwait(false))
                 {
                     run.Expiration = StoredDeadline(expiration);
                 }
@@ -214,6 +221,8 @@ internal sealed partial class RedisCache
         run.Complete(ret);
         return ret;
     }
+
+    private bool ShouldStoreGenerated<T>(T? value) => _tombstoneGrace is null && (!IsDefault(value) || _cacheNullValues);
 
     /// <summary>One run per Redis key and type: concurrent callers join the run in progress, which reads Redis once and generates only on a miss, and share its result or failure; it runs on its own token, cancelled once every caller has cancelled. Keyed by the Redis key, not the cache key, which a strategy may map to different Redis keys, and by value, so a prefixed key is never rendered to a string. The work ends the run itself, so the caller that started it awaits the work's own task.</summary>
     private ValueTask<T?> ShareGenerationAsync<T, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, IInFlightEnd<T?>, ValueTask<T?>> work, CancellationToken token) =>
@@ -253,13 +262,18 @@ internal sealed partial class RedisCache
             else
             {
                 LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
-                var generated = await RunGeneratorAsync(cacheKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, token).ConfigureAwait(false);
+                var generated = await (_tombstoneGrace is null
+                    ? RunGeneratorAsync(cacheKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, token)
+                    : GenerateAndFillExpiringAsync(cacheKey, redisKey, state, generator, policy, format, run)).ConfigureAwait(false);
 
-                var duration = generated.Expiration is { } expiration ? Remaining(expiration) : PolicyDuration(policy);
-                if (duration is { } lifetime && (!IsDefault(generated.Value) || _cacheNullValues)
-                    && await SetInternalAsync(cacheKey, redisKey, generated.Value, lifetime, format, token).ConfigureAwait(false))
+                if (_tombstoneGrace is null)
                 {
-                    run.Expiration = StoredDeadline(lifetime);
+                    var duration = generated.Expiration is { } expiration ? Remaining(expiration) : PolicyDuration(policy);
+                    if (duration is { } lifetime && (!IsDefault(generated.Value) || _cacheNullValues)
+                        && await SetInternalAsync(cacheKey, redisKey, generated.Value, lifetime, format, token).ConfigureAwait(false))
+                    {
+                        run.Expiration = StoredDeadline(lifetime);
+                    }
                 }
 
                 ret = generated.Value;
