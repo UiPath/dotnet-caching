@@ -3,7 +3,7 @@ using UiPath.Caching.Tests.Redis;
 
 namespace UiPath.Caching.Tests.KeyMove;
 
-// DR-1: the move claim of a router group at X1, its release into S0, and X11 (the operator's abandon of a closed group), with the claim behind a fake.
+// Tests taking the router group's move claim at X1, releasing it into S0, and the operator abandoning a closed group in X11, using a fake claim.
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
 public class StageDriverClaimTests(RedisContainerFixture fixture)

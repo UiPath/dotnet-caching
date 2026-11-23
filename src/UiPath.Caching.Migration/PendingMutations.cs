@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace UiPath.Caching.Migration;
 
 /// <summary>Keys of one cache whose last write has an unknown outcome: off the local tier until the late commit can no longer land, then evicted and announced again. One timer per key, and a key's retirement and replacement never interleave.</summary>
@@ -23,7 +25,11 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
         }
     }
 
-    public void Begin(string key, TimeSpan window)
+    /// <summary>Test seam: runs, and is awaited, just before a waiter looks at the key's current hold.</summary>
+    internal Func<string, Task>? BeforeWaiterLooks { get; set; }
+
+    /// <param name="hold">A task that completes when the client has no retry of the key left: the final eviction waits for it, then for one more window, because a retry changes Redis until it ends.</param>
+    public void Begin(string key, TimeSpan window, Task? hold = null)
     {
         var until = core.Clock.GetUtcNow() + window;
         Entry entry;
@@ -32,10 +38,11 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
             if (_entries.TryGetValue(key, out var existing))
             {
                 existing.Until = existing.Until > until ? existing.Until : until;
+                existing.Hold = hold ?? existing.Hold;
                 return;
             }
 
-            entry = new Entry { Until = until };
+            entry = new Entry { Until = until, Window = window, Hold = hold };
             _entries[key] = entry;
             core.Tier.BeginPending(new LocalKey(cache, key));
         }
@@ -102,7 +109,13 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
     {
         while (true)
         {
+            if (BeforeWaiterLooks is { } seam)
+            {
+                await seam(key).ConfigureAwait(false);
+            }
+
             TimeSpan left;
+            Task? awaited;
             lock (_gate)
             {
                 if (entry.Done)
@@ -110,8 +123,9 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
                     return;
                 }
 
+                var holding = TryGetActiveHold(entry, out awaited);
                 left = entry.Until - core.Clock.GetUtcNow();
-                if (left <= TimeSpan.Zero)
+                if (!holding && left <= TimeSpan.Zero)
                 {
                     entry.Done = true;
                     Retire(key);
@@ -121,6 +135,14 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
 
             try
             {
+                if (awaited is not null)
+                {
+                    // The retry of a trailing step is still under way: the key stays off the tier until it ends, and then for one window more.
+                    await awaited.WaitAsync(stopping).ConfigureAwait(false);
+                    FinishHold(entry, awaited);
+                    continue;
+                }
+
                 await Task.Delay(left, core.Clock, stopping).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -130,6 +152,49 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
         }
 
         await AnnounceAsync(key).ConfigureAwait(false);
+    }
+
+    // Called under the gate. Even an already completed retry extends the protection window.
+    private bool TryGetActiveHold(Entry entry, [NotNullWhen(true)] out Task? hold)
+    {
+        hold = entry.Hold;
+        if (hold is null)
+        {
+            return false;
+        }
+
+        if (!hold.IsCompleted)
+        {
+            return true;
+        }
+
+        entry.Hold = null;
+        ExtendWindow(entry);
+        hold = null;
+        return false;
+    }
+
+    private void FinishHold(Entry entry, Task awaited)
+    {
+        lock (_gate)
+        {
+            // A concurrent write may have installed a different hold.
+            if (ReferenceEquals(entry.Hold, awaited))
+            {
+                entry.Hold = null;
+            }
+
+            ExtendWindow(entry);
+        }
+    }
+
+    private void ExtendWindow(Entry entry)
+    {
+        var until = core.Clock.GetUtcNow() + entry.Window;
+        if (entry.Until <= until)
+        {
+            entry.Until = core.Clock.GetUtcNow() + entry.Window;
+        }
     }
 
     private async Task AnnounceAsync(string key)
@@ -159,6 +224,10 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
     private sealed class Entry
     {
         public DateTimeOffset Until { get; set; }
+
+        public TimeSpan Window { get; init; }
+
+        public Task? Hold { get; set; }
 
         public bool Done { get; set; }
     }

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using UiPath.Caching.Broadcast;
@@ -64,12 +65,13 @@ internal sealed class TestNode : IAsyncDisposable
         string? bridgeOrigin = null,
         Func<string, bool>? pinWhen = null,
         IPinStore? pinStore = null,
-        string? scope = null)
+        string? scope = null,
+        ILogger? logger = null)
     {
         var source = new Uri($"urn:test-{node ?? Guid.NewGuid().ToString("N")}");
         var sourceBackend = new FakeBackend(store, clock);
         var libraryBackend = new FakeBackend(store, clock);
-        var core = sharedCore ?? new RouterCore(clock, useLibrary ?? (_ => true), NullLogger.Instance)
+        var core = sharedCore ?? new RouterCore(clock, useLibrary ?? (_ => true), logger ?? NullLogger.Instance)
         {
             BypassFlag = bypass,
             SourceTimeout = sourceTimeout ?? TimeSpan.FromSeconds(30),

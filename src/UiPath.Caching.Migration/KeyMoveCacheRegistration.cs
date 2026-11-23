@@ -30,10 +30,10 @@ public sealed class KeyMoveCacheRegistration
     /// <summary>Glob over every native key of the cache, without the connection's key prefix; it starts with the library key prefix, the application's namespace.</summary>
     public required string NativePattern { get; init; }
 
-    /// <summary>K1N: the caller key to the native key, which starts with the library key prefix.</summary>
+    /// <summary>Maps the caller key to the native key, which starts with the library key prefix.</summary>
     public required Func<string, string> FormatNativeKey { get; init; }
 
-    /// <summary>K2N: the native key to the caller key, or null for a key that is not the cache's.</summary>
+    /// <summary>Maps the native key to the caller key or returns null if the cache does not own it.</summary>
     public required Func<string, string?> ParseNativeKey { get; init; }
 
     /// <summary>The ownership predicate for in-place keys; by default a key that <see cref="ParseInPlaceKey"/> reads is owned.</summary>

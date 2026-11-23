@@ -5,8 +5,8 @@ namespace UiPath.Caching.KeyMove;
 /// <param name="FormatInPlace">the caller key to the in-place key.</param>
 /// <param name="ParseInPlace">the in-place key to the caller key, or null when the key is not one of the cache.</param>
 /// <param name="NativePattern">Glob that covers every native key of the cache.</param>
-/// <param name="FormatNative">K1N: the caller key to the native key.</param>
-/// <param name="ParseNative">K2N: the native key to the caller key, or null when the key is not one of the cache.</param>
+/// <param name="FormatNative">Maps the caller key to the native key.</param>
+/// <param name="ParseNative">Maps the native key to the caller key or returns null if the cache does not own it.</param>
 /// <param name="OwnsInPlace">The ownership predicate for in-place keys; null accepts a key that <paramref name="ParseInPlace"/> reads.</param>
 /// <param name="OwnsNative">The ownership predicate for native keys; null accepts a key that <paramref name="ParseNative"/> reads.</param>
 internal sealed record KeyMoveCache(

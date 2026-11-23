@@ -21,6 +21,12 @@ internal interface IRouterParticipant
     /// <summary>The cache's pending keys with the time each window ends, for the log of a stop that could not wait for them.</summary>
     IReadOnlyList<(string Cache, string Key, DateTimeOffset Until)> PendingKeys();
 
+    /// <summary>Stops scheduling the retries of trailing steps, once the admitted calls have drained, so a pending key waits only for commands already sent.</summary>
+    Task StopRetriesAsync();
+
+    /// <summary>Logs a warning naming the keys that still have a retry outstanding, for a stop that went past its bound.</summary>
+    void WarnRetriesInFlight();
+
     /// <summary>Drops this node's local copies and joins to loads that began before.</summary>
     void ResetLocal();
 

@@ -93,7 +93,7 @@ public class StepPlannerFlightTests
     [InlineData("S4", "rev", "S3:rev:1:11:id11")]
     [InlineData("S0", "none", "S4:rev:1:11:id11")]
     [InlineData("S0", "none", "S5:fwd:1:11:id11")]
-    public async Task A_reverse_in_flight_from_step_X8_on_is_never_abandoned_whatever_the_flag_does(string state, string direction, string prev)
+    public async Task A_reverse_in_flight_from_X8_on_is_never_abandoned_whatever_the_flag_does(string state, string direction, string prev)
     {
         var plan = await DecideAsync(Input(InFlight(state, direction, prev), Fleet(fl: 5), Verdict(min: 5), durZero: TimeSpan.FromSeconds(11)));
 

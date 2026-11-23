@@ -53,7 +53,7 @@ public class StepPlannerReverseTests
     }
 
     [Fact]
-    public async Task A_stored_forced_reverse_skips_G1_to_G3_and_G7_and_is_counted_but_nothing_else_is_asked_of_the_start_gates()
+    public async Task Stored_forced_reverse_consent_waives_the_node_checks_and_counts_as_an_override()
     {
         var lowered = Verdict(min: 3, lowered: 1);
         var fresh = new[] { Advert("n1"), Advert("n2", km: false, snap: 90) };
@@ -65,7 +65,7 @@ public class StepPlannerReverseTests
     }
 
     [Fact]
-    public async Task X8_waits_for_every_fresh_advert_to_ack_S1_of_the_reverse_and_X9_needs_D1_to_D3_with_no_canary_or_hold()
+    public async Task X8_requires_reverse_S1_acknowledgements_and_X9_requires_a_drain_and_no_in_flight_promotions_regardless_of_holds_or_canary()
     {
         Takes(await DecideAsync(Input(ReverseReady, flag: Verdict(min: 5))), "X8", "S3", "rev", 1);
         var waiting = await DecideAsync(Input(ReverseReady, [Advert("n1", acks: ReverseReady), Advert("n2", acks: Drained)]));

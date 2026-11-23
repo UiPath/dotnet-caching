@@ -6,6 +6,7 @@ internal sealed class FakeStateReader : IStateReader
 {
     private int _reads;
     private int _probes;
+    private int _samples;
 
     public List<string> Calls { get; } = [];
 
@@ -19,7 +20,7 @@ internal sealed class FakeStateReader : IStateReader
 
     public int Reads => Volatile.Read(ref _reads);
 
-    public int Samples { get; private set; }
+    public int Samples => Volatile.Read(ref _samples);
 
     public int Probes => Volatile.Read(ref _probes);
 
@@ -29,22 +30,31 @@ internal sealed class FakeStateReader : IStateReader
     public Task<StateRecord?> ReadAsync(string group, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _reads);
-        Calls.Add("read");
+        Record("read");
         return Fail ? Task.FromException<StateRecord?>(new TimeoutException("state shard down")) : Task.FromResult(State);
     }
 
     public Task<ControlSample?> SampleAsync(string group, CancellationToken cancellationToken)
     {
-        Samples++;
-        Calls.Add("sample");
+        Interlocked.Increment(ref _samples);
+        Record("sample");
         return Answer();
     }
 
     public Task<ControlSample?> ProbeAsync(string group, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _probes);
-        Calls.Add("probe");
+        Record("probe");
         return Answer();
+    }
+
+    // A monitor runs one loop per group, so calls arrive from several threads at once.
+    private void Record(string call)
+    {
+        lock (Calls)
+        {
+            Calls.Add(call);
+        }
     }
 
     private Task<ControlSample?> Answer() =>

@@ -26,4 +26,8 @@ internal enum SchedulePointStep : byte
     HashExpire,
     ControlSync,
     ControlCommit,
+    ControlCheck,
+    NativeWrite,
+    FenceObserve,
+    ReadLife,
 }

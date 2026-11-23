@@ -10,6 +10,6 @@ internal enum ClaimDurability
     /// <summary>The master has no replica: nothing to wait for, no alert on a single node.</summary>
     NoReplica,
 
-    /// <summary>Every retry left WAIT at 0, timed out or failed: the caller raises <c>wait_skipped{claim}</c> or waits, by the design's rules.</summary>
+    /// <summary>Replication remained unconfirmed because every WAIT returned zero, timed out, or failed. The caller waits when confirmation is required and otherwise raises <c>wait_skipped{claim}</c>.</summary>
     NotConfirmed,
 }
