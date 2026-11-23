@@ -9,14 +9,14 @@ internal sealed class TestNode : IAsyncDisposable
 {
     private readonly bool _ownsCore;
     private readonly ManualTimeProvider _clock;
-    private readonly Router _router;
     private bool _stopped;
+    private bool _disposed;
 
     private TestNode(string cacheName, Uri source, RouterCore core, RoutedCache<Item> cache, FakeBackend sourceBackend, FakeBackend libraryBackend, bool ownsCore, ManualTimeProvider clock)
     {
         _ownsCore = ownsCore;
         _clock = clock;
-        _router = new Router(core, [(cacheName, typeof(Item), cache)]);
+        Router = new Router(core, [(cacheName, typeof(Item), cache)]);
         CacheName = cacheName;
         Source = source;
         Core = core;
@@ -26,6 +26,8 @@ internal sealed class TestNode : IAsyncDisposable
     }
 
     public string CacheName { get; }
+
+    public Router Router { get; }
 
     public Uri Source { get; }
 
@@ -49,12 +51,24 @@ internal sealed class TestNode : IAsyncDisposable
         string group = "g",
         TimeSpan? defaultExpiry = null,
         RouterCore? sharedCore = null,
-        IPathClient<Item>? library = null)
+        IPathClient<Item>? library = null,
+        Func<bool>? bypass = null,
+        TimeSpan? sourceTimeout = null,
+        Func<LibraryParts>? lazyLibrary = null,
+        Func<CancellationToken, Task<LibraryParts>>? lazyLibraryAsync = null,
+        TimeSpan? startBound = null,
+        TimeSpan? cleanupBound = null)
     {
         var source = new Uri($"urn:test-{node ?? Guid.NewGuid().ToString("N")}");
         var sourceBackend = new FakeBackend(store, clock);
         var libraryBackend = new FakeBackend(store, clock);
-        var core = sharedCore ?? new RouterCore(clock, useLibrary ?? (_ => true), NullLogger.Instance);
+        var core = sharedCore ?? new RouterCore(clock, useLibrary ?? (_ => true), NullLogger.Instance)
+        {
+            BypassFlag = bypass,
+            SourceTimeout = sourceTimeout ?? TimeSpan.FromSeconds(30),
+            StartBound = startBound ?? TimeSpan.FromSeconds(5),
+            CleanupBound = cleanupBound ?? TimeSpan.FromSeconds(10),
+        };
         var registration = new RouterCacheRegistration<Item>
         {
             Name = cacheName,
@@ -66,8 +80,18 @@ internal sealed class TestNode : IAsyncDisposable
             DefaultExpiry = defaultExpiry,
         };
         var events = new CacheEventFactory(Options.Create(new CacheOptions { SourceUri = source }));
-        var cache = new RoutedCache<Item>(core, registration, library ?? libraryBackend, bus.For(source), events, source);
-        return new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
+        RoutedCache<Item> cache;
+        if (lazyLibrary is null && lazyLibraryAsync is null)
+        {
+            cache = new RoutedCache<Item>(core, registration, library ?? libraryBackend, bus.For(source), events, source);
+            return new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
+        }
+
+        core.UseLibrary(lazyLibraryAsync ?? (_ => Task.FromResult(lazyLibrary!())));
+        cache = new RoutedCache<Item>(core, registration);
+        var lazy = new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
+        lazy.Router.Start();
+        return lazy;
     }
 
     public bool IsLocal(string key) => Core.Tier.TryGet(new LocalKey(CacheName, key), EpochOf(Cache), out _);
@@ -92,23 +116,30 @@ internal sealed class TestNode : IAsyncDisposable
     public Task StartDispose()
     {
         _stopped = true;
-        return _router.DisposeAsync().AsTask();
+        return Router.DisposeAsync().AsTask();
     }
 
     /// <summary>Starts the router's stop and leaves the clock alone.</summary>
     public Task StartStop(CancellationToken cancellationToken = default)
     {
         _stopped = true;
-        return _router.StopAsync(cancellationToken);
+        return Router.StopAsync(cancellationToken);
     }
 
     public async ValueTask DisposeAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         if (_ownsCore && !_stopped)
         {
             Core.BeginStop();
             Core.CancelBackground();
-            await Core.DrainAsync();
+            // Real time: the injected clock stands still at teardown, so nothing that waits on it could end.
+            await Core.DrainAsync().WaitAsync(TimeSpan.FromSeconds(20));
         }
 
         if (!_stopped)

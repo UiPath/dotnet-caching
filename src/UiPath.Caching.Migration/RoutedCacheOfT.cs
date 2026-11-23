@@ -4,7 +4,7 @@ using UiPath.Caching.Broadcast;
 
 namespace UiPath.Caching.Migration;
 
-internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
+internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDisposable
     where T : class
 {
     private static readonly Route ClearRoute = new(RoutePath.Source, Route.Flag);
@@ -12,8 +12,6 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     private readonly RouterCore _core;
     private readonly RouterCacheRegistration<T> _registration;
     private readonly IPathClient<T> _source;
-    private readonly IPathClient<T> _library;
-    private readonly CacheEventPublisher _publisher;
     private readonly TopicKey _topic;
     private readonly CacheEpoch _epoch = new();
     private readonly ConcurrentDictionary<string, Flight> _flights = new(StringComparer.Ordinal);
@@ -21,7 +19,23 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     private readonly WriteFence _fence = new();
     private readonly PendingMutations _pending;
     private readonly InvalidationRetrier _retrier;
-    private readonly IDisposable _subscription;
+    private volatile IPathClient<T> _library = UnavailablePathClient<T>.Instance;
+    private volatile CacheEventPublisher? _publisher;
+    private IDisposable? _subscription;
+    private ITopic<ICacheEvent>? _topicHandle;
+    private int _attached;
+
+    /// <summary>A cache whose library is not there yet: <see cref="Prepare(LibraryParts)"/> brings it in.</summary>
+    public RoutedCache(RouterCore core, RouterCacheRegistration<T> registration)
+    {
+        _core = core;
+        _registration = registration;
+        _source = new SourcePathClient<T>(registration.Source);
+        _topic = new TopicKey($"router:{registration.Name}");
+        _pending = new PendingMutations(core, registration.Name, key => AnnounceRemovalAsync(key, ClearRoute), DetachKey);
+        _retrier = new InvalidationRetrier(core, registration.LocalCap, PublishRemovalOnceAsync, PublishClearOnceAsync, CountPublishFailure);
+        core.Register(this);
+    }
 
     public RoutedCache(
         RouterCore core,
@@ -30,17 +44,11 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         ITopicProvider topics,
         ICacheEventFactory events,
         Uri ownSource)
-    {
-        _core = core;
-        _registration = registration;
-        _library = library;
-        _source = new SourcePathClient<T>(registration.Source);
-        _topic = new TopicKey($"router:{registration.Name}");
-        _publisher = new CacheEventPublisher(registration.Name, topics, events, NullLogger.Instance);
-        _pending = new PendingMutations(core, registration.Name, key => AnnounceRemovalAsync(key, ClearRoute), DetachKey);
-        _retrier = new InvalidationRetrier(core, registration.LocalCap, PublishRemovalOnceAsync, PublishClearOnceAsync, CountPublishFailure);
-        _subscription = topics.Create(_topic).Subscribe(new PeerObserver(ownSource, EvictLocal, ClearLocal));
-    }
+        : this(core, registration) => Prepare(library, topics, events, ownSource).Commit();
+
+    public TopicKey? Topic => _topicHandle is null ? null : _topic;
+
+    public bool IsSubscribed => _topicHandle is not null && (_topicHandle is not ITopicSubscriptionState state || state.IsSubscribed);
 
     internal CacheEpoch Epoch => _epoch;
 
@@ -52,8 +60,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(factory);
-        using var admission = _core.Admit();
-        var route = _core.ChoosePath(_registration.Group);
+        using var admission = _core.Admit(_registration.Group, out var route);
         var local = new LocalKey(_registration.Name, key);
         if (TryLocal(local, route, out var hit))
         {
@@ -98,8 +105,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     public async ValueTask<T?> TryGetAsync(string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        using var admission = _core.Admit();
-        var route = _core.ChoosePath(_registration.Group);
+        using var admission = _core.Admit(_registration.Group, out var route);
         var local = new LocalKey(_registration.Name, key);
         if (TryLocal(local, route, out var hit))
         {
@@ -120,15 +126,15 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(value);
-        using var admission = _core.Admit();
-        return await WriteAsync(key, value, expiry, _core.ChoosePath(_registration.Group), null, cancellationToken).ConfigureAwait(false);
+        using var admission = _core.Admit(_registration.Group, out var route);
+        return await WriteAsync(key, value, expiry, route, null, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<WriteOutcome> RemoveAsync(string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        using var admission = _core.Admit();
-        return await MutateAsync(key, _core.ChoosePath(_registration.Group), (client, token) => client.RemoveAsync(key, token), null, null, cancellationToken).ConfigureAwait(false);
+        using var admission = _core.Admit(_registration.Group, out var route);
+        return await MutateAsync(key, route, (client, token) => client.RemoveAsync(key, token), null, null, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask ClearAsync(CancellationToken cancellationToken = default)
@@ -157,7 +163,12 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         }
     }
 
-    public void Dispose() => _subscription.Dispose();
+    public void Dispose() => _subscription?.Dispose();
+
+    public void ResetLocal() => ClearLocal();
+
+    public IRouterParticipant.IAttachment Prepare(LibraryParts library) =>
+        Prepare(new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin), library.Topics, library.Events, library.Source);
 
     public Task WhenPendingSettledAsync() => _pending.WhenEmptyAsync();
 
@@ -173,16 +184,24 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         await _retrier.FlushAsync().ConfigureAwait(false);
     }
 
-    private static async ValueTask<bool> TryPublishAsync(Func<ValueTask<bool>> publish)
+    private async ValueTask<bool> TryPublishAsync(Func<ValueTask<bool>> publish)
     {
         try
         {
-            return await publish().ConfigureAwait(false);
+            // A publish that hangs counts as failed, so a stuck library cannot hold a write, a clear or a stop.
+            return await publish().AsTask().WaitAsync(_core.SourceTimeout, _core.Clock, _core.StopToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return false;
         }
+    }
+
+    private LibraryAttachment Prepare(IPathClient<T> library, ITopicProvider topics, ICacheEventFactory events, Uri ownSource)
+    {
+        var publisher = new CacheEventPublisher(_registration.Name, topics, events, NullLogger.Instance);
+        var topic = topics.Create(_topic);
+        return new LibraryAttachment(this, library, publisher, topic, topic.Subscribe(new PeerObserver(ownSource, EvictLocal, ClearLocal)));
     }
 
     private void EvictLocal(string key)
@@ -209,7 +228,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     private bool TryLocal(LocalKey local, Route route, out T? value)
     {
         value = null;
-        if (_registration.LocalCap > TimeSpan.Zero && _core.Tier.TryGet(local, _epoch, out var found) && found is T typed)
+        if (route.Tier && _registration.LocalCap > TimeSpan.Zero && _core.Tier.TryGet(local, _epoch, out var found) && found is T typed)
         {
             RouterTelemetry.CountLocalHit(_registration.Name, _registration.Group, route);
             value = typed;
@@ -259,7 +278,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         var first = await Client(route.Path).ReadAsync(key, cancellationToken).ConfigureAwait(false);
         if (first.Kind == ReadOutcome.Found)
         {
-            return new Loaded(Hit(first, local, mark, readStart, route.Path, route.Reason), route);
+            return new Loaded(Hit(first, local, mark, readStart, route.Path, route.Reason, route.Tier), route);
         }
 
         if (first.Kind == ReadOutcome.Absent)
@@ -280,12 +299,18 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
             }
         }
 
+        // In bypass the library is not asked, whatever the source said.
+        if (route.Bypass)
+        {
+            return new Loaded(null, route);
+        }
+
         var second = await Client(route.Other).ReadAsync(key, cancellationToken).ConfigureAwait(false);
         var firstUnavailable = first.Kind == ReadOutcome.Unavailable;
         switch (second.Kind)
         {
             case ReadOutcome.Found:
-                return new Loaded(Hit(second, local, mark, readStart, route.Other, Route.OtherClientRead), route);
+                return new Loaded(Hit(second, local, mark, readStart, route.Other, Route.OtherClientRead, route.Tier), route);
             case ReadOutcome.Unreadable:
                 RouterTelemetry.CountUnreadable(name, group, route.Other, Route.OtherClientUnreadable);
                 break;
@@ -304,12 +329,12 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         return new Loaded(null, firstUnavailable && route.Path == RoutePath.Library ? new Route(RoutePath.Source, Route.OtherClientRead) : route);
     }
 
-    private T Hit(PathRead<T> read, LocalKey local, FillMark mark, DateTimeOffset readStart, RoutePath path, string reason)
+    private T Hit(PathRead<T> read, LocalKey local, FillMark mark, DateTimeOffset readStart, RoutePath path, string reason, bool fill)
     {
         RouterTelemetry.CountRedisHit(_registration.Name, _registration.Group, path, reason);
         var value = read.Value!;
         var cap = _registration.LocalCap;
-        if (cap > TimeSpan.Zero)
+        if (fill && cap > TimeSpan.Zero)
         {
             var lifetime = cap;
             if (read.Expiration is { } expiration)
@@ -365,7 +390,14 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
             // The key lock and the write slot are free by now: a slow publish holds back neither the next write of the key nor a clear.
             if (announcement.Route is { } announced)
             {
-                await PublishKeyAsync(key, setDeadline, announced).ConfigureAwait(false);
+                if (announced.Bypass)
+                {
+                    AnnounceFromBypass(key, announced);
+                }
+                else
+                {
+                    await PublishKeyAsync(key, setDeadline, announced).ConfigureAwait(false);
+                }
             }
         }
     }
@@ -404,7 +436,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     private async ValueTask<WriteOutcome> SendAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, KeyState state, Announcement announcement, CancellationToken cancellationToken)
     {
         var result = await CommandAsync(Client(route.Path), key, route, command, state, announcement, cancellationToken).ConfigureAwait(false);
-        if (result.Outcome == WriteOutcome.NotSent)
+        if (result.Outcome == WriteOutcome.NotSent && !route.Bypass)
         {
             // A token cancelled before the library sent anything must not reach the other client: that command would be sent already cancelled.
             cancellationToken.ThrowIfCancellationRequested();
@@ -454,12 +486,31 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     private async ValueTask PublishKeyAsync(string key, DateTimeOffset? setDeadline, Route route)
     {
         var options = new RouterEntryOptions(key, _topic, setDeadline ?? _core.Clock.GetUtcNow());
-        var published = await TryPublishAsync(() => setDeadline is null ? _publisher.CacheRemovedAsync(options) : _publisher.CacheSetAsync(options)).ConfigureAwait(false);
+        var publisher = _publisher;
+        var published = publisher is not null && await TryPublishAsync(() => setDeadline is null ? publisher.CacheRemovedAsync(options) : publisher.CacheSetAsync(options)).ConfigureAwait(false);
         if (!published)
         {
             CountPublishFailure(route);
             _retrier.ReportKey(key, route);
         }
+    }
+
+    /// <summary>Hands the announcement to the retrier worker, so the caller never waits on the library.</summary>
+    private void AnnounceFromBypass(string key, Route route)
+    {
+        // No local copy on any node of this cache (the cap is the cache's own setting), so there is nothing to evict elsewhere.
+        if (_registration.LocalCap <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        if (_publisher is null)
+        {
+            CountPublishFailure(route);
+            return;
+        }
+
+        _retrier.ReportKey(key, route);
     }
 
     private async ValueTask AnnounceRemovalAsync(string key, Route route)
@@ -480,10 +531,14 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         }
     }
 
+    // Without a started library nothing can be published; the failure is counted and retried like any other.
     private ValueTask<bool> PublishRemovalOnceAsync(string key) =>
-        TryPublishAsync(() => _publisher.CacheRemovedAsync(new RouterEntryOptions(key, _topic, _core.Clock.GetUtcNow())));
+        _publisher is { } publisher
+            ? TryPublishAsync(() => publisher.CacheRemovedAsync(new RouterEntryOptions(key, _topic, _core.Clock.GetUtcNow())))
+            : ValueTask.FromResult(false);
 
-    private ValueTask<bool> PublishClearOnceAsync() => TryPublishAsync(() => _publisher.TopicInvalidatedAsync(_topic));
+    private ValueTask<bool> PublishClearOnceAsync() =>
+        _publisher is { } publisher ? TryPublishAsync(() => publisher.TopicInvalidatedAsync(_topic)) : ValueTask.FromResult(false);
 
     private void CountPublishFailure(Route route)
     {
@@ -503,5 +558,33 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         public Task<T?> Task { get; } = task;
 
         public CancellationToken LeaderToken { get; } = leaderToken;
+    }
+
+    private sealed class LibraryAttachment(RoutedCache<T> owner, IPathClient<T> library, CacheEventPublisher publisher, ITopic<ICacheEvent> topic, IDisposable subscription) : IRouterParticipant.IAttachment
+    {
+        private bool _committed;
+
+        public void Commit()
+        {
+            if (Interlocked.CompareExchange(ref owner._attached, 1, 0) != 0)
+            {
+                subscription.Dispose();
+                return;
+            }
+
+            _committed = true;
+            owner._subscription = subscription;
+            owner._topicHandle = topic;
+            owner._publisher = publisher;
+            owner._library = library;
+        }
+
+        public void Dispose()
+        {
+            if (!_committed)
+            {
+                subscription.Dispose();
+            }
+        }
     }
 }

@@ -1,7 +1,17 @@
 namespace UiPath.Caching.Migration;
 
-/// <summary>One admitted operation: stop waits for every admission to be disposed before it flushes and disposes anything.</summary>
-internal readonly struct Admission(RouterCore core) : IDisposable
+/// <summary>One admitted operation, counted for the stop and for the drain of its mode.</summary>
+internal readonly struct Admission : IDisposable
 {
-    public void Dispose() => core.Exit();
+    private readonly RouterCore _core;
+
+    public Admission(RouterCore core, int mode)
+    {
+        _core = core;
+        Mode = mode;
+    }
+
+    public int Mode { get; }
+
+    public void Dispose() => _core.Exit(Mode);
 }

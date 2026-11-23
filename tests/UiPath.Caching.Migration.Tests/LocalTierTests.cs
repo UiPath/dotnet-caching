@@ -146,4 +146,34 @@ public sealed class LocalTierTests : RouterTestBase
         second.IsLocal("c").Should().BeFalse("a different cache's key, though the joined text is the same");
         (await second.Cache.TryGetAsync("c", Ct)).Should().Be(new Item("from-a-b"));
     }
+
+    [Fact]
+    public void Clear_drops_every_entry_and_rejects_a_fill_that_was_captured_before_it()
+    {
+        using var tier = new LocalTier(Clock);
+        var epoch = new CacheEpoch();
+        var warm = new LocalKey("c", "warm");
+        var late = new LocalKey("c", "late");
+        tier.TryFill(warm, tier.Capture(warm, epoch), epoch, new Item("warm"), Clock.GetUtcNow().AddMinutes(1)).Should().BeTrue();
+        var captured = tier.Capture(late, epoch);
+
+        tier.Clear();
+
+        tier.TryGet(warm, epoch, out _).Should().BeFalse();
+        tier.TryFill(late, captured, epoch, new Item("late"), Clock.GetUtcNow().AddMinutes(1)).Should().BeFalse();
+        tier.TryFill(late, tier.Capture(late, epoch), epoch, new Item("fresh"), Clock.GetUtcNow().AddMinutes(1)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Clear_keeps_a_pending_key_pending()
+    {
+        using var tier = new LocalTier(Clock);
+        var epoch = new CacheEpoch();
+        var key = new LocalKey("c", "k");
+        tier.BeginPending(key);
+
+        tier.Clear();
+
+        tier.TryFill(key, tier.Capture(key, epoch), epoch, new Item("x"), Clock.GetUtcNow().AddMinutes(1)).Should().BeFalse();
+    }
 }
