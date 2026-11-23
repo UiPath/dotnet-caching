@@ -1,0 +1,56 @@
+using UiPath.Caching.KeyMove;
+
+namespace UiPath.Caching.Tests.KeyMove;
+
+internal sealed class FakeGroupData : IGroupDataOps
+{
+    public long Native { get; set; }
+
+    public bool PurgeWorks { get; set; } = true;
+
+    public List<string> Calls { get; } = [];
+
+    // Runs once, after the first inventory that found a key: a state that moves, or a lease that is lost, between the inventory and the purge.
+    public Func<Task>? AfterFirstCount { get; set; }
+
+    // Runs once, at the end of the first native purge: a lease taken over while N was being deleted.
+    public Func<Task>? AfterNativePurge { get; set; }
+
+    public List<DataGuard> Guards { get; } = [];
+
+    public async Task<long> CountNativeAsync(string group, CancellationToken cancellationToken)
+    {
+        Calls.Add("count");
+        var found = Native;
+        if (found > 0 && AfterFirstCount is { } hook)
+        {
+            AfterFirstCount = null;
+            await hook();
+        }
+
+        return found;
+    }
+
+    public async Task PurgeNativeAsync(string group, DataGuard guard, CancellationToken cancellationToken)
+    {
+        Calls.Add("purge_n");
+        Guards.Add(guard);
+        if (PurgeWorks)
+        {
+            Native = 0;
+        }
+
+        if (AfterNativePurge is { } hook)
+        {
+            AfterNativePurge = null;
+            await hook();
+        }
+    }
+
+    public Task PurgeLegacyAsync(string group, DataGuard guard, CancellationToken cancellationToken)
+    {
+        Calls.Add("purge_l");
+        Guards.Add(guard);
+        return Task.CompletedTask;
+    }
+}

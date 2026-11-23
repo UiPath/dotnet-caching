@@ -15,6 +15,8 @@ global using UiPath.Caching.Redis;
 global using static UiPath.Caching.CacheValueHelpers;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UiPath.Caching.Tests")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UiPath.Caching.Migration")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UiPath.Caching.Migration.Tests")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UiPath.Caching.Benchmarks")]
 // Castle DynamicProxy (used by NSubstitute via AutoFixture in Caching.Tests) needs access to the
 // internal concrete cache classes to generate dynamic proxies for closed generics like

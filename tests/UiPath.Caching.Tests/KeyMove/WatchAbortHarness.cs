@@ -12,11 +12,13 @@ internal sealed class WatchAbortHarness : IAsyncDisposable
     private readonly RedisKey _watched;
     private readonly RedisValue _field;
     private readonly int _skip;
+    private readonly bool _absent;
+    private readonly Func<IDatabase, Task>? _touch;
     private readonly long _toForce;
     private int _executions;
     private int _aborted;
 
-    private WatchAbortHarness(IDatabase real, ConnectionMultiplexer otherMux, RedisKey watched, RedisValue field, long toForce, int skip)
+    private WatchAbortHarness(IDatabase real, ConnectionMultiplexer otherMux, RedisKey watched, RedisValue field, long toForce, int skip, bool absent, Func<IDatabase, Task>? touch)
     {
         _real = real;
         _otherMux = otherMux;
@@ -24,6 +26,8 @@ internal sealed class WatchAbortHarness : IAsyncDisposable
         _field = field;
         _toForce = toForce;
         _skip = skip;
+        _absent = absent;
+        _touch = touch;
         Database = InterceptingProxy.Wrap(real, InterceptDatabase);
     }
 
@@ -35,8 +39,10 @@ internal sealed class WatchAbortHarness : IAsyncDisposable
     public int Aborted => Volatile.Read(ref _aborted);
 
     // The first <paramref name="skip"/> transactions run untouched, the next <paramref name="toForce"/> are aborted.
-    public static async Task<WatchAbortHarness> CreateAsync(MoveTestEnvironment env, string connectionString, long toForce, string field = "dur", int skip = 0) =>
-        new(env.Db, await ConnectionMultiplexer.ConnectAsync(connectionString), env.Ctl, field, toForce, skip);
+    // The watched key is the environment's control record unless <paramref name="watched"/> names another; for a key that must stay absent,
+    // <paramref name="absent"/> deletes it again after the write, which still marks it as touched. <paramref name="touch"/> replaces the hash write for a key of another type.
+    public static async Task<WatchAbortHarness> CreateAsync(MoveTestEnvironment env, string connectionString, long toForce, string field = "dur", int skip = 0, RedisKey? watched = null, bool absent = false, Func<IDatabase, Task>? touch = null) =>
+        new(env.Db, await ConnectionMultiplexer.ConnectAsync(connectionString), watched ?? env.Ctl, field, toForce, skip, absent, touch);
 
     public async ValueTask DisposeAsync() => await _otherMux.DisposeAsync();
 
@@ -60,7 +66,19 @@ internal sealed class WatchAbortHarness : IAsyncDisposable
         if (attempt > _skip && attempt - _skip <= _toForce)
         {
             await _real.ExecuteAsync("WATCH", _watched).ConfigureAwait(false);
-            await _otherMux.GetDatabase().HashSetAsync(_watched, _field, "0").ConfigureAwait(false);
+            if (_touch is not null)
+            {
+                await _touch(_otherMux.GetDatabase()).ConfigureAwait(false);
+            }
+            else
+            {
+                await _otherMux.GetDatabase().HashSetAsync(_watched, _field, "0").ConfigureAwait(false);
+            }
+
+            if (_absent)
+            {
+                await _otherMux.GetDatabase().KeyDeleteAsync(_watched).ConfigureAwait(false);
+            }
         }
 
         var committed = await inner.ExecuteAsync(flags).ConfigureAwait(false);
