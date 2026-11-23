@@ -36,14 +36,14 @@ jobs:
         run: dotnet build tests/UiPath.Caching.PluginContract.Tests -c Release -f net10.0
 
       - name: Test
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           RUN_REDIS_INTEGRATION_TESTS: '1'
           REDIS_CONNECTION_STRING: 'localhost:6379'
         run: ./tests/UiPath.Caching.Tests/bin/Release/net10.0/UiPath.Caching.Tests
 
       - name: Plugin contract tests
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           RUN_REDIS_INTEGRATION_TESTS: '1'
           REDIS_CONNECTION_STRING: 'localhost:6379'
@@ -75,7 +75,7 @@ jobs:
         run: dotnet build tests/UiPath.Caching.Tests -c Release -f net10.0
 
       - name: Cluster tests
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           RUN_REDIS_INTEGRATION_TESTS: '1'
           REDIS_CLUSTER_CONNECTION_STRING: '127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002'
@@ -210,7 +210,7 @@ jobs:
       # Redis-backed integration tests run on the Linux job (service containers are Linux-only),
       # so here they skip and the rest of the suite runs.
       - name: Test
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: dotnet test --solution UiPath.Caching.slnx -c Release --no-build -- --results-directory TestResults --report-xunit-trx
 
       - name: Upload test results

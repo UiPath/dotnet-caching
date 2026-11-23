@@ -88,6 +88,7 @@ internal sealed class StageFlagPoller(IMigrationStageSource source, Func<string,
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            // Cancellation is the normal way the poll loop stops (a cancelled delay), so it ends quietly.
         }
     }
 }

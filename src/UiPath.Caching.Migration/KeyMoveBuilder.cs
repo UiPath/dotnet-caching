@@ -1,3 +1,4 @@
+using System.Buffers;
 using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Migration;
@@ -5,6 +6,9 @@ namespace UiPath.Caching.Migration;
 /// <summary>Registers the groups, caches and attestations of a key move move with <c>RouterBuilder.UseKeyMove</c>; every rule is checked when the router is built.</summary>
 public sealed class KeyMoveBuilder
 {
+    // An evidence id is written into a comma- and colon-separated record, so neither may appear in it, nor whitespace.
+    private static readonly SearchValues<char> EvidenceIdSeparators = SearchValues.Create(",: \t\r\n");
+
     private readonly List<(string Name, bool Listed)> _groups = [];
     private readonly List<KeyMoveCacheRegistration> _caches = [];
     private readonly Dictionary<string, string> _formatSettled = new(StringComparer.Ordinal);
@@ -122,7 +126,7 @@ public sealed class KeyMoveBuilder
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var cache in _caches)
         {
-            MoveKeyNames.ValidateName(cache.Name, "cache");
+            MoveKeyNames.ValidateName(cache.Name, nameof(cache));
             if (!names.Add(cache.Name))
             {
                 throw new InvalidOperationException($"The key move cache '{cache.Name}' is added twice; a cache belongs to one group and is registered once.");
@@ -151,7 +155,7 @@ public sealed class KeyMoveBuilder
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(group);
         ArgumentException.ThrowIfNullOrWhiteSpace(evidenceId);
-        if (evidenceId.AsSpan().IndexOfAny(",: \t\r\n") >= 0)
+        if (evidenceId.AsSpan().IndexOfAny(EvidenceIdSeparators) >= 0)
         {
             throw new ArgumentException($"The evidence id '{evidenceId}' holds a comma, a colon or whitespace.", nameof(evidenceId));
         }
@@ -164,7 +168,7 @@ public sealed class KeyMoveBuilder
 
     private static KeyMoveCache Convert(KeyMoveCacheRegistration cache, HashSet<string> groups, IReadOnlyDictionary<string, (string Group, Func<string, string> InPlaceKey)> routed, string prefix)
     {
-        MoveKeyNames.ValidateName(cache.Name, "cache");
+        MoveKeyNames.ValidateName(cache.Name, nameof(cache));
         if (cache.ParseInPlaceKey is null || cache.ParseNativeKey is null || cache.FormatNativeKey is null)
         {
             throw new InvalidOperationException($"The key move cache '{cache.Name}' needs ParseInPlaceKey, ParseNativeKey and FormatNativeKey.");
@@ -242,12 +246,10 @@ public sealed class KeyMoveBuilder
     {
         foreach (var side in new[] { MoveSide.Legacy, MoveSide.Native })
         {
-            foreach (var shared in caches.GroupBy(c => c.PatternOf(side)).Where(g => g.Count() > 1))
+            var shared = caches.GroupBy(c => c.PatternOf(side)).FirstOrDefault(g => g.Count() > 1 && g.Any(c => (side == MoveSide.Native ? c.OwnsNative : c.OwnsInPlace) is null));
+            if (shared is not null)
             {
-                if (shared.Any(c => (side == MoveSide.Native ? c.OwnsNative : c.OwnsInPlace) is null))
-                {
-                    throw new InvalidOperationException($"The key move caches {string.Join(", ", shared.Select(c => $"'{c.Name}'"))} scan the same {(side == MoveSide.Native ? "native" : "in-place")} pattern '{shared.Key}'; each needs an ownership predicate that separates its keys from the others'.");
-                }
+                throw new InvalidOperationException($"The key move caches {string.Join(", ", shared.Select(c => $"'{c.Name}'"))} scan the same {(side == MoveSide.Native ? "native" : "in-place")} pattern '{shared.Key}'; each needs an ownership predicate that separates its keys from the others'.");
             }
         }
     }
@@ -284,17 +286,20 @@ public sealed class KeyMoveBuilder
 
     private void ValidateRelationships(HashSet<string> groups, List<KeyMoveCache> caches, HashSet<string> names, IReadOnlyDictionary<string, (string Group, Func<string, string> InPlaceKey)> routed)
     {
-        foreach (var attested in new[] { _formatSettled, _nodeListComplete, _memoryFits }.SelectMany(d => d.Keys).Where(g => !groups.Contains(g)))
+        var attested = new[] { _formatSettled, _nodeListComplete, _memoryFits }.SelectMany(d => d.Keys).FirstOrDefault(g => !groups.Contains(g));
+        if (attested is not null)
         {
             throw new InvalidOperationException($"An attestation names the group '{attested}', which was not added.");
         }
 
-        foreach (var orphan in routed.Where(r => groups.Contains(r.Value.Group) && !names.Contains(r.Key)).Select(r => r.Key))
+        var orphan = routed.Where(r => groups.Contains(r.Value.Group) && !names.Contains(r.Key)).Select(r => r.Key).FirstOrDefault();
+        if (orphan is not null)
         {
             throw new InvalidOperationException($"The router cache '{orphan}' belongs to the key move group '{routed[orphan].Group}' but is not registered with AddCache, so it would sit outside the key map and the managed set.");
         }
 
-        foreach (var name in groups.Where(g => caches.All(c => c.Group != g)))
+        var name = groups.FirstOrDefault(g => caches.All(c => c.Group != g));
+        if (name is not null)
         {
             throw new InvalidOperationException($"The key move group '{name}' has no cache.");
         }

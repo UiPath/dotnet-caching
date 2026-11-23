@@ -161,14 +161,6 @@ internal static class ClaimGrammar
 
     private static bool All(string s, Func<char, bool> test)
     {
-        foreach (var c in s)
-        {
-            if (!test(c))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return s.AsEnumerable().All(test);
     }
 }

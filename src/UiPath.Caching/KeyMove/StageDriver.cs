@@ -92,6 +92,7 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            // Cancellation is the normal way a group's loop stops (a cancelled delay), so it ends quietly.
         }
     }
 
