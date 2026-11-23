@@ -20,6 +20,8 @@ UiPath.Caching.Redis.FormatNegotiationOptions.UpgradeHold.get -> System.TimeSpan
 UiPath.Caching.Redis.FormatNegotiationOptions.UpgradeHold.set -> void
 UiPath.Caching.Redis.FormatNegotiationOptions.ViewInterval.get -> System.TimeSpan
 UiPath.Caching.Redis.FormatNegotiationOptions.ViewInterval.set -> void
+UiPath.Caching.Redis.IFormatWriteGate
+UiPath.Caching.Redis.IFormatWriteGate.Hold() -> string?
 UiPath.Caching.Redis.RedisCacheOptions.FormatNegotiation.get -> UiPath.Caching.Redis.FormatNegotiationOptions!
 UiPath.Caching.Redis.RedisCacheOptions.FormatNegotiation.set -> void
 const UiPath.Caching.Metrics.FormatBlockers = "Caching.Stats.FormatBlockers" -> string!

@@ -9,11 +9,14 @@ internal static class RouterBanner
     public static string Describe(RouterBuilder builder, string processId) =>
         string.Create(
             CultureInfo.InvariantCulture,
-            $"Caching router settings: caches={builder.Registrations.Count}; identity process id={processId} ({(builder.NodeIdentity is null ? "generated" : "UseNodeIdentity")}); " +
-            $"group predicate=UseLibraryWhen; bypass={(builder.BypassFlag is null ? "none (EnterBypassAsync only)" : "UseBypassWhen")}; pin=not available; " +
+            $"Caching router settings: caches={builder.Registrations.Count}; excluded={Excluded(builder)}; identity process id={processId} ({(builder.NodeIdentity is null ? "generated" : "UseNodeIdentity")}); " +
+            $"group predicate=UseLibraryWhen; bypass={(builder.BypassFlag is null ? "none (EnterBypassAsync only)" : "UseBypassWhen")}; pin={(builder.PinPredicate is null ? "none" : "UsePinWhen")}; " +
             $"source timeout={builder.SourceTimeout ?? TimeSpan.FromSeconds(30)} ({(builder.SourceTimeout is null ? "default" : "UseSourceTimeout")}); " +
             $"settle bound={(builder.SettleBound is { } bound ? $"{bound} (UseLibrarySettleBound)" : "from the connection")}; " +
             $"precedence, first wins: {string.Join(" > ", RoutePrecedence.Order)}.");
 
     public static void Log(ILogger logger, RouterBuilder builder, string processId) => logger.LogInformation("{Banner}", Describe(builder, processId));
+
+    private static string Excluded(RouterBuilder builder) =>
+        builder.Excluded.Count == 0 ? "none" : string.Join(", ", builder.Excluded.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => $"{e.Key} ({e.Value})"));
 }

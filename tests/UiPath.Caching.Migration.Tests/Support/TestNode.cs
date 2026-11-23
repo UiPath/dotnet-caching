@@ -57,7 +57,14 @@ internal sealed class TestNode : IAsyncDisposable
         Func<LibraryParts>? lazyLibrary = null,
         Func<CancellationToken, Task<LibraryParts>>? lazyLibraryAsync = null,
         TimeSpan? startBound = null,
-        TimeSpan? cleanupBound = null)
+        TimeSpan? cleanupBound = null,
+        Func<string>? version = null,
+        bool cacheNulls = false,
+        IChannelBridge? bridge = null,
+        string? bridgeOrigin = null,
+        Func<string, bool>? pinWhen = null,
+        IPinStore? pinStore = null,
+        string? scope = null)
     {
         var source = new Uri($"urn:test-{node ?? Guid.NewGuid().ToString("N")}");
         var sourceBackend = new FakeBackend(store, clock);
@@ -69,6 +76,16 @@ internal sealed class TestNode : IAsyncDisposable
             StartBound = startBound ?? TimeSpan.FromSeconds(5),
             CleanupBound = cleanupBound ?? TimeSpan.FromSeconds(10),
         };
+        if (bridge is not null && sharedCore is null)
+        {
+            core.Bridge = new BridgeHost(bridge, bridgeOrigin ?? source.ToString(), core, NullLogger.Instance);
+        }
+
+        if (pinWhen is not null && sharedCore is null)
+        {
+            core.Pins = new PinCoordinator(core, pinWhen, pinStore, scope, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance) { OwnField = "n1" + RouterAdvertisement.FieldSuffix };
+        }
+
         var registration = new RouterCacheRegistration<Item>
         {
             Name = cacheName,
@@ -78,17 +95,21 @@ internal sealed class TestNode : IAsyncDisposable
             LocalCap = localCap ?? TimeSpan.FromMinutes(1),
             PendingWindow = pendingWindow ?? TimeSpan.FromSeconds(30),
             DefaultExpiry = defaultExpiry,
+            Version = version,
+            CacheNulls = cacheNulls,
         };
         var events = new CacheEventFactory(Options.Create(new CacheOptions { SourceUri = source }));
         RoutedCache<Item> cache;
         if (lazyLibrary is null && lazyLibraryAsync is null)
         {
-            cache = new RoutedCache<Item>(core, registration, library ?? libraryBackend, bus.For(source), events, source);
-            return new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
+            cache = new RoutedCache<Item>(core, registration, library ?? libraryBackend, bus.For(source), events, source, version?.Invoke());
+            var started = new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
+            started.Router.AttachBridge();
+            return started;
         }
 
         core.UseLibrary(lazyLibraryAsync ?? (_ => Task.FromResult(lazyLibrary!())));
-        cache = new RoutedCache<Item>(core, registration);
+        cache = new RoutedCache<Item>(core, registration, version?.Invoke());
         var lazy = new TestNode(cacheName, source, core, cache, sourceBackend, libraryBackend, sharedCore is null, clock);
         lazy.Router.Start();
         return lazy;

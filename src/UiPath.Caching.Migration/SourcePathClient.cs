@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Migration;
 
-internal sealed class SourcePathClient<T>(ISourceCache<T> source) : IPathClient<T>
+internal sealed class SourcePathClient<T>(ISourceCache<T> source, bool cacheNulls = false) : IPathClient<T>
     where T : class
 {
     public TimeSpan? SettleWithin => null;
@@ -22,7 +22,7 @@ internal sealed class SourcePathClient<T>(ISourceCache<T> source) : IPathClient<
             return PathRead<T>.Of(read.Kind);
         }
 
-        return read.Value is { } value ? new PathRead<T>(ReadOutcome.Found, value, null) : PathRead<T>.Of(ReadOutcome.Absent);
+        return read.Value is not null || cacheNulls ? new PathRead<T>(ReadOutcome.Found, read.Value, null) : PathRead<T>.Of(ReadOutcome.Absent);
     }
 
     public async ValueTask<WriteResult> SetAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken)
@@ -34,6 +34,18 @@ internal sealed class SourcePathClient<T>(ISourceCache<T> source) : IPathClient<
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             return WriteOutcome.Unknown;
+        }
+    }
+
+    public async ValueTask<AddResult> TryAddAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await source.TryAddAsync(key, value, deadline is { } at ? CacheExpiry.At(at) : CacheExpiry.Default, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return AddOutcome.Unknown;
         }
     }
 

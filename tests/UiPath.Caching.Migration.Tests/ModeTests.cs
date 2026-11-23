@@ -420,7 +420,7 @@ public sealed class ModeTests : RouterTestBase
 
         var banner = RouterBanner.Describe(builder, "node-1");
 
-        banner.Should().Contain("node-1 (UseNodeIdentity)").And.Contain("bypass=UseBypassWhen").And.Contain("source timeout=00:00:07 (UseSourceTimeout)").And.Contain("00:00:09 (UseLibrarySettleBound)").And.Contain("pin=not available");
-        banner.Should().Contain("bypass (flag, explicit request, library not started) > group predicate > pin");
+        banner.Should().Contain("node-1 (UseNodeIdentity)").And.Contain("bypass=UseBypassWhen").And.Contain("source timeout=00:00:07 (UseSourceTimeout)").And.Contain("00:00:09 (UseLibrarySettleBound)").And.Contain("pin=none");
+        banner.Should().Contain("pin (UsePinWhen, or a switched group) > bypass (flag, explicit request, library not started) > group predicate");
     }
 }

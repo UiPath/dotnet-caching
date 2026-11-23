@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -40,6 +41,7 @@ public static class RouterServiceCollectionExtensions
         }
 
         var processId = builder.NodeIdentity ?? $"{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}";
+        var gate = builder.PinPredicate is null ? null : new PinFormatGate();
         var registered = services.Count;
         services
             .AddNamedCachingOnPrimaryConnection(
@@ -47,11 +49,7 @@ public static class RouterServiceCollectionExtensions
                 configuration,
                 chain =>
                 {
-                    chain.AddRedis(options =>
-                    {
-                        options.RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance;
-                        options.RemoveUnreadable = false;
-                    });
+                    chain.AddRedis(ConfigureStackRedis);
                     chain.AddBroadcast();
                     chain.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
                     chain.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
@@ -60,6 +58,10 @@ public static class RouterServiceCollectionExtensions
                 (stack, _) =>
                 {
                     stack.AddSingleton<ISerializerProxy<byte[]>>(envelope);
+                    if (gate is not null)
+                    {
+                        stack.AddSingleton<IFormatWriteGate>(gate);
+                    }
 
                     // After the stack's own `?stack=` post-configure, so the process id lands in the host part of the identity.
                     stack.PostConfigure<CacheOptions>(options => options.SourceUri = WithProcess(options.SourceUri ?? CacheOptions.MachineUri, processId));
@@ -78,7 +80,8 @@ public static class RouterServiceCollectionExtensions
             }
         }
 
-        services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId));
+        var section = configuration.GetSection(sectionName);
+        services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId, gate, section));
         services.AddHostedService<RouterHostedService>();
         return services;
     }
@@ -104,6 +107,28 @@ public static class RouterServiceCollectionExtensions
         LibrarySettleBound.ThrowIfBeyondHorizon(LibrarySettleBound.Join(connection?.ConnectionString, connection?.ConnectionStringExtraParams));
     }
 
+    /// <summary>The key the stack's node list store uses: the same name, with braces escaped, through the stack's key strategy.</summary>
+    internal static RedisKey NodeListKey(CacheOptions cacheOptions, RedisCacheOptions redisOptions)
+    {
+        var name = string.Join(cacheOptions.Separator, "Caching", "Nodes")
+            .Replace("%", "%25", StringComparison.Ordinal)
+            .Replace("{", "%7B", StringComparison.Ordinal)
+            .Replace("}", "%7D", StringComparison.Ordinal);
+        return (redisOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, RedisKeyspaces.String).GetRedisKey(name);
+    }
+
+    /// <summary>The identity the router's adverts and bridge messages carry: the stack's source identity, from the router's section as the stack binds it.</summary>
+    internal static string RouterIdentity(IConfigurationSection section, string processId)
+    {
+        var options = new CacheOptions();
+        section.Bind(options);
+        return StackIdentity(options.SourceUri ?? CacheOptions.MachineUri, processId).ToString().ToLowerInvariant();
+    }
+
+    /// <summary>The router stack's source identity: the named stack's <c>?stack=</c> form, then the process part.</summary>
+    internal static Uri StackIdentity(Uri source, string processId) =>
+        WithProcess(new Uri($"{source.AbsoluteUri.Split('?')[0]}?stack={Uri.EscapeDataString(StackName)}"), processId);
+
     internal static Uri WithProcess(Uri source, string processId)
     {
         var text = source.AbsoluteUri;
@@ -111,7 +136,17 @@ public static class RouterServiceCollectionExtensions
         return query < 0 ? new Uri($"{text}-p{processId}") : new Uri($"{text[..query]}-p{processId}{text[query..]}");
     }
 
-    private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId)
+    /// <summary>The stack's Redis options: set here only, never bound from configuration, so the validator can check them without building the stack.</summary>
+    internal static void ConfigureStackRedis(RedisCacheOptions options)
+    {
+        options.RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance;
+        options.RemoveUnreadable = false;
+
+        // A stored null then reads as found; each registration decides with CacheNulls whether that is a hit. The router never writes a null.
+        options.CacheNullValues = true;
+    }
+
+    private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, PinFormatGate? gate, IConfigurationSection section)
     {
         var logger = root.GetService<ILoggerFactory>()?.CreateLogger("UiPath.Caching.Migration") ?? NullLogger.Instance;
         var core = new RouterCore(root.GetRequiredService<TimeProvider>(), predicate, logger)
@@ -128,9 +163,42 @@ public static class RouterServiceCollectionExtensions
                 ThrowIfSettleBeyondHorizon(root);
             }
 
+            // The other check that fails the host: settings that would make the library write what the source cannot read.
+            // Bound as the named stack binds them, without building it: a stack that cannot be built must not fail the host here.
+            var stackCache = new CacheOptions();
+            section.Bind(stackCache);
+            var stackRedis = new RedisCacheOptions();
+            ConfigureStackRedis(stackRedis);
+            RegistrationValidator.ThrowIfInvalid(stackCache, stackRedis);
+            logger.LogInformation("Caching router library options: {Options}", RegistrationValidator.Describe(stackCache, stackRedis));
+
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
             core.UseLibrary(token => StartLibraryAsync(root, builder, token));
-            var router = new Router(core, builder.Registrations);
+            if (builder.Bridge is { } bridge)
+            {
+                core.Bridge = new BridgeHost(bridge, RouterIdentity(section, processId), core, logger) { MaxPending = builder.BridgeMaxPending };
+            }
+
+            var setup = AdvertisementSetup.TryCreate(root, builder, processId, section, logger);
+            if (builder.PinPredicate is { } pinWhen)
+            {
+                ValidatePinSetup(section, setup, logger);
+
+                // Before the caches, which take their group's pin from it.
+                var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger);
+                core.Pins = pins;
+                gate!.Attach(pins);
+            }
+
+            var advertiser = setup is null ? null : CreateAdvertiser(setup, core, logger);
+            if (advertiser is not null && core.Pins is { } attached)
+            {
+                attached.OwnField = advertiser.Field;
+                attached.Fresh = advertiser.Fresh;
+            }
+
+            var router = new Router(core, builder.Registrations, builder.Excluded) { Advertiser = advertiser, Envelope = builder.Envelope };
+
             RouterBanner.Log(logger, builder, processId);
             router.Start();
             return router;
@@ -141,6 +209,42 @@ public static class RouterServiceCollectionExtensions
             core.DisposeResources();
             throw;
         }
+    }
+
+    private static void ValidatePinSetup(IConfigurationSection section, AdvertisementSetup? setup, ILogger logger)
+    {
+        var negotiation = new FormatNegotiationOptions();
+        section.GetSection("Redis:FormatNegotiation").Bind(negotiation);
+        if (negotiation.Mode == FormatNegotiationMode.Force)
+        {
+            throw new InvalidOperationException("UsePinWhen cannot be combined with Redis:FormatNegotiation:Mode Force: Force writes the format without asking the pin gate. Use Auto.");
+        }
+
+        if (setup is null)
+        {
+            throw new InvalidOperationException("UsePinWhen needs the router's pin store, and the node advertisement it lives in could not be set up (see the warning logged before this), so no group could ever be known unpinned.");
+        }
+
+        var needed = negotiation.LivenessWindow + (negotiation.AdvertiseInterval * 2);
+        if (negotiation.UpgradeHold < needed)
+        {
+            throw new InvalidOperationException($"UsePinWhen needs Redis:FormatNegotiation:UpgradeHold of at least LivenessWindow + 2 x AdvertiseInterval ({needed}), so a node that joins while the switch is recorded is seen before a format is written; it is {negotiation.UpgradeHold}.");
+        }
+
+        if (setup.Scope is null)
+        {
+            logger.LogWarning("UsePinWhen is set but the application has no AppShortName, so the pin gate cannot attribute nodes to this application and stays closed.");
+        }
+    }
+    private static RouterAdvertiser CreateAdvertiser(AdvertisementSetup setup, RouterCore core, ILogger logger)
+    {
+        var sources = new List<IAdvertisementTokens> { new BypassTokens(core), new ScopeTokens(setup.Scope) };
+        if (core.Pins is { } pins)
+        {
+            sources.Add(pins);
+        }
+
+        return new RouterAdvertiser(setup.Store, setup.NodeId, setup.Build, sources, setup.RefreshInterval, setup.LivenessWindow, core.Clock, logger);
     }
 
     private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, CancellationToken cancellationToken)

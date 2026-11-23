@@ -1,13 +1,23 @@
+using System.Buffers;
+using StackExchange.Redis;
+
 namespace UiPath.Caching.Migration;
 
 public sealed class RouterBuilder
 {
+    private static readonly SearchValues<char> ForbiddenVersionCharacters = SearchValues.Create("@+={} ");
+
     private readonly List<Func<RouterCore, (string Name, Type Type, object Cache)>> _registrations = [];
     private readonly HashSet<string> _names = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _excluded = new(StringComparer.Ordinal);
 
     internal IReadOnlyList<Func<RouterCore, (string Name, Type Type, object Cache)>> Registrations => _registrations;
 
+    internal IReadOnlyDictionary<string, string> Excluded => _excluded;
+
     internal Func<string, bool>? LibraryPredicate { get; private set; }
+
+    internal Func<string, bool>? PinPredicate { get; private set; }
 
     internal ISerializerProxy<byte[]>? Envelope { get; private set; }
 
@@ -21,6 +31,12 @@ public sealed class RouterBuilder
 
     internal TimeSpan CleanupBound { get; set; } = TimeSpan.FromSeconds(10);
 
+    internal Func<IDatabase>? SourceDatabase { get; private set; }
+
+    internal IChannelBridge? Bridge { get; private set; }
+
+    internal int BridgeMaxPending { get; private set; } = BridgeHost.DefaultMaxPending;
+
     public RouterBuilder Add<T>(RouterCacheRegistration<T> registration)
         where T : class
     {
@@ -30,6 +46,20 @@ public sealed class RouterBuilder
         ArgumentOutOfRangeException.ThrowIfLessThan(registration.LocalCap, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(registration.PendingWindow, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(registration.PendingWindow, LibrarySettleBound.Horizon);
+        // Read once: the value checked here is the one the cache's events use.
+        var version = registration.Version is { } provider
+            ? provider() ?? throw new ArgumentException($"The version provider of cache '{registration.Name}' returned null.", nameof(registration))
+            : null;
+        if (version is not null && (string.IsNullOrWhiteSpace(version) || version.AsSpan().IndexOfAny(ForbiddenVersionCharacters) >= 0))
+        {
+            throw new ArgumentException($"The version of cache '{registration.Name}' must be non-empty and hold no '@', '+', '=', braces or spaces.", nameof(registration));
+        }
+
+        if (_excluded.ContainsKey(registration.Name))
+        {
+            throw new ArgumentException($"Cache '{registration.Name}' is listed as excluded, so it cannot also be registered.", nameof(registration));
+        }
+
         if (!_names.Add(registration.Name))
         {
             throw new ArgumentException($"A cache named '{registration.Name}' is already registered.", nameof(registration));
@@ -40,7 +70,42 @@ public sealed class RouterBuilder
             typeof(T),
             new RoutedCache<T>(
                 core,
-                registration)));
+                registration,
+                version)));
+        return this;
+    }
+
+    /// <summary>
+    /// The adapter over the older client's invalidation channel: the router publishes every key write, delete and clear on it and evicts on what it
+    /// receives. At most <paramref name="maxPendingPublishes"/> adapter calls are in flight; a publish beyond that is dropped and counted.
+    /// </summary>
+    public RouterBuilder UseChannelBridge(IChannelBridge bridge, int maxPendingPublishes = 16)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxPendingPublishes, 1);
+        Bridge = bridge ?? throw new ArgumentNullException(nameof(bridge));
+        BridgeMaxPending = maxPendingPublishes;
+        return this;
+    }
+
+    /// <summary>
+    /// Lists a cache that stays on the application's own client, outside the router: one the library cannot match, such as a lock or another
+    /// primitive the two stacks implement differently, or a map cache with field semantics the library does not keep. The startup log names it,
+    /// and asking the router for it fails with <paramref name="reason"/>.
+    /// </summary>
+    public RouterBuilder Exclude(string cacheName, string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cacheName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (_names.Contains(cacheName))
+        {
+            throw new ArgumentException($"Cache '{cacheName}' is registered, so it cannot also be excluded.", nameof(cacheName));
+        }
+
+        if (!_excluded.TryAdd(cacheName, reason))
+        {
+            throw new ArgumentException($"Cache '{cacheName}' is already excluded.", nameof(cacheName));
+        }
+
         return this;
     }
 
@@ -79,6 +144,13 @@ public sealed class RouterBuilder
         return this;
     }
 
+    /// <summary>A live setting that pins groups to the library path, never the source; a group is switched once a format write needs it and every node has the pin. Group names hold none of <c>+ @ = { }</c>.</summary>
+    public RouterBuilder UsePinWhen(Func<string, bool> pinned)
+    {
+        PinPredicate = pinned ?? throw new ArgumentNullException(nameof(pinned));
+        return this;
+    }
+
     /// <summary>The serializer that writes and reads the older client's value envelope.</summary>
     public RouterBuilder UseEnvelope(ISerializerProxy<byte[]> envelope)
     {
@@ -92,6 +164,13 @@ public sealed class RouterBuilder
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(bound, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(bound, LibrarySettleBound.Horizon);
         SettleBound = bound;
+        return this;
+    }
+
+    /// <summary>The source client's database, returned at once and with no key prefix of its own, which carries the router's node advertisement while the library is down.</summary>
+    public RouterBuilder UseSourceConnection(Func<IDatabase> database)
+    {
+        SourceDatabase = database ?? throw new ArgumentNullException(nameof(database));
         return this;
     }
 }

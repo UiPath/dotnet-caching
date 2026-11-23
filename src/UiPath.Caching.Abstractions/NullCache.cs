@@ -309,6 +309,13 @@ public sealed class NullCache : ICache, ISpanKeyCache, IResultCache, IMigrationC
         return ValueTask.FromResult(StoreOutcome.Committed);
     }
 
+    /// <summary>Always <see cref="AddOutcome.Added"/>, as <c>TryAddAsync</c> always answers true.</summary>
+    public ValueTask<AddOutcome> TryCreateAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult(AddOutcome.Added);
+    }
+
     /// <summary>Always <see cref="StoreOutcome.Committed"/>, as <c>RemoveAsync</c> always answers true.</summary>
     public ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {

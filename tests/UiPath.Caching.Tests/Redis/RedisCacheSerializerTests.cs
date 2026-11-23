@@ -918,6 +918,38 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public async Task A_create_whose_reply_is_lost_is_unknown()
+    {
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromMilliseconds(100)));
+        var never = new TaskCompletionSource<bool>();
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), When.NotExists, Arg.Any<CommandFlags>()).Returns(never.Task);
+
+        (await sut.TryCreateAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(AddOutcome.Unknown);
+    }
+
+    [Fact]
+    public async Task A_create_retried_after_a_lost_reply_is_unknown_even_when_the_retry_finds_the_key()
+    {
+        var sut = Create(FastRegistry(), write: new RetryOncePipeline(TimeSpan.FromMilliseconds(100), () => Task.CompletedTask));
+        var never = new TaskCompletionSource<bool>();
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), When.NotExists, Arg.Any<CommandFlags>())
+            .Returns(never.Task, Task.FromResult(false));
+
+        (await sut.TryCreateAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(AddOutcome.Unknown, "the first send may be the one that added it");
+    }
+
+    [Theory]
+    [InlineData(true, AddOutcome.Added)]
+    [InlineData(false, AddOutcome.Exists)]
+    public async Task A_create_answered_once_reports_that_answer(bool answer, AddOutcome expected)
+    {
+        var sut = Create(out _);
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), When.NotExists, Arg.Any<CommandFlags>()).Returns(answer);
+
+        (await sut.TryCreateAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(expected);
+    }
+
+    [Fact]
     public async Task A_write_and_delete_cancelled_in_flight_are_unknown()
     {
         var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(30)));
