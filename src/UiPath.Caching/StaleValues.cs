@@ -40,7 +40,7 @@ internal sealed partial class StaleValues : IDisposable
     private readonly long[] _changes = new long[CommitLocks];
 
     // Why each fail-safe entry left the local tier, held only as long as the entry itself: a keep that runs after the entry left reads it.
-    private readonly ConditionalWeakTable<ICacheEntry, StrongBox<EvictionReason>> _left = new();
+    private readonly ConditionalWeakTable<ICacheEntry, StrongBox<EvictionReason>> _left = [];
     private long _epoch;
     private bool _disposed;
 
@@ -180,6 +180,19 @@ internal sealed partial class StaleValues : IDisposable
         }
     }
 
+    /// <summary>Drops the key's value only while it holds <paramref name="entry"/>: that entry was invalidated.</summary>
+    public void Drop(string name, ICacheEntry entry)
+    {
+        var key = new KeptKey(name);
+        lock (Commit(name))
+        {
+            if (ReferenceEquals(Held(key)?.Entry, entry))
+            {
+                _local.Remove(key);
+            }
+        }
+    }
+
     /// <summary>Settles a value kept for <paramref name="entry"/> once the entry may have left the local tier before the keep.</summary>
     /// <param name="custom">An entry the cache's own factory did not make: it cannot be told apart from one a peer's change took, so it is dropped, as before.</param>
     /// <param name="changed">The entry's change token fired: a peer's change reached the key while the entry was, or was being, stored.</param>
@@ -214,19 +227,6 @@ internal sealed partial class StaleValues : IDisposable
         else
         {
             Drop(name, kept);
-        }
-    }
-
-    /// <summary>Drops the key's value only while it holds <paramref name="entry"/>: that entry was invalidated.</summary>
-    public void Drop(string name, ICacheEntry entry)
-    {
-        var key = new KeptKey(name);
-        lock (Commit(name))
-        {
-            if (ReferenceEquals(Held(key)?.Entry, entry))
-            {
-                _local.Remove(key);
-            }
         }
     }
 
