@@ -57,6 +57,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         _logger = logger;
         _logFailure = LogRedisHashCacheException;
         _logReadScriptUnavailable = LogReadScriptUnavailable;
+        base.LogExpireTimeUnavailable = LogExpireTimeUnavailableMessage;
         _rewriteScriptRefused = RewriteScriptsRefused;
         _read = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Read));
         _write = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Write));
@@ -274,6 +275,9 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Scripts are unavailable; hash cache reads now use an HGETALL and PTTL pair")]
     private partial void LogReadScriptUnavailable(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "EXPIRETIME is unavailable; hash cache expirations are now read from the TTL")]
+    private partial void LogExpireTimeUnavailableMessage(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The server refused the script that rewrites hash fields; rewrites now use a transaction per field")]
     private partial void LogRewriteScriptRefused(Exception ex);

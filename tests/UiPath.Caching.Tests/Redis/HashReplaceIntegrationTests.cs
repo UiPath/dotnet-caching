@@ -141,8 +141,7 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
         }
 
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var server = redis.GetServers()[0];
-        await foreach (var key in server.KeysAsync(pattern: $"*{run}*"))
+        await foreach (var key in RedisTestKeys.KeysAsync(redis, $"*{run}*"))
         {
             // A null TTL also answers a key that expired after the scan listed it; only one still there without a TTL is the defect.
             var ttl = await redis.GetDatabase().KeyTimeToLiveAsync(key);
@@ -235,6 +234,7 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         return provider.GetRequiredService<ICacheFactory>().CreateHashCache(fieldBatch == 1000 ? KnownCacheProviderNames.InMemoryRedis : KnownCacheProviderNames.Redis);
     }
 }

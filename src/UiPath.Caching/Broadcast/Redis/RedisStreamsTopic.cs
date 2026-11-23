@@ -47,13 +47,18 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly RedisStreamsTopicOptions _streamOptions;
     private readonly EventDispatcher<T> _dispatcher;
+    private readonly Action<Exception>? _onRefused;
     private readonly RedisStreamNotifyChannel? _notifyChannel;
-    private readonly RedisChannel? _notifyRedisChannel;
     private readonly SignalingFetchWaiter _waiter;
+    private readonly bool _builtInSharded;
+    private readonly CacheOptions _cacheOptions;
+    private readonly Lock _switchGate = new();
     // Half of MaxLength; 0 = no trim.
     private readonly long _wakeEvery;
     // This node's source as the entries carry it, so a publish of its own events allocates no new text for it.
     private readonly RedisValue _ownSource;
+    // Swapped whole, so a reader never sees half a channel; replaced once, by the switch from sharded to literal.
+    private volatile NotifyTarget? _notify;
     private long _published;
     private int _doorbell;
     private int _doorbellFailures;
@@ -79,7 +84,28 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         ICachingTelemetryProvider cachingTelemetryProvider,
         IRedisProfiler redisProfiler,
         CancellationToken stopToken)
+        : this(topicKey, connectionState, redis, subjectFactory, formatter, resiliencePipelineProvider, streamOptions, cacheOptions, logger, cachingTelemetryProvider, redisProfiler, onRefused: null, onRead: null, stopToken)
     {
+    }
+
+    /// <param name="onRefused">Told of an exception that may mean the server does not run, or will not let this node run, the Streams commands: from a publish, a read or a group create.</param>
+    internal RedisStreamsTopic(
+        TopicKey topicKey,
+        IConnectionState connectionState,
+        IRedisConnector redis,
+        Func<IEventSubject<T>> subjectFactory,
+        IEventFormatterProxy<T> formatter,
+        IResiliencePipelineProvider resiliencePipelineProvider,
+        RedisStreamsTopicOptions streamOptions,
+        CacheOptions cacheOptions,
+        ILogger<RedisStreamsTopic<T>> logger,
+        ICachingTelemetryProvider cachingTelemetryProvider,
+        IRedisProfiler redisProfiler,
+        Action<Exception>? onRefused,
+        Action? onRead,
+        CancellationToken stopToken)
+    {
+        _onRefused = onRefused;
         RedisStreamsTopicOptionsValidator.ThrowIfInvalid(streamOptions);
         TopicKey = topicKey;
         _connectionState = connectionState;
@@ -91,6 +117,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _streamOptions = streamOptions;
         _subject = subjectFactory();
+        _cacheOptions = cacheOptions;
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, streamOptions);
         _ownSource = StreamSource.Of(_context.SourceUri);
@@ -99,18 +126,22 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         DoorbellSpacing = streamOptions.EffectiveNotifyMinInterval;
         if (_streamOptions.NotifyEnabled)
         {
+            // A custom strategy is not switched: its channel is the operator's, and a literal one of ours may not be where they listen.
+            _builtInSharded = streamOptions.NotifyChannelStrategy is null && streamOptions.NotifyShardedPubSub;
+            var shardedRefused = _builtInSharded && BroadcastCapability.For(redis).ShardedPubSubIsRefused;
             var notifyChannelStrategy = streamOptions.NotifyChannelStrategy
-                ?? StreamSuffixChannel.Create(_redisStreamKeyStrategy, cacheOptions, streamOptions.NotifyChannelName, streamOptions.NotifyShardedPubSub);
-            _notifyRedisChannel = notifyChannelStrategy.GetRedisChannel(topicKey);
+                ?? StreamSuffixChannel.Create(_redisStreamKeyStrategy, cacheOptions, streamOptions.NotifyChannelName, streamOptions.NotifyShardedPubSub && !shardedRefused);
+            _notify = new NotifyTarget(notifyChannelStrategy.GetRedisChannel(topicKey));
             _ringInAdd = streamOptions.NotifyChannelStrategy is null && !streamOptions.NotifyShardedPubSub;
             _notifyChannel = new RedisStreamNotifyChannel(
-                _notifyRedisChannel.Value,
+                _notify.Channel,
                 _redis,
                 _logger,
                 _waiter,
                 streamOptions.NotifySubscriberTimeout,
                 streamOptions.NotifySubscriberDueTime,
-                _context.ConsumerName);
+                _context.ConsumerName,
+                SwitchToLiteral);
             // A new connection may be to another topology.
             _redis.OnReconnected += OnReconnected;
         }
@@ -118,7 +149,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         // Run later on the pool, by which time the writer the drop reports through is in place.
         var dropped = new DroppedEvents(topicKey, () => _subscriber!.ReportLoss(), _logger);
         var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, capacity, streamOptions.FullMode, _ => dropped.Dropped());
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _waiter, () => _subject.Invalidate(MissedEventsReason.Lost), _stopTokenSource.Token);
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _waiter, () => _subject.Invalidate(MissedEventsReason.Lost), _stopTokenSource.Token, onRefused: onRefused, onRead: onRead);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
@@ -127,6 +158,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
     public EventHandler? OnDisposed { get; set; }
 
     public bool IsSubscribed => !_disposed && _subscriber.IsReading;
+
+    string? ITopic<T>.Transport => Metrics.TransportStreams;
 
     // A doorbell is a hint: one stalled on Redis must not hold the rings behind it for the whole command timeout.
     internal TimeSpan DoorbellTimeout { get; set; } = TimeSpan.FromSeconds(1);
@@ -175,12 +208,12 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         {
             var message = Fields(@event);
             // While no doorbell is in flight this entry carries one; otherwise its ring folds into the one in flight, as before.
-            if (_notifyRedisChannel.HasValue && TryTakeDoorbellForAdd())
+            if (_notify is not null && TryTakeDoorbellForAdd())
             {
                 return await PublishRingingAsync(@event, message, token).ConfigureAwait(false);
             }
 
-            var behindAdd = _notifyRedisChannel.HasValue && RingsBehindAdd();
+            var behindAdd = _notify is not null && RingsBehindAdd();
             var id = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
@@ -203,7 +236,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
             (Self: this, Message: message, BehindAdd: behindAdd),
             defaultValue: RedisValue.Null,
             token).ConfigureAwait(false);
-            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic, id);
+            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic, id, Metrics.TransportStreams);
             if (!id.IsNull)
             {
                 Ring(doorbell: !behindAdd);
@@ -215,6 +248,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
         {
             LogPublishError(ex, TopicKey, @event.Id);
+            _onRefused?.Invoke(ex);
             return false;
         }
     }
@@ -270,7 +304,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
             token).ConfigureAwait(false);
             rung = replyRung;
             added = !id.IsNull;
-            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic, id);
+            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic, id, Metrics.TransportStreams);
             if (added)
             {
                 Ring(doorbell: false);
@@ -341,7 +375,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
     {
         var values = new RedisValue[3 + message.Length * 2];
         values[0] = _streamOptions.MaxLength is { } maxLength ? maxLength : RedisValue.EmptyString;
-        values[1] = _notifyRedisChannel!.Value.ToString();
+        values[1] = _notify!.Channel.ToString();
         values[2] = _context.ConsumerName;
         for (var i = 0; i < message.Length; i++)
         {
@@ -385,7 +419,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
     /// <summary>Wakes the other nodes unless the doorbell went out behind the XADD, and this one every <see cref="_wakeEvery"/> own entries: nothing else rings for those, and a burst of them could be trimmed unread.</summary>
     private void Ring(bool doorbell)
     {
-        if (doorbell && _notifyRedisChannel.HasValue)
+        if (doorbell && _notify is not null)
         {
             RingDoorbell();
         }
@@ -580,7 +614,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
             Volatile.Write(ref _lastDoorbell, Stopwatch.GetTimestamp());
             // On the primary, like the XADD: a doorbell behind it on the same connection cannot overtake the entry.
             // Through the multiplexer's own database: a connector's key-prefixed one would prefix the channel too, and the subscriber, which carries no key prefix, would never hear it.
-            publish = _redis.Database.Multiplexer.GetDatabase().PublishAsync(_notifyRedisChannel!.Value, _context.ConsumerName, CommandFlags.DemandMaster);
+            publish = _redis.Database.Multiplexer.GetDatabase().PublishAsync(_notify!.Channel, _context.ConsumerName, CommandFlags.DemandMaster);
             await publish.WaitAsync(DoorbellTimeout, stop).ConfigureAwait(false);
             Volatile.Write(ref _doorbellFailures, 0);
             return true;
@@ -598,9 +632,48 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         }
         catch (Exception ex)
         {
-            DoorbellFailed(ex);
+            // The refusal is logged once by the connector; the next doorbell goes out on the literal channel.
+            if (!SwitchToLiteral(ex))
+            {
+                DoorbellFailed(ex);
+            }
+
             return false;
         }
+    }
+
+    /// <summary>Moves the doorbell from the built-in sharded channel to the literal one of the same name, once the server refused SPUBLISH or SSUBSCRIBE (Redis 6.2, Kvrocks, some proxies). Nodes that switched and nodes still on the sharded channel do not hear each other's doorbells; that is acceptable, as a doorbell is a hint and the poll interval backstops it. A custom channel strategy is never switched.</summary>
+    /// <returns>Whether the doorbell is on the literal channel now, so the refusal is dealt with.</returns>
+    private bool SwitchToLiteral(Exception exception)
+    {
+        if (!_builtInSharded || _notify is not { } current)
+        {
+            return false;
+        }
+
+        var capability = BroadcastCapability.For(_redis);
+        if (current.Literal)
+        {
+            // Already switched, by the other of the two commands or an earlier refusal.
+            return capability.ShardedPubSubIsRefused;
+        }
+
+        if (!capability.ShardedPubSubRefused(exception, _logger))
+        {
+            return false;
+        }
+
+        var literal = StreamSuffixChannel.Create(_redisStreamKeyStrategy, _cacheOptions, _streamOptions.NotifyChannelName, sharded: false).GetRedisChannel(TopicKey);
+        lock (_switchGate)
+        {
+            if (_notify is { Literal: false })
+            {
+                _notify = new NotifyTarget(literal, Literal: true);
+                _notifyChannel?.UseChannel(literal);
+            }
+        }
+
+        return true;
     }
 
     // Once per streak at warning: a stalled Redis would otherwise log every second for every topic.
@@ -693,4 +766,6 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "The topology behind topic {TopicKey} could not be read; the doorbell waits for the XADD reply")]
     private partial void LogTopologyUnknown(Exception ex, TopicKey topicKey);
+
+    private sealed record NotifyTarget(RedisChannel Channel, bool Literal = false);
 }

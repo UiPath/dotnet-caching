@@ -101,7 +101,7 @@ Bound by `AddAzureEntraAuthentication()` from the `UiPath.Caching.Azure` package
 
 ## Caching:Broadcast:RedisStreams (RedisStreamsTopicOptions)
 
-App-wide-only fields (per-topic `Topics[]` entries ignore these): `Enabled`, `ConnectionMonitorEnabled`, `TrackStatistics`, `MaintainerEnabled`, `MaintainerCheckInterval`, `MaintainerTrimInterval`, `MaintainerQuarantineInterval`, `MaintainerSearchPattern`.
+App-wide-only fields (per-topic `Topics[]` entries ignore these): `Enabled`, `StreamsUnsupported`, `UseStreamsOnQuirkServers`, `ConnectionMonitorEnabled`, `TrackStatistics`, `MaintainerEnabled`, `MaintainerCheckInterval`, `MaintainerTrimInterval`, `MaintainerQuarantineInterval`, `MaintainerSearchPattern`.
 
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
@@ -131,6 +131,8 @@ App-wide-only fields (per-topic `Topics[]` entries ignore these): `Enabled`, `Co
 | `NotifyShardedPubSub` | `bool` | `false` | App-wide / Per-topic | `true` = use `SPUBLISH`/`SSUBSCRIBE` (Redis 7.0+); ignored when `NotifyChannelStrategy` is set in code. |
 | `NotifySubscriberTimeout` | `TimeSpan?` | `null` | App-wide / Per-topic | Resubscribe interval when `Subscribe` fails; `null` or non-positive = multiplexer timeout (5 s until the connection is up). |
 | `NotifySubscriberDueTime` | `TimeSpan?` | `null` | App-wide / Per-topic | Delay before the first subscribe attempt; `null` = half of resolved `NotifySubscriberTimeout`. |
+| `StreamsUnsupported` | `StreamsUnsupportedAction` | `PubSub` | App-wide only | What happens when the server does not run Streams, found by a probe once per connection (an `XGROUP CREATE ... MKSTREAM` on a throwaway key, never `INFO`) or by a refused `XADD`, `XREADGROUP` or `XGROUP`. `PubSub` = broadcast over plain Pub/Sub with one warning, then off if Pub/Sub is refused too; `Disable` = broadcast off for the topic with one warning; `Fail` = host start fails when a probe within 2 s proves Streams missing, and after start the topics stay as they are with one error. Writes in the first milliseconds on a server without Streams can return `false`. Topic metrics carry a `Transport` tag (`streams`, `pubsub`, `off`), and each switch tracks one `Caching.Stats.TransportChanged` event with `TopicName`, `From`, `To` and `Reason`. Mixed server types in one fleet are unsupported; stream keys left behind are not removed. See [how-to/broadcast.md](../how-to/broadcast.md#when-the-server-has-no-streams). |
+| `UseStreamsOnQuirkServers` | `bool` | `false` | App-wide only | `true` = skip the probe check that a deleted stream loses its consumer groups, which sends Kvrocks to Pub/Sub. A switch tells subscribers once that events were lost (`MissedEventsReason.Lost`), as a Kvrocks node sees at startup. |
 
 Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisStreams`. Each entry is matched case-insensitively on `Name`; only present fields override app-wide values (delta overlay). See [how-to/broadcast.md#per-topic-overrides](../how-to/broadcast.md#per-topic-overrides).
 
@@ -185,6 +187,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `BatchConcurrentChunks` | `int` | `2` | Per-provider | Chunks of a batch call in flight at once. |
 | `BatchTopicInvalidationThreshold` | `int?` | `null` | Per-provider | Above this many keys (input of known size) a batch call publishes one topic-wide invalidation instead of one event per key. It drops the local tier of the topic for every cache sharing it; nodes on an older version ignore it. |
 | `PeerFieldUpdates` | `bool` | `false` | Per-provider | A small `HashReplace` write tells the other nodes which fields it wrote, and a node whose local copy of the hash is exactly one write behind adds them to the copy instead of dropping it; any other copy is dropped as before. Every write of a hash then also counts the hash's writes in a reserved `_version_` field, in the write's own transaction. Turn it on once every node that writes the hashes runs this version. |
+| `RepeatInvalidationAfter` | `TimeSpan?` | `null` | Per-provider | On Redis Active-Active, a node drops its local copy of a key again this long after another node invalidated it, as well as at once, so a copy refilled from a replica that had not yet received the write is dropped and read again. Set it above the replication lag, for example 1 s. It costs one extra Redis read per remote invalidation. Zero and negative values are rejected. |
 | `PeerFieldUpdateMaxFields` | `int` | `16` | Per-provider | The most fields a write may carry to the other nodes; a write of more is dropped by them. |
 | `PeerFieldUpdateMaxBytes` | `int` | `1024` | Per-provider | The most bytes the names and serialized values of a write's fields may add up to for the write to be carried to the other nodes. |
 | `BackgroundWriteDrainTimeout` | `TimeSpan` | `00:00:05` | Per-provider | How long disposing the cache waits for background writes still running before it cancels them. `Timeout.InfiniteTimeSpan` (`-00:00:00.001` in configuration) waits for them all; any other negative value cancels them at once. |

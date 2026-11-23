@@ -124,6 +124,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
     public async Task A_hash_is_looked_at_for_no_more_than_the_first_fields()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.ReportsCommandStats, "Counts HSCAN calls from INFO commandstats, which this server does not report.");
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = mux.GetDatabase();
         var run = Run();
@@ -311,6 +312,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
     public async Task Other_types_empty_values_and_keys_outside_the_pattern_are_not_counted()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = mux.GetDatabase();
         var run = Run();
@@ -366,6 +368,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
     public async Task Every_primary_the_connector_names_is_scanned()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipWhen(fixture.IsCluster, "Names one server twice, and a cluster spreads the keys over its shards.");
         await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = mux.GetDatabase();
         var run = Run();
@@ -588,9 +591,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
     private async Task<long> HScansAsync()
     {
         await using var admin = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
-        var stats = (await admin.GetServer(admin.GetEndPoints()[0]).InfoAsync("commandstats")).SelectMany(group => group).ToList();
-        var line = stats.FirstOrDefault(pair => pair.Key == "cmdstat_hscan").Value;
-        return line is null ? 0 : long.Parse(line.Split(',')[0].Split('=')[1], System.Globalization.CultureInfo.InvariantCulture);
+        return await RedisTestKeys.CommandCallsAsync(admin, "cmdstat_hscan");
     }
 
     // v[1]:{name}:[tail] for a string and v[1]:h:{name}:[tail] for a hash: glob characters before and after the name.
@@ -644,7 +645,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         public EndPoint[] GetEndPoints(bool configuredOnly = false) => mux.GetEndPoints(configuredOnly);
 
         public IEnumerable<IServer> GetPrimaries() =>
-            primaries ?? (exposePrimaries ? mux.GetServers().Where(s => !s.IsReplica && s.IsConnected).ToArray() : []);
+            primaries ?? (exposePrimaries ? RedisTestKeys.Primaries(mux) : []);
 
         public void Dispose()
         {

@@ -6,9 +6,17 @@ namespace UiPath.Caching.Broadcast;
 /// </summary>
 internal sealed class GapFilteringTopic(ITopic<ICacheEvent> inner) : ITopic<ICacheEvent>, ITopicSubscriptionState
 {
+    event Action<Exception>? ITopic<ICacheEvent>.Refused
+    {
+        add => inner.Refused += value;
+        remove => inner.Refused -= value;
+    }
+
     public TopicKey TopicKey => inner.TopicKey;
 
     public bool IsSubscribed => inner is ITopicSubscriptionState { IsSubscribed: true };
+
+    string? ITopic<ICacheEvent>.Transport => inner.Transport;
 
     public EventHandler? OnDisposed
     {

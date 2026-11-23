@@ -102,6 +102,11 @@ public class OptionsCloneTests
                 ? System.Threading.Channels.BoundedChannelFullMode.DropOldest
                 : System.Threading.Channels.BoundedChannelFullMode.Wait;
         }
+        if (type.IsEnum)
+        {
+            return Enum.GetValues(type).Cast<object>().First(value => !value.Equals(current));
+        }
+
         if (type == typeof(IRedisStreamKeyStrategy))
         {
             return Substitute.For<IRedisStreamKeyStrategy>();

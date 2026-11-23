@@ -89,6 +89,12 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
 
     public TimeSpan? NotifySubscriberDueTime { get; set; }
 
+    /// <summary>What happens when the server does not run Streams, found by a probe once per connection or by a refused command. App-wide: a per-topic override is ignored.</summary>
+    public StreamsUnsupportedAction StreamsUnsupported { get; set; } = StreamsUnsupportedAction.PubSub;
+
+    /// <summary>Skips the probe check that a server keeps the consumer groups of a deleted stream (Kvrocks does), which otherwise sends the topics to Pub/Sub. App-wide: a per-topic override is ignored.</summary>
+    public bool UseStreamsOnQuirkServers { get; set; }
+
     internal bool PollIntervalSet => _pollInterval.HasValue;
 
     internal TimeSpan EffectiveNotifyMinInterval => NotifyMinInterval ?? DefaultNotifyMinInterval;
@@ -137,5 +143,7 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
         NotifyShardedPubSub          = NotifyShardedPubSub,
         NotifySubscriberTimeout      = NotifySubscriberTimeout,
         NotifySubscriberDueTime      = NotifySubscriberDueTime,
+        StreamsUnsupported           = StreamsUnsupported,
+        UseStreamsOnQuirkServers     = UseStreamsOnQuirkServers,
     };
 }

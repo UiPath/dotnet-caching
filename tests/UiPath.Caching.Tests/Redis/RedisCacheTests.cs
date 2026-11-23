@@ -1185,6 +1185,44 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         await _database.Received(1).ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>());
     }
 
+    [Theory]
+    [InlineData("ERR unknown command 'PEXPIRETIME', with args beginning with: 'k'")]
+    [InlineData("NOPERM this user has no permissions to run the 'pexpiretime' command")]
+    public async Task ExpireTime_answers_from_the_TTL_and_stops_asking_when_a_v7_server_refuses_it(string error)
+    {
+        _version = new(7, 2, 4);
+        _database.KeyExpireTimeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, error));
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(15));
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_serializer.Serialize("v"));
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var first = await Sut.ExpireTimeAsync<string>(_cacheKey, token);
+        var second = await Sut.ExpireTimeAsync<string>(_cacheKey, token);
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: token);
+
+        first.Should().Be(_now.AddMinutes(15));
+        second.Should().Be(_now.AddMinutes(15));
+        entry.Value.Should().Be("v");
+        await _database.Received(1).KeyExpireTimeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task ExpireTime_does_not_latch_on_an_unrelated_server_error()
+    {
+        _version = new(7, 2, 4);
+        _database.KeyExpireTimeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "LOADING Redis is loading the dataset in memory"));
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.ExpireTimeAsync<string>(_cacheKey, token)).Should().BeNull();
+        (await Sut.ExpireTimeAsync<string>(_cacheKey, token)).Should().BeNull();
+
+        await _database.Received(2).KeyExpireTimeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+    }
+
     [Fact]
     public void Read_scripts_are_off_by_default() => new RedisCacheOptions().ReadScriptsEnabled.Should().BeFalse();
 

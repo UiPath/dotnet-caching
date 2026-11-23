@@ -59,10 +59,11 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var (_, writer) = Node("a", new DelayedWrites(Slow), background: true);
-        var (_, peer) = Node("b");
+        var (peerNode, peer) = Node("b");
         var key = Unique();
         (await writer.SetAsync(key, "old", Ct)).Should().BeTrue();
         (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "old")).Should().BeTrue();
+        await StreamsReady.AwaitSubscribedAsync(peerNode);
 
         (await writer.SetAsync(key, "new", Ct)).Should().BeTrue();
         var until = DateTime.UtcNow.AddSeconds(2);
@@ -236,6 +237,7 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         var cache = provider.GetRequiredService<Microsoft.Extensions.Caching.Distributed.IDistributedCache>();
 
         var started = DateTime.UtcNow;
@@ -303,6 +305,7 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         return (provider, provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis));
     }
 

@@ -28,6 +28,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task Entries_trimmed_during_an_outage_before_they_were_read_are_reported()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         await StartReadingAsync();
 
         await GoOfflineAsync();
@@ -42,6 +43,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task Entries_trimmed_between_two_polls_before_they_were_read_are_reported()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         await StartReadingAsync();
 
         // One script, so no poll lands between the adds and the trim.
@@ -56,6 +58,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task A_stream_trimmed_empty_is_reported_once_however_often_it_is_polled()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         Assert.SkipWhen(fixture.ServerVersion.Major < 7, "Counts entries with ENTRIESREAD and max-deleted-entry-id, which Redis 7.0 added.");
         await StartReadingAsync();
 
@@ -75,6 +78,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task A_new_groups_first_entries_are_not_a_gap()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         Assert.SkipWhen(fixture.ServerVersion.Major < 7, "Counts entries with ENTRIESREAD and max-deleted-entry-id, which Redis 7.0 added.");
         StartWriter();
 
@@ -90,7 +94,9 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task A_group_created_after_the_history_was_trimmed_away_reports_nothing_for_its_first_entries()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         Assert.SkipWhen(fixture.ServerVersion.Major < 7, "Counts entries with ENTRIESREAD and max-deleted-entry-id, which Redis 7.0 added.");
+        Assert.SkipUnless(fixture.ReportsEntriesRead, "A group made by another node has only the server's count, which this server does not keep.");
         await Db.StreamDeleteConsumerGroupAsync(_stream, _group);
         await AddAsync(5);
         await Db.StreamTrimAsync(_stream, maxLength: 0);
@@ -105,9 +111,29 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     }
 
     [Fact]
+    public async Task A_group_this_node_makes_after_the_history_was_trimmed_away_reports_nothing_for_its_first_entries()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
+        Assert.SkipWhen(fixture.ServerVersion.Major < 7, "Counts entries with ENTRIESREAD and max-deleted-entry-id, which Redis 7.0 added.");
+        await Db.StreamDeleteConsumerGroupAsync(_stream, _group);
+        await AddAsync(5);
+        await Db.StreamTrimAsync(_stream, maxLength: 0);
+
+        // The node makes the group itself, so it knows the count it made it with even where the server does not report it.
+        StartWriter();
+        (await EventuallyAsync(async () => Array.Exists(await Db.StreamGroupInfoAsync(_stream), g => g.Name == _group))).Should().BeTrue();
+        var first = await AddAsync(1);
+
+        (await EventuallyAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
+        Volatile.Read(ref _missed).Should().Be(0, "the entries trimmed before the group existed were never its to read");
+    }
+
+    [Fact]
     public async Task Entries_trimmed_before_a_new_group_first_read_are_reported()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         StartSubscribedOffline();
         await Db.ScriptEvaluateAsync(
             "for i = 1, 5 do redis.call('XADD', KEYS[1], '*', 'f', 'v') end redis.call('XTRIM', KEYS[1], 'MAXLEN', 2)",
@@ -121,6 +147,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task StackExchange_Redis_reads_a_new_groups_unknown_count_as_zero()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         await AddAsync(3);
         await Db.StreamCreateConsumerGroupAsync(_stream, "fresh", StreamPosition.NewMessages);
 
@@ -131,6 +158,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task Entries_kept_through_an_outage_are_replayed_without_a_report()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         Assert.SkipWhen(fixture.ServerVersion.Major < 7, "Counts entries with ENTRIESREAD and max-deleted-entry-id, which Redis 7.0 added.");
         await StartReadingAsync();
 
@@ -146,6 +174,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task Trimming_entries_already_read_is_not_reported()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         Assert.SkipWhen(fixture.ServerVersion.Major < 7, "Counts entries with ENTRIESREAD and max-deleted-entry-id, which Redis 7.0 added.");
         await StartReadingAsync();
         var last = await AddAsync(3);
@@ -164,6 +193,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task A_stream_removed_while_in_use_is_reported_once()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         await StartReadingAsync();
 
         await Db.KeyDeleteAsync(_stream);
@@ -177,6 +207,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task A_group_removed_while_in_use_is_reported_once()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         await StartReadingAsync();
 
         await Db.StreamDeleteConsumerGroupAsync(_stream, _group);
@@ -190,6 +221,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task A_topic_that_lost_entries_expires_what_it_keeps()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10], SourceUri = new Uri("urn:node") };
         var options = new RedisStreamsTopicOptions { Enabled = true, PollInterval = PollInterval };
         var stream = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("orders");
@@ -227,6 +259,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     public async Task The_first_entry_of_a_group_made_on_an_empty_stream_is_not_a_gap_before_Redis_7()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         Assert.SkipWhen(fixture.ServerVersion.Major >= 7, "Redis 7.0 records max-deleted-entry-id, so it never mistakes the first entry for a trim.");
         await Db.StreamDeleteConsumerGroupAsync(_stream, _group);
         StartWriter();
@@ -242,7 +275,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
 
     public async ValueTask InitializeAsync()
     {
-        if (!fixture.Enabled)
+        if (!fixture.Enabled || !fixture.StreamsUsable)
         {
             return;
         }

@@ -281,7 +281,7 @@ public class MigrateOnReadHashIntegrationTests(RedisContainerFixture fixture)
         var (hashKey, redisKey) = await SeedAsync(harness, raw, ("a", JsonX), ("b", JsonY));
         var stringKey = Unique();
         await harness.Cache().SetAsync(stringKey, "seed", policy: null, Ct);
-        var rawString = raw.GetServer(raw.GetEndPoints()[0]).Keys(pattern: $"*{stringKey}*").Single();
+        var rawString = RedisTestKeys.Keys(raw, $"*{stringKey}*").Single();
         await raw.GetDatabase().StringSetAsync(rawString, JsonX, TimeSpan.FromMinutes(5));
         var policy = harness.Resolve(MigrateOnReadHarness.Migrating);
         await harness.Cache().GetAsync<string>(stringKey, policy, Ct);
@@ -455,24 +455,24 @@ public class MigrateOnReadHashIntegrationTests(RedisContainerFixture fixture)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.SupportsAcl, "Needs ACL SETUSER, which this server does not allow.");
+        Assert.SkipUnless(fixture.ReportsAclLog, "Counts refusals from ACL LOG, whose entries this server does not report with count and reason fields.");
         await using var admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var server = admin.GetServer(admin.GetEndPoints()[0]);
         var user = $"it-hashscript-{Guid.NewGuid():N}";
-        await server.ExecuteAsync("ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
+        await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
         try
         {
             var connection = $"{fixture.ConnectionString},user={user},password=pw";
             var app = App();
             using var seeder = Build(FormatNegotiationMode.Force, app: app);
 
-            await server.ExecuteAsync("ACL", "LOG", "RESET");
+            await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "LOG", "RESET");
             using (var off = MigrateOnReadHarness.Build(connection, FormatNegotiationMode.Force, app, scripts: false))
             {
                 var (key, redisKey) = await SeedAsync(seeder, admin, ("a", JsonX));
                 await off.Hashes().GetAsync<string>(key, off.Resolve(MigrateOnReadHarness.Migrating), Ct);
                 await off.Migrator.WhenIdleAsync(Ct);
                 (await StoredAsync(admin, redisKey, "a")).Single().Should().Equal(FastX);
-                (await ScriptRefusalsAsync(server, user)).Should().Be(0, "scripts are off, so none is sent");
+                (await ScriptRefusalsAsync(admin, user)).Should().Be(0, "scripts are off, so none is sent");
             }
 
             using var on = MigrateOnReadHarness.Build(connection, FormatNegotiationMode.Force, app, scripts: true);
@@ -482,18 +482,18 @@ public class MigrateOnReadHashIntegrationTests(RedisContainerFixture fixture)
 
             await on.Hashes().GetAsync<string>(first, policy, Ct);
             await on.Migrator.WhenIdleAsync(Ct);
-            var refusals = await ScriptRefusalsAsync(server, user);
+            var refusals = await ScriptRefusalsAsync(admin, user);
             await on.Hashes().GetAsync<string>(second, policy, Ct);
             await on.Migrator.WhenIdleAsync(Ct);
 
             (await StoredAsync(admin, firstKey, "a")).Single().Should().Equal(FastX, "the call that was refused still rewrote, by transaction");
             (await StoredAsync(admin, secondKey, "a")).Single().Should().Equal(FastX);
             refusals.Should().BeGreaterThan(0);
-            (await ScriptRefusalsAsync(server, user)).Should().Be(refusals, "scripts stay off for this node once the server has refused one");
+            (await ScriptRefusalsAsync(admin, user)).Should().Be(refusals, "scripts stay off for this node once the server has refused one");
         }
         finally
         {
-            await server.ExecuteAsync("ACL", "DELUSER", user);
+            await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "DELUSER", user);
         }
     }
 
@@ -715,9 +715,9 @@ public class MigrateOnReadHashIntegrationTests(RedisContainerFixture fixture)
         }
     }
 
-    private static async Task<long> ScriptRefusalsAsync(IServer server, string user)
+    private static async Task<long> ScriptRefusalsAsync(IConnectionMultiplexer admin, string user)
     {
-        var log = (RedisResult[])(await server.ExecuteAsync("ACL", "LOG"))!;
+        var log = (await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "LOG")).SelectMany(reply => (RedisResult[])reply!).ToArray();
         long count = 0;
         foreach (var entry in log)
         {
@@ -741,7 +741,7 @@ public class MigrateOnReadHashIntegrationTests(RedisContainerFixture fixture)
     {
         var key = Unique();
         await harness.Hashes().SetAsync(key, new Dictionary<string, string?> { ["seed"] = "seed" }, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(5)), policy: null, Ct);
-        var redisKey = raw.GetServer(raw.GetEndPoints()[0]).Keys(pattern: $"*{key}*").Single();
+        var redisKey = RedisTestKeys.Keys(raw, $"*{key}*").Single();
         var db = raw.GetDatabase();
         await db.HashSetAsync(redisKey, [.. fields.Select(f => new HashEntry(f.Field, f.Value))]);
         await db.HashDeleteAsync(redisKey, "seed");

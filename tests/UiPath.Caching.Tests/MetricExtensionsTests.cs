@@ -40,6 +40,18 @@ public class MetricExtensionsTests
     }
 
     [Fact]
+    public void A_topic_metric_carries_the_Transport_tag_only_when_one_is_given()
+    {
+        var telemetry = new RecordingTelemetryProvider();
+
+        telemetry.TrackTopicWriteMetric("orders", "5-7", Metrics.TransportStreams);
+        telemetry.TrackTopicReadMetric("orders", "bad", Metrics.TransportPubSub);
+        telemetry.TrackTopicReadMetric("orders", "5-7");
+
+        telemetry.Metrics.Select(m => m.Properties!.GetValueOrDefault(Metrics.Transport)).Should().Equal(Metrics.TransportStreams, Metrics.TransportPubSub, null);
+    }
+
+    [Fact]
     public void TrackReadWriteTopicMetric()
     {
         var topic = _fixture.Create<string>();

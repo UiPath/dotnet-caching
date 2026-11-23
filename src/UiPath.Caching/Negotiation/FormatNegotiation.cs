@@ -64,8 +64,9 @@ internal sealed class FormatNegotiation
         var streams = cacheOptions.BroadcastEnabled
             ? services.GetServices<ITopicProvider>().OfType<RedisStreamsTopicProvider>().FirstOrDefault(p => p.Enabled)
             : null;
+        // The one selected, else the one Streams falls back to: it is registered but not selected, and its topics are the ones to count after a switch.
         var pubSub = cacheOptions.BroadcastEnabled
-            ? services.GetServices<ITopicProvider>().OfType<RedisPubSubTopicProvider>().FirstOrDefault(p => p.Enabled)
+            ? services.GetServices<ITopicProvider>().OfType<RedisPubSubTopicProvider>().FirstOrDefault(p => p.Enabled) ?? streams?.PubSubFallback as RedisPubSubTopicProvider
             : null;
         if (options.Mode == FormatNegotiationMode.Force && NegotiationPlan.ReadingNoJson(policies) is { Count: > 0 } readingNoJson)
         {
@@ -95,7 +96,7 @@ internal sealed class FormatNegotiation
             NodeList = new StreamNodeList(new RedisStreamGroupSource(connector), options),
             StreamKeys = streams is null ? null : streams.StreamKeys,
             PubSub = pubSub,
-            Subscribers = pubSub is null ? null : new PubSubNodeList(new RedisSubscriberSource(connector)),
+            Subscribers = pubSub is null ? null : new PubSubNodeList(new RedisSubscriberSource(connector, loggers.CreateLogger<RedisSubscriberSource>())),
             Options = options,
             Clock = clock,
             Logger = loggers.CreateLogger<FormatNegotiationService>(),

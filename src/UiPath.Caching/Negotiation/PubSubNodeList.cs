@@ -41,6 +41,16 @@ internal sealed class PubSubNodeList(ISubscriberSource source)
                 return SubscriberReading.Unknown with { Why = "no server is connected" };
             }
 
+            switch (await source.CheckCountsAsync(cancellationToken).ConfigureAwait(false))
+            {
+                case NumsubCheck.NotClientCounts:
+                    Reset();
+                    return SubscriberReading.Unknown with { Why = "the server's PUBSUB NUMSUB does not count clients (a proxy such as Azure Managed Redis)" };
+                case NumsubCheck.Inconclusive:
+                    Reset();
+                    return SubscriberReading.Unknown with { Why = "the server's PUBSUB NUMSUB could not be checked yet" };
+            }
+
             IReadOnlyList<string> asked = [.. channels];
             var replies = await Task.WhenAll(endpoints.Select(endpoint => source.CountAsync(endpoint, asked, cancellationToken))).ConfigureAwait(false);
             if (replies.Any(reply => reply is null))

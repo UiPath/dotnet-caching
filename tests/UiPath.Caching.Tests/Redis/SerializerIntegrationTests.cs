@@ -315,7 +315,7 @@ public class SerializerIntegrationTests(RedisContainerFixture fixture)
         (provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis), provider.GetRequiredService<ICachePolicyFactory>().Resolve(FastPolicy)!);
 
     private static RedisKey RawKey(ConnectionMultiplexer raw, string key) =>
-        raw.GetServer(raw.GetEndPoints()[0]).Keys(pattern: $"*{key}*").Single();
+        RedisTestKeys.Keys(raw, $"*{key}*").Single();
 
     private static async Task<byte[]?> RawValueAsync(ConnectionMultiplexer raw, string key) =>
         await raw.GetDatabase().StringGetAsync(RawKey(raw, key));

@@ -17,6 +17,7 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
     public async Task Entries_of_a_read_whose_answer_was_lost_are_dispatched_and_acknowledged()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
 
         RedisKey stream = $"it:pending:{Guid.NewGuid():N}";
         RedisValue group = "group";
@@ -84,6 +85,9 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
     public async Task Reads_of_a_subscribed_writer_run_the_script_only_on_Redis_7_and_later()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
+        Assert.SkipUnless(fixture.ReportsCommandStats, "Counts EVAL calls from INFO commandstats, which this server does not report at once per node.");
+        Assert.SkipUnless(fixture.ReportsCommandStats, "Counts EVAL calls from INFO commandstats, which this server does not report.");
 
         RedisKey stream = $"it:script:{Guid.NewGuid():N}";
         RedisValue group = "group";
@@ -149,6 +153,7 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
     public async Task An_entry_the_topic_publishes_reads_back_with_the_payload_by_name_and_the_source_beside_it()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
 
         using var connector = NewConnector();
         await connector.ConnectAsync(TestContext.Current.CancellationToken);
@@ -203,6 +208,7 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
     public async Task Own_entries_are_acknowledged_without_a_decode_and_the_others_dispatched(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         Assert.SkipWhen(scripts && fixture.ServerVersion.Major < 7, "The script read needs Redis 7.0.");
 
         RedisKey stream = $"it:own:{Guid.NewGuid():N}";
@@ -288,11 +294,7 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
 
     private static async Task<long> EvalCallsAsync(ConnectionMultiplexer admin)
     {
-        var server = admin.GetServer(admin.GetEndPoints()[0]);
-        var commands = (await server.InfoAsync("commandstats")).SelectMany(group => group);
-        return commands
-            .Where(pair => pair.Key.StartsWith("cmdstat_eval", StringComparison.Ordinal))
-            .Sum(pair => long.Parse(pair.Value.Split("calls=")[1].Split(',')[0], System.Globalization.CultureInfo.InvariantCulture));
+        return await RedisTestKeys.CommandCallsAsync(admin, "cmdstat_eval");
     }
 
     private RedisConnector NewConnector()

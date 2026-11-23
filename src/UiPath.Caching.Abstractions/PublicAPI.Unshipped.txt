@@ -151,3 +151,5 @@ UiPath.Caching.AddOutcome.NotSent = 1 -> UiPath.Caching.AddOutcome
 UiPath.Caching.AddOutcome.Unknown = 4 -> UiPath.Caching.AddOutcome
 UiPath.Caching.IMigrationCache.TryCreateAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.AddOutcome>
 UiPath.Caching.NullCache.TryCreateAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.AddOutcome>
+UiPath.Caching.Broadcast.ITopic<T>.Refused -> System.Action<System.Exception!>?
+UiPath.Caching.Broadcast.ITopic<T>.Transport.get -> string?

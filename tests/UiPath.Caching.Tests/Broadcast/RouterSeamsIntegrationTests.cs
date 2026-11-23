@@ -23,6 +23,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
     public async Task A_public_subscriber_on_another_node_is_told_events_were_missed_when_a_topic_is_invalidated(string transport)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipWhen(transport == KnownTopicNames.RedisStreams && !fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var publisherNode = Node("a", transport);
         var subscriberNode = Node("b", transport);
         var key = new TopicKey($"orders-{Guid.NewGuid():N}");
@@ -57,8 +58,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         state.IsSubscribed.Should().BeFalse("the subscription is made on the subscriber's first timer tick, 3 s away");
         (await UntilAsync(() => state.IsSubscribed)).Should().BeTrue();
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var subscribers = (RedisResult[])(await redis.GetDatabase().ExecuteAsync("PUBSUB", "NUMSUB", $"{_app}:ps:{topic.TopicKey}"))!;
-        ((long)subscribers[1]).Should().BeGreaterThan(0, "a subscribed topic is one the server would deliver to");
+        (await RedisTestKeys.SubscribersAsync(redis, $"{_app}:ps:{topic.TopicKey}")).Should().BeGreaterThan(0, "a subscribed topic is one the server would deliver to");
 
         topic.Dispose();
 
@@ -69,6 +69,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
     public async Task A_streams_topic_is_subscribed_once_its_group_exists_and_the_reader_runs_and_not_after_it_is_disposed()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var node = Node("a", KnownTopicNames.RedisStreams);
         var topic = Provider(node, KnownTopicNames.RedisStreams).Create(new TopicKey($"orders-{Guid.NewGuid():N}"));
         var state = State(topic);
@@ -93,7 +94,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
 
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var channels = (RedisResult[])(await redis.GetDatabase().ExecuteAsync("PUBSUB", "CHANNELS", "*"))!;
-        ((long)(await redis.GetDatabase().ExecuteAsync("PUBSUB", "NUMPAT"))).Should().BeGreaterThan(0);
+        (await RedisTestKeys.PatternsAsync(redis)).Should().BeGreaterThan(0);
         channels.Should().NotContain(channel => ((string?)channel)!.StartsWith($"{_app}:pattern:", StringComparison.Ordinal), "the subscription is a pattern, not a channel");
     }
 
@@ -101,6 +102,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
     public async Task A_streams_topic_stops_being_subscribed_when_its_group_is_lost_and_reads_fail_and_is_again_once_they_succeed()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var node = Node("a", KnownTopicNames.RedisStreams);
         var topic = Provider(node, KnownTopicNames.RedisStreams).Create(new TopicKey($"orders-{Guid.NewGuid():N}"));
         var state = State(topic);
@@ -127,6 +129,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
     public async Task A_stack_on_the_primary_connection_and_the_application_each_hear_every_event_of_one_topic_key()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         const string Stack = "Stack";
         var application = ApplicationWithStack("app", Stack);
         var publisherNode = Node("p", KnownTopicNames.RedisStreams);
@@ -214,7 +217,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
     private async Task<RedisKey> StreamKeyAsync(ConnectionMultiplexer redis)
     {
         var database = redis.GetDatabase();
-        foreach (var key in redis.GetServer(redis.GetEndPoints()[0]).Keys(pattern: $"*{_app}*"))
+        foreach (var key in RedisTestKeys.Keys(redis, $"*{_app}*"))
         {
             if (await database.KeyTypeAsync(key) == RedisType.Stream)
             {
@@ -250,7 +253,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var database = redis.GetDatabase();
         var groups = new List<StreamGroupInfo>();
-        foreach (var key in redis.GetServer(redis.GetEndPoints()[0]).Keys(pattern: $"*{_app}*"))
+        foreach (var key in RedisTestKeys.Keys(redis, $"*{_app}*"))
         {
             if (await database.KeyTypeAsync(key) == RedisType.Stream)
             {

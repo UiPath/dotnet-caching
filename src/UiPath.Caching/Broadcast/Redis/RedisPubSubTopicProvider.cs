@@ -4,7 +4,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast.Redis;
 
-public class RedisPubSubTopicProvider : RedisTopicProviderBase, IPubSubSubscriptions
+public class RedisPubSubTopicProvider : RedisTopicProviderBase, IPubSubSubscriptions, IPubSubFallback
 {
     private readonly RedisPubSubTopicOptions _options;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;

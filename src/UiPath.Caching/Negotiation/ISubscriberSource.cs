@@ -13,4 +13,10 @@ internal interface ISubscriberSource
 
     /// <summary>The server's <c>PUBSUB NUMSUB</c> for all the channels, in the order asked, and its <c>PUBSUB NUMPAT</c>; <see langword="null"/> when the server refuses either.</summary>
     Task<ServerCount?> CountAsync(EndPoint endpoint, IReadOnlyList<string> channels, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Whether this source's <c>PUBSUB NUMSUB</c> counts clients, checked before the first count is trusted. A source that has no doubt about it needs nothing
+    /// here.
+    /// </summary>
+    Task<NumsubCheck> CheckCountsAsync(CancellationToken cancellationToken) => Task.FromResult(NumsubCheck.Reliable);
 }

@@ -5,20 +5,20 @@ namespace UiPath.Caching;
 
 internal static class MetricExtensions
 {
-    internal static void TrackTopicWriteMetric(this ICachingTelemetryProvider cachingTelemetryProvider, RedisKey topic, RedisValue streamId)
+    internal static void TrackTopicWriteMetric(this ICachingTelemetryProvider cachingTelemetryProvider, RedisKey topic, RedisValue streamId, string? transport = null)
     {
         if (cachingTelemetryProvider.IsListening())
         {
             var topicName = topic.ToString();
-            TrackTopicMetric(cachingTelemetryProvider, topicName, Metrics.GetWriteTopicMetricName(topicName), streamId);
+            TrackTopicMetric(cachingTelemetryProvider, topicName, Metrics.GetWriteTopicMetricName(topicName), streamId, transport);
         }
     }
 
-    internal static void TrackTopicReadMetric(this ICachingTelemetryProvider cachingTelemetryProvider, string topicName, RedisValue streamId)
+    internal static void TrackTopicReadMetric(this ICachingTelemetryProvider cachingTelemetryProvider, string topicName, RedisValue streamId, string? transport = null)
     {
         if (cachingTelemetryProvider.IsListening())
         {
-            TrackTopicMetric(cachingTelemetryProvider, topicName, Metrics.GetReadTopicMetricName(topicName), streamId);
+            TrackTopicMetric(cachingTelemetryProvider, topicName, Metrics.GetReadTopicMetricName(topicName), streamId, transport);
         }
     }
 
@@ -51,7 +51,8 @@ internal static class MetricExtensions
         ICachingTelemetryProvider cachingTelemetryProvider,
         string topicName,
         string metricName,
-        RedisValue streamId)
+        RedisValue streamId,
+        string? transport)
     {
         var streamIdValue = streamId.GetStreamIdFromRedisValue();
         if (streamIdValue.Valid)
@@ -59,20 +60,18 @@ internal static class MetricExtensions
             cachingTelemetryProvider.TrackMetric(
                 metricName,
                 streamIdValue.Timestamp,
-                [
-                    new(Metrics.TopicName, topicName),
-                    new(Metrics.SequenceNumber, streamIdValue.Sequence.ToString(CultureInfo.InvariantCulture)),
-                ]);
+                transport is null
+                    ? [new(Metrics.TopicName, topicName), new(Metrics.SequenceNumber, streamIdValue.Sequence.ToString(CultureInfo.InvariantCulture))]
+                    : [new(Metrics.TopicName, topicName), new(Metrics.SequenceNumber, streamIdValue.Sequence.ToString(CultureInfo.InvariantCulture)), new(Metrics.Transport, transport)]);
         }
         else
         {
             cachingTelemetryProvider.TrackMetric(
                 metricName,
                 0,
-                [
-                    new(Metrics.TopicName, topicName),
-                    new(Metrics.SequenceNumber, Metrics.Invalid),
-                ]);
+                transport is null
+                    ? [new(Metrics.TopicName, topicName), new(Metrics.SequenceNumber, Metrics.Invalid)]
+                    : [new(Metrics.TopicName, topicName), new(Metrics.SequenceNumber, Metrics.Invalid), new(Metrics.Transport, transport)]);
         }
     }
 }

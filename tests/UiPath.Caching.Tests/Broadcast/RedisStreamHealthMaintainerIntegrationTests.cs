@@ -20,6 +20,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
     public async Task A_stream_is_discovered_through_the_per_primary_scan()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
 
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
         var streamKey = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("topic");
@@ -61,6 +62,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
     public async Task A_stream_under_the_connector_prefix_is_discovered_when_KeyPrefix_is_not_set(bool decorated, string prefixFormat)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
 
         // decorated hides the StackExchange.Redis wrapper from the reflection read, leaving only the probe.
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
@@ -103,6 +105,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
     public async Task Every_stream_is_discovered_through_a_connector_that_does_not_implement_GetPrimaries(bool decorated)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
 
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
         var keyStrategy = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions);
@@ -152,6 +155,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
     public async Task A_stream_in_a_non_default_database_is_discovered_through_a_connector_that_does_not_implement_GetPrimaries()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
 
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
         var streamKey = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("topic");
@@ -193,6 +197,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
     public async Task On_a_quiet_stream_a_caught_up_group_is_kept_and_a_group_behind_is_deleted()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
 
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
         var streamKey = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("topic");

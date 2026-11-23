@@ -183,6 +183,7 @@ flowchart LR
 | Set ("queue") caches — registration & settings | [docs/reference/settings.md#queue-caches-uipathcachingqueue](docs/reference/settings.md#queue-caches-uipathcachingqueue) |
 | Short copy-paste patterns | [docs/recipes/](docs/recipes/) |
 | Settings reference (every option, every default) | [docs/reference/settings.md](docs/reference/settings.md) |
+| Supported servers and managed services | [docs/reference/server-support.md](docs/reference/server-support.md) |
 | Public interface surface | [docs/reference/interfaces.md](docs/reference/interfaces.md) |
 | Glossary | [docs/reference/glossary.md](docs/reference/glossary.md) |
 | Sample app (Aspire AppHost) | [docs/sample-app.md](docs/sample-app.md) |
@@ -191,8 +192,7 @@ flowchart LR
 ## Requirements
 
 - **.NET** — 8.0 and 10.0.
-- **Redis** — 6.0+. Redis 7.0+ required for sharded Pub/Sub (`SPUBLISH`/`SSUBSCRIBE`) on the streams notify doorbell.
-- **Azure Managed Redis / Azure Cache for Redis** — supported, with key-based or Entra ID authentication (`UiPath.Caching.Azure`).
+- **Redis server**: Redis 6.2+, Valkey, Dragonfly, Garnet, Kvrocks, Azure Managed Redis, ElastiCache, MemoryDB, Memorystore and Redis Cloud. See [Server support](docs/reference/server-support.md).
 - **StackExchange.Redis** — pulled transitively; no direct dependency needed in consumers.
 
 ## License

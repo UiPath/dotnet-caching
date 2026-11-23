@@ -77,6 +77,32 @@ public class ConsumerGroupsTests
         await db.Received(1).StreamCreateConsumerGroupAsync("s", "g", StreamPosition.NewMessages);
     }
 
+    [Fact]
+    public async Task A_group_that_exists_is_found_whatever_text_follows_the_code()
+    {
+        var db = Substitute.For<IDatabase>();
+        db.ExecuteAsync("XGROUP", Arg.Any<object[]>())
+            .Returns(Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, TestErrors.ValkeyGroupExists)));
+        var head = new StreamHead(100_000, RepliedAt, Exists: true, "99000-3", 99_000, EntriesAdded: 5, Start: new ReadCount("99000-3", 5));
+
+        var act = () => ConsumerGroups.CreateAsync(db, "s", "g", StreamPosition.NewMessages, head);
+
+        await act.Should().ThrowAsync<RedisServerException>();
+        await db.DidNotReceiveWithAnyArgs().StreamCreateConsumerGroupAsync(default, default, default);
+    }
+
+    [Fact]
+    public async Task A_missing_stream_is_recognized_without_the_ERR_prefix()
+    {
+        var db = Substitute.For<IDatabase>();
+        db.StreamInfoAsync("s").Returns(Task.FromException<StreamInfo>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "no such key")));
+        db.ExecuteAsync("XGROUP", Arg.Any<object[]>()).Returns(RedisResult.Create((RedisValue)"OK"));
+
+        (await ConsumerGroups.CreateAsync(db, "s", "g", StreamPosition.NewMessages, head: null)).Should().BeTrue();
+
+        await db.Received(1).ExecuteAsync("XGROUP", Arg.Is<object[]>(a => a.Contains("0-0")));
+    }
+
     // The server read its clock at 100 000 ms, 1 s after the join.
     private static StreamHead Head(bool exists = true, long? lastMs = 0, long? added = 5) =>
         new(ServerMs: 100_000, RepliedAt, exists, lastMs is { } ms ? $"{ms}-0" : RedisValue.Null, lastMs, added, Start: null);

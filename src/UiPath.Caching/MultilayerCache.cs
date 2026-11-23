@@ -42,6 +42,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         _localMemorySetter = new LocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect)
         {
             Invalidations = _innerTier.Shared,
+            RepeatInvalidation = _repeats is { } repeats ? repeats.Schedule : null,
             PeerRefresh = _peerRefresher is { } refresher ? refresher.TryEnqueue : null,
             PeerRefreshChanged = _peerRefresher is { } changed ? changed.TokenChanged : null,
             // A keep that lands while a peer's event is dispatched is heard by the entry's token, not by the store.

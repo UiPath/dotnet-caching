@@ -374,7 +374,11 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _database.Configure().StreamInfoAsync(_context.Topic).ReturnsForAnyArgs(Task.FromException<StreamInfo>(error.StartsWith("ERR", StringComparison.Ordinal) ? UnknownCommandError(error) : new RedisServerException(RedisErrorKind.None, CommandFlags.None, error)));
         var redis = _fixture.Create<IRedisConnector>();
         redis.Database.Returns(_database);
+        // Below 7.0 the check is sent behind the read, whatever version an unset connector would draw.
+        redis.Version.Returns(Version.Parse("6.2.0"));
         var missed = 0;
+        // Only a signal wakes the reader, so each read below is one the test asked for and none races the recovery it raises.
+        using var waiter = new SignalingFetchWaiter(TimeSpan.FromSeconds(30));
 
         using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
             _context,
@@ -385,17 +389,26 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             _logger,
             _fixture.Create<ICachingTelemetryProvider>(),
             _fixture.Create<IRedisProfiler>(),
-            new SignalingFetchWaiter(_pollInterval),
+            waiter,
             () => Interlocked.Increment(ref missed),
             _cancellationTokenSource.Token);
 
         (await WaitUntil(() => Volatile.Read(ref reads) > 0)).Should().BeTrue();
-        redis.OnConnectionRestored += Raise.Event<EventHandler>(redis, EventArgs.Empty);
+        sut.MarkSubscribed();
+        waiter.Signal();
         (await WaitUntil(() => Volatile.Read(ref missed) == 1)).Should().BeTrue("a loss cannot be ruled out without XINFO");
-        var readsAfterLoss = Volatile.Read(ref reads);
 
-        (await WaitUntil(() => Volatile.Read(ref reads) > readsAfterLoss + 2)).Should().BeTrue("the denied check must not stop consumption");
-        Volatile.Read(ref missed).Should().Be(1);
+        redis.OnConnectionRestored += Raise.Event<EventHandler>(redis, EventArgs.Empty);
+        (await WaitUntil(() => Volatile.Read(ref missed) == 2)).Should().BeTrue("a reconnect reports a loss again, as the check is denied again");
+
+        var readsAfterLoss = Volatile.Read(ref reads);
+        for (var next = 1; next <= 3; next++)
+        {
+            waiter.Signal();
+            (await WaitUntil(() => Volatile.Read(ref reads) >= readsAfterLoss + next)).Should().BeTrue("the denied check must not stop consumption");
+        }
+
+        Volatile.Read(ref missed).Should().Be(2, "reads with no reconnect before them do not report a loss");
     }
 
     [Fact]
@@ -712,7 +725,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .ReturnsForAnyArgs(StreamReads.NewOnly(_ => Interlocked.Increment(ref reads) == 1 ? firstRead.Task : Task.FromResult(Array.Empty<StreamEntry>())));
         _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>())
             .ReturnsForAnyArgs(_ => survived
-                ? Task.FromException<bool>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, StreamConstants.ConsumerGroupNameExistsErrorMessage))
+                ? Task.FromException<bool>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, TestErrors.ValkeyGroupExists))
                 : Task.FromResult(true));
 
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
@@ -889,7 +902,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _database.ExecuteAsync("XGROUP", Arg.Any<object[]>())
             .Returns(_ => Interlocked.Increment(ref creates) == 1
                 ? Task.FromException<RedisResult>(new RedisTimeoutException(CommandFlags.None, "Timeout performing XGROUP", CommandStatus.Sent))
-                : Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, StreamConstants.ConsumerGroupNameExistsErrorMessage)));
+                : Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, TestErrors.ConsumerGroupNameExists)));
         SkippedEntries(skipped);
 
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
@@ -2507,7 +2520,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _database.ExecuteAsync("XGROUP", Arg.Any<object[]>())
             .ReturnsForAnyArgs(_ => Interlocked.Increment(ref created) == 1
                 ? Task.FromException<RedisResult>(Timeout())
-                : Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, StreamConstants.ConsumerGroupNameExistsErrorMessage)));
+                : Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, TestErrors.ConsumerGroupNameExists)));
         var newReadLimit = retryFindsIt ? 2 : 1;
         NoAckRead(call => call.ArgAt<RedisValue?>(3).ToString() == ">" && Interlocked.Increment(ref newReads) <= newReadLimit
             ? throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOGROUP No such key or consumer group")

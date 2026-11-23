@@ -119,7 +119,7 @@ public sealed class MigrationCacheRedisIntegrationTests(RedisContainerFixture fi
     private RedisKey Find(string key)
     {
         _ = Raw;
-        return _raw!.GetServer(_raw.GetEndPoints()[0]).Keys(pattern: $"*{key}*").Single();
+        return RedisTestKeys.Keys(_raw!, $"*{key}*").Single();
     }
 
     private ICache Open(string? connection = null, bool removeUnreadable = true)

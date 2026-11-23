@@ -182,6 +182,7 @@ public sealed class ManyKeysIntegrationTests(RedisContainerFixture fixture) : ID
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        StreamsReady.Await(provider);
         return (provider, provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis));
     }
 

@@ -49,6 +49,18 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     }
 
     [Fact]
+    public async Task A_server_that_refuses_Streams_is_left_alone()
+    {
+        Sut.Initialize();
+        BroadcastCapability.For(_redisConnector).Refused(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR unknown command 'XGROUP'"));
+
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceive().LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>());
+        await _primary.DidNotReceive().ExecuteAsync(Arg.Any<int?>(), Arg.Any<string>(), Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
     public async Task Works_as_expected_when_no_lock()
     {
         Sut.Initialize();
@@ -242,6 +254,35 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         await _database.Received().StreamTrimByMinIdAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<StreamTrimMode>(), CommandFlags.DemandMaster);
     }
 
+
+    [Theory]
+    [InlineData("ERR syntax error")]
+    [InlineData("ERR unknown command 'XTRIM'")]
+    [InlineData("NOPERM this user has no permissions to run the 'xtrim' command")]
+    public async Task A_refused_trim_by_min_id_is_not_sent_again(string error)
+    {
+        PrepareTrim();
+        _database.StreamTrimByMinIdAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<StreamTrimMode>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, error));
+
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received(1).StreamTrimByMinIdAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<StreamTrimMode>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task An_unrelated_error_from_trim_by_min_id_does_not_latch()
+    {
+        PrepareTrim();
+        _database.StreamTrimByMinIdAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<StreamTrimMode>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "LOADING Redis is loading the dataset in memory"));
+
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received(2).StreamTrimByMinIdAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<StreamTrimMode>(), Arg.Any<CommandFlags>());
+    }
 
     [Fact]
     public async Task OnException()
@@ -689,6 +730,14 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     }
 
 #pragma warning disable CS0618 // Deprecated but still honored, and the key shape it selects is what these tests cover.
+    private void PrepareTrim()
+    {
+        _streamGroupInfos = [GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 1)];
+        _streamConsumerInfos = [GenerateConsumerInfo()];
+        _redisConnector.Version.Returns(Version.Parse("7.2.4"));
+        Sut.Initialize();
+    }
+
     private void ShardKeyEnabled(bool enabled) => _cacheOptions.ShardKeyEnabled = enabled;
 #pragma warning restore CS0618
 

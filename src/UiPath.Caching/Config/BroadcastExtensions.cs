@@ -1,4 +1,6 @@
 ﻿using UiPath.Caching.Broadcast.Redis;
+using UiPath.Caching.Policies;
+using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Config;
 
@@ -41,7 +43,8 @@ public static class BroadcastExtensions
         EnsureRegistry<RedisPubSubTopicOptions>(builder, sectionName);
         if (builder.Enabled && options.Enabled)
         {
-            builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ITopicProvider, RedisPubSubTopicProvider>());
+            AddRedisPubSubProvider(builder.Services);
+            builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ITopicProvider, RedisPubSubTopicProvider>(static services => services.GetRequiredService<RedisPubSubTopicProvider>()));
         }
 
         return builder;
@@ -63,7 +66,29 @@ public static class BroadcastExtensions
         {
             RedisStreamsTopicOptionsValidator.ThrowIfInvalid(options);
             builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<RedisStreamsTopicOptions>, RedisStreamsTopicOptionsValidator>());
-            builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ITopicProvider, RedisStreamsTopicProvider>());
+            if (options.StreamsUnsupported == StreamsUnsupportedAction.PubSub)
+            {
+                AddRedisPubSubStandby(builder);
+            }
+
+            // One instance behind both registrations, made through the internal constructor that takes the fallback.
+            builder.Services.TryAddSingleton(static services => new RedisStreamsTopicProvider(
+                services.GetRequiredService<IOptions<RedisStreamsTopicOptions>>(),
+                services.GetRequiredService<IOptions<CacheOptions>>(),
+                services.GetRequiredService<PerTopicOptionsRegistry<RedisStreamsTopicOptions>>(),
+                services.GetRequiredService<IRedisConnector>(),
+                services.GetRequiredService<IEventFormatterProxy<ICacheEvent>>(),
+                services.GetRequiredService<IResiliencePipelineProvider>(),
+                services.GetRequiredService<ILoggerFactory>(),
+                services.GetRequiredService<ICachingTelemetryProvider>(),
+                services.GetRequiredService<IRedisProfiler>(),
+                services.GetService<RedisPubSubTopicProvider>()));
+            builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ITopicProvider, RedisStreamsTopicProvider>(static services => services.GetRequiredService<RedisStreamsTopicProvider>()));
+            if (options.StreamsUnsupported == StreamsUnsupportedAction.Fail)
+            {
+                builder.Services.AddHostedService<StreamsSupportGate>();
+            }
+
             if (options.MaintainerEnabled)
             {
                 builder.Services.AddHostedService<RedisStreamHealthMaintainer>();
@@ -89,6 +114,30 @@ public static class BroadcastExtensions
             .Configure(topicName, configure);
         return builder;
     }
+
+    private static void AddRedisPubSubProvider(IServiceCollection services) => services.TryAddSingleton<RedisPubSubTopicProvider>();
+
+    // Claims nothing at registration, so AddRedisPubSub may come before or after: the provider is made on first use, from the options and registry the app registered
+    // for Pub/Sub, else from the default section. Its Enabled is whatever those say, and only AddRedisPubSub puts it among the providers TopicFactory chooses from.
+    private static void AddRedisPubSubStandby(ICachingBuilder builder) =>
+        builder.Services.TryAddSingleton(services =>
+        {
+            var configured = services.GetServices<IConfigureOptions<RedisPubSubTopicOptions>>().Any();
+            var section = builder.Configuration.GetSection(RedisPubSubSectionName);
+            var options = configured ? services.GetRequiredService<IOptions<RedisPubSubTopicOptions>>() : Options.Create(section.Get<RedisPubSubTopicOptions>() ?? new());
+            var registry = (configured ? services.GetService<PerTopicOptionsRegistry<RedisPubSubTopicOptions>>() : null)
+                ?? new PerTopicOptionsRegistry<RedisPubSubTopicOptions>(builder.Configuration.GetSection($"{RedisPubSubSectionName}:Topics"));
+            return new RedisPubSubTopicProvider(
+                options,
+                services.GetRequiredService<IOptions<CacheOptions>>(),
+                registry,
+                services.GetRequiredService<IRedisConnector>(),
+                services.GetRequiredService<IEventFormatterProxy<ICacheEvent>>(),
+                services.GetRequiredService<IResiliencePipelineProvider>(),
+                services.GetRequiredService<ICachingTelemetryProvider>(),
+                services.GetRequiredService<IRedisProfiler>(),
+                services.GetRequiredService<ILoggerFactory>());
+        });
 
     private static void EnsureRegistry<TOptions>(ICachingBuilder builder, string sectionName)
         where TOptions : class

@@ -95,6 +95,7 @@ internal sealed class MigrateOnReadHarness : IDisposable
                 o.Policies[Unset] = Policy("fast", ["json", "fast", "other"], migrate: null);
             });
         var harness = new MigrateOnReadHarness(services.BuildServiceProvider(), telemetry, negotiator, fast);
+        StreamsReady.Await(harness.Services);
         return harness;
     }
 

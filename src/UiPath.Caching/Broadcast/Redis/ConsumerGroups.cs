@@ -35,7 +35,7 @@ internal static class ConsumerGroups
                     await database.ExecuteAsync("XGROUP", Arguments(stream, group, start)).ConfigureAwait(false);
                     return true;
                 }
-                catch (RedisServerException ex) when (ex.Message != StreamConstants.ConsumerGroupNameExistsErrorMessage)
+                catch (RedisServerException ex) when (!RedisUtils.IsGroupExists(ex))
                 {
                     // Created without a count below.
                 }
@@ -132,7 +132,7 @@ internal static class ConsumerGroups
 
     // Nothing comes before 0-0, whoever creates the stream first; XINFO denied leaves the count unknown.
     private static ReadCount? Missing(RedisServerException ex) =>
-        ex.Message.StartsWith("ERR no such key", StringComparison.OrdinalIgnoreCase) ? new ReadCount("0-0", 0) : null;
+        ex.Message.Contains("no such key", StringComparison.OrdinalIgnoreCase) ? new ReadCount("0-0", 0) : null;
 
     private static object[] Arguments(RedisKey stream, RedisValue group, ReadCount start) =>
         ["CREATE", stream, group, start.LastDelivered, "MKSTREAM", "ENTRIESREAD", start.EntriesRead];

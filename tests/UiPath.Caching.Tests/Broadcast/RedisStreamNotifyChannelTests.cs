@@ -38,6 +38,71 @@ public class RedisStreamNotifyChannelTests
     }
 
     [Fact]
+    public async Task Using_another_channel_unsubscribes_the_old_one_and_subscribes_the_new()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var sharded = RedisChannel.Sharded("notify{1}");
+        var literal = RedisChannel.Literal("notify:1");
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var subscriber = _fixture.Freeze<ISubscriber>();
+        var multiplexer = _fixture.Freeze<IConnectionMultiplexer>();
+        multiplexer.TimeoutMilliseconds.Returns(5000);
+        subscriber.Multiplexer.Returns(multiplexer);
+        redis.Subscriber.Returns(subscriber);
+        var subscribedLiteral = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var subscribedSharded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        subscriber.When(s => s.SubscribeAsync(sharded, Arg.Any<Action<RedisChannel, RedisValue>>())).Do(_ => subscribedSharded.TrySetResult());
+        subscriber.When(s => s.SubscribeAsync(literal, Arg.Any<Action<RedisChannel, RedisValue>>())).Do(_ => subscribedLiteral.TrySetResult());
+
+        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new RedisStreamNotifyChannel(sharded, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self");
+        await subscribedSharded.Task.WaitAsync(30.Seconds(), token);
+        await Task.Delay(100.Milliseconds(), token);
+
+        sut.UseChannel(literal);
+
+        await subscribedLiteral.Task.WaitAsync(30.Seconds(), token);
+        subscriber.Received(1).Unsubscribe(sharded, Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_refusal_the_owner_handles_does_not_deny_the_subscription()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var sharded = RedisChannel.Sharded("notify{1}");
+        var literal = RedisChannel.Literal("notify:1");
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var subscriber = _fixture.Freeze<ISubscriber>();
+        var multiplexer = _fixture.Freeze<IConnectionMultiplexer>();
+        multiplexer.TimeoutMilliseconds.Returns(5000);
+        subscriber.Multiplexer.Returns(multiplexer);
+        redis.Subscriber.Returns(subscriber);
+        subscriber.SubscribeAsync(sharded, Arg.Any<Action<RedisChannel, RedisValue>>())
+            .Returns(Task.FromException(StreamsFakes.UnknownCommand()));
+        var subscribedLiteral = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        subscriber.When(s => s.SubscribeAsync(literal, Arg.Any<Action<RedisChannel, RedisValue>>())).Do(_ => subscribedLiteral.TrySetResult());
+
+        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        RedisStreamNotifyChannel? sut = null;
+        sut = new RedisStreamNotifyChannel(sharded, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", _ =>
+        {
+            sut!.UseChannel(literal);
+            return true;
+        });
+        using var owned = sut;
+
+        await subscribedLiteral.Task.WaitAsync(30.Seconds(), token);
+        // Live a moment after the subscribe call returns.
+        var until = DateTime.UtcNow + 10.Seconds();
+        while (!waiter.NotifyLive && DateTime.UtcNow < until)
+        {
+            await Task.Delay(10, token);
+        }
+
+        waiter.NotifyLive.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task A_doorbell_rung_by_this_node_does_not_signal_the_waiter()
     {
         var token = TestContext.Current.CancellationToken;
