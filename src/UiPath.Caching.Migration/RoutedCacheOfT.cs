@@ -4,14 +4,13 @@ using UiPath.Caching.Broadcast;
 
 namespace UiPath.Caching.Migration;
 
-internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDisposable
+internal sealed partial class RoutedCache<T> : IRouterParticipant, IRouterClear, ICache<T>, IDisposable
     where T : class
 {
     /// <summary>A command that changed nothing (a create that found the key held): neither retried on the other client nor settled.</summary>
     private const WriteOutcome Unchanged = (WriteOutcome)(-1);
 
     private static readonly Route ClearRoute = new(RoutePath.Source, Route.Flag);
-
     /// <summary>What the local tier holds for a cached null, which it cannot hold itself.</summary>
     private static readonly object NullMarker = new();
 
@@ -76,51 +75,11 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
     internal PendingMutations Pending => _pending;
 
-    public async ValueTask<T?> GetOrAddAsync(string key, Func<CancellationToken, Task<T?>> factory, CacheExpiry expiry = default, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        ArgumentNullException.ThrowIfNull(factory);
-        using var admission = Admit(out var route);
-        var local = new LocalKey(_registration.Name, key);
-        if (TryLocal(local, route, out var hit))
-        {
-            return hit;
-        }
+    /// <summary>The library stores a null as a value, so a null write stores it, and a null create or fill is allowed.</summary>
+    internal bool CacheNullValues { get; set; }
 
-        while (true)
-        {
-            var load = new TaskCompletionSource<T?>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var mine = new Flight(load.Task, cancellationToken);
-            var flight = _flights.GetOrAdd(key, mine);
-            if (!ReferenceEquals(flight, mine))
-            {
-                try
-                {
-                    return await flight.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && flight.LeaderToken.IsCancellationRequested)
-                {
-                    // The caller that ran the load was cancelled and this one is not, so it loads for itself.
-                    continue;
-                }
-            }
-
-            try
-            {
-                var value = await LoadAsync(key, local, route, factory, expiry, cancellationToken).ConfigureAwait(false);
-                _flights.TryRemove(new KeyValuePair<string, Flight>(key, mine));
-                load.SetResult(value);
-                return value;
-            }
-            catch (Exception ex)
-            {
-                _flights.TryRemove(new KeyValuePair<string, Flight>(key, mine));
-                load.SetException(ex);
-                _ = load.Task.Exception;
-                throw;
-            }
-        }
-    }
+    public ValueTask<T?> GetOrAddAsync(string key, Func<CancellationToken, Task<T?>> factory, CacheExpiry expiry = default, CancellationToken cancellationToken = default) =>
+        GetOrAddCoreAsync(key, factory, InvokeFactory, null, expiry, cancellationToken);
 
     public async ValueTask<T?> TryGetAsync(string key, CancellationToken cancellationToken = default)
     {
@@ -147,11 +106,11 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(value);
         using var admission = Admit(out var route);
-        return await WriteAsync(key, value, expiry, route, null, cancellationToken).ConfigureAwait(false);
+        return await WriteAsync(key, value, expiry, route, null, asFill: false, fill: null, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Added settles like a write; an entry already there changes nothing, so nothing is evicted or announced. A deadline already passed creates nothing.</summary>
-    public async ValueTask<AddOutcome> TryAddAsync(string key, T value, CacheExpiry expiry = default, CancellationToken cancellationToken = default)
+    public async ValueTask<AddOutcome> TryCreateAsync(string key, T value, CacheExpiry expiry = default, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -168,7 +127,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             route,
             async (client, token) =>
             {
-                var result = await client.TryAddAsync(key, value, deadline, token).ConfigureAwait(false);
+                var result = await client.TryCreateAsync(key, value, deadline, token).ConfigureAwait(false);
 
                 // A source that answers anything else (Failed, or a value outside the enum) is settled and reported as unknown.
                 reported = result.Outcome is AddOutcome.Added or AddOutcome.Exists or AddOutcome.NotSent ? result.Outcome : AddOutcome.Unknown;
@@ -182,6 +141,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             },
             deadline ?? DateTimeOffset.MaxValue,
             null,
+            fill: null,
             cancellationToken).ConfigureAwait(false);
         return outcome == WriteOutcome.NotSent ? AddOutcome.NotSent : reported;
     }
@@ -190,11 +150,16 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         using var admission = Admit(out var route);
-        return await MutateAsync(key, route, (client, token) => client.RemoveAsync(key, token), null, null, cancellationToken).ConfigureAwait(false);
+        return await MutateAsync(key, route, (client, token) => client.RemoveAsync(key, token), null, null, fill: null, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask ClearAsync(CancellationToken cancellationToken = default)
     {
+        if (_library.Moving)
+        {
+            throw new NotSupportedException($"Cache '{_registration.Name}' cannot be cleared by the router while its group's keys move: the move has its own clear, which closes the cache's gate on both sides.");
+        }
+
         using var admission = _core.Admit();
         cancellationToken.ThrowIfCancellationRequested();
         ClearLocal();
@@ -273,7 +238,8 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
     private IPathClient<T> LibraryClient(LibraryParts library)
     {
-        var plain = new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin, WritePolicy(), ReadPolicy()) { CacheNulls = _registration.CacheNulls };
+        CacheNullValues = library.CacheNullValues;
+        var plain = new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin, WritePolicy(), ReadPolicy()) { CacheNulls = _registration.CacheNulls, Cache = library.Cache };
         if (library.KeyMove is not { } plane || _registration.KeyMove is not { } binding)
         {
             return plain;
@@ -342,7 +308,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         return false;
     }
 
-    private async Task<T?> LoadAsync(string key, LocalKey local, Route route, Func<CancellationToken, Task<T?>> factory, CacheExpiry expiry, CancellationToken cancellationToken)
+    private async Task<T?> LoadAsync(string key, LocalKey local, Route route, Func<CancellationToken, Task<T?>> factory, CacheExpiry expiry, Func<CacheExpiry>? lateExpiry, CancellationToken cancellationToken)
     {
         var state = _keys.Acquire(key);
         try
@@ -363,13 +329,11 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             if (value is not null)
             {
                 var box = _library.KeepsStoredOnFill ? new FillBox<T>() : null;
-                await WriteAsync(key, value, expiry, existing.Write, current => current.Generation == generation && _epoch.Value == mark.Epoch, cancellationToken, asFill: true, box).ConfigureAwait(false);
+                await WriteAsync(key, value, lateExpiry?.Invoke() ?? expiry, existing.Write, current => current.Generation == generation && _epoch.Value == mark.Epoch, asFill: true, box, cancellationToken).ConfigureAwait(false);
 
-                // A fill that lost leaves the stored value, which is the one the call returns, kept under the mark it started with.
-                if (box?.Stored is { } stored)
+                if (TryKeepFillWinner(local, mark, box, out var winner))
                 {
-                    KeepStored(local, mark, stored, box.StoredExpiration);
-                    return stored;
+                    return winner;
                 }
             }
 
@@ -379,6 +343,25 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         {
             _keys.Release(key, state);
         }
+    }
+
+    private bool TryKeepFillWinner(LocalKey local, FillMark mark, FillBox<T>? fill, out T? winner)
+    {
+        winner = null;
+        if (fill is not { Lost: true })
+        {
+            return false;
+        }
+
+        if (fill.Stored is not { } stored)
+        {
+            return fill.CachedNull;
+        }
+
+        // Keep the winner only under the original fill mark.
+        KeepStored(local, mark, stored, fill.StoredExpiration);
+        winner = stored;
+        return true;
     }
 
     /// <summary>A hit, filled into the local tier; null for a miss. Throws when the call has no answer and must not run the factory.</summary>
@@ -488,7 +471,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         }
     }
 
-    private ValueTask<WriteOutcome> WriteAsync(string key, T value, CacheExpiry expiry, Route route, Func<KeyState, bool>? validate, CancellationToken cancellationToken, bool asFill = false, FillBox<T>? fill = null)
+    private ValueTask<WriteOutcome> WriteAsync(string key, T value, CacheExpiry expiry, Route route, Func<KeyState, bool>? validate, bool asFill, FillBox<T>? fill, CancellationToken cancellationToken)
     {
         var deadline = Deadline(expiry);
         if (deadline is { } at && at <= _core.Clock.GetUtcNow())
@@ -500,36 +483,36 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             }
 
             // A deadline already passed is a delete, as the older client ends up doing.
-            return MutateAsync(key, route, (client, token) => client.RemoveAsync(key, token), null, validate, cancellationToken);
+            return MutateAsync(key, route, (client, token) => client.RemoveAsync(key, token), null, validate, fill: null, cancellationToken);
         }
 
         if (asFill)
         {
-            return MutateAsync(key, route, (client, token) => client.FillAsync(key, value, deadline, fill, token), deadline ?? DateTimeOffset.MaxValue, validate, cancellationToken);
+            return MutateAsync(key, route, (client, token) => client.FillAsync(key, value, deadline, fill, token), deadline ?? DateTimeOffset.MaxValue, validate, fill, cancellationToken);
         }
 
-        return MutateAsync(key, route, (client, token) => client.SetAsync(key, value, deadline, token), deadline ?? DateTimeOffset.MaxValue, validate, cancellationToken);
+        return MutateAsync(key, route, (client, token) => client.SetAsync(key, value, deadline, token), deadline ?? DateTimeOffset.MaxValue, validate, fill: null, cancellationToken);
     }
 
     private DateTimeOffset? Deadline(CacheExpiry expiry)
     {
         if (expiry.Deadline is { } absolute)
         {
-            return absolute;
+            return absolute == DateTimeOffset.MaxValue ? null : absolute;
         }
 
         var deadline = _core.Clock.ToDateTimeOffset(expiry.Relative ?? _registration.DefaultExpiry);
         return deadline == DateTimeOffset.MaxValue ? null : deadline;
     }
 
-    private async ValueTask<WriteOutcome> MutateAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, DateTimeOffset? setDeadline, Func<KeyState, bool>? validate, CancellationToken cancellationToken)
+    private async ValueTask<WriteOutcome> MutateAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, DateTimeOffset? setDeadline, Func<KeyState, bool>? validate, FillBox<T>? fill, CancellationToken cancellationToken)
     {
         // Before anything is sent: nothing to settle.
         cancellationToken.ThrowIfCancellationRequested();
         var announcement = new Announcement();
         try
         {
-            return await MutateLockedAsync(key, route, command, validate, announcement, cancellationToken).ConfigureAwait(false);
+            return await MutateLockedAsync(key, route, command, validate, announcement, fill, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -552,7 +535,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         }
     }
 
-    private async ValueTask<WriteOutcome> MutateLockedAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, Func<KeyState, bool>? validate, Announcement announcement, CancellationToken cancellationToken)
+    private async ValueTask<WriteOutcome> MutateLockedAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, Func<KeyState, bool>? validate, Announcement announcement, FillBox<T>? fill, CancellationToken cancellationToken)
     {
         await _fence.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -565,7 +548,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
                 {
                     return validate is not null && !validate(state)
                         ? WriteOutcome.NotSent
-                        : await SendAsync(key, route, command, state, announcement, cancellationToken).ConfigureAwait(false);
+                        : await SendAsync(key, route, command, state, announcement, fill, cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -583,11 +566,13 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         }
     }
 
-    private async ValueTask<WriteOutcome> SendAsync(string key, Route captured, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, KeyState state, Announcement announcement, CancellationToken cancellationToken)
+    private async ValueTask<WriteOutcome> SendAsync(string key, Route captured, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, KeyState state, Announcement announcement, FillBox<T>? fill, CancellationToken cancellationToken)
     {
         var route = _core.Revalidate(_pin, captured);
         var result = await CommandAsync(Client(route), key, route, command, state, announcement, cancellationToken).ConfigureAwait(false);
-        if (result.Outcome == WriteOutcome.NotSent && !route.Bypass && !route.NoFallback && !Client(route).NoFallback && MayFallBack(route))
+
+        // A fill that lost to a stored value was sent and answered: the other client must not write over the winner.
+        if (result.Outcome == WriteOutcome.NotSent && !route.Bypass && !route.NoFallback && !Client(route).NoFallback && fill?.Lost != true && MayFallBack(route))
         {
             // A token cancelled before the library sent anything must not reach the other client: that command would be sent already cancelled.
             cancellationToken.ThrowIfCancellationRequested();

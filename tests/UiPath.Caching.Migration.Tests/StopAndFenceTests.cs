@@ -288,7 +288,7 @@ public sealed class StopAndFenceTests : RouterTestBase
         var leader = node.Cache.GetOrAddAsync("k", Factory, default, Ct).AsTask();
         await entered.Task;
         await node.Cache.SetAsync(neighbour, new Item("neighbour"), default, Ct);
-        await sibling.Cache.SetAsync("k", new Item("sibling"), default, Ct);
+        await sibling.Cache.SetAsync(neighbour, new Item("sibling"), default, Ct);
         gate.SetResult();
         await leader;
 

@@ -37,7 +37,7 @@ internal sealed class SourcePathClient<T>(ISourceCache<T> source, bool cacheNull
         }
     }
 
-    public async ValueTask<AddResult> TryAddAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken)
+    public async ValueTask<AddResult> TryCreateAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken)
     {
         try
         {
@@ -48,6 +48,9 @@ internal sealed class SourcePathClient<T>(ISourceCache<T> source, bool cacheNull
             return AddOutcome.Unknown;
         }
     }
+
+    /// <summary>The source has no conditional write, so its fill is its set; no surface member of the cache reaches it (a fill by the library's contract is refused while the source serves).</summary>
+    public ValueTask<WriteResult> FillAsync(string key, T value, DateTimeOffset? deadline, FillBox<T>? stored, CancellationToken cancellationToken) => SetAsync(key, value, deadline, cancellationToken);
 
     public async ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken)
     {

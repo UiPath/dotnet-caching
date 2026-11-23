@@ -8,14 +8,9 @@ UiPath.Caching.Migration.CacheUnavailableException
 UiPath.Caching.Migration.CacheUnavailableException.CacheUnavailableException() -> void
 UiPath.Caching.Migration.CacheUnavailableException.CacheUnavailableException(string! message) -> void
 UiPath.Caching.Migration.CacheUnavailableException.CacheUnavailableException(string! message, System.Exception! innerException) -> void
-UiPath.Caching.Migration.IRoutedCache<T>
-UiPath.Caching.Migration.IRoutedCache<T>.ClearAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
-UiPath.Caching.Migration.IRoutedCache<T>.GetOrAddAsync(string! key, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! factory, UiPath.Caching.Migration.CacheExpiry expiry = default(UiPath.Caching.Migration.CacheExpiry), System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
-UiPath.Caching.Migration.IRoutedCache<T>.RemoveAsync(string! key, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.WriteOutcome>
-UiPath.Caching.Migration.IRoutedCache<T>.SetAsync(string! key, T! value, UiPath.Caching.Migration.CacheExpiry expiry = default(UiPath.Caching.Migration.CacheExpiry), System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.WriteOutcome>
-UiPath.Caching.Migration.IRoutedCache<T>.TryGetAsync(string! key, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
 UiPath.Caching.Migration.IRouter
-UiPath.Caching.Migration.IRouter.Get<T>(string! cacheName) -> UiPath.Caching.Migration.IRoutedCache<T!>!
+UiPath.Caching.Migration.IRouter.ClearAsync(string! cacheName, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+UiPath.Caching.Migration.IRouter.Get<T>(string! cacheName) -> UiPath.Caching.ICache<T!>!
 UiPath.Caching.Migration.ISourceCache<T>
 UiPath.Caching.Migration.ISourceCache<T>.ClearAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask
 UiPath.Caching.Migration.ISourceCache<T>.GetAsync(string! key, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.SourceRead<T!>>
@@ -122,7 +117,6 @@ UiPath.Caching.Migration.ConformanceReport.Samples.get -> int
 override UiPath.Caching.Migration.ConformanceReport.ToString() -> string!
 UiPath.Caching.Migration.RouterConformance
 static UiPath.Caching.Migration.RouterConformance.CheckAsync<T>(System.IServiceProvider! services, string! cacheName, System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<string!, T!>>! samples, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Migration.ConformanceReport!>!
-UiPath.Caching.Migration.IRoutedCache<T>.TryAddAsync(string! key, T! value, UiPath.Caching.Migration.CacheExpiry expiry = default(UiPath.Caching.Migration.CacheExpiry), System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.AddOutcome>
 UiPath.Caching.Migration.ISourceCache<T>.TryAddAsync(string! key, T! value, UiPath.Caching.Migration.CacheExpiry expiry, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.AddResult>
 UiPath.Caching.Migration.AddResult
 UiPath.Caching.Migration.AddResult.Deconstruct(out UiPath.Caching.AddOutcome Outcome, out System.TimeSpan? SettleWithin) -> void

@@ -27,7 +27,7 @@ public sealed class PinTests : RouterTestBase
         var node = NewNode(useLibrary: _ => false, bypass: () => true, pinWhen: _ => true, pinStore: _store);
         await Settled(node);
 
-        var outcome = await node.Cache.TryAddAsync("k", new Item("created"), default, Ct);
+        var outcome = await node.Cache.TryCreateAsync("k", new Item("created"), default, Ct);
 
         outcome.Should().Be(AddOutcome.Added);
         node.LibraryBackend.Creates.Should().Be(1);
@@ -42,7 +42,7 @@ public sealed class PinTests : RouterTestBase
         await Settled(node);
         var release = new TaskCompletionSource();
         node.SourceBackend.InFlight = _ => release.Task;
-        var inFlight = node.Cache.TryAddAsync("k", new Item("created"), default, Ct).AsTask();
+        var inFlight = node.Cache.TryCreateAsync("k", new Item("created"), default, Ct).AsTask();
         await UntilAsync(() => node.SourceBackend.Creates == 1);
 
         _pinned = true;
@@ -67,7 +67,7 @@ public sealed class PinTests : RouterTestBase
         pins.EvaluatePins();
         (await pins.RefreshAsync(Ct)).Should().BeFalse();
 
-        var outcome = await node.Cache.TryAddAsync("k", new Item("created"), default, Ct);
+        var outcome = await node.Cache.TryCreateAsync("k", new Item("created"), default, Ct);
 
         outcome.Should().Be(AddOutcome.NotSent);
         (node.SourceBackend.Creates, node.LibraryBackend.Creates).Should().Be((0, 0));
@@ -336,6 +336,42 @@ public sealed class PinTests : RouterTestBase
         (await running).Should().Be(new Item("made"), "the caller still gets the value its factory made");
         node.SourceBackend.Writes.Should().Be(0, "the state that let the call in is too old to tell whether the group was switched meanwhile");
         node.LibraryBackend.Writes.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_generated_value_that_loses_the_fill_returns_the_stored_one_and_writes_over_nothing_on_either_path()
+    {
+        var node = NewNode(useLibrary: _ => true, pinWhen: _ => false, pinStore: _store);
+        await Settled(node);
+        var release = new TaskCompletionSource();
+        var running = node.Cache.GetOrAddAsync("k", async _ => { await release.Task; return new Item("made"); }, default, Ct).AsTask();
+        await UntilAsync(() => node.LibraryBackend.Reads >= 1);
+        await node.LibraryBackend.SetAsync("k", new Item("winner"), null, Ct);
+        var writes = node.LibraryBackend.Writes;
+        release.SetResult();
+
+        (await running).Should().Be(new Item("winner"));
+        (await node.LibraryBackend.ReadAsync("k", Ct)).Value.Should().Be(new Item("winner"));
+        node.LibraryBackend.Writes.Should().Be(writes, "a lost fill writes nothing");
+        node.SourceBackend.Writes.Should().Be(0, "a lost fill is answered, not unsent: the source must not take the value either");
+    }
+
+    [Fact]
+    public async Task A_generated_value_that_loses_the_fill_to_a_cached_null_is_answered_with_null_and_never_sent_to_the_source()
+    {
+        var node = NewNode(useLibrary: _ => true, pinWhen: _ => false, pinStore: _store);
+        await Settled(node);
+        await node.SourceBackend.SetAsync("k", new Item("source"), null, Ct);
+        node.SourceBackend.ReadOverride = ReadOutcome.Absent;
+        node.LibraryBackend.ReadOverride = ReadOutcome.Absent;
+        node.LibraryBackend.FillLosesToNull = true;
+
+        var value = await node.Cache.GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), default, Ct);
+
+        value.Should().BeNull("the library holds a cached null, which is its answer");
+        node.SourceBackend.FillCalls.Should().Be(0, "a lost fill is answered, so the source is never asked to take the value");
+        node.SourceBackend.ReadOverride = null;
+        (await node.SourceBackend.ReadAsync("k", Ct)).Value.Should().Be(new Item("source"));
     }
 
     [Fact]

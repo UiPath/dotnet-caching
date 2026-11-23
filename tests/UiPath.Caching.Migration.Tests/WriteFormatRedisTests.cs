@@ -70,27 +70,27 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         var cache = Cache(NewNode("a", () => true, () => format));
         var value = new List<long> { 1, 2, 3 };
 
-        await cache.SetAsync("early", value, CacheExpiry.After(Lifetime), Ct);
+        await cache.SetAsync("early", value, Lifetime, Ct);
 
         (await Bytes("early")).Should().Equal(LegacyEnvelope.Write(value), "no node has acknowledged the pin yet, so the gate is closed and the group writes the envelope");
         (await UntilAsync(async () =>
         {
-            await cache.SetAsync("k", value, CacheExpiry.After(Lifetime), Ct);
+            await cache.SetAsync("k", value, Lifetime, Ct);
             return (await Bytes("k")) is { Length: > 0 } bytes && bytes[0] == TestFormatSerializer.Id;
         })).Should().BeTrue("the group is switched once every node reads the format");
         var stored = await Bytes("k");
         stored!.Skip(1).Should().Equal(JsonSerializer.SerializeToUtf8Bytes(value), "the header byte is followed by the serializer's payload");
         (await Db.KeyTimeToLiveAsync(RedisKeyOf("k")))!.Value.Should().BeCloseTo(Lifetime, TimeSpan.FromSeconds(10));
         (await Db.StringGetAsync($"mg:{{{ScopeTokens.For(_app)}:g}}:sw")).ToString().Should().Be("1", "the point of no return is recorded");
-        (await cache.TryGetAsync("k", Ct)).Should().Equal(value, "the header format reads back through the router");
+        (await cache.GetAsync("k", Ct)).Should().Equal(value, "the header format reads back through the router");
         (await Bytes("early")).Should().Equal(LegacyEnvelope.Write(value), "a value written before the switch is not touched");
 
         format = "json";
-        await cache.SetAsync("down", value, CacheExpiry.After(Lifetime), Ct);
+        await cache.SetAsync("down", value, Lifetime, Ct);
 
         (await Bytes("down")).Should().Equal(LegacyEnvelope.Write(value), "a writer set back to json writes the envelope on the next write");
-        (await cache.TryGetAsync("k", Ct)).Should().Equal(value, "a value already converted still reads");
-        (await cache.TryGetAsync("early", Ct)).Should().Equal(value);
+        (await cache.GetAsync("k", Ct)).Should().Equal(value, "a value already converted still reads");
+        (await cache.GetAsync("early", Ct)).Should().Equal(value);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
 
         for (var i = 0; i < 6; i++)
         {
-            await cache.SetAsync($"k{i}", value, CacheExpiry.After(Lifetime), Ct);
+            await cache.SetAsync($"k{i}", value, Lifetime, Ct);
             await Task.Delay(500, Ct);
         }
 
@@ -123,7 +123,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         var value = new List<long> { 7, 8 };
         (await UntilAsync(async () =>
         {
-            await cache.SetAsync("k", value, CacheExpiry.After(Lifetime), Ct);
+            await cache.SetAsync("k", value, Lifetime, Ct);
             return (await Bytes("k")) is { Length: > 0 } bytes && bytes[0] == TestFormatSerializer.Id;
         })).Should().BeTrue();
         _nodes.Remove(first);
@@ -131,12 +131,12 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
 
         var restarted = new CountingSource(new LegacySource(_redis!, _cacheName));
         var afterRestart = Cache(NewNode("b", () => false, () => null, () => false, source: restarted));
-        (await afterRestart.TryGetAsync("k", Ct)).Should().Equal(value, "the switch is durable: the pin setting is gone and the group predicate says source, and the library still answers");
+        (await afterRestart.GetAsync("k", Ct)).Should().Equal(value, "the switch is durable: the pin setting is gone and the group predicate says source, and the library still answers");
 
         var throwing = new CountingSource(new LegacySource(_redis!, _cacheName));
         var afterThrow = Cache(NewNode("c", () => throw new InvalidOperationException("no setting"), () => throw new InvalidOperationException("no setting"), () => throw new InvalidOperationException("no setting"), source: throwing));
-        (await afterThrow.TryGetAsync("k", Ct)).Should().Equal(value);
-        await afterThrow.SetAsync("written", value, CacheExpiry.After(Lifetime), Ct);
+        (await afterThrow.GetAsync("k", Ct)).Should().Equal(value);
+        await afterThrow.SetAsync("written", value, Lifetime, Ct);
         (await Bytes("written")).Should().Equal(LegacyEnvelope.Write(value), "a write setting that throws writes the envelope");
 
         var down = new CountingSource(new LegacySource(_redis!, _cacheName));
@@ -148,10 +148,10 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
             return Task.FromResult<List<long>?>([]);
         }
 
-        var read = async () => await noLibrary.GetOrAddAsync("k", Factory, default, Ct);
+        var read = async () => await noLibrary.GetOrAddAsync("k", Factory, Ct);
 
         await read.Should().ThrowAsync<CacheUnavailableException>();
-        (await noLibrary.SetAsync("lost", value, CacheExpiry.After(Lifetime), Ct)).Should().Be(WriteOutcome.NotSent);
+        (await noLibrary.SetAsync("lost", value, Lifetime, Ct)).Should().BeFalse();
         factoryRuns.Should().Be(0, "a switched group never runs the origin");
         (await Db.KeyExistsAsync(RedisKeyOf("lost"))).Should().BeFalse();
         restarted.Calls.Should().Be(0);
@@ -175,7 +175,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         return false;
     }
 
-    private static IRoutedCache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
+    private static ICache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
 
     private async Task<byte[]?> Bytes(string key) => (byte[]?)await Db.StringGetAsync(RedisKeyOf(key));
 

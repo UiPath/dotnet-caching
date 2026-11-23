@@ -57,14 +57,14 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
         var reader = Cache(NewNode("one", transport: transport));
         var writer = Cache(NewNode("two", transport: transport));
         await Task.Delay(1500, Ct);
-        await reader.SetAsync("k", [1], CacheExpiry.After(Lifetime), Ct);
-        (await reader.TryGetAsync("k", Ct)).Should().Equal(1);
+        await reader.SetAsync("k", [1], Lifetime, Ct);
+        (await reader.GetAsync("k", Ct)).Should().Equal(1);
         await Db.KeyDeleteAsync(RedisKeyOf("k"));
-        (await reader.TryGetAsync("k", Ct)).Should().BeEquivalentTo(new long[] { 1 }, "only the local copy can answer now");
+        (await reader.GetAsync("k", Ct)).Should().BeEquivalentTo(new long[] { 1 }, "only the local copy can answer now");
 
-        await writer.SetAsync("k", [2], CacheExpiry.After(Lifetime), Ct);
+        await writer.SetAsync("k", [2], Lifetime, Ct);
 
-        (await UntilAsync(async () => (await reader.TryGetAsync("k", Ct))?.SequenceEqual([2L]) == true)).Should().BeTrue("the other process on the same host is a peer, so its event evicted the stale copy");
+        (await UntilAsync(async () => (await reader.GetAsync("k", Ct))?.SequenceEqual([2L]) == true)).Should().BeTrue("the other process on the same host is a peer, so its event evicted the stale copy");
     }
 
     [Fact]
@@ -75,28 +75,28 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
         var router = node.GetRequiredService<IRouter>();
         var cache = Cache(node);
         await Task.Delay(1500, Ct);
-        await cache.SetAsync("k", [1], CacheExpiry.After(Lifetime), Ct);
-        (await cache.TryGetAsync("k", Ct)).Should().Equal(1);
+        await cache.SetAsync("k", [1], Lifetime, Ct);
+        (await cache.GetAsync("k", Ct)).Should().Equal(1);
         await Db.KeyDeleteAsync(RedisKeyOf("k"));
-        (await cache.TryGetAsync("k", Ct)).Should().BeEquivalentTo(new long[] { 1 }, "served by the shared tier");
+        (await cache.GetAsync("k", Ct)).Should().BeEquivalentTo(new long[] { 1 }, "served by the shared tier");
 
         await router.EnterBypassAsync(Ct);
 
         router.Mode.Should().Be(RouterMode.BypassLibrary);
-        (await cache.TryGetAsync("k", Ct)).Should().BeNull("bypass reads the source, not the tier");
-        await cache.SetAsync("b", [3], CacheExpiry.After(Lifetime), Ct);
+        (await cache.GetAsync("k", Ct)).Should().BeNull("bypass reads the source, not the tier");
+        await cache.SetAsync("b", [3], Lifetime, Ct);
         (await Db.StringGetAsync(RedisKeyOf("b"))).HasValue.Should().BeTrue();
         await Db.KeyDeleteAsync(RedisKeyOf("b"));
-        (await cache.TryGetAsync("b", Ct)).Should().BeNull("no local copy was filled in bypass");
+        (await cache.GetAsync("b", Ct)).Should().BeNull("no local copy was filled in bypass");
 
         await router.LeaveBypassAsync(Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
         router.Mode.Should().Be(RouterMode.Library);
-        (await cache.TryGetAsync("k", Ct)).Should().BeNull("the tier was cleared on the way out");
-        await cache.SetAsync("k", [4], CacheExpiry.After(Lifetime), Ct);
-        (await cache.TryGetAsync("k", Ct)).Should().Equal(4);
+        (await cache.GetAsync("k", Ct)).Should().BeNull("the tier was cleared on the way out");
+        await cache.SetAsync("k", [4], Lifetime, Ct);
+        (await cache.GetAsync("k", Ct)).Should().Equal(4);
         await Db.KeyDeleteAsync(RedisKeyOf("k"));
-        (await cache.TryGetAsync("k", Ct)).Should().BeEquivalentTo(new long[] { 4 }, "the tier serves again");
+        (await cache.GetAsync("k", Ct)).Should().BeEquivalentTo(new long[] { 4 }, "the tier serves again");
     }
 
     [Fact]
@@ -109,21 +109,21 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
         var cache = Cache(node);
         router.Mode.Should().Be(RouterMode.BypassLibrary);
         router.ModeReason.Should().Be(RouterModeReason.Flag);
-        await cache.SetAsync("k", [1], CacheExpiry.After(Lifetime), Ct);
+        await cache.SetAsync("k", [1], Lifetime, Ct);
         (await Db.StringGetAsync(RedisKeyOf("k"))).HasValue.Should().BeTrue("the source wrote it");
 
         bypass = false;
         var left = await UntilAsync(async () =>
         {
-            await cache.TryGetAsync("k", Ct);
+            await cache.GetAsync("k", Ct);
             return router.Mode == RouterMode.Library;
         });
 
         left.Should().BeTrue("the library started and the leave order completed");
-        await cache.SetAsync("l", [2], CacheExpiry.After(Lifetime), Ct);
-        (await cache.TryGetAsync("l", Ct)).Should().NotBeNull();
+        await cache.SetAsync("l", [2], Lifetime, Ct);
+        (await cache.GetAsync("l", Ct)).Should().NotBeNull();
         await Db.KeyDeleteAsync(RedisKeyOf("l"));
-        (await cache.TryGetAsync("l", Ct)).Should().BeEquivalentTo(new long[] { 2 }, "the library path fills the shared tier");
+        (await cache.GetAsync("l", Ct)).Should().BeEquivalentTo(new long[] { 2 }, "the library path fills the shared tier");
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
         var stopping = NewNode("stopping");
         var staying = NewNode("staying");
         await Task.Delay(1500, Ct);
-        await Cache(stopping).SetAsync("k", [1], CacheExpiry.After(Lifetime), Ct);
+        await Cache(stopping).SetAsync("k", [1], Lifetime, Ct);
         var own = GroupOf(stopping);
         var other = GroupOf(staying);
         (await GroupsAsync()).Should().Contain([own, other]);
@@ -164,7 +164,7 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
         return false;
     }
 
-    private static IRoutedCache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
+    private static ICache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
 
     private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
 

@@ -171,11 +171,31 @@ public sealed class LibraryPathClientTests : RouterTestBase
         var policies = new Queue<CachePolicy>([WriteFormats.Envelope, WriteFormats.MessagePackPolicy]);
         var picking = new LibraryPathClient<Item>(_store, _connection, key => key, () => Settle, () => new WriteLease(policies.Dequeue(), null));
 
-        await Client().TryAddAsync("k", new Item("v"), null, Ct);
-        await picking.TryAddAsync("k", new Item("v"), null, Ct);
-        await picking.TryAddAsync("k", new Item("v"), null, Ct);
+        await Client().TryCreateAsync("k", new Item("v"), null, Ct);
+        await picking.TryCreateAsync("k", new Item("v"), null, Ct);
+        await picking.TryCreateAsync("k", new Item("v"), null, Ct);
 
         _store.CreatePolicies.Should().Equal(null, WriteFormats.Envelope, WriteFormats.MessagePackPolicy);
+    }
+
+    // The server applied the fill and the connection dropped before the answer: the library answers a failure, which proves nothing about the fill.
+    [Fact]
+    public async Task A_fill_whose_connection_drops_after_the_send_is_unknown_and_one_that_never_left_is_not_sent()
+    {
+        var (cache, script) = ScriptedCache.Create();
+        script.Answers["TryFillAsync"] = _ =>
+        {
+            _connection.IsConnected = false;
+            return new ValueTask<FillResult<Item>>(default(FillResult<Item>));
+        };
+        var client = new LibraryPathClient<Item>(_store, _connection, key => key, Settle) { Cache = cache };
+
+        var sent = await client.FillAsync("k", new Item("v"), null, null, Ct);
+        var unsent = await client.FillAsync("k", new Item("v"), null, null, Ct);
+
+        sent.Outcome.Should().Be(WriteOutcome.Unknown);
+        sent.SettleWithin.Should().Be(Settle);
+        unsent.Outcome.Should().Be(WriteOutcome.NotSent, "the connection was already down before this one");
     }
 
     private LibraryPathClient<Item> Client(Func<string, string>? redisKey = null) =>

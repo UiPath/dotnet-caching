@@ -13,7 +13,7 @@ public sealed class RegistrationCompletenessTests : RouterTestBase
         var seen = new List<string>();
         Bus.OnPublish = ev => seen.Add($"{ev.Type}/{Store.ContainsKey("k")}");
 
-        var outcome = await node.Cache.TryAddAsync("k", new Item("new"), default, Ct);
+        var outcome = await node.Cache.TryCreateAsync("k", new Item("new"), default, Ct);
 
         outcome.Should().Be(AddOutcome.Added);
         Store["k"].Name.Should().Be("new");
@@ -29,7 +29,7 @@ public sealed class RegistrationCompletenessTests : RouterTestBase
         await node.Cache.TryGetAsync("k", Ct);
         node.IsLocal("k").Should().BeTrue();
 
-        var outcome = await node.Cache.TryAddAsync("k", new Item("new"), default, Ct);
+        var outcome = await node.Cache.TryCreateAsync("k", new Item("new"), default, Ct);
 
         outcome.Should().Be(AddOutcome.Exists);
         Store["k"].Name.Should().Be("old");
@@ -44,7 +44,7 @@ public sealed class RegistrationCompletenessTests : RouterTestBase
         var node = NewNode();
         node.LibraryBackend.CreateOverride = AddOutcome.NotSent;
 
-        var outcome = await node.Cache.TryAddAsync("k", new Item("new"), default, Ct);
+        var outcome = await node.Cache.TryCreateAsync("k", new Item("new"), default, Ct);
 
         outcome.Should().Be(AddOutcome.Added);
         node.SourceBackend.Creates.Should().Be(1);
@@ -56,7 +56,7 @@ public sealed class RegistrationCompletenessTests : RouterTestBase
         var node = NewNode(pendingWindow: TimeSpan.FromSeconds(30));
         node.LibraryBackend.CreateOverride = AddOutcome.Unknown;
 
-        var outcome = await node.Cache.TryAddAsync("k", new Item("new"), default, Ct);
+        var outcome = await node.Cache.TryCreateAsync("k", new Item("new"), default, Ct);
 
         outcome.Should().Be(AddOutcome.Unknown);
         Bus.Published.Should().Be(1);
@@ -72,7 +72,7 @@ public sealed class RegistrationCompletenessTests : RouterTestBase
         var node = NewNode(useLibrary: _ => false, pendingWindow: TimeSpan.FromSeconds(30));
         node.SourceBackend.CreateOverride = AddOutcome.Failed;
 
-        (await node.Cache.TryAddAsync("k", new Item("new"), default, Ct)).Should().Be(AddOutcome.Unknown);
+        (await node.Cache.TryCreateAsync("k", new Item("new"), default, Ct)).Should().Be(AddOutcome.Unknown);
         Bus.Published.Should().Be(1, "an unknown create is announced like a write of unknown outcome");
     }
 
@@ -98,7 +98,7 @@ public sealed class RegistrationCompletenessTests : RouterTestBase
     {
         var node = NewNode();
 
-        var outcome = await node.Cache.TryAddAsync("k", new Item("new"), CacheExpiry.At(Clock.GetUtcNow().AddSeconds(-1)), Ct);
+        var outcome = await node.Cache.TryCreateAsync("k", new Item("new"), CacheExpiry.At(Clock.GetUtcNow().AddSeconds(-1)), Ct);
 
         outcome.Should().Be(AddOutcome.NotSent);
         node.LibraryBackend.Creates.Should().Be(0);
@@ -116,7 +116,7 @@ public sealed class RegistrationCompletenessTests : RouterTestBase
         var cache = new FakeMigrationCache { Create = (_, _) => Task.FromResult(store) };
         var client = new LibraryPathClient<Item>(cache, new FakeConnection(), key => key, TimeSpan.FromSeconds(7));
 
-        var result = await client.TryAddAsync("k", new Item("v"), null, Ct);
+        var result = await client.TryCreateAsync("k", new Item("v"), null, Ct);
 
         result.Outcome.Should().Be(expected);
         if (expected == AddOutcome.Unknown)

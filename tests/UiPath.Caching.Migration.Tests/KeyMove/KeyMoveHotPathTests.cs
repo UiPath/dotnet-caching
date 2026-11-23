@@ -64,22 +64,41 @@ public sealed class KeyMoveHotPathTests
     private static GroupRules UnmanagedRules() =>
         new(true, ReadRule.Follow, WriteRule.Follow, new ActedState("S3", "fwd", 1, "id", 1, false), null, false, true, [], new HashSet<string> { "other" });
 
+    // Allocation only adds: the smallest of several rounds is what the code itself allocates, so a round that a collection, a tier-up or a contended thread inflated does not decide the comparison.
     private static long Measure(IPathClient<Item> client)
     {
         Run(client, 50);
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        Run(client, Calls);
-        return GC.GetAllocatedBytesForCurrentThread() - before;
+        var smallest = long.MaxValue;
+        for (var round = 0; round < 5; round++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            Run(client, Calls);
+            smallest = Math.Min(smallest, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+
+        return smallest;
     }
 
     private static void Run(IPathClient<Item> client, int calls)
     {
         for (var i = 0; i < calls; i++)
         {
-            client.ReadAsync("k", CancellationToken.None).AsTask().GetAwaiter().GetResult();
-            client.SetAsync("k", Value, null, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-            client.RemoveAsync("k", CancellationToken.None).AsTask().GetAwaiter().GetResult();
-            client.FillAsync("k", Value, null, null, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+            Complete(client.ReadAsync("k", CancellationToken.None));
+            Complete(client.SetAsync("k", Value, null, CancellationToken.None));
+            Complete(client.RemoveAsync("k", CancellationToken.None));
+            Complete(client.FillAsync("k", Value, null, null, CancellationToken.None));
         }
+    }
+
+    // Each call is consumed once: a completed one is read in place, so the measure holds no Task of its own; any other is waited for.
+    private static void Complete<T>(ValueTask<T> pending)
+    {
+        if (pending.IsCompletedSuccessfully)
+        {
+            _ = pending.Result;
+            return;
+        }
+
+        pending.AsTask().GetAwaiter().GetResult();
     }
 }

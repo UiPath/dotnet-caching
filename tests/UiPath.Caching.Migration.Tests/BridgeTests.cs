@@ -19,7 +19,7 @@ public sealed class BridgeTests : RouterTestBase
 
         await node.Cache.SetAsync("a", new Item("1"), default, Ct);
         await node.Cache.RemoveAsync("a", Ct);
-        await node.Cache.TryAddAsync("b", new Item("2"), default, Ct);
+        await node.Cache.TryCreateAsync("b", new Item("2"), default, Ct);
 
         bridge.Published.Should().Equal(
             new BridgeMessage(BridgeMessageKind.Key, CacheName, "a", Origin: Me),
@@ -33,7 +33,7 @@ public sealed class BridgeTests : RouterTestBase
         var (node, bridge) = Bridged();
         Store["k"] = new Item("old");
 
-        (await node.Cache.TryAddAsync("k", new Item("new"), default, Ct)).Should().Be(AddOutcome.Exists);
+        (await node.Cache.TryCreateAsync("k", new Item("new"), default, Ct)).Should().Be(AddOutcome.Exists);
 
         bridge.Published.Should().BeEmpty();
     }
@@ -173,7 +173,7 @@ public sealed class BridgeTests : RouterTestBase
             .UseChannelBridge(bridge));
         await using var provider = services.BuildServiceProvider();
 
-        await provider.GetRequiredService<IRouter>().Get<Item>("items").SetAsync("k", new Item("v"), default, Ct);
+        await provider.GetRequiredService<IRouter>().Get<Item>("items").SetAsync("k", new Item("v"), Ct);
 
         bridge.Subscribed.Should().BeTrue();
         bridge.Published.Should().ContainSingle().Which.Origin.Should().Be("urn:bridge-host-pbridge1?stack=uipath.caching.migration");
