@@ -130,7 +130,8 @@ internal sealed class KeyPromotion<T>
         var snap = await SourceSnapAsync(key, cancellationToken).ConfigureAwait(false);
         var replied = _p.Clock.GetTimestamp();
         var (served, skipped) = await ReadSourceAsync(run, snap, cancellationToken).ConfigureAwait(false);
-        if (skipped is { } skip)
+        var deleteStaleTarget = _reverse && mover is not null && skipped is { Kind: PromotionKind.TooLarge };
+        if (skipped is { } skip && !deleteStaleTarget)
         {
             return skip;
         }
@@ -139,6 +140,11 @@ internal sealed class KeyPromotion<T>
         if (AbandonReason(data, events, started, replied, snap.TtlMs) is { } reason)
         {
             return new PromotionResult<T>(PromotionKind.Abandoned, uncached, Reason: reason);
+        }
+
+        if (deleteStaleTarget)
+        {
+            return await DeleteOversizedTargetAsync(run, capture, uncached, cancellationToken).ConfigureAwait(false);
         }
 
         byte[] encoded;
@@ -414,10 +420,15 @@ internal sealed class KeyPromotion<T>
         return ttlMs is >= 0 and < 1 ? "abandoned" : null;
     }
 
-    private async ValueTask<(bool Drained, PromotionResult<T>? Stopped)> PublishAsync(PromotionRun run, Capture capture, byte[] encoded, long ttlMs, PathRead<T> uncached, CancellationToken cancellationToken)
+    private Publication PublicationOf(Capture capture, long ttlMs)
     {
         var px = ttlMs < 0 ? MoveScripts.NoExpiry : ttlMs;
-        var publication = new Publication(capture.Token ?? throw new InvalidOperationException("A captured fence requires a token."), capture.Gate ?? throw new InvalidOperationException("A captured fence requires a gate."), _p.CacheId, MoveScripts.NewNonce(), FenceTtlMs, px, px == MoveScripts.NoExpiry ? MoveScripts.NoExpiry : capture.Tcap, !_reverse);
+        return new Publication(capture.Token ?? throw new InvalidOperationException("A captured fence requires a token."), capture.Gate ?? throw new InvalidOperationException("A captured fence requires a gate."), _p.CacheId, MoveScripts.NewNonce(), FenceTtlMs, px, px == MoveScripts.NoExpiry ? MoveScripts.NoExpiry : capture.Tcap, !_reverse);
+    }
+
+    private async ValueTask<(bool Drained, PromotionResult<T>? Stopped)> PublishAsync(PromotionRun run, Capture capture, byte[] encoded, long ttlMs, PathRead<T> uncached, CancellationToken cancellationToken)
+    {
+        var publication = PublicationOf(capture, ttlMs);
         await At(SchedulePointStep.Publish).ConfigureAwait(false);
         if (!await run.Ownership.HoldsAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -437,6 +448,30 @@ internal sealed class KeyPromotion<T>
         // The bytes went over the wire: they are recorded now, with no wait, and the runner pays them before the next key. A retry or an out-of-memory second try of the same key records nothing more.
         run.Ownership.Published(encoded.Length);
         return await PublishOutcomeAsync(run, published, uncached, cancellationToken).ConfigureAwait(false);
+    }
+
+    // The oversized native value stays until the release sweep. Its older legacy copy must be gone before the pass can count the skip.
+    private async ValueTask<PromotionResult<T>> DeleteOversizedTargetAsync(PromotionRun run, Capture capture, PathRead<T> uncached, CancellationToken cancellationToken)
+    {
+        var publication = PublicationOf(capture, MoveScripts.NoExpiry);
+        await At(SchedulePointStep.Publish).ConfigureAwait(false);
+        if (!await run.Ownership.HoldsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return PromotionResult<T>.Of(PromotionKind.OwnershipLost);
+        }
+
+        long deleted;
+        try
+        {
+            deleted = await run.Data.Scripts.DeleteCapturedAsync(run.Keys, run.Unit.Id, publication, StillHeld(run.Ownership)).ConfigureAwait(false);
+        }
+        catch (OwnershipLostException)
+        {
+            return PromotionResult<T>.Of(PromotionKind.OwnershipLost);
+        }
+
+        var (_, stopped) = await PublishOutcomeAsync(run, deleted, uncached, cancellationToken).ConfigureAwait(false);
+        return stopped ?? PromotionResult<T>.Of(PromotionKind.TooLarge, uncached);
     }
 
     private async ValueTask<(bool Drained, PromotionResult<T>? Stopped)> PublishOutcomeAsync(PromotionRun run, long published, PathRead<T> uncached, CancellationToken cancellationToken)

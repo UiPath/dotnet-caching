@@ -32,6 +32,11 @@ internal sealed partial class MoveScripts
         local m = redis.call('HGET', KEYS[3], 'c:' .. ARGV[7])
         if (not m) or m ~= ARGV[5] or string.sub(m, 1, 6) == 'CLOSED' then return -2 end
         if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+        if ARGV[4] == 'del' then
+          redis.call('SET', KEYS[1], ARGV[8], 'PX', ARGV[9])
+          redis.call('DEL', KEYS[2])
+          return 1
+        end
         if ARGV[4] == 'nx' and redis.call('EXISTS', KEYS[2]) == 1 then return 2 end
         local deadline = nil
         if ARGV[3] ~= '-1' and ARGV[10] ~= '-1' then
@@ -210,6 +215,41 @@ internal sealed partial class MoveScripts
             }
 
             return await PublishRefusalAsync(keys, id, p).ConfigureAwait(false);
+        }
+
+        return await WatchedAsync(AttemptAsync, owned).ConfigureAwait(false);
+    }
+
+    /// <summary>Deletes the target and replaces its fence while the captured identity, gate, and fence still hold.</summary>
+    public async Task<long> DeleteCapturedAsync(FencedKeys keys, string id, Publication publication, Func<bool>? owned)
+    {
+        var p = publication with { OnlyIfAbsent = false };
+        var reply = await EvaluateAsync(
+            PubScript,
+            [keys.Fence, keys.Data, keys.Control],
+            [p.Token, RedisValue.EmptyString, Ttl(NoExpiry), "del", p.GateSeen, id, p.Cid, p.NewNonce, p.FenceTtlMilliseconds, Ttl(NoExpiry)]).ConfigureAwait(false);
+        if (reply is not null)
+        {
+            return (long)reply;
+        }
+
+        if (IsClosed(p.GateSeen))
+        {
+            return await HoldsIdentityAsync(keys.Control, id).ConfigureAwait(false) ? GateRefused : IdentityMismatch;
+        }
+
+        async Task<long?> AttemptAsync()
+        {
+            var transaction = _db.CreateTransaction();
+            AddPublishConditions(transaction, keys, id, p);
+            List<Task> queued =
+            [
+                transaction.StringSetAsync(keys.Fence, p.NewNonce, TimeSpan.FromMilliseconds(p.FenceTtlMilliseconds), When.Always, Master),
+                transaction.KeyDeleteAsync(keys.Data, Master),
+            ];
+            return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false)
+                ? Published
+                : await PublishRefusalAsync(keys, id, p).ConfigureAwait(false);
         }
 
         return await WatchedAsync(AttemptAsync, owned).ConfigureAwait(false);
