@@ -10,27 +10,21 @@ public sealed class MoveRetrySetTests
     {
         var options = new KeyMoveOptions { RetryInitial = TimeSpan.FromMilliseconds(10), RetryMax = TimeSpan.FromMilliseconds(10) };
         var told = 0;
+        var toldOnce = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var set = new MoveRetrySet(TimeProvider.System, options, _ =>
         {
-            told++;
+            Interlocked.Increment(ref told);
+            toldOnce.TrySetResult();
             throw new InvalidOperationException("the alert delegate failed");
         });
         set.Add("old", DateTimeOffset.UtcNow.AddMilliseconds(-1), _ => Task.FromResult(false));
-        var done = new TaskCompletionSource();
-        set.Add("later", DateTimeOffset.UtcNow.AddMinutes(1), _ =>
-        {
-            done.TrySetResult();
-            return Task.FromResult(true);
-        });
+        set.Add("later", DateTimeOffset.UtcNow.AddMinutes(1), _ => Task.FromResult(true));
+        var settled = set.SettledAsync("later") ?? Task.CompletedTask;
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (Volatile.Read(ref told) < 1 && DateTime.UtcNow < until)
-        {
-            await Task.Delay(10, Ct);
-        }
+        await toldOnce.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await settled.WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
-        told.Should().Be(1);
+        Volatile.Read(ref told).Should().Be(1);
         set.Count.Should().Be(0);
 
         // The loop is still there for a retry added after the failure.

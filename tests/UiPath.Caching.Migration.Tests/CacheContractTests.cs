@@ -335,23 +335,18 @@ public sealed class CacheContractTests : RouterTestBase
         ICache<Item> cache = node.Cache;
         await cache.SetAsync("k", new Item("1"), Life, Ct);
         await cache.GetAsync("k", Ct);
-        for (var i = 0; i < 50; i++)
+        for (var i = 0; i < 2000; i++)
         {
             await cache.GetOrAddAsync("k", 7, NullGenerator, Ct);
         }
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
+        var perCall = long.MaxValue;
+        for (var run = 0; run < 7; run++)
         {
-            var hit = cache.GetOrAddAsync("k", 7, NullGenerator, Ct);
-            if (!hit.IsCompletedSuccessfully)
-            {
-                throw new InvalidOperationException("A hit of the local tier completes at once.");
-            }
+            perCall = Math.Min(perCall, BytesPerLocalHit(cache));
         }
 
-        var perCall = (GC.GetAllocatedBytesForCurrentThread() - before) / 1000;
-        perCall.Should().BeLessThan(120, "a closure and a delegate would add more than 100 bytes");
+        perCall.Should().BeLessThan(64, "a closure and a delegate would add about 90 bytes");
     }
 
     [Fact]
@@ -437,5 +432,21 @@ public sealed class CacheContractTests : RouterTestBase
         node.Cache.PendingKeyCount.Should().Be(1, "the create may have committed, so the key is pending");
         Bus.Published.Should().Be(published + 1, "and peers are told");
         node.IsLocal("k").Should().BeFalse();
+    }
+
+    private static long BytesPerLocalHit(ICache<Item> cache)
+    {
+        const int Calls = 1000;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Calls; i++)
+        {
+            var hit = cache.GetOrAddAsync("k", 7, NullGenerator, Ct);
+            if (!hit.IsCompletedSuccessfully)
+            {
+                throw new InvalidOperationException("A hit of the local tier completes at once.");
+            }
+        }
+
+        return (GC.GetAllocatedBytesForCurrentThread() - before) / Calls;
     }
 }
