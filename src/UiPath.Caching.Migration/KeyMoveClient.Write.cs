@@ -97,55 +97,60 @@ internal sealed partial class KeyMoveClient<T>
                 return await WritePlain(key, value, deadline, cancellationToken).ConfigureAwait(false);
             }
 
-            if (StepsFor(plan, delete) is not { } steps)
-            {
-                return ClosedOrUnknown(history.Applied);
-            }
-
-            if (!TryEncodeWrite(writeValue, steps, out var inPlace, out var native))
-            {
-                return WriteOutcome.NotSent;
-            }
-
-            if (await PrepareMarkedAsync(key, steps, history.Applied, lease, cancellationToken).ConfigureAwait(false) is { } refused)
-            {
-                return refused;
-            }
-
-            var (admitted, replan) = await AdmitAsync(promotion: false, plan.Act?.Id, cancellationToken).ConfigureAwait(false);
-            if (replan)
-            {
-                // The steps above were built under an older state: the whole operation is built again under the one in force.
-                if (AdmissionRerunRefusal(run++, history.Applied) is { } exhausted)
-                {
-                    return exhausted;
-                }
-
-                await Task.Delay(_options.AdmissionPoll, _p.Clock, cancellationToken).ConfigureAwait(false);
-                plan = PlanFor(write: true);
-                continue;
-            }
-
-            if (admitted is null)
-            {
-                return ClosedOrUnknown(history.Applied);
-            }
-
-            using var unit = admitted;
-            var form = new Form(key, steps, inPlace, native, px, unit.Id, MoveScripts.NewNonce(), absolute) { First = !history.Attempted, Prior = history.Applied, Lease = lease };
-            var ran = await RunStepsAsync(form, 0, unit, cancellationToken).ConfigureAwait(false);
-            if (ran.Rerun)
-            {
-                history.Record(form.MarkerValue is not null);
-            }
-
-            if (WriteFinished(ran, run++, history.Applied) is { } result)
+            if (await WriteAttemptAsync(key, writeValue, delete, px, absolute, plan, history, lease, run++, cancellationToken).ConfigureAwait(false) is { } result)
             {
                 return result;
             }
 
             plan = PlanFor(write: true);
         }
+    }
+
+    // Null when the operation is built again under the state in force.
+    private async ValueTask<WriteResult?> WriteAttemptAsync(string key, T? writeValue, bool delete, long px, DateTimeOffset? absolute, KeyMovePlan plan, WriteHistory history, WritePermitLease lease, int run, CancellationToken cancellationToken)
+    {
+        if (StepsFor(plan, delete) is not { } steps)
+        {
+            return ClosedOrUnknown(history.Applied);
+        }
+
+        if (!TryEncodeWrite(writeValue, steps, out var inPlace, out var native))
+        {
+            return WriteOutcome.NotSent;
+        }
+
+        if (await PrepareMarkedAsync(key, steps, history.Applied, lease, cancellationToken).ConfigureAwait(false) is { } refused)
+        {
+            return refused;
+        }
+
+        var (admitted, replan) = await AdmitAsync(promotion: false, plan.Act?.Id, cancellationToken).ConfigureAwait(false);
+        if (replan)
+        {
+            // The steps above were built under an older state: the whole operation is built again under the one in force.
+            if (AdmissionRerunRefusal(run, history.Applied) is { } exhausted)
+            {
+                return exhausted;
+            }
+
+            await Task.Delay(_options.AdmissionPoll, _p.Clock, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+
+        if (admitted is null)
+        {
+            return ClosedOrUnknown(history.Applied);
+        }
+
+        using var unit = admitted;
+        var form = new Form(key, steps, inPlace, native, px, unit.Id, MoveScripts.NewNonce(), absolute) { First = !history.Attempted, Prior = history.Applied, Lease = lease };
+        var ran = await RunStepsAsync(form, 0, unit, cancellationToken).ConfigureAwait(false);
+        if (ran.Rerun)
+        {
+            history.Record(form.MarkerValue is not null);
+        }
+
+        return WriteFinished(ran, run, history.Applied);
     }
 
     private ValueTask<WriteResult> WritePlain(string key, T? value, DateTimeOffset? deadline, CancellationToken cancellationToken) =>
@@ -252,18 +257,23 @@ internal sealed partial class KeyMoveClient<T>
 
             if (sent.Code == MoveScripts.IdentityMismatch)
             {
-                // The identity changed: the whole unit runs again under the new rules, never retried under the old one.
-                if (unit.Readmit())
-                {
-                    return (default, true);
-                }
-
-                return (i == 0 ? Unsent(form.Prior) : Pending(form, i), false);
+                return IdentityChanged(form, i, unit);
             }
         }
 
         await FinishMarkAsync(form).ConfigureAwait(false);
         return (WriteOutcome.Committed, false);
+    }
+
+    // The identity changed: the whole unit runs again under the new rules, never retried under the old one.
+    private (WriteResult Result, bool Rerun) IdentityChanged(Form form, int step, AdmittedUnit unit)
+    {
+        if (unit.Readmit())
+        {
+            return (default, true);
+        }
+
+        return (step == 0 ? Unsent(form.Prior) : Pending(form, step), false);
     }
 
     // The script changed nothing: a first attempt at the limit, a late command, or a record with no binding value. An earlier attempt of this write may have applied.

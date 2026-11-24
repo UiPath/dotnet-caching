@@ -139,34 +139,7 @@ internal sealed partial class MoveScripts
         }
 
         // A changed identity or marker aborts the transaction; the next pass reads everything again. A change of the binding or retiring value comes with a change of the identity.
-        return await WatchedAsync(async () =>
-        {
-            if (await _db.HashGetAsync(control, field, Master).ConfigureAwait(false) != expected)
-            {
-                return 0;
-            }
-
-            var id = await _db.HashGetAsync(control, MarkerBinding.IdentityField, Master).ConfigureAwait(false);
-            var current = await CurrentBindingAsync(control).ConfigureAwait(false);
-            var retiring = await _db.HashGetAsync(control, MarkerBinding.RetiringField, Master).ConfigureAwait(false);
-            if (MarkerBinding.IsLive(expected, current.IsNull ? null : (string)current!, retiring.IsNull ? null : (string)retiring!))
-            {
-                return -1;
-            }
-
-            var transaction = _db.CreateTransaction();
-            var queued = new List<Task>();
-            transaction.AddCondition(Condition.HashEqual(control, field, expected));
-            transaction.AddCondition(id.IsNull ? Condition.HashNotExists(control, MarkerBinding.IdentityField) : Condition.HashEqual(control, MarkerBinding.IdentityField, id));
-            var removed = transaction.HashDeleteAsync(control, field, Master);
-            queued.Add(removed);
-            if (!await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
-            {
-                return null;
-            }
-
-            return await removed.ConfigureAwait(false) ? 1 : 0;
-        }).ConfigureAwait(false);
+        return await WatchedAsync(() => TrySupersessionGcAsync(control, field, expected)).ConfigureAwait(false);
     }
 
     public async Task<long[]> SupersessionGcManyAsync(RedisKey control, IReadOnlyList<(string Field, string Expected)> markers)
@@ -179,7 +152,7 @@ internal sealed partial class MoveScripts
         var reply = await EvaluateAsync(SmgcManyScript, [control], [.. markers.SelectMany(m => new RedisValue[] { m.Field, m.Expected })]).ConfigureAwait(false);
         if (reply is not null)
         {
-            return [.. ((RedisResult[])reply!).Select(r => (long)r)];
+            return [.. ((RedisResult[]?)reply)!.Select(r => (long)r)];
         }
 
         var codes = new long[markers.Count];
@@ -201,36 +174,7 @@ internal sealed partial class MoveScripts
             return (long)reply;
         }
 
-        return await WatchedAsync(async () =>
-        {
-            if (!await HoldsIdentityAsync(control, id).ConfigureAwait(false))
-            {
-                return IdentityMismatch;
-            }
-
-            var field = await _db.HashGetAsync(control, MarkerBinding.BindingFieldName, Master).ConfigureAwait(false);
-            var bindingField = field.IsNull ? MarkerBinding.IdentityField : (string)field!;
-            var current = await _db.HashGetAsync(control, bindingField, Master).ConfigureAwait(false);
-            var retiring = await _db.HashGetAsync(control, MarkerBinding.RetiringField, Master).ConfigureAwait(false);
-            var viaCurrent = binding.Length > 0 && current == binding;
-            if (!viaCurrent && !(binding.Length > 0 && retiring == binding))
-            {
-                return BindingEnded;
-            }
-
-            var transaction = _db.CreateTransaction();
-            var queued = new List<Task>();
-            transaction.AddCondition(Condition.HashEqual(control, MarkerBinding.IdentityField, id));
-            transaction.AddCondition(Condition.HashEqual(control, viaCurrent ? bindingField : MarkerBinding.RetiringField, binding));
-            var deleted = transaction.KeyDeleteAsync(key, Master);
-            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
-            {
-                return await deleted.ConfigureAwait(false) ? 1 : 0;
-            }
-
-            // Aborted: the identity or the binding moved, or an unrelated field of the record did. The next pass reads again and says which.
-            return null;
-        }).ConfigureAwait(false);
+        return await WatchedAsync(() => TrySourceDeleteGuardedAsync(key, control, id, binding)).ConfigureAwait(false);
     }
 
     public async Task<long> LimitSetAsync(RedisKey control, string id, long limit)
@@ -294,9 +238,69 @@ internal sealed partial class MoveScripts
         }).ConfigureAwait(false);
     }
 
+    private async Task<long?> TrySupersessionGcAsync(RedisKey control, string field, string expected)
+    {
+        if (await _db.HashGetAsync(control, field, Master).ConfigureAwait(false) != expected)
+        {
+            return 0;
+        }
+
+        var id = await _db.HashGetAsync(control, MarkerBinding.IdentityField, Master).ConfigureAwait(false);
+        var current = await CurrentBindingAsync(control).ConfigureAwait(false);
+        var retiring = await _db.HashGetAsync(control, MarkerBinding.RetiringField, Master).ConfigureAwait(false);
+        if (MarkerBinding.IsLive(expected, current.IsNull ? null : current.ToString(), retiring.IsNull ? null : retiring.ToString()))
+        {
+            return -1;
+        }
+
+        var transaction = _db.CreateTransaction();
+        var queued = new List<Task>();
+        transaction.AddCondition(Condition.HashEqual(control, field, expected));
+        transaction.AddCondition(id.IsNull ? Condition.HashNotExists(control, MarkerBinding.IdentityField) : Condition.HashEqual(control, MarkerBinding.IdentityField, id));
+        var removed = transaction.HashDeleteAsync(control, field, Master);
+        queued.Add(removed);
+        if (!await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        return await removed.ConfigureAwait(false) ? 1 : 0;
+    }
+
+    private async Task<long?> TrySourceDeleteGuardedAsync(RedisKey key, RedisKey control, string id, string binding)
+    {
+        if (!await HoldsIdentityAsync(control, id).ConfigureAwait(false))
+        {
+            return IdentityMismatch;
+        }
+
+        var field = await _db.HashGetAsync(control, MarkerBinding.BindingFieldName, Master).ConfigureAwait(false);
+        var bindingField = field.IsNull ? MarkerBinding.IdentityField : field.ToString();
+        var current = await _db.HashGetAsync(control, bindingField, Master).ConfigureAwait(false);
+        var retiring = await _db.HashGetAsync(control, MarkerBinding.RetiringField, Master).ConfigureAwait(false);
+        var viaCurrent = binding.Length > 0 && current == binding;
+        if (!viaCurrent && !(binding.Length > 0 && retiring == binding))
+        {
+            return BindingEnded;
+        }
+
+        var transaction = _db.CreateTransaction();
+        var queued = new List<Task>();
+        transaction.AddCondition(Condition.HashEqual(control, MarkerBinding.IdentityField, id));
+        transaction.AddCondition(Condition.HashEqual(control, viaCurrent ? bindingField : MarkerBinding.RetiringField, binding));
+        var deleted = transaction.KeyDeleteAsync(key, Master);
+        if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
+        {
+            return await deleted.ConfigureAwait(false) ? 1 : 0;
+        }
+
+        // Aborted: the identity or the binding moved, or an unrelated field of the record did. The next pass reads again and says which.
+        return null;
+    }
+
     private async Task<RedisValue> CurrentBindingAsync(RedisKey control)
     {
         var field = await _db.HashGetAsync(control, MarkerBinding.BindingFieldName, Master).ConfigureAwait(false);
-        return await _db.HashGetAsync(control, field.IsNull ? MarkerBinding.IdentityField : (string)field!, Master).ConfigureAwait(false);
+        return await _db.HashGetAsync(control, field.IsNull ? MarkerBinding.IdentityField : field.ToString(), Master).ConfigureAwait(false);
     }
 }

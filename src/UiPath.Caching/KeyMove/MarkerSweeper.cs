@@ -71,17 +71,17 @@ internal sealed class MarkerSweeper(IDatabase control, MoveScripts scripts, Move
             return default;
         }
 
-        var current = await control.HashGetAsync(record, head[1].IsNull ? MarkerBinding.IdentityField : (string)head[1]!, Master).ConfigureAwait(false);
+        var current = await control.HashGetAsync(record, head[1].IsNull ? MarkerBinding.IdentityField : head[1].ToString(), Master).ConfigureAwait(false);
         var markers = new List<(string Field, string Value)>();
         await foreach (var entry in control.HashScanAsync(record, FieldPrefix + "*", pageSize: ScanPage, flags: Master).WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            markers.Add(((string)entry.Name!, (string)entry.Value!));
+            markers.Add((entry.Name.ToString(), entry.Value.ToString()));
         }
 
         var (obsolete, helped, orphans) = (0, 0, 0);
         foreach (var (field, value) in markers)
         {
-            if (!MarkerBinding.IsLive(value, current.IsNull ? null : (string)current!, head[2].IsNull ? null : (string)head[2]!))
+            if (!MarkerBinding.IsLive(value, current.IsNull ? null : current.ToString(), head[2].IsNull ? null : head[2].ToString()))
             {
                 obsolete += await scripts.SupersessionGcAsync(record, field, value).ConfigureAwait(false) == 1 ? 1 : 0;
                 continue;

@@ -71,7 +71,7 @@ internal sealed class UnmarkQueue(TimeProvider clock, KeyMoveOptions options, Fu
             _items.Enqueue(item);
         }
 
-        foreach (var group in due.GroupBy(i => (string)i.Control!))
+        foreach (var group in due.GroupBy(i => i.Control.ToString()))
         {
             foreach (var batch in group.Chunk(options.UnmarkBatch))
             {
