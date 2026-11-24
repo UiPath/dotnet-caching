@@ -22,7 +22,7 @@ internal sealed partial class KeyMoveClient<T>
         _ => SchedulePointStep.Fill,
     };
 
-    private static (WriteResult Result, bool Rerun) FillOutcome(long code, AdmittedUnit unit) => code switch
+    private static (WriteResult Result, bool Rerun) WriteFillOutcome(long code, AdmittedUnit unit) => code switch
     {
         MoveScripts.IdentityMismatch when unit.Readmit() => (default, true),
         MoveScripts.IdentityMismatch or MoveScripts.DestinationExists => (WriteOutcome.NotSent, false),
@@ -31,6 +31,8 @@ internal sealed partial class KeyMoveClient<T>
 
     private static void KeepFillWinner(FillBox<T> box, PathRead<T> held)
     {
+        box.Lost = true;
+        box.Unreadable = held.Kind == ReadOutcome.Unreadable;
         if (held.Kind == ReadOutcome.Found)
         {
             box.Stored = held.Value;
@@ -131,7 +133,7 @@ internal sealed partial class KeyMoveClient<T>
             KeepFillWinner(winner, held);
         }
 
-        return FillOutcome(code, unit);
+        return WriteFillOutcome(code, unit);
     }
 
     private bool CreateIsClosed(KeyMoveMode mode) => mode is KeyMoveMode.Closed or KeyMoveMode.Union || (mode == KeyMoveMode.S2 && _p.NoOrigin);

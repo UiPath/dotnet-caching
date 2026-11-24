@@ -18,7 +18,7 @@ public sealed class PinHostTests
 
         var router = provider.GetRequiredService<IRouter>();
 
-        var read = async () => await router.Get<Item>("items").TryGetAsync("k", Ct);
+        var read = async () => await router.Get<Item>("items").GetAsync("k", Ct);
         await read.Should().ThrowAsync<CacheUnavailableException>();
         source.Reads.Should().Be(0);
         await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
@@ -32,7 +32,7 @@ public sealed class PinHostTests
 
         var router = provider.GetRequiredService<IRouter>();
 
-        var read = async () => await router.Get<Item>("items").GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), default, Ct);
+        var read = async () => await router.Get<Item>("items").GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), Ct);
         await read.Should().ThrowAsync<CacheUnavailableException>();
         source.Reads.Should().Be(0);
         source.Writes.Should().Be(0);
@@ -45,7 +45,7 @@ public sealed class PinHostTests
         var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         await using var provider = Build(source, "g", _ => { });
 
-        var value = await provider.GetRequiredService<IRouter>().Get<Item>("items").GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), default, Ct);
+        var value = await provider.GetRequiredService<IRouter>().Get<Item>("items").GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), Ct);
 
         value.Should().Be(new Item("made"));
         source.Writes.Should().Be(1);
@@ -151,8 +151,8 @@ public sealed class PinHostTests
                 },
                 Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
-            var write = await router.Get<Item>("items").SetAsync("k", new Item("v"), default, Ct);
-            write.Should().Be(WriteOutcome.NotSent);
+            var write = await router.Get<Item>("items").SetAsync("k", new Item("v"), Ct);
+            write.Should().BeFalse();
             source.Writes.Should().Be(0);
         }
         finally

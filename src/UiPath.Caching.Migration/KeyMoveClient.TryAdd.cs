@@ -5,7 +5,123 @@ namespace UiPath.Caching.Migration;
 
 internal sealed partial class KeyMoveClient<T>
 {
-    /// <summary>Reads the union and creates the key only if absent, using the write form for the current state. The create replaces the fence on the side it writes.</summary>
+    public static NotSupportedException Refused(string what) => new($"{what} has no checked form while the group's keys move; it is available again in the library's own formats.");
+
+    ValueTask<TryAddResult<T>> IPathClient<T>.TryAddAsync(string key, T? value, DateTimeOffset? deadline, CancellationToken cancellationToken)
+    {
+        if (value is not null)
+        {
+            var lifetime = deadline is { } at ? at - _p.Clock.GetUtcNow() : (TimeSpan?)null;
+            return TryAddAsync(key, value, lifetime, cancellationToken);
+        }
+
+        return Moving
+            ? ValueTask.FromResult(TryAddResult<T>.Failed(WriteOutcome.NotSent))
+            : _p.Plain.TryAddAsync(key, null, deadline, cancellationToken);
+    }
+
+    /// <summary>The library's swap, refused while the keys move.</summary>
+    public ValueTask<SwapResult<T>> SetIfChangedAsync(string key, T? value, IEqualityComparer<T> comparer, DateTimeOffset? deadline, CancellationToken cancellationToken) =>
+        Moving ? throw Refused("A compare-and-swap") : _p.Plain.SetIfChangedAsync(key, value, comparer, deadline, cancellationToken);
+
+    /// <summary>A refresh runs where the key lives: through the library when no key move applies, and refused while the keys move.</summary>
+    public ValueTask<WriteResult> RefreshAsync(string key, CacheExpiry expiry, CancellationToken cancellationToken) =>
+        Moving ? throw Refused("A refresh") : _p.Plain.RefreshAsync(key, expiry, cancellationToken);
+
+    /// <summary>The library's fill; while the keys move, the admitted fill of a managed state, and none where writes are plain.</summary>
+    public async ValueTask<FillResult<T>> TryFillAsync(string key, T? value, DateTimeOffset? deadline, CancellationToken cancellationToken)
+    {
+        if (!Moving)
+        {
+            return await _p.Plain.TryFillAsync(key, value, deadline, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (value is null)
+        {
+            return default;
+        }
+
+        // Plain writes land on the in-place key while the reads prefer the native one, and the move can advance between the read and the write: no admitted form exists, so the fill is refused.
+        if (PlanFor(write: true).Mode == KeyMoveMode.Plain)
+        {
+            return default;
+        }
+
+        var box = new FillBox<T>();
+        var written = await FillAsync(key, value, deadline, box, cancellationToken).ConfigureAwait(false);
+        return written.Outcome switch
+        {
+            WriteOutcome.Committed => new FillResult<T>(FillOutcome.Added, null, deadline),
+            _ when box.Lost && box.Stored is { } stored => new FillResult<T>(FillOutcome.Existed, stored, box.StoredExpiration),
+            _ when box.Lost && box.Unreadable => new FillResult<T>(FillOutcome.Unreadable, null),
+            _ => default,
+        };
+    }
+
+    public ValueTask<bool?> ContainsAsync(string key, CancellationToken cancellationToken) => Moving ? ValueTask.FromResult<bool?>(null) : _p.Plain.ContainsAsync(key, cancellationToken);
+
+    /// <summary>The remaining life: the library's own read when no key move applies, otherwise a PTTL on the side the reads use.</summary>
+    public async ValueTask<TimeSpan?> TimeToLiveAsync(string key, CancellationToken cancellationToken)
+    {
+        if (!Moving)
+        {
+            return await _p.Plain.TimeToLiveAsync(key, cancellationToken).ConfigureAwait(false);
+        }
+
+        var expiration = await ExpireTimeAsync(key, cancellationToken).ConfigureAwait(false);
+        return expiration is { } at ? at - _p.Clock.GetUtcNow() : null;
+    }
+
+    public async ValueTask<DateTimeOffset?> ExpireTimeAsync(string key, CancellationToken cancellationToken)
+    {
+        if (!Moving)
+        {
+            return await _p.Plain.ExpireTimeAsync(key, cancellationToken).ConfigureAwait(false);
+        }
+
+        // The sides the read plan reads, in its order: S5 only N, S1 and S2 only L, otherwise N, L, then N again. The life alone is asked for, so nothing is decoded or promoted.
+        var data = Data;
+        if (data is null || !data.IsConnected())
+        {
+            throw new CacheUnavailableException($"Cache '{_p.CacheId}' could not answer a read of the expiry.");
+        }
+
+        try
+        {
+            foreach (var onSource in ExpirySides())
+            {
+                if (onSource)
+                {
+                    var snap = await Source.SnapshotAsync(key, cancellationToken).ConfigureAwait(false);
+                    if (snap.Kind == ReadOutcome.Found)
+                    {
+                        return snap.TtlMs < 0 ? null : ExpirationAfter(snap.TtlMs);
+                    }
+
+                    continue;
+                }
+
+                var life = await data.Db.KeyTimeToLiveAsync(Key(Native(key)), Master).ConfigureAwait(false);
+                if (life is { } span)
+                {
+                    return ExpirationAfter((long)Math.Ceiling(span.TotalMilliseconds));
+                }
+
+                if (await data.Db.KeyExistsAsync(Key(Native(key)), Master).ConfigureAwait(false))
+                {
+                    return null;
+                }
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            throw new CacheUnavailableException($"Cache '{_p.CacheId}' could not answer a read of the expiry.", ex);
+        }
+    }
+
+    /// <summary>Creates an absent key using the write form for the current state, after checking both sides.</summary>
     /// <param name="lifetime">The claim's relative life; null for none. A create is new data, so its life is relative to the create.</param>
     public async ValueTask<TryAddResult<T>> TryAddAsync(string key, T value, TimeSpan? lifetime, CancellationToken cancellationToken)
     {
@@ -50,11 +166,11 @@ internal sealed partial class KeyMoveClient<T>
         }
     }
 
-    async ValueTask<AddResult> IPathClient<T>.TryAddAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken)
+    async ValueTask<AddResult> IPathClient<T>.TryCreateAsync(string key, T value, DateTimeOffset? deadline, CancellationToken cancellationToken)
     {
         if (PlanFor(write: true).Mode == KeyMoveMode.Plain)
         {
-            return await _p.Plain.TryAddAsync(key, value, deadline, cancellationToken).ConfigureAwait(false);
+            return await _p.Plain.TryCreateAsync(key, value, deadline, cancellationToken).ConfigureAwait(false);
         }
 
         TimeSpan? lifetime = deadline - _p.Clock.GetUtcNow();
@@ -82,6 +198,18 @@ internal sealed partial class KeyMoveClient<T>
         MoveScripts.Published => TryAddResult<T>.Created,
         MoveScripts.DestinationExists => TryAddResult<T>.Exists(null),
         _ => TryAddResult<T>.Failed(WriteOutcome.NotSent),
+    };
+
+    private DateTimeOffset? ExpirationAfter(long milliseconds) =>
+        milliseconds < 0 ? null : _p.Clock.GetUtcNow().AddMilliseconds(milliseconds);
+
+    // Ask for expiry without decoding or promoting a value.
+    // True for L, read through the source side; false for N.
+    private bool[] ExpirySides() => PlanFor(write: false).Mode switch
+    {
+        KeyMoveMode.S5 => [false],
+        KeyMoveMode.S1 or KeyMoveMode.S2 => [true],
+        _ => [false, true, false],
     };
 
     private async ValueTask<TryAddResult<T>> PlainCreateAsync(string key, T value, long px, CancellationToken cancellationToken)

@@ -110,8 +110,8 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         var key = (RedisKey)$"n:{_cacheName},c:t";
         try
         {
-            (await cache.TryAddAsync("t", [1, 2], CacheExpiry.After(TimeSpan.FromMinutes(10)), Ct)).Should().Be(AddOutcome.Added);
-            (await cache.TryAddAsync("t", [9], CacheExpiry.After(TimeSpan.FromMinutes(10)), Ct)).Should().Be(AddOutcome.Exists);
+            (await cache.TryAddAsync("t", [1, 2], TimeSpan.FromMinutes(10), Ct)).Should().BeTrue();
+            (await cache.TryAddAsync("t", [9], TimeSpan.FromMinutes(10), Ct)).Should().BeFalse();
 
             var db = _redis!.GetDatabase();
             ((byte[]?)await db.StringGetAsync(key)).Should().Equal(LegacyEnvelope.Write(new List<long> { 1, 2 }));
@@ -155,7 +155,7 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         try
         {
             var runs = 0;
-            var value = await router.Get<List<long>>(_cacheName).GetOrAddAsync("nul", _ => { runs++; return Task.FromResult<List<long>?>([7]); }, CacheExpiry.After(TimeSpan.FromMinutes(5)), Ct);
+            var value = await router.Get<List<long>>(_cacheName).GetOrAddAsync("nul", _ => { runs++; return Task.FromResult<List<long>?>([7]); }, TimeSpan.FromMinutes(5), Ct);
 
             if (cacheNulls)
             {

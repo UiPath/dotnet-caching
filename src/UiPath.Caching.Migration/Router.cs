@@ -51,6 +51,17 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
     internal KeyMoveNode? KeyMove { get; init; }
 
+    public async Task ClearAsync(string cacheName, CancellationToken cancellationToken = default)
+    {
+        _core.ThrowIfStopped();
+        if (!_caches.TryGetValue(cacheName, out var entry))
+        {
+            throw new KeyNotFoundException($"No cache named '{cacheName}' is registered with the router.");
+        }
+
+        await ((IRouterClear)entry.Cache).ClearAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public Task EnterBypassAsync(CancellationToken cancellationToken = default)
     {
         _core.ThrowIfStopped();
@@ -64,7 +75,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
     }
 
 
-    public IRoutedCache<T> Get<T>(string cacheName)
+    public ICache<T> Get<T>(string cacheName)
         where T : class
     {
         _core.ThrowIfStopped();
@@ -78,7 +89,7 @@ internal sealed class Router : IRouter, IAsyncDisposable
             throw new KeyNotFoundException($"No cache named '{cacheName}' is registered with the router.");
         }
 
-        return entry.Cache as IRoutedCache<T>
+        return entry.Cache as ICache<T>
             ?? throw new InvalidOperationException($"Cache '{cacheName}' holds {entry.Type.Name}, not {typeof(T).Name}.");
     }
 

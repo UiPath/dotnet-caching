@@ -122,7 +122,7 @@ public static class RouterServiceCollectionExtensions
         options.RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance;
         options.RemoveUnreadable = false;
 
-        // A stored null then reads as found; each registration decides with CacheNulls whether that is a hit. The router never writes a null.
+        // Each registration opts into treating a cached null as a hit.
         options.CacheNullValues = true;
     }
 
@@ -332,8 +332,9 @@ public static class RouterServiceCollectionExtensions
         var topics = root.GetRequiredKeyedService<ITopicFactory>(StackName).Get();
         var streams = new PrefixStrategy(RedisKeyspaces.Streams, options);
         var group = source.ToString().ToLowerInvariant();
+        var libraryCache = root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis);
         return new LibraryParts(
-            root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis).AsMigrationCache(),
+            libraryCache.AsMigrationCache(),
             connector,
             topics,
             root.GetRequiredKeyedService<ICacheEventFactory>(StackName),
@@ -341,7 +342,9 @@ public static class RouterServiceCollectionExtensions
             LibrarySettleWithin(root, builder.SettleBound),
             started,
             (key, cancellationToken) => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key, cancellationToken),
-            keyMove is { HasGroups: true } ? new NodePlane(keyMove, root.GetRequiredService<TimeProvider>(), builder.KeyMove?.Alert) : null);
+            keyMove is { HasGroups: true } ? new NodePlane(keyMove, root.GetRequiredService<TimeProvider>(), builder.KeyMove?.Alert) : null,
+            libraryCache,
+            root.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(StackName).Value.CacheNullValues);
     }
 
     private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, KeyMoveNode? keyMove, AdvertisementSetup? setup, CancellationToken cancellationToken)

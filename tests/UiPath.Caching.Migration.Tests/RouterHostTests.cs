@@ -25,7 +25,7 @@ public sealed class RouterHostTests
         router.Mode.Should().Be(RouterMode.BypassLibrary);
         router.ModeReason.Should().Be(RouterModeReason.LibraryUnavailable);
         var cache = router.Get<Item>("items");
-        var value = await cache.GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), default, Ct);
+        var value = await cache.GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), Ct);
         value.Should().Be(new Item("made"));
         logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Error && entry.Message.Contains("library stack could not start", StringComparison.Ordinal));
         logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Information && entry.Message.Contains("Caching router settings", StringComparison.Ordinal));
@@ -41,7 +41,7 @@ public sealed class RouterHostTests
         var router = host.Services.GetRequiredService<IRouter>();
         router.Mode.Should().Be(RouterMode.BypassLibrary);
         router.ModeReason.Should().Be(RouterModeReason.LibraryUnavailable);
-        (await router.Get<Item>("items").GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), default, Ct)).Should().Be(new Item("made"));
+        (await router.Get<Item>("items").GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), Ct)).Should().Be(new Item("made"));
         await host.StopAsync(Ct);
     }
 
@@ -58,6 +58,25 @@ public sealed class RouterHostTests
         clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3), "the rollback is bounded, so the first attempt ended well inside the start bound");
         router.Mode.Should().Be(RouterMode.BypassLibrary);
         await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+    }
+
+    [Fact]
+    public async Task A_direct_library_cache_and_a_routed_cache_live_in_one_container_and_the_router_touches_only_its_own()
+    {
+        await using var provider = Build(connector: false, identity: null);
+        await new RouterHostedService(provider).StartAsync(Ct);
+        var router = provider.GetRequiredService<IRouter>();
+
+        var routed = router.Get<Item>("items");
+        var direct = provider.GetRequiredService<ICache<Item>>();
+
+        routed.Should().BeOfType<RoutedCache<Item>>();
+        direct.Should().NotBeOfType<RoutedCache<Item>>();
+        direct.Name.Should().NotBe(routed.Name);
+        (await routed.GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("made")), Ct)).Should().Be(new Item("made"));
+        var unregistered = () => router.Get<Item>("direct-only");
+        unregistered.Should().Throw<KeyNotFoundException>("a cache the app uses directly is not the router's");
+        provider.GetRequiredService<ICache<Item>>().Should().NotBeSameAs(routed);
     }
 
     [Fact]

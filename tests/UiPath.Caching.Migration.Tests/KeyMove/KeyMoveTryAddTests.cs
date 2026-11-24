@@ -127,15 +127,23 @@ public sealed class KeyMoveTryAddTests(RedisFixture fixture)
     }
 
     [Fact]
-    public async Task S0_and_an_unmanaged_cache_create_by_a_plain_NX_on_L_and_a_dead_life_is_refused()
+    public async Task S0_creates_through_the_source_side_and_a_dead_life_is_refused_before_any_send()
     {
-        await using var kit = await KeyMoveKit.CreateAsync(fixture);
+        RecordingMoveSide? side = null;
+        await using var kit = await KeyMoveKit.CreateAsync(
+            fixture,
+            source: k => side = new RecordingMoveSide(new InPlaceMoveSide<Item>(k.SidePlane, k.Group, k.L, ItemCodec.Instance, null, k.Clock)));
         await kit.SetStateAsync("S0");
 
         (await kit.Client.TryAddAsync("k", new Item("a"), null, Ct)).Kind.Should().Be(TryAddKind.Created);
         (await kit.Client.TryAddAsync("k", new Item("b"), null, Ct)).Kind.Should().Be(TryAddKind.Exists);
+        var sends = side!.Calls.Count;
         (await kit.Client.TryAddAsync("z", new Item("b"), TimeSpan.Zero, Ct)).Kind.Should().Be(TryAddKind.Failed);
-        (await kit.GetAsync(kit.L("k"))).Should().Be("a");
+
+        side.Calls.Count(call => call == "Create").Should().Be(2);
+        side.Calls.Count.Should().Be(sends);
+        kit.Plain.TryAdds.Should().Be(0);
+        kit.Schedule.Steps.Should().BeEmpty();
     }
 
     [Fact]

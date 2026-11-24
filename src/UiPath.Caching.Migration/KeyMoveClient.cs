@@ -36,6 +36,10 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
 
     public IReadOnlyCollection<string> InFlightKeys => _retries.OutstandingKeys;
 
+    public bool Moving => PlanFor(write: false).Mode != KeyMoveMode.Plain || PlanFor(write: true).Mode != KeyMoveMode.Plain;
+
+    public ILibraryBatch<T>? PlainBatch => Moving ? null : _p.Plain.PlainBatch;
+
     internal MoveRetrySet Retries => _retries;
 
     internal NegativeHints Hints => _hints;

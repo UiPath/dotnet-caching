@@ -182,6 +182,52 @@ public sealed class KeyMoveRouterTests(RedisFixture fixture)
     }
 
     [Fact]
+    public async Task The_ICache_members_follow_their_rule_in_a_key_move_state()
+    {
+        var clock = NewClock();
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, clock: clock);
+        await using var node = NodeOf(kit, clock, new FakeBus());
+        ICache<Item> cache = node.Cache;
+        await kit.PrepareAsync("k", "t");
+        await kit.SetStateAsync("S3");
+        await kit.Db.StringSetAsync(kit.L("k"), "v0", TimeSpan.FromMinutes(10));
+
+        // A routed read promotes, a conditional create is the key move form, the remaining life comes from the same read.
+        (await cache.GetAsync("k", Ct))!.Name.Should().Be("v0");
+        (await kit.GetAsync(kit.N("k"))).Should().Be("v0");
+        (await cache.TryAddAsync("k", new Item("x"), Ct)).Should().BeFalse();
+        (await cache.TryAddAsync("t", new Item("claim"), TimeSpan.FromMinutes(5), Ct)).Should().BeTrue();
+        (await kit.GetAsync(kit.N("t"))).Should().Be("claim");
+        (await cache.TimeToLiveAsync("k", Ct))!.Value.Should().BeGreaterThan(TimeSpan.FromMinutes(9));
+        (await cache.ContainsAsync("t", Ct)).Should().BeTrue();
+
+        // A refresh has no checked form while the keys move.
+        var refresh = async () => await cache.RefreshAsync("k", TimeSpan.FromMinutes(1), Ct);
+        await refresh.Should().ThrowAsync<NotSupportedException>();
+        (await cache.RemoveAsync("t", Ct)).Should().BeTrue();
+        (await kit.ExistsAsync(kit.N("t"))).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task The_router_refuses_to_clear_a_cache_while_its_group_moves_and_clears_it_again_after()
+    {
+        var clock = NewClock();
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, clock: clock);
+        await using var node = NodeOf(kit, clock, new FakeBus());
+        await kit.PrepareAsync("k");
+        await kit.SetStateAsync("S3");
+
+        var clear = async () => await node.Router.ClearAsync(node.CacheName, Ct);
+
+        await clear.Should().ThrowAsync<NotSupportedException>();
+        node.SourceBackend.Clears.Should().Be(0, "nothing is cleared on either side: the move has its own clear");
+
+        await kit.SetStateAsync("S0");
+        await node.Router.ClearAsync(node.CacheName, Ct);
+        node.SourceBackend.Clears.Should().Be(1);
+    }
+
+    [Fact]
     public async Task A_managed_cache_in_key_move_never_falls_back_to_the_source_for_a_write_that_the_state_closes()
     {
         var clock = NewClock();
