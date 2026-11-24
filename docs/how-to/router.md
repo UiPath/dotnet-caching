@@ -19,13 +19,19 @@ services.AddCachingRouter(configuration, router => router
     })
     .UseLibraryWhen(group => flags.IsOn(group))         // true: library path; read once per call
     .UseBypassWhen(() => settings.BypassLibrary)        // optional live kill switch, read on every call
-    .UseEnvelope(new OldEnvelopeSerializer()));         // ISerializerProxy<byte[]> of the old value format
+    .UseEnvelope(new OldEnvelopeSerializer()));         // optional: ISerializerProxy<byte[]> of the old value format
 
 var folders = provider.GetRequiredService<IRouter>().Get<Folders>("folders");
 var value = await folders.GetOrAddAsync(key, token => LoadAsync(key, token), CacheExpiry.After(TimeSpan.FromMinutes(5)));
 ```
 
 The router builds a Redis-only named stack on the application's connector (`AddNamedCachingOnPrimaryConnection`) with a pass-through key strategy, your envelope as the only serializer and `RemoveUnreadable = false`. The stack marks the envelope header-free (`IHeaderFreeSerializerProxy`), so it must never start a value with a byte from 0x01 to 0x1F other than tab, line feed or carriage return; a write that would fails with `InvalidOperationException`. It compiles against the public `UiPath.Caching` API only.
+
+## Without an envelope
+
+Leave out `UseEnvelope` when both sides of the move are library formats: a key separator change (for example `:` to `$`), or a move to a new Redis instance with the connection prefix dropped. The in-place keys then already hold the library's own format.
+
+The router's library cache uses the library's own JSON format, and `"json"` as a write format means that JSON. The in-place side keeps the library's system fields. `UseChannelBridge` is refused without an envelope, since the bridge carries the older client's invalidations and there is no older client.
 
 ## Behaviour
 

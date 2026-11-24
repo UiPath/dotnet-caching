@@ -26,7 +26,7 @@ public static class RouterConformance
         ArgumentNullException.ThrowIfNull(samples);
         var router = services.GetRequiredService<IRouter>() as Router ?? throw new InvalidOperationException("The conformance check needs the router that AddCachingRouter registers.");
         var cache = router.Find<T>(cacheName) ?? throw new ArgumentException($"No cache named '{cacheName}' of {typeof(T).Name} is registered with the router.", nameof(cacheName));
-        var envelope = router.Envelope ?? throw new InvalidOperationException("The router has no envelope.");
+        var envelope = router.Envelope ?? services.GetRequiredKeyedService<ISerializerProxy<byte[]>>(RouterServiceCollectionExtensions.StackName);
         var connector = services.GetRequiredService<IRedisConnector>();
         await connector.ConnectAsync(cancellationToken).ConfigureAwait(false);
         var store = services.GetRequiredKeyedService<ICacheFactory>(RouterServiceCollectionExtensions.StackName).CreateCache(KnownCacheProviderNames.Redis).AsMigrationCache();

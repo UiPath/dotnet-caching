@@ -4,7 +4,7 @@ namespace UiPath.Caching.Migration;
 
 /// <summary>Picks the write and read policy of one call by its group.</summary>
 /// <remarks>
-/// A write is MessagePack only while the group is switched and the gate is open, the envelope in every other case.
+/// A write is MessagePack only while the group is switched and the gate is open, the envelope in every other case (the library's own JSON when the router has none).
 /// The setting is read on every write. An answer that throws, or that names no known format, writes the envelope and clears the group's wanted bit: the group is never moved toward MessagePack by a setting that cannot be read, and holds the gate no longer.
 /// The library still applies its own negotiation to a MessagePack write, so a node that joined without the pin turns the write back to the envelope there.
 /// </remarks>
