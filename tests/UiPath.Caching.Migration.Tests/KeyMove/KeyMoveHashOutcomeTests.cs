@@ -49,12 +49,12 @@ public sealed class KeyMoveHashOutcomeTests(RedisFixture fixture)
         path.KeepsStoredOnFill.Should().BeTrue();
         path.SettleWithin.Should().Be(TimeSpan.FromSeconds(30));
         path.InFlightKeys.Should().BeEmpty();
-        kit.Client.Hints.Set("k", kit.Kit.Id);
+        kit.Client.Hints.Set("k", kit.Kit.Id, MoveSide.Legacy);
         path.KeyChanged("k");
-        kit.Client.Hints.Has("k", kit.Kit.Id).Should().BeFalse();
-        kit.Client.Hints.Set("k", kit.Kit.Id);
+        kit.Client.Hints.Has("k", kit.Kit.Id, MoveSide.Legacy).Should().BeFalse();
+        kit.Client.Hints.Set("k", kit.Kit.Id, MoveSide.Legacy);
         path.Gap();
-        kit.Client.Hints.Has("k", kit.Kit.Id).Should().BeFalse();
+        kit.Client.Hints.Has("k", kit.Kit.Id, MoveSide.Legacy).Should().BeFalse();
         await path.StopRetriesAsync();
     }
 

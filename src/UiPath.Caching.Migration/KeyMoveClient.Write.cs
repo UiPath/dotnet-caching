@@ -27,6 +27,10 @@ internal sealed partial class KeyMoveClient<T>
             KeyMoveMode.S2 when !_p.NoOrigin => [SourceStep(delete)],
             KeyMoveMode.S3 or KeyMoveMode.S4 => DualWriteSteps(delete),
             KeyMoveMode.S5 => NativeWriteSteps(delete, plan.Act is { Swept: true }),
+
+            // Reverse: Src is N and the target is L under GL.
+            KeyMoveMode.ReverseS1 when !_p.NoOrigin => [SourceStep(delete), WriteStep.BumpDel],
+            KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4 when !_p.NoOrigin => [WriteStep.SrcDel, delete ? WriteStep.BumpDel : WriteStep.BumpSet],
             _ => null,
         };
     }
@@ -114,7 +118,8 @@ internal sealed partial class KeyMoveClient<T>
             return ClosedOrUnknown(history.Applied);
         }
 
-        if (!TryEncodeWrite(writeValue, steps, out var inPlace, out var native))
+        var reverse = KeyMovePlanning.IsReverseWrite(plan.Mode);
+        if (!TryEncodeWrite(writeValue, steps, reverse, out var sourceBytes, out var targetBytes))
         {
             return WriteOutcome.NotSent;
         }
@@ -143,7 +148,7 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         using var unit = admitted;
-        var form = new Form(key, steps, inPlace, native, px, unit.Id, MoveScripts.NewNonce(), absolute) { First = !history.Attempted, Prior = history.Applied, Lease = lease };
+        var form = new Form(key, steps, sourceBytes, targetBytes, px, unit.Id, MoveScripts.NewNonce(), absolute) { Reverse = reverse, First = !history.Attempted, Prior = history.Applied, Lease = lease };
         var ran = await RunStepsAsync(form, 0, unit, cancellationToken).ConfigureAwait(false);
         if (ran.Rerun)
         {
@@ -203,16 +208,19 @@ internal sealed partial class KeyMoveClient<T>
         return px < 1 ? (true, MoveScripts.NoExpiry) : (false, px);
     }
 
-    private bool TryEncodeWrite(T? value, WriteStep[] steps, out byte[]? inPlace, out byte[]? native)
+    // Forward, Src is L and the target N; reverse, Src is N and the target L in its own format.
+    private bool TryEncodeWrite(T? value, WriteStep[] steps, bool reverse, out byte[]? sourceBytes, out byte[]? targetBytes)
     {
-        inPlace = null;
-        native = null;
+        sourceBytes = null;
+        targetBytes = null;
         try
         {
             if (value is not null)
             {
-                inPlace = steps.Contains(WriteStep.SrcSet) ? Source.Codec.Encode(value) : null;
-                native = steps.Contains(WriteStep.BumpSet) || steps.Contains(WriteStep.BumpSetMarked) || steps.Contains(WriteStep.NativeSet) ? _p.Native.Encode(value) : null;
+                var sourceCodec = reverse ? _p.Native : Source.Codec;
+                var targetCodec = reverse ? Source.Codec : _p.Native;
+                sourceBytes = steps.Contains(WriteStep.SrcSet) ? sourceCodec.Encode(value) : null;
+                targetBytes = steps.Contains(WriteStep.BumpSet) || steps.Contains(WriteStep.BumpSetMarked) || steps.Contains(WriteStep.NativeSet) ? targetCodec.Encode(value) : null;
             }
 
             return true;
@@ -374,24 +382,21 @@ internal sealed partial class KeyMoveClient<T>
             return new StepSent(MoveScripts.Superseded);
         }
 
-        var n = Native(form.CallerKey);
         if (step == WriteStep.BumpSetMarked)
         {
-            return await SendMarkedAsync(data, form, n, px, cancellationToken).ConfigureAwait(false);
+            return await SendMarkedAsync(data, form, px, cancellationToken).ConfigureAwait(false);
         }
 
         try
         {
             var code = step switch
             {
-                WriteStep.SrcDel => await Source.DeleteAsync(form.CallerKey, form.Id).ConfigureAwait(false),
-                WriteStep.SrcSet => await Source.SetAsync(form.CallerKey, form.Id, form.SourceBytes ?? throw MissingWriteValue(), px, false).ConfigureAwait(false),
-                WriteStep.BumpSet when retry => await data.Scripts.BumpIfFenceAsync(Fenced(data, n), form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Set, form.NativeBytes ?? throw MissingWriteValue(), px).ConfigureAwait(false),
-                WriteStep.BumpDel when retry => await data.Scripts.BumpIfFenceAsync(Fenced(data, n), form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Delete, markerField: MarkerFieldOf(data, form.CallerKey)).ConfigureAwait(false),
-                WriteStep.BumpSet => await data.Scripts.BumpAsync(Fenced(data, n), form.Id, form.Nonce, FenceTtlMs, BumpOperation.Set, form.NativeBytes ?? throw MissingWriteValue(), px).ConfigureAwait(false),
-                WriteStep.BumpDel => await data.Scripts.BumpAsync(Fenced(data, n), form.Id, form.Nonce, FenceTtlMs, BumpOperation.Delete, markerField: MarkerFieldOf(data, form.CallerKey)).ConfigureAwait(false),
-                WriteStep.NativeSet => BooleanCode(await data.Db.StringSetAsync(Key(n), form.NativeBytes ?? throw MissingWriteValue(), Expiry(px), When.Always, Master).ConfigureAwait(false)),
-                _ => BooleanCode(await data.Db.KeyDeleteAsync(Key(n), Master).ConfigureAwait(false)),
+                WriteStep.SrcDel or WriteStep.SrcSet => await SendSourceAsync(data, form, step, px).ConfigureAwait(false),
+                WriteStep.BumpSet when retry => await data.Scripts.BumpIfFenceAsync(TargetOf(data, form), form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Set, form.TargetBytes ?? throw MissingWriteValue(), px).ConfigureAwait(false),
+                WriteStep.BumpSet => await data.Scripts.BumpAsync(TargetOf(data, form), form.Id, form.Nonce, FenceTtlMs, BumpOperation.Set, form.TargetBytes ?? throw MissingWriteValue(), px).ConfigureAwait(false),
+                WriteStep.BumpDel => await SendBumpDeleteAsync(data, form, retry).ConfigureAwait(false),
+                WriteStep.NativeSet => BooleanCode(await data.Db.StringSetAsync(Key(Native(form.CallerKey)), form.TargetBytes ?? throw MissingWriteValue(), Expiry(px), When.Always, Master).ConfigureAwait(false)),
+                _ => BooleanCode(await data.Db.KeyDeleteAsync(Key(Native(form.CallerKey)), Master).ConfigureAwait(false)),
             };
             return new StepSent(code);
         }
@@ -401,14 +406,24 @@ internal sealed partial class KeyMoveClient<T>
         }
     }
 
+    private Task<long> SendBumpDeleteAsync(KeyMoveData data, Form form, bool retry)
+    {
+        var target = TargetOf(data, form);
+        var markerField = form.Reverse ? null : MarkerFieldOf(data, form.CallerKey);
+        return retry
+            ? data.Scripts.BumpIfFenceAsync(target, form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Delete, markerField: markerField)
+            : data.Scripts.BumpAsync(target, form.Id, form.Nonce, FenceTtlMs, BumpOperation.Delete, markerField: markerField);
+    }
+
     // A marked set with no reply may still apply; its permit is kept until it cannot.
-    private async ValueTask<StepSent> SendMarkedAsync(KeyMoveData data, Form form, string n, long px, CancellationToken cancellationToken)
+    private async ValueTask<StepSent> SendMarkedAsync(KeyMoveData data, Form form, long px, CancellationToken cancellationToken)
     {
         var now = _p.Clock.GetUtcNow();
         var deadline = now + _options.CommandTimeout;
         try
         {
-            var reply = await data.Scripts.BumpMarkedAsync(Fenced(data, n), form.Id, form.Nonce, FenceTtlMs, form.NativeBytes ?? throw MissingWriteValue(), px, data.Names.MarkerField(_p.InPlaceKey(form.CallerKey)), form.First, deadline.ToUnixTimeMilliseconds()).ConfigureAwait(false);
+            var n = Native(form.CallerKey);
+            var reply = await data.Scripts.BumpMarkedAsync(Fenced(data, n), form.Id, form.Nonce, FenceTtlMs, form.TargetBytes ?? throw MissingWriteValue(), px, data.Names.MarkerField(_p.InPlaceKey(form.CallerKey)), form.First, deadline.ToUnixTimeMilliseconds()).ConfigureAwait(false);
             return new StepSent(reply.Committed ? 1 : reply.Code, null, reply.Marker);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -425,6 +440,34 @@ internal sealed partial class KeyMoveClient<T>
         retry && form.Deadline is { } deadline ? MillisecondsLeft(deadline) : form.Px;
 
     private FencedKeys Fenced(KeyMoveData data, string n) => new(data.Names.ForwardFence(n), Key(n), ControlOf(data, n));
+
+    // The key a fenced step writes: N under G forward, L under GL in reverse.
+    private FencedKeys TargetOf(KeyMoveData data, Form form)
+    {
+        if (!form.Reverse)
+        {
+            return Fenced(data, Native(form.CallerKey));
+        }
+
+        var l = _p.InPlaceKey(form.CallerKey);
+        return new FencedKeys(data.Names.ReverseFence(l), Key(l), ControlOf(data, l));
+    }
+
+    // Forward, Src is L through its side; reverse, Src is N under its own control record.
+    private Task<long> SendSourceAsync(KeyMoveData data, Form form, WriteStep step, long px)
+    {
+        if (!form.Reverse)
+        {
+            return step == WriteStep.SrcDel
+                ? Source.DeleteAsync(form.CallerKey, form.Id)
+                : Source.SetAsync(form.CallerKey, form.Id, form.SourceBytes ?? throw MissingWriteValue(), px, false);
+        }
+
+        var n = Native(form.CallerKey);
+        return step == WriteStep.SrcDel
+            ? data.Scripts.SourceDeleteAsync(Key(n), ControlOf(data, n), form.Id)
+            : data.Scripts.SourceSetAsync(Key(n), ControlOf(data, n), form.Id, form.SourceBytes ?? throw MissingWriteValue(), px, false);
+    }
 
     private CacheUnavailableException Unavailable() => new($"Cache '{_p.CacheId}' is closed for writes while its group moves.");
 
@@ -458,7 +501,7 @@ internal sealed partial class KeyMoveClient<T>
         await At(SchedulePointStep.FenceObserve).ConfigureAwait(false);
         try
         {
-            form.Observed = await data.Db.StringGetAsync(data.Names.ForwardFence(Native(form.CallerKey)), Master).ConfigureAwait(false);
+            form.Observed = await data.Db.StringGetAsync(TargetOf(data, form).Fence, Master).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException && ex is not OperationCanceledException)
         {
@@ -467,8 +510,11 @@ internal sealed partial class KeyMoveClient<T>
         }
     }
 
-    private sealed record Form(string CallerKey, WriteStep[] Steps, byte[]? SourceBytes, byte[]? NativeBytes, long Px, string Id, string Nonce, DateTimeOffset? Deadline)
+    private sealed record Form(string CallerKey, WriteStep[] Steps, byte[]? SourceBytes, byte[]? TargetBytes, long Px, string Id, string Nonce, DateTimeOffset? Deadline)
     {
+        /// <summary>Src is N and the target is L under GL.</summary>
+        public bool Reverse { get; init; }
+
         public string? Observed { get; set; }
 
         /// <summary>True only while no attempt of this logical write has been sent.</summary>

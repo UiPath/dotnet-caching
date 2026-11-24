@@ -18,6 +18,15 @@ internal enum KeyMoveMode
     S4,
     S5,
 
+    /// <summary>A write in S1(rev): Src is N, then L is deleted under GL.</summary>
+    ReverseS1,
+
+    /// <summary>A write in S3(rev): N is deleted, then L is written under GL.</summary>
+    ReverseS3,
+
+    /// <summary>A write in S4(rev), with the forms of S3(rev).</summary>
+    ReverseS4,
+
     /// <summary>Union N-first with no promotion: the blind rule, a reverse state, and S4 with residue.</summary>
     Union,
 }

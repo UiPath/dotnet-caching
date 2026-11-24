@@ -34,7 +34,7 @@ public sealed class KeyMoveMarkerReadTests(RedisFixture fixture)
 
         kit.Schedule.Steps.Should().NotContain(SchedulePointStep.Publish).And.NotContain(SchedulePointStep.CompareDelete).And.NotContain(SchedulePointStep.ReadSource);
         meter.Count("cache.keymove.superseded_helped").Should().Be(1);
-        kit.Client.Hints.Has("k", kit.Client.PlanFor(write: false).Identity).Should().BeTrue("L has just been deleted, so the miss is a fact");
+        kit.Client.Hints.Has("k", kit.Client.PlanFor(write: false).Identity, MoveSide.Legacy).Should().BeTrue("L has just been deleted, so the miss is a fact");
     }
 
     [Theory]

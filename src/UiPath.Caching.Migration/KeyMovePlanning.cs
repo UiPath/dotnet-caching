@@ -28,6 +28,17 @@ internal static class KeyMovePlanning
         _ => otherwise,
     };
 
+    /// <summary>True for the write modes of the reverse direction, which only the clients that run their forms leave open.</summary>
+    public static bool IsReverseWrite(KeyMoveMode mode) => mode is KeyMoveMode.ReverseS1 or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4;
+
+    private static KeyMoveMode ReverseModeOf(string state) => state switch
+    {
+        "S1" => KeyMoveMode.ReverseS1,
+        "S3" => KeyMoveMode.ReverseS3,
+        "S4" => KeyMoveMode.ReverseS4,
+        _ => KeyMoveMode.Closed,
+    };
+
     private static KeyMoveMode WriteMode(GroupRules rules)
     {
         if (rules.Writes != WriteRule.Follow)
@@ -38,7 +49,7 @@ internal static class KeyMovePlanning
         return rules.Acting switch
         {
             null or { State: "S0" } => KeyMoveMode.Plain,
-            { Direction: "rev" } => KeyMoveMode.Closed,
+            { Direction: "rev", State: var state } => ReverseModeOf(state),
             { State: var state } => ModeOf(state, KeyMoveMode.Closed),
         };
     }

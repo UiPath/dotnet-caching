@@ -162,7 +162,7 @@ internal sealed partial class KeyMoveClient<T>
     {
         // Only the source existence probe is batched, using one pipeline of EXISTS on the masters.
         var identity = plan.Identity;
-        var candidates = missing.Where(k => !_hints.Has(k, identity)).ToList();
+        var candidates = missing.Where(k => !_hints.Has(k, identity, MoveSide.Legacy)).ToList();
         foreach (var hinted in missing.Except(candidates))
         {
             result[hinted] = PathRead<T>.Of(ReadOutcome.Absent);
