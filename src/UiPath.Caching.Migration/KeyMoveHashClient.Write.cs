@@ -25,6 +25,7 @@ internal sealed partial class KeyMoveHashClient<T>
             return _p.Plain.SetAsync(key, fields, options, cancellationToken);
         }
 
+        ThrowIfNoOriginReverseWrite(plan.Mode);
         ThrowIfMetadataRefused(options.Metadata, plan.Mode);
 
         return WriteManagedAsync(key, options.Mode == HashCacheSetOption.KeyReplace ? HashWriteKind.Replace : HashWriteKind.Merge, fields, options, null, plan, cancellationToken);
@@ -46,9 +47,9 @@ internal sealed partial class KeyMoveHashClient<T>
     // Where L is written, a format that has no field for metadata could not keep it: the write is refused before anything is stored.
     internal void ThrowIfMetadataRefused(IDictionary<string, string?>? metadata, KeyMoveMode mode)
     {
-        if (metadata is not null && mode is KeyMoveMode.S1 or KeyMoveMode.S2 && !_p.InPlace.CarriesMetadata)
+        if (metadata is not null && mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4 && !_p.InPlace.CarriesMetadata)
         {
-            throw new NotSupportedException($"The hash cache '{_p.CacheId}' keeps its hashes in a format that has no field for metadata until its keys move, so a write that carries metadata cannot run in state {mode}.");
+            throw new NotSupportedException($"The hash cache '{_p.CacheId}' keeps its in-place hashes in a format that has no field for metadata, so a write that carries metadata cannot run in state {mode}.");
         }
     }
 
@@ -73,6 +74,10 @@ internal sealed partial class KeyMoveHashClient<T>
                 return MovingSteps(plan, kind, residue);
             case KeyMoveMode.S5:
                 return MovedSteps(plan, kind);
+            case KeyMoveMode.ReverseS1 when !_p.NoOrigin:
+                return ReverseSourceSteps(kind);
+            case KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4 when !_p.NoOrigin:
+                return ReverseMovingSteps(plan, kind, residue);
             default:
                 return null;
         }
@@ -108,8 +113,26 @@ internal sealed partial class KeyMoveHashClient<T>
         return plan.Act is { Swept: true } ? [last] : [first, last];
     }
 
+    // S1(rev): Src is N and L is deleted under GL. A field write there is refused before it is built.
+    private static HashWriteStep[]? ReverseSourceSteps(HashWriteKind kind) => kind switch
+    {
+        HashWriteKind.Delete => [HashWriteStep.SrcDel, HashWriteStep.BumpDel],
+        HashWriteKind.Replace => [HashWriteStep.SrcWrite, HashWriteStep.BumpDel],
+        _ => null,
+    };
+
+    // S3(rev) and S4(rev): N is deleted first, then L is written under GL. A merge runs only where N holds no hash.
+    private static HashWriteStep[] ReverseMovingSteps(KeyMovePlan plan, HashWriteKind kind, bool residue) => kind switch
+    {
+        HashWriteKind.Delete => [HashWriteStep.SrcDel, HashWriteStep.BumpDel],
+        HashWriteKind.Replace => [HashWriteStep.SrcDel, HashWriteStep.DstWrite],
+        HashWriteKind.Merge => [HashWriteStep.DstWrite],
+        _ => plan.Mode == KeyMoveMode.ReverseS4 && !residue ? [HashWriteStep.DstFieldsDel] : [HashWriteStep.SrcFieldsDel, HashWriteStep.DstFieldsDel],
+    };
+
     private static bool NeedsSourceProbe(WriteRun run) =>
-        !run.Applied && (run.Kind == HashWriteKind.Merge && run.Plan.Mode is KeyMoveMode.S3 or KeyMoveMode.S4 || run.Kind == HashWriteKind.DeleteFields && run.Plan.Mode == KeyMoveMode.S4);
+        !run.Applied && (run.Kind == HashWriteKind.Merge && run.Plan.Mode is KeyMoveMode.S3 or KeyMoveMode.S4 or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4
+            || run.Kind == HashWriteKind.DeleteFields && run.Plan.Mode is KeyMoveMode.S4 or KeyMoveMode.ReverseS4);
 
     private static Turn EmptyWrite(WriteRun run)
     {
@@ -120,6 +143,16 @@ internal sealed partial class KeyMoveHashClient<T>
 
         run.Kind = HashWriteKind.Delete;
         return Turn.Again;
+    }
+
+    private bool IsNoOriginReverseWrite(KeyMoveMode mode) => _p.NoOrigin && KeyMovePlanning.IsReverseWrite(mode);
+
+    private void ThrowIfNoOriginReverseWrite(KeyMoveMode mode)
+    {
+        if (IsNoOriginReverseWrite(mode))
+        {
+            throw Unavailable();
+        }
     }
 
     private HashWriteStep[] MovingSteps(KeyMovePlan plan, HashWriteKind kind, bool residue) => kind switch
@@ -209,6 +242,11 @@ internal sealed partial class KeyMoveHashClient<T>
             return Turn.Done(await PlainAsync(run.KeyName, run.Kind, run.Fields, run.Options, run.Names, cancellationToken).ConfigureAwait(false));
         }
 
+        if (IsNoOriginReverseWrite(run.Plan.Mode))
+        {
+            return ClosedWrite(run);
+        }
+
         // The state can have changed under a wait or a new plan: the capability of L is judged again before anything is encoded or sent.
         ThrowIfMetadataRefused(run.Options.Metadata, run.Plan.Mode);
         return await ProbeBeforeWriteAsync(run, cancellationToken).ConfigureAwait(false);
@@ -217,6 +255,13 @@ internal sealed partial class KeyMoveHashClient<T>
     private async ValueTask<Turn> ProbeBeforeWriteAsync(WriteRun run, CancellationToken cancellationToken)
     {
         run.Residue = false;
+
+        // A field write in S1(rev) would have to pick the side that holds the key, and that pick races a whole replace.
+        if (run.Plan.Mode == KeyMoveMode.ReverseS1 && !_p.NoOrigin && run.Kind is HashWriteKind.Merge or HashWriteKind.DeleteFields)
+        {
+            return Turn.Done(Blocked("reverse_barrier"));
+        }
+
         if (!NeedsSourceProbe(run))
         {
             return Turn.Proceed;
@@ -249,8 +294,7 @@ internal sealed partial class KeyMoveHashClient<T>
     {
         if (StepsFor(run.Plan, run.Kind, run.Residue) is not { } steps)
         {
-            // After an applied attempt the write is uncertain, never refused: the call settles as Unknown.
-            return Turn.Done(run.Applied ? Typed(WriteOutcome.Unknown) : throw Unavailable());
+            return ClosedWrite(run);
         }
 
         run.Steps = steps;
@@ -268,6 +312,9 @@ internal sealed partial class KeyMoveHashClient<T>
         return await ReserveMarkerAsync(run, cancellationToken).ConfigureAwait(false);
     }
 
+    // After an applied attempt a closed state leaves the call's outcome uncertain.
+    private Turn ClosedWrite(WriteRun run) => Turn.Done(run.Applied ? Typed(WriteOutcome.Unknown) : throw Unavailable());
+
     private bool TryEncodeWrite(WriteRun run)
     {
         run.InPlaceEntries = null;
@@ -277,8 +324,15 @@ internal sealed partial class KeyMoveHashClient<T>
             if (run.Kind is HashWriteKind.Replace or HashWriteKind.Merge)
             {
                 var inPlaceMetadata = _p.InPlace.CarriesMetadata ? run.Options.Metadata : null;
-                run.InPlaceEntries = run.Steps.Contains(HashWriteStep.SrcWrite) ? EntriesOf(_p.InPlace.EncodeFields(run.Fields!, inPlaceMetadata)) : null;
-                run.NativeEntries = run.Steps.Contains(HashWriteStep.DstWrite) || run.Steps.Contains(HashWriteStep.DstWriteMarked) || run.Steps.Contains(HashWriteStep.NativeWrite) ? EntriesOf(_p.Native.EncodeFields(run.Fields!, run.Options.Metadata)) : null;
+                var writesSource = run.Steps.Contains(HashWriteStep.SrcWrite);
+                var writesTarget = run.Steps.Contains(HashWriteStep.DstWrite) || run.Steps.Contains(HashWriteStep.DstWriteMarked) || run.Steps.Contains(HashWriteStep.NativeWrite);
+
+                // Forward, Src is L and the target N; reverse, Src is N and the target L.
+                var reverse = KeyMovePlanning.IsReverseWrite(run.Plan.Mode);
+                var writesL = reverse ? writesTarget : writesSource;
+                var writesN = reverse ? writesSource : writesTarget;
+                run.InPlaceEntries = writesL ? EntriesOf(_p.InPlace.EncodeFields(run.Fields!, inPlaceMetadata)) : null;
+                run.NativeEntries = writesN ? EntriesOf(_p.Native.EncodeFields(run.Fields!, run.Options.Metadata)) : null;
             }
 
             return true;
@@ -321,7 +375,7 @@ internal sealed partial class KeyMoveHashClient<T>
         }
 
         using var unit = admitted ?? throw Unavailable();
-        var form = new Form(run.KeyName, run.Steps, run.InPlaceEntries, run.NativeEntries, run.Kind == HashWriteKind.Replace ? HashCacheSetOption.KeyReplace : HashCacheSetOption.HashReplace, run.ExpireAt, run.Names, unit.Id, MoveScripts.NewNonce(), run.Absolute, HashVersion.NewEpochSeed()) { First = !run.Attempted, Prior = run.Applied, Lease = run.Lease };
+        var form = new Form(run.KeyName, run.Steps, run.InPlaceEntries, run.NativeEntries, run.Kind == HashWriteKind.Replace ? HashCacheSetOption.KeyReplace : HashCacheSetOption.HashReplace, run.ExpireAt, run.Names, unit.Id, MoveScripts.NewNonce(), run.Absolute, HashVersion.NewEpochSeed()) { Reverse = KeyMovePlanning.IsReverseWrite(run.Plan.Mode), First = !run.Attempted, Prior = run.Applied, Lease = run.Lease };
         var (ranResult, rerun) = await RunStepsAsync(form, unit, cancellationToken).ConfigureAwait(false);
         if (!rerun)
         {
@@ -363,7 +417,8 @@ internal sealed partial class KeyMoveHashClient<T>
     // For a merge in S3 and S4, and the residue question of a field delete in S4. A merge on an N that is partial would hide every field of L that it did not name, so it never runs ahead of the promotion.
     private async ValueTask<(WriteResult? Refused, bool Replan, bool Residue)> ProbeSourceAsync(string key, HashWriteKind kind, KeyMovePlan plan, CancellationToken cancellationToken)
     {
-        var present = await _reads.ExistsAsync(InPlace(key), SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false);
+        var reverse = KeyMovePlanning.IsReverseWrite(plan.Mode);
+        var present = await _reads.ExistsAsync(reverse ? Native(key) : InPlace(key), SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false);
         if (present is null)
         {
             return (WriteOutcome.NotSent, false, false);
@@ -372,6 +427,12 @@ internal sealed partial class KeyMoveHashClient<T>
         if (kind == HashWriteKind.DeleteFields || present == false)
         {
             return (null, false, present == true);
+        }
+
+        // N holds the hash: S4(rev) has no promoter and S3(rev) has none yet, so a merge on L would hide the fields of N.
+        if (reverse)
+        {
+            return (Blocked(plan.Mode == KeyMoveMode.ReverseS4 ? "reverse_residue" : "reverse_unpromoted"), false, true);
         }
 
         if (plan.Mode == KeyMoveMode.S4)
@@ -558,7 +619,8 @@ internal sealed partial class KeyMoveHashClient<T>
 
         try
         {
-            return new StepSent(await StepScriptAsync(data, form, step, retry).ConfigureAwait(false));
+            var code = form.Reverse ? await ReverseStepScriptAsync(data, form, step, retry).ConfigureAwait(false) : await StepScriptAsync(data, form, step, retry).ConfigureAwait(false);
+            return new StepSent(code);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -586,6 +648,28 @@ internal sealed partial class KeyMoveHashClient<T>
             _ => await data.Db.KeyDeleteAsync(Key(n), Master).ConfigureAwait(false) ? 1L : 0L,
         };
     }
+
+    // Src is N, written in the library's format with its write count; the target is L in its own format, under GL.
+    private async ValueTask<long> ReverseStepScriptAsync(KeyMoveData data, Form form, HashWriteStep step, bool retry)
+    {
+        var l = InPlace(form.KeyName);
+        var n = Native(form.KeyName);
+        var target = ReverseTarget(data, l);
+        var fence = new FenceBump(target.Fence, form.Nonce, FenceTtlMs);
+        return step switch
+        {
+            HashWriteStep.SrcDel => await data.Scripts.SourceDeleteAsync(Key(n), ControlOf(data, n), form.Id).ConfigureAwait(false),
+            HashWriteStep.SrcWrite => await data.Scripts.HashWriteAsync(Key(n), ControlOf(data, n), form.Id, form.Counting(form.Native!)).ConfigureAwait(false),
+            HashWriteStep.SrcFieldsDel => await data.Scripts.HashDeleteFieldsAsync(Key(n), ControlOf(data, n), form.Id, form.Fields(), KnownFieldNames.VersionKey, form.Seed).ConfigureAwait(false),
+            HashWriteStep.DstWrite => await data.Scripts.HashWriteAsync(Key(l), ControlOf(data, l), form.Id, new ControlledHashWrite(form.InPlace!, form.Mode, form.ExpireAt), fence, retry ? new FenceRetry(form.Observed) : null).ConfigureAwait(false),
+            HashWriteStep.DstFieldsDel => await data.Scripts.HashDeleteFieldsAsync(Key(l), ControlOf(data, l), form.Id, form.Fields(), fence: fence, retry: retry ? new FenceRetry(form.Observed) : null).ConfigureAwait(false),
+            HashWriteStep.BumpDel when retry => await data.Scripts.BumpIfFenceAsync(target, form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Delete).ConfigureAwait(false),
+            HashWriteStep.BumpDel => await data.Scripts.BumpAsync(target, form.Id, form.Nonce, FenceTtlMs, BumpOperation.Delete).ConfigureAwait(false),
+            _ => throw new InvalidOperationException($"The step {step} has no reverse form."),
+        };
+    }
+
+    private FencedKeys ReverseTarget(KeyMoveData data, string l) => new(data.Names.ReverseFence(l), Key(l), ControlOf(data, l));
 
     // A marked write with no reply may still apply; its permit is kept until it cannot.
     private async ValueTask<StepSent> SendMarkedAsync(KeyMoveData data, Form form, string n, CancellationToken cancellationToken)
@@ -616,7 +700,8 @@ internal sealed partial class KeyMoveHashClient<T>
         await At(SchedulePointStep.FenceObserve).ConfigureAwait(false);
         try
         {
-            form.Observed = await data.Db.StringGetAsync(data.Names.ForwardFence(Native(form.KeyName)), Master).ConfigureAwait(false);
+            var fence = form.Reverse ? data.Names.ReverseFence(InPlace(form.KeyName)) : data.Names.ForwardFence(Native(form.KeyName));
+            form.Observed = await data.Db.StringGetAsync(fence, Master).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException && ex is not OperationCanceledException)
         {
@@ -673,6 +758,9 @@ internal sealed partial class KeyMoveHashClient<T>
     private sealed record Form(string KeyName, HashWriteStep[] Steps, HashEntry[]? InPlace, HashEntry[]? Native, HashCacheSetOption Mode, long ExpireAt, string[]? Names, string Id, string Nonce, DateTimeOffset? Deadline, long Seed)
     {
         public string? Observed { get; set; }
+
+        /// <summary>Src is N and the target is L under GL.</summary>
+        public bool Reverse { get; init; }
 
         /// <summary>True only while no attempt of this logical write has been sent.</summary>
         public bool First { get; init; }

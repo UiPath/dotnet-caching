@@ -514,11 +514,11 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
     }
 
     [Fact]
-    public async Task A_write_in_a_reverse_state_is_unavailable_and_its_read_is_the_union()
+    public async Task A_write_in_a_reverse_state_with_no_write_form_is_unavailable_and_its_read_is_the_union()
     {
         await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
         await kit.Kit.PrepareAsync("k");
-        await kit.Kit.SetStateAsync("S3", direction: "rev");
+        await kit.Kit.SetStateAsync("S2", direction: "rev");
         await kit.SetAsync(kit.L("k"), Original);
 
         var write = async () => await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(), Ct);

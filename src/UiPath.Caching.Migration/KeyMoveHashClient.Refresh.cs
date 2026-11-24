@@ -38,7 +38,7 @@ internal sealed partial class KeyMoveHashClient<T>
             return await PlainRefreshAsync(key, expiry, metadata, withOptions, cancellationToken).ConfigureAwait(false);
         }
 
-        // The metadata field has no checked form until the keys have moved.
+        ThrowIfNoOriginReverseWrite(plan.Mode);
         if (metadata is not null)
         {
             ThrowIfRefreshMetadataRefused(plan.Mode);
@@ -67,7 +67,7 @@ internal sealed partial class KeyMoveHashClient<T>
                 return await PlainRefreshAsync(key, CacheExpiry.At(DateTimeOffset.FromUnixTimeMilliseconds(at)), metadata, withOptions, cancellationToken).ConfigureAwait(false);
             }
 
-            ThrowIfNoManagedWrite(plan);
+            ThrowIfNoManagedWrite(plan.Mode);
             var (admitted, replan) = Admit(promotion: false, plan.Act?.Id);
             if (replan)
             {
@@ -128,6 +128,13 @@ internal sealed partial class KeyMoveHashClient<T>
                 case KeyMoveMode.S4:
                     // A refresh is acknowledged only where it lands on N: L is no copy that survives for good.
                     return Judged(await ExpireAsync(data, n, unit, at, fence, clearOfN).ConfigureAwait(false));
+                case KeyMoveMode.ReverseS1:
+                    // The side that holds the key, N first; an extension lost against a concurrent replace is harmless.
+                    return Judged(await ExpireEitherAsync(data, n, l, unit, at, null, clearOfN, clearOfL).ConfigureAwait(false));
+                case KeyMoveMode.ReverseS4:
+                    return Judged(await ExpireEitherAsync(data, l, n, unit, at, ReverseFence(data, l), clearOfL, clearOfN).ConfigureAwait(false));
+                case KeyMoveMode.ReverseS3:
+                    return await RefreshReverseAsync(key, at, clearOfL, unit, data, cancellationToken).ConfigureAwait(false);
                 default:
                     return await RefreshForwardAsync(key, at, clearOfN, unit, data, fence, cancellationToken).ConfigureAwait(false);
             }
@@ -181,14 +188,38 @@ internal sealed partial class KeyMoveHashClient<T>
         return Judged(await ExpireAsync(data, n, unit, at, fence, clear).ConfigureAwait(false));
     }
 
+    // S3(rev): acknowledged only when it lands on L. While N holds the hash it must be promoted first, so the refresh is refused.
+    private async ValueTask<(WriteResult Result, bool Again)> RefreshReverseAsync(string key, long at, HashMetadataClear clear, AdmittedUnit unit, KeyMoveData data, CancellationToken cancellationToken)
+    {
+        var l = InPlace(key);
+        var code = await ExpireAsync(data, l, unit, at, ReverseFence(data, l), clear).ConfigureAwait(false);
+        if (code != 0)
+        {
+            return Judged(code);
+        }
+
+        // Neither side holds the hash, or N could not be asked: nothing was extended.
+        var present = await _reads.ExistsAsync(Native(key), SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false);
+        return (present == true ? Blocked("reverse_unpromoted") : WriteOutcome.NotSent, false);
+    }
+
+    // The first side, then the other when the first holds no hash.
+    private async ValueTask<long> ExpireEitherAsync(KeyMoveData data, string first, string second, AdmittedUnit unit, long at, FenceBump? fence, HashMetadataClear clearFirst, HashMetadataClear clearSecond)
+    {
+        var code = await ExpireAsync(data, first, unit, at, fence, clearFirst).ConfigureAwait(false);
+        return code != 0 ? code : await ExpireAsync(data, second, unit, at, null, clearSecond).ConfigureAwait(false);
+    }
+
+    private FenceBump ReverseFence(KeyMoveData data, string l) => new(data.Names.ReverseFence(l), MoveScripts.NewNonce(), FenceTtlMs);
+
     private ValueTask<WriteResult> PlainRefreshAsync(string key, CacheExpiry expiry, IDictionary<string, string?>? metadata, bool withOptions, CancellationToken cancellationToken) =>
         withOptions ? _p.Plain.RefreshAsync(key, expiry, metadata, cancellationToken) : _p.Plain.RefreshAsync(key, expiry, cancellationToken);
 
     private void ThrowIfRefreshMetadataRefused(KeyMoveMode mode)
     {
-        if (mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.S3 or KeyMoveMode.S4)
+        if (mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.S3 or KeyMoveMode.S4 || KeyMovePlanning.IsReverseWrite(mode))
         {
-            throw new NotSupportedException($"A refresh of the hash cache '{_p.CacheId}' that carries metadata cannot run before its keys have moved, because the metadata field has no checked form there.");
+            throw new NotSupportedException($"The hash cache '{_p.CacheId}' cannot refresh with metadata because the metadata field has no checked form for a refresh in state {mode}.");
         }
     }
 
