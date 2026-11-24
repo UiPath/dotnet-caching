@@ -8,4 +8,8 @@ internal sealed class AlwaysOwned : IMoveOwnership
     public bool StillHeld => true;
 
     public ValueTask<bool> HoldsAsync(CancellationToken cancellationToken) => ValueTask.FromResult(true);
+
+    public void Published(long bytes)
+    {
+    }
 }

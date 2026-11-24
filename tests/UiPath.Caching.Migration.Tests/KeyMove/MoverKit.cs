@@ -13,7 +13,7 @@ internal sealed class MoverKit : IAsyncDisposable
     private readonly string _nHead;
     private readonly string _nTail;
 
-    private MoverKit(KeyMoveKit kit, bool twoOwners, bool hashCache, bool noOrigin, TimeSpan? groupMin, TimeSpan? cacheMin, string? excluded, ISupersessionHandler? supersession, Func<MoverKit, IMoveSide<Item>>? source, ISchedulePoint? schedule)
+    private MoverKit(KeyMoveKit kit, bool twoOwners, bool hashCache, bool noOrigin, TimeSpan? groupMin, TimeSpan? cacheMin, string? excluded, ISupersessionHandler? supersession, Func<MoverKit, IMoveSide<Item>>? source, ISchedulePoint? schedule, KeyMoveOptions? moveOptions)
     {
         Kit = kit;
         _lPrefix = kit.L(string.Empty);
@@ -35,7 +35,7 @@ internal sealed class MoverKit : IAsyncDisposable
         Space = new RegisteredKeySpace(caches, _nHead, null, excluded is null ? null : [excluded], groupMin is { } g ? new Dictionary<string, TimeSpan> { [kit.Group] = g } : null);
         var parts = new KeyMoveClientParts<Item>(kit.Group, kit.Cid, noOrigin, kit.L, kit.N, ItemCodec.Instance, ItemCodec.Instance, kit.Plain, kit.Plane, kit.Clock, () => TimeSpan.FromSeconds(30))
         {
-            Options = new KeyMoveOptions(),
+            Options = moveOptions ?? new KeyMoveOptions(),
             Source = source?.Invoke(this),
             Schedule = schedule ?? NoSchedulePoint.Instance,
         };
@@ -69,12 +69,13 @@ internal sealed class MoverKit : IAsyncDisposable
         bool cluster = false,
         int? database = null,
         ISchedulePoint? schedule = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        KeyMoveOptions? moveOptions = null)
     {
         var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: noOrigin, cluster: cluster, interceptDb: interceptDb, database: database, clock: clock);
         try
         {
-            var made = new MoverKit(kit, twoOwners, hashCache, noOrigin, groupMin, cacheMin, excluded?.Replace("{U}", kit.Unique, StringComparison.Ordinal), supersession, source, schedule);
+            var made = new MoverKit(kit, twoOwners, hashCache, noOrigin, groupMin, cacheMin, excluded?.Replace("{U}", kit.Unique, StringComparison.Ordinal), supersession, source, schedule, moveOptions);
             return made;
         }
         catch
@@ -94,7 +95,7 @@ internal sealed class MoverKit : IAsyncDisposable
                 throw new TimeoutException("The condition did not hold in time.");
             }
 
-            await Task.Delay(25);
+            await Task.Delay(TimeSpan.FromMilliseconds(25), TimeProvider.System);
         }
     }
 
@@ -118,7 +119,7 @@ internal sealed class MoverKit : IAsyncDisposable
 
     public Task SeedAsync(params string[] keys) => SeedAsync(keys.ToDictionary(k => k, k => ("v-" + k, (TimeSpan?)null)));
 
-    public MoverHost Host(MoverOptions? options = null, Func<IMoveTarget, IMoveTarget>? wrap = null, Func<StateRecord?>? state = null, IKeyMovePlane? plane = null, IScanUnits? units = null, Func<CancellationToken, Task<StateRecord?>>? readState = null)
+    public MoverHost Host(MoverOptions? options = null, Func<IMoveTarget, IMoveTarget>? wrap = null, Func<StateRecord?>? state = null, IKeyMovePlane? plane = null, IScanUnits? units = null, Func<CancellationToken, Task<StateRecord?>>? readState = null, IMoveRate? rate = null)
     {
         IMoveTarget target = Target;
         return new MoverHost(
@@ -130,8 +131,8 @@ internal sealed class MoverKit : IAsyncDisposable
             readState ?? (_ => Task.FromResult(state is null ? State() : state())),
             string.Empty,
             Kit.Clock,
-            options ?? Quick,
-            new FixedMoveRate(0, Kit.Clock));
+            rate ?? NoLimit.Instance,
+            options ?? Quick);
     }
 
     public StateRecord State(string state = "S3", bool acked = true) => new(
@@ -208,7 +209,7 @@ internal sealed class MoverKit : IAsyncDisposable
                 throw new TimeoutException("The counters did not reach the expected values: " + string.Join(", ", now.Select(e => $"{e.Key}={e.Value}")));
             }
 
-            await Task.Delay(25);
+            await Task.Delay(TimeSpan.FromMilliseconds(25), TimeProvider.System);
         }
     }
 
