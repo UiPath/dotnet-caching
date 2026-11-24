@@ -16,7 +16,8 @@ public class PerTopicOptionsRegistryTests
     public void Configure_stores_action_and_GetActions_returns_it_case_insensitively()
     {
         var registry = new PerTopicOptionsRegistry<RedisStreamsTopicOptions>(NullConfigurationSection.Instance);
-        Action<RedisStreamsTopicOptions> action = o => o.MaxLength = 999;
+        static void ConfigureMaxLength(RedisStreamsTopicOptions o) => o.MaxLength = 999;
+        Action<RedisStreamsTopicOptions> action = ConfigureMaxLength;
 
         registry.Configure("Orders", action);
 
@@ -28,13 +29,13 @@ public class PerTopicOptionsRegistryTests
     public void Configure_stacks_multiple_actions_for_the_same_topic_in_registration_order()
     {
         var registry = new PerTopicOptionsRegistry<RedisStreamsTopicOptions>(NullConfigurationSection.Instance);
-        Action<RedisStreamsTopicOptions> first = _ => { };
-        Action<RedisStreamsTopicOptions> second = _ => { };
+        static void First(RedisStreamsTopicOptions _) { }
+        static void Second(RedisStreamsTopicOptions _) { }
 
-        registry.Configure("orders", first);
-        registry.Configure("ORDERS", second);
+        registry.Configure("orders", First);
+        registry.Configure("ORDERS", Second);
 
-        registry.GetActions("orders").Should().Equal(first, second);
+        registry.GetActions("orders").Should().Equal((Action<RedisStreamsTopicOptions>)First, (Action<RedisStreamsTopicOptions>)Second);
     }
 
     [Fact]

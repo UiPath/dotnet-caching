@@ -72,7 +72,7 @@ internal static class HostHelper
 {
     private static readonly string SampleFolder = Path.Combine("samples", "UiPath.Caching.Sample");
 
-    private static Lazy<string> BasePath = new Lazy<string>(() =>
+    private static readonly Lazy<string> BasePath = new Lazy<string>(() =>
     {
         var temp = new DirectoryInfo(Directory.GetCurrentDirectory());
         while (temp is not null && !Directory.Exists(Path.Combine(temp.FullName, SampleFolder)))

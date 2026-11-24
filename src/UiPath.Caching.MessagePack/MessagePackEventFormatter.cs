@@ -138,25 +138,7 @@ internal sealed class MessagePackEventFormatter : IEventFormatterProxy<ICacheEve
         var data = @event.Data;
         var properties = data?.Properties;
         Span<bool> encodedKnown = (properties?.Count ?? 0) <= StackProperties ? stackalloc bool[StackProperties] : new bool[properties!.Count];
-        var known = 0;
-        var others = 0;
-        if (properties is not null)
-        {
-            var index = 0;
-            foreach (var (name, value) in properties)
-            {
-                var isKnown = IsEncodedKnown(name, value);
-                encodedKnown[index++] = isKnown;
-                if (isKnown)
-                {
-                    known++;
-                }
-                else
-                {
-                    others++;
-                }
-            }
-        }
+        var (known, others) = Classify(properties, encodedKnown);
 
         var count = (@event.Id is null ? 0 : 1) + (@event.Type is null ? 0 : 1) + (@event.Source is null ? 0 : 1)
             + (data is null ? 0 : 1) + (properties is null ? 0 : 1) + (others > 0 ? 1 : 0);
@@ -171,15 +153,7 @@ internal sealed class MessagePackEventFormatter : IEventFormatterProxy<ICacheEve
         if (@event.Type is { } type)
         {
             writer.Write(TypeKey);
-            var code = TypeCode(type);
-            if (code >= 0)
-            {
-                writer.Write(code);
-            }
-            else
-            {
-                writer.Write(type);
-            }
+            WriteType(ref writer, type);
         }
 
         if (@event.Source is { } source)
@@ -206,6 +180,38 @@ internal sealed class MessagePackEventFormatter : IEventFormatterProxy<ICacheEve
         }
 
         writer.Flush();
+    }
+
+    private static (int Known, int Others) Classify(IDictionary<string, object?>? properties, Span<bool> encodedKnown)
+    {
+        var known = 0;
+        var index = 0;
+        if (properties is null)
+        {
+            return (0, 0);
+        }
+
+        foreach (var (name, value) in properties)
+        {
+            var isKnown = IsEncodedKnown(name, value);
+            encodedKnown[index++] = isKnown;
+            known += isKnown ? 1 : 0;
+        }
+
+        return (known, index - known);
+    }
+
+    private static void WriteType(ref MessagePackWriter writer, string type)
+    {
+        var code = TypeCode(type);
+        if (code >= 0)
+        {
+            writer.Write(code);
+        }
+        else
+        {
+            writer.Write(type);
+        }
     }
 
     private static int TypeCode(string type) => type switch

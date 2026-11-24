@@ -91,15 +91,15 @@ internal sealed partial class MultilayerCache
         var candidates = new List<(CacheKey Key, DateTimeOffset Expiration)>(hits.Count);
         var stateByCallerKey = new Dictionary<CacheKey, TState>(hits.Count);
         var byState = new Dictionary<TState, RehydrateTarget>(hits.Count);
-        foreach (var hit in hits)
+        foreach (var (callerKey, state, options, expiration, value) in hits)
         {
-            if (hit.Value is null && _multiLayerCacheOptions.CacheNullValues)
+            if (value is null && _multiLayerCacheOptions.CacheNullValues)
             {
                 continue;
             }
-            candidates.Add((hit.CallerKey, hit.Expiration));
-            stateByCallerKey[hit.CallerKey] = hit.State;
-            byState[hit.State] = new RehydrateTarget(hit.Options, hit.Expiration, hit.CallerKey);
+            candidates.Add((callerKey, expiration));
+            stateByCallerKey[callerKey] = state;
+            byState[state] = new RehydrateTarget(options, expiration, callerKey);
         }
         return (candidates, stateByCallerKey, byState);
     }

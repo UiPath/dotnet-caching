@@ -219,6 +219,7 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 
@@ -267,7 +268,10 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
             {
             }
 
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+            public ValueTask DisposeAsync()
+            {
+                return ValueTask.CompletedTask;
+            }
         }
     }
 }

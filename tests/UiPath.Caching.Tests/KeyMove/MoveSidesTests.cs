@@ -15,7 +15,7 @@ namespace UiPath.Caching.Tests.KeyMove;
 /// <summary>Side capabilities, views, barriers and connection counters of the instance move. Beyond the shared test server: MOVE_SIDES_MASTER and MOVE_SIDES_REPLICA (a master and its replica, the replica with the debug command enabled), MOVE_SIDES_LIMITED (a user without SCAN, ROLE, CONFIG, INFO and WAIT), MOVE_SIDES_NOMULTI (a user without MULTI and WATCH) and MOVE_SIDES_NOPEXPIREAT (a user without PEXPIREAT).</summary>
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public sealed class MoveSidesTests(RedisContainerFixture fixture)
+public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
 {
     private const string Skip = "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.";
     private static readonly MasterCaps GoodMaster = new(new DnsEndPoint("m", 6379), new Version(7, 4), Scripts: true, Transactions: true, Hashes: true, Wait: true, 1, "noeviction");
@@ -118,7 +118,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
 
         caps.Scripts.Should().BeFalse();
         DeniedCommands(caps).Should().Contain("EVAL");
-        caps.Denied.Should().OnlyContain(d => d.Contains("@", StringComparison.Ordinal), "every denial names the endpoint");
+        caps.Denied.Should().OnlyContain(d => d.Contains('@'), "every denial names the endpoint");
         caps.SlotEnforced.Should().BeTrue("without scripts the probe assumes slots are enforced, which is always safe");
         caps.MoveScriptsOn(refusing).UsesScripts.Should().BeFalse("this side takes the fallback on its own");
     }
@@ -136,7 +136,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         caps.EvictionPolicy.Should().BeNull();
         caps.Notes("dst").Should().ContainSingle().Which.Should().Be("dst: eviction policy unknown, needs an eviction-policy attestation");
         DeniedCommands(caps).Should().Contain(["SCAN", "ROLE"]);
-        caps.Denied.Should().OnlyContain(d => d.Contains("@", StringComparison.Ordinal), "every denial names the endpoint");
+        caps.Denied.Should().OnlyContain(d => d.Contains('@'), "every denial names the endpoint");
         caps.Failures("dst").Should().HaveCount(2).And.Contain(f => f.Contains("scan", StringComparison.Ordinal)).And.Contain(f => f.Contains("denies INFO", StringComparison.Ordinal), "an unknown eviction policy is reported as a note");
     }
 
@@ -468,7 +468,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
 
         var second = side.WrittenKeys.Skip(side.WrittenKeys.Count / 2).ToHashSet();
         side.WrittenKeys.Take(side.WrittenKeys.Count / 2).Should().NotIntersectWith(second, "a second call uses keys of its own");
-        side.WrittenKeys.Should().OnlyContain(k => Regex.IsMatch(k, @"^side:probe:\{[^}]+\}:[0-9a-f]{32}:[ab]$"), "keys keep the slot tag and carry a nonce");
+        side.WrittenKeys.Should().OnlyContain(k => ProbeKey().IsMatch(k), "keys keep the slot tag and carry a nonce");
     }
 
     [Fact]
@@ -584,7 +584,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
     private static IEnumerable<string> DeniedCommands(SideCaps caps) => caps.Denied.Select(static d => d[..d.IndexOf('@', StringComparison.Ordinal)]);
 
     /// <summary>The database whose multiplexer shows every server wrapped so each SCAN step is reported to <paramref name="onScan"/>.</summary>
-    private static IDatabase CountingScans(IConnectionMultiplexer mux, IDatabase db, Action onScan)
+    private static IDatabase CountingScans(ConnectionMultiplexer mux, IDatabase db, Action onScan)
     {
         var servers = mux.GetServers().Select(server => InterceptingProxy.Wrap(server, (method, args) =>
         {
@@ -595,7 +595,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
 
             return InterceptingProxy.Proceed;
         })).ToArray();
-        var wrapped = InterceptingProxy.Wrap(mux, (method, _) => method.Name == nameof(IConnectionMultiplexer.GetServers) ? servers : InterceptingProxy.Proceed);
+        var wrapped = InterceptingProxy.Wrap<IConnectionMultiplexer>(mux, (method, _) => method.Name == nameof(IConnectionMultiplexer.GetServers) ? servers : InterceptingProxy.Proceed);
         return InterceptingProxy.Wrap(db, (method, _) => method.Name == "get_Multiplexer" ? wrapped : InterceptingProxy.Proceed);
     }
 
@@ -612,6 +612,9 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
                 }
             },
             cancellationToken).WaitAsync(limit, cancellationToken);
+
+    [GeneratedRegex(@"^side:probe:\{[^}]+\}:[0-9a-f]{32}:[ab]$")]
+    private static partial Regex ProbeKey();
 
     private RedisConnector NewConnector()
     {

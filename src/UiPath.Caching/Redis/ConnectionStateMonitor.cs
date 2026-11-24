@@ -18,13 +18,13 @@ public sealed class ConnectionStateMonitor : IConnectionState, IDisposable
     private readonly IConnectionState[] _connectionStates;
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly TimeProvider _timeProvider;
+    private readonly TimeSpan _monitorInterval;
     // Guards the outage mark, the observed flag and the timer, so failures, restores and polling change them one at a time.
     // Never held while reading _isConnected: a Lazy holds its own lock while it evaluates, and its factory marks outages.
     private readonly Lock _gate = new();
     private Lazy<bool> _isConnected = default!;
     private ITimer? _timer;
     private bool _disposed;
-    private TimeSpan _monitorInterval;
     private bool _down;
     private bool _observed;
     private EventHandler? _recovered;

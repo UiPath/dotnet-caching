@@ -8,7 +8,7 @@ public class DefaultCachePolicyFactoryTests
     public void Resolve_returns_null_when_name_not_registered()
     {
         var defaults = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(5) };
-        var factory = new DefaultCachePolicyFactory(new Dictionary<string, CachePolicy>(), defaults);
+        var factory = new DefaultCachePolicyFactory([], defaults);
 
         factory.Resolve("nothing-registered").Should().BeNull();
     }
@@ -17,7 +17,7 @@ public class DefaultCachePolicyFactoryTests
     public void Resolve_returns_null_when_policyName_is_null()
     {
         var defaults = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(5) };
-        var factory = new DefaultCachePolicyFactory(new Dictionary<string, CachePolicy>(), defaults);
+        var factory = new DefaultCachePolicyFactory([], defaults);
 
         factory.Resolve(null!).Should().BeNull();
     }
@@ -26,7 +26,7 @@ public class DefaultCachePolicyFactoryTests
     public void Resolve_returns_null_when_policyName_is_empty()
     {
         var defaults = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(5) };
-        var factory = new DefaultCachePolicyFactory(new Dictionary<string, CachePolicy>(), defaults);
+        var factory = new DefaultCachePolicyFactory([], defaults);
 
         factory.Resolve(string.Empty).Should().BeNull();
     }

@@ -68,7 +68,7 @@ public class DepthSeededRequest : SeededRequest
 
     public int GenerationLevel { get; private set; }
 
-    private int GetGenerationLevel(Type innerRequest)
+    private static int GetGenerationLevel(Type innerRequest)
     {
         var level = 0;
 
@@ -269,7 +269,7 @@ public class GenerationDepthGuard : ISpecimenBuilderNode
                 {
                     if (multipleItems == null)
                     {
-                        multipleItems = new List<ISpecimenBuilder> { singleItem };
+                        multipleItems = [singleItem];
                     }
 
                     multipleItems.Add(enumerator.Current);

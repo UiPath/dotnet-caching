@@ -223,6 +223,7 @@ public class InMemoryRedisCacheProviderTests : IAsyncLifetime
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

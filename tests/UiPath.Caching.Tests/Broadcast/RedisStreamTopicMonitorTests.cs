@@ -644,6 +644,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

@@ -124,7 +124,7 @@ internal sealed record StateRecord(
         };
     }
 
-    private static IReadOnlyDictionary<string, long> ReadResidue(Dictionary<string, string?> fields) =>
+    private static Dictionary<string, long> ReadResidue(Dictionary<string, string?> fields) =>
         fields.Where(f => f.Key.StartsWith(StateFields.ResiduePrefix, StringComparison.Ordinal) && long.TryParse(f.Value, NumberStyles.None, CultureInfo.InvariantCulture, out _))
             .ToDictionary(f => f.Key[StateFields.ResiduePrefix.Length..], f => long.Parse(f.Value!, CultureInfo.InvariantCulture), StringComparer.Ordinal);
 }

@@ -35,7 +35,7 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
         topic.Should().NotBeNull();
         Sut.Keys.Should().NotBeEmpty();
         topic.Dispose();
-        for (var attempt = 0; Sut.Keys.Any() && attempt < 50; attempt++)
+        for (var attempt = 0; Sut.Keys.Count > 0 && attempt < 50; attempt++)
         {
             await Task.Delay(20, token);
         }
@@ -356,6 +356,7 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         _sut?.Dispose();
         return ValueTask.CompletedTask;
     }

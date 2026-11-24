@@ -50,6 +50,7 @@ public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccesso
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

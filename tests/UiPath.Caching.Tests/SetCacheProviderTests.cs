@@ -5,6 +5,7 @@ namespace UiPath.Caching.Tests;
 
 public class InMemoryQueueCacheProviderTests
 {
+    private static readonly string[] TwoItems = ["a", "b"];
 
     [Fact]
     public void Creates_in_memory_set_cache()
@@ -37,7 +38,7 @@ public class InMemoryQueueCacheProviderTests
         (await cache.CountAsync<string>("k", ct)).Should().Be(2);
 
         var popped = await cache.PopAsync<string>("k", token: ct);
-        new[] { "a", "b" }.Should().Contain(popped!);
+        TwoItems.Should().Contain(popped!);
         (await cache.CountAsync<string>("k", ct)).Should().Be(1);
     }
 

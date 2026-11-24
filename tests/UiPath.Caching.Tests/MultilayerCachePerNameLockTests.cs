@@ -33,9 +33,9 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
         // Callers of one process share a run per key, which takes no lock; only the distributed lock is one.
         _options.LocalSingleFlightEnabled = true;
         _options.DistributedLockEnabled = false;
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, testContextAccessor.Current.CancellationToken);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy: null, testContextAccessor.Current.CancellationToken);
 
         await _distributedLock.DidNotReceiveWithAnyArgs().AcquireAsync(default!, default, default, Arg.Any<CancellationToken>());
     }
@@ -58,9 +58,9 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
     public async Task GetOrAdd_with_policy_LocalSingleFlightEnabled_false_takes_no_distributed_lock_either()
     {
         var policy = new CachePolicy { Lock = new LockProfile { LocalSingleFlightEnabled = false, DistributedLockEnabled = false } };
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy, testContextAccessor.Current.CancellationToken);
 
         await _distributedLock.DidNotReceiveWithAnyArgs().AcquireAsync(default!, default, default, Arg.Any<CancellationToken>());
     }
@@ -80,9 +80,9 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
                 DistributedLockTimeout = timeout,
             },
         };
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy, testContextAccessor.Current.CancellationToken);
 
         await _distributedLock.Received(1).AcquireAsync(Arg.Any<string>(), expiry, timeout, Arg.Any<CancellationToken>());
     }
@@ -108,9 +108,9 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
                 DistributedLockTimeout = TimeSpan.FromSeconds(-5),
             },
         };
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy, testContextAccessor.Current.CancellationToken);
 
         await _distributedLock.Received(1).AcquireAsync(Arg.Any<string>(), cacheWideExpiry, cacheWideTimeout, Arg.Any<CancellationToken>());
     }
@@ -121,14 +121,18 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
         _options.LocalSingleFlightEnabled = false;
         _options.DistributedLockEnabled = false;
         var policy = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) };
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy, testContextAccessor.Current.CancellationToken);
 
         await _distributedLock.DidNotReceiveWithAnyArgs().AcquireAsync(default!, default, default, Arg.Any<CancellationToken>());
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        GC.SuppressFinalize(this);
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask InitializeAsync()
     {

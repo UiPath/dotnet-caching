@@ -16,7 +16,7 @@ public class TopicKeyTest
         Assert.True(new TopicKey(value) == value.ToLowerInvariant());
         Assert.True(new TopicKey(value) != new TopicKey(value.ToLowerInvariant() + _fixture.Create<string>()));
         Assert.True(new TopicKey(value) != value.ToLowerInvariant() + _fixture.Create<string>());
-        Assert.True(new TopicKey(value).GetHashCode() != 0);
+        Assert.NotEqual(0, new TopicKey(value).GetHashCode());
         Assert.True(new TopicKey(value).GetHashCode() == new TopicKey(value.ToLowerInvariant()).GetHashCode());
     }
 }

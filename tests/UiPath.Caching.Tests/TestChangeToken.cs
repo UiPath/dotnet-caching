@@ -8,7 +8,7 @@ internal sealed class TestChangeToken : ICacheChangeToken, IDisposable
 
     public bool ActiveChangeCallbacks { get; set; }
 
-    public List<(Action<object?> callback, object? state)> Callbacks { get; } = new();
+    public List<(Action<object?> callback, object? state)> Callbacks { get; } = [];
 
     public bool MetadataHasChanged { get; set; }
 

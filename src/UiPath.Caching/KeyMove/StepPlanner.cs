@@ -24,11 +24,11 @@ internal static partial class StepPlanner
         }
 
         var side = await SideEffectsAsync(i, options).ConfigureAwait(false);
-        var drift = CacheDrift(i);
-        var plan = drift.Plan ?? (state.Field(StateFields.ColdStart).Length > 0 ? new StepPlan(StepKind.ColdStart) : await StageStepAsync(i, options, side).ConfigureAwait(false));
+        var (driftPlan, driftAlerts) = CacheDrift(i);
+        var plan = driftPlan ?? (state.Field(StateFields.ColdStart).Length > 0 ? new StepPlan(StepKind.ColdStart) : await StageStepAsync(i, options, side).ConfigureAwait(false));
         return plan with
         {
-            Alerts = [.. plan.AlertList, .. side.Alerts, .. drift.Alerts],
+            Alerts = [.. plan.AlertList, .. side.Alerts, .. driftAlerts],
             AutoHoldSet = side.HoldSet,
             AutoHoldClear = side.HoldClear,
             AllAck = side.AllAck,

@@ -369,9 +369,9 @@ public class KeyedSubjectTests
         var evt = CreateEvent(key);
         _sut.OnNext(evt);
 
-        foreach (var survivor in survivors)
+        foreach (var (observer, subscription) in survivors)
         {
-            survivor.observer.Events.Should().ContainSingle("every surviving observer must receive the event");
+            observer.Events.Should().ContainSingle("every surviving observer must receive the event");
         }
     }
 
@@ -600,7 +600,7 @@ public class KeyedSubjectTests
         first.Completions.Should().Be(0);
     }
 
-    private static ICacheEvent CreateEvent(string? key)
+    private static TestCacheEvent CreateEvent(string? key)
     {
         return new TestCacheEvent
         {

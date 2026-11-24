@@ -54,7 +54,7 @@ public class InMemoryRedisCollectionExtensionsTests
             }));
 
         act.Should().Throw<OptionsValidationException>()
-            .Which.OptionsType.Should().Be(typeof(InMemoryRedisCacheOptions));
+            .Which.OptionsType.Should().Be<InMemoryRedisCacheOptions>();
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class InMemoryRedisCollectionExtensionsTests
             }));
 
         act.Should().Throw<OptionsValidationException>()
-            .Which.OptionsType.Should().Be(typeof(InMemoryRedisCacheOptions));
+            .Which.OptionsType.Should().Be<InMemoryRedisCacheOptions>();
     }
 
     [Theory]

@@ -28,7 +28,9 @@ public class ThrottledAlertsTests
     {
         var throttle = new ThrottledAlerts(null, new ManualTimeProvider(DateTimeOffset.UnixEpoch), TimeSpan.FromSeconds(2));
 
-        throttle.Raise(Alert("k"));
+        var act = () => throttle.Raise(Alert("k"));
+
+        act.Should().NotThrow();
     }
 
     private static KeyMoveAlert Alert(string detail) => new("g1", "ambiguous_ownership", detail);

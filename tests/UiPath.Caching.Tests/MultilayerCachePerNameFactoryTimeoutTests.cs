@@ -25,13 +25,13 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
     public async Task GetOrAdd_with_null_FactoryTimeout_runs_generator_to_completion()
     {
         var token = testContextAccessor.Current.CancellationToken;
-        Func<CancellationToken, Task<string?>> generator = async ct =>
+        async Task<string?> Generator(CancellationToken ct)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(50), ct);
             return "v";
-        };
+        }
 
-        var result = await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, token: token);
+        var result = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy: null, token: token);
 
         result.Should().Be("v");
     }
@@ -45,13 +45,13 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
         // what bounds the call, so nothing here can hang.
         using var caller = new CancellationTokenSource();
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
-        Func<CancellationToken, Task<string?>> generator = async ct =>
+        async Task<string?> Generator(CancellationToken ct)
         {
             await Task.Delay(TimeSpan.FromSeconds(10), ct);
             return "v";
-        };
+        }
 
-        var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy, caller.Token);
+        var act = async () => await Sut.GetOrAddAsync(_cacheKey, Generator, policy, caller.Token);
 
         await act.Should().ThrowAsync<TimeoutException>();
     }
@@ -60,9 +60,9 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
     public async Task GetOrAdd_with_FactoryTimeout_completes_when_generator_finishes_within_budget()
     {
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromSeconds(5) };
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
-        var result = await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
+        var result = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy, testContextAccessor.Current.CancellationToken);
 
         result.Should().Be("v");
     }
@@ -72,14 +72,14 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
     {
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromSeconds(1) };
         using var cts = new CancellationTokenSource();
-        Func<CancellationToken, Task<string?>> generator = async ct =>
+        async Task<string?> Generator(CancellationToken ct)
         {
             await cts.CancelAsync();
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return "v";
-        };
+        }
 
-        var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy, cts.Token);
+        var act = async () => await Sut.GetOrAddAsync(_cacheKey, Generator, policy, cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
@@ -91,14 +91,18 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
         // A misconfigured FactoryTimeout (e.g. TimeSpan.MaxValue) must clamp internally rather
         // than surface as ArgumentOutOfRangeException at first cache miss.
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromDays(365 * 100) };
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
-        var result = await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
+        var result = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy, testContextAccessor.Current.CancellationToken);
 
         result.Should().Be("v");
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        GC.SuppressFinalize(this);
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask InitializeAsync()
     {

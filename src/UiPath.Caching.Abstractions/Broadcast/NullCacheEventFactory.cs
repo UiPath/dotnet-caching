@@ -3,7 +3,7 @@ namespace UiPath.Caching.Broadcast;
 [ExcludeFromCodeCoverage]
 public sealed class NullCacheEventFactory : ICacheEventFactory
 {
-    private static ICacheEvent NullEvent = new NullCacheEvent();
+    private static readonly ICacheEvent NullEvent = new NullCacheEvent();
 
     private NullCacheEventFactory()
     {

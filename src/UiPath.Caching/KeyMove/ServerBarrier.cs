@@ -141,13 +141,13 @@ internal sealed class ServerBarrier(IDatabase database, RedisKey owner, TimeProv
         var parts = await GroupWritesAsync(writes).ConfigureAwait(false);
         var outcomes = new List<BarrierOutcome>(parts.Count);
         var tallies = new List<Tally>(parts.Count);
-        foreach (var part in parts)
+        foreach (var (_, key, queues) in parts)
         {
             var tally = new Tally();
             tallies.Add(tally);
             try
             {
-                outcomes.Add(await RunAsync(part.Queues, part.Key, wayBack, tally).ConfigureAwait(false));
+                outcomes.Add(await RunAsync(queues, key, wayBack, tally).ConfigureAwait(false));
             }
             catch (Exception ex) when (tallies.Exists(static t => t.Committed))
             {

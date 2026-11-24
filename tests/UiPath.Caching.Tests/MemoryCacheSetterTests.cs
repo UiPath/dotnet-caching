@@ -18,7 +18,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;
     private IMemoryCache _memoryCache = default!;
-    private ISystemClock _clock = default!;
+    private SystemClock _clock = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
     private InMemoryRedisCacheOptions _options = default!;
@@ -255,6 +255,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 
