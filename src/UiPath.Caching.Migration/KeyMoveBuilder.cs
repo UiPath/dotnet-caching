@@ -8,6 +8,7 @@ public sealed class KeyMoveBuilder
 {
     // An evidence id is written into a comma- and colon-separated record, so neither may appear in it, nor whitespace.
     private static readonly SearchValues<char> EvidenceIdSeparators = SearchValues.Create(",: \t\r\n");
+    private static readonly SearchValues<char> GlobCharacters = SearchValues.Create("*?[]\\");
 
     private readonly List<(string Name, bool Listed)> _groups = [];
     private readonly List<KeyMoveCacheRegistration> _caches = [];
@@ -15,6 +16,7 @@ public sealed class KeyMoveBuilder
     private readonly Dictionary<string, string> _nodeListComplete = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _memoryFits = new(StringComparer.Ordinal);
     private readonly List<string> _excluded = [];
+    private readonly Dictionary<string, TimeSpan> _moveMinTtl = new(StringComparer.Ordinal);
     private string? _libraryPrefix;
     private bool _floorAttested;
     private Action<KeyMoveAlert>? _alert;
@@ -52,6 +54,18 @@ public sealed class KeyMoveBuilder
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(pattern);
         _excluded.Add(pattern);
+        return this;
+    }
+
+    /// <summary>Sets the minimum remaining life of a key the mover moves in <paramref name="group"/>: a key with less life left is not moved and is counted as <c>short_ttl</c>, since a read promotes it when it is used and it expires on its own when it is not. A key with no expiry is never short.</summary>
+    /// <remarks>The default is 10 minutes. A cache can override it with <see cref="KeyMoveCacheRegistration.MoveMinTtl"/>, and a <see cref="KeyMoveCacheRegistration.NoOrigin"/> cache ignores it. A read-through promotion ignores it too.</remarks>
+    /// <param name="group">The group, which must be added with <see cref="AddGroup"/>.</param>
+    /// <param name="minTtl">The minimum remaining life; <see cref="TimeSpan.Zero"/> moves every key.</param>
+    public KeyMoveBuilder UseMoveMinTtl(string group, TimeSpan minTtl)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(group);
+        ArgumentOutOfRangeException.ThrowIfLessThan(minTtl, TimeSpan.Zero);
+        _moveMinTtl[group] = minTtl;
         return this;
     }
 
@@ -139,13 +153,13 @@ public sealed class KeyMoveBuilder
         RefuseExcludedOverlap(caches);
         RefuseSharedPatterns(caches);
         var registrations = _groups.Select(g => new GroupRegistration(g.Name, true, g.Listed, [.. caches.Where(c => c.Group == g.Name).Select(c => c.Name)])).ToArray();
-        return new KeyMoveSetup(registrations, stages, new RegisteredGroupFacts(caches, _floorAttested, _formatSettled, _nodeListComplete, _memoryFits), new RegisteredKeySpace(caches, prefix, _alert, [.. _excluded]), new UnavailableMoveClaim(), prefix) { Alert = _alert };
+        return new KeyMoveSetup(registrations, stages, new RegisteredGroupFacts(caches, _floorAttested, _formatSettled, _nodeListComplete, _memoryFits), new RegisteredKeySpace(caches, prefix, _alert, [.. _excluded], new Dictionary<string, TimeSpan>(_moveMinTtl)), new UnavailableMoveClaim(), prefix) { Alert = _alert };
     }
 
     // The prefix heads every scan pattern, so a character that a pattern reads as a wildcard would make the scan miss the keys it names.
     private static void RefuseGlob(string prefix)
     {
-        if (prefix.AsSpan().IndexOfAny("*?[]\\") >= 0)
+        if (prefix.AsSpan().IndexOfAny(GlobCharacters) >= 0)
         {
             throw new ArgumentException($"The library key prefix '{prefix}' holds a glob character (* ? [ ] \\), which a scan pattern would read as a wildcard.", nameof(prefix));
         }
@@ -175,6 +189,11 @@ public sealed class KeyMoveBuilder
         }
 
         ValidateKeyspace(cache, prefix);
+        if (cache.MoveMinTtl is { } minTtl && minTtl < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException($"The key move cache '{cache.Name}' has a MoveMinTtl that is negative.");
+        }
+
         if (!groups.Contains(cache.Group))
         {
             throw new InvalidOperationException($"The key move cache '{cache.Name}' names the group '{cache.Group}', which was not added.");
@@ -185,7 +204,7 @@ public sealed class KeyMoveBuilder
             throw new InvalidOperationException($"The key move cache '{cache.Name}' is not registered with the router in the group '{cache.Group}'.");
         }
 
-        return new KeyMoveCache(cache.Name, cache.Group, cache.NoOrigin || cache.AtMostOnce, cache.AtMostOnce, cache.AcceptRefill, cache.MaxSourceTtl, cache.InPlacePattern, router.InPlaceKey, cache.ParseInPlaceKey, cache.NativePattern, cache.FormatNativeKey, cache.ParseNativeKey, cache.OwnsInPlaceKey, cache.OwnsNativeKey);
+        return new KeyMoveCache(cache.Name, cache.Group, cache.NoOrigin || cache.AtMostOnce, cache.AtMostOnce, cache.AcceptRefill, cache.MaxSourceTtl, cache.InPlacePattern, router.InPlaceKey, cache.ParseInPlaceKey, cache.NativePattern, cache.FormatNativeKey, cache.ParseNativeKey, cache.OwnsInPlaceKey, cache.OwnsNativeKey, cache.MoveMinTtl);
     }
 
     private static void ValidateKeyspace(KeyMoveCacheRegistration cache, string prefix)
@@ -286,6 +305,12 @@ public sealed class KeyMoveBuilder
 
     private void ValidateRelationships(HashSet<string> groups, List<KeyMoveCache> caches, HashSet<string> names, IReadOnlyDictionary<string, (string Group, Func<string, string> InPlaceKey)> routed)
     {
+        var named = _moveMinTtl.Keys.FirstOrDefault(g => !groups.Contains(g));
+        if (named is not null)
+        {
+            throw new InvalidOperationException($"UseMoveMinTtl names the group '{named}', which was not added.");
+        }
+
         var attested = new[] { _formatSettled, _nodeListComplete, _memoryFits }.SelectMany(d => d.Keys).FirstOrDefault(g => !groups.Contains(g));
         if (attested is not null)
         {

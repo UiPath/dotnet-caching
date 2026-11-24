@@ -36,6 +36,8 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         });
     }
 
+    public EpochGate Gate => _gate;
+
     public ConnectionMultiplexer Mux { get; }
 
     public string Unique { get; }
@@ -72,7 +74,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 
     public long Ep => _ep;
 
-    public static async Task<KeyMoveKit> CreateAsync(RedisFixture fixture, bool useScripts = true, bool noOrigin = false, bool cluster = false, TimeProvider? clock = null, KeyMoveOptions? options = null, Func<KeyMoveKit, IMoveSide<Item>>? source = null, Func<IDatabase, IDatabase>? interceptDb = null)
+    public static async Task<KeyMoveKit> CreateAsync(RedisFixture fixture, bool useScripts = true, bool noOrigin = false, bool cluster = false, TimeProvider? clock = null, KeyMoveOptions? options = null, Func<KeyMoveKit, IMoveSide<Item>>? source = null, Func<IDatabase, IDatabase>? interceptDb = null, int? database = null)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 and REDIS_CONNECTION_STRING to run.");
         var connection = fixture.ConnectionString;
@@ -82,7 +84,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
             Assert.SkipWhen(string.IsNullOrWhiteSpace(connection), "Set REDIS_CLUSTER_CONNECTION_STRING to run the cluster tests.");
         }
 
-        var mux = await ConnectionMultiplexer.ConnectAsync(connection + ",allowAdmin=true");
+        var mux = await ConnectionMultiplexer.ConnectAsync(connection + ",allowAdmin=true" + (database is { } db ? $",defaultDatabase={db}" : string.Empty));
         var version = mux.GetServers().Where(s => !s.IsReplica).Select(s => s.Version).Min() ?? new Version(7, 0);
         return new KeyMoveKit(mux, useScripts, noOrigin, clock ?? TimeProvider.System, options ?? new KeyMoveOptions(), Guid.NewGuid().ToString("N")[..10], version, source, interceptDb);
     }

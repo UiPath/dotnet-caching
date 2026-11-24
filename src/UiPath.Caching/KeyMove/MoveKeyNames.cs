@@ -106,6 +106,25 @@ internal sealed class MoveKeyNames
         return $"{LibraryPrefix}{Keyspace}:{{{group}}}:lead";
     }
 
+    /// <summary>The lease of one scan unit of the mover, tagged by the group and the unit so it, the cursor and the pass record share a slot.</summary>
+    public RedisKey UnitLease(string group, string unit) => $"{UnitPrefix(group, unit)}:lease";
+
+    /// <summary>The cursor of a unit's pass in one direction of one move.</summary>
+    public RedisKey UnitCursor(string group, string unit, string direction, long moveId) => $"{UnitPrefix(group, unit)}:cur:{direction}:{moveId}";
+
+    /// <summary>The record of a unit's last finished pass in one direction of one move: the Unix time in milliseconds at which that pass started.</summary>
+    public RedisKey UnitPass(string group, string unit, string direction, long moveId) => $"{UnitPrefix(group, unit)}:pass:{direction}:{moveId}";
+
+    /// <summary>The key whose life paces the passes of a unit: set when a pass starts, and a pass does not start while it lives.</summary>
+    public RedisKey UnitPace(string group, string unit, string direction, long moveId) => $"{UnitPrefix(group, unit)}:pace:{direction}:{moveId}";
+
+    /// <summary>The progress counters of the group's move, in the slot of its state hash.</summary>
+    public RedisKey Progress(string group)
+    {
+        ValidateName(group, nameof(group));
+        return $"{LibraryPrefix}{Keyspace}:{{{group}}}:prog";
+    }
+
     /// <summary>The lock of one Clear at a time for a cache, in the slot of the group's state hash.</summary>
     public RedisKey ClearLock(string group, string cacheId)
     {
@@ -191,6 +210,13 @@ internal sealed class MoveKeyNames
         Span<byte> digest = stackalloc byte[32];
         SHA256.HashData(Encoding.UTF8.GetBytes(key), digest);
         return Convert.ToBase64String(digest[..8]).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    private string UnitPrefix(string group, string unit)
+    {
+        ValidateName(group, nameof(group));
+        ValidateName(unit, nameof(unit));
+        return $"{LibraryPrefix}{Keyspace}:{{{group}:{unit}}}";
     }
 
     private RedisKey InSlotOf(string dataKey, string rest)

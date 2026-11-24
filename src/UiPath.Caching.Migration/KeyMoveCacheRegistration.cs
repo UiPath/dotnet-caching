@@ -41,4 +41,7 @@ public sealed class KeyMoveCacheRegistration
 
     /// <summary>The ownership predicate for native keys; by default a key that <see cref="ParseNativeKey"/> reads is owned.</summary>
     public Func<string, bool>? OwnsNativeKey { get; init; }
+
+    /// <summary>The remaining life below which the mover leaves a key of this cache to its next read, overriding the group's <see cref="KeyMoveBuilder.UseMoveMinTtl"/>; null follows the group. Zero moves every key. A <see cref="NoOrigin"/> cache is always moved in full, and a read-through promotion ignores it.</summary>
+    public TimeSpan? MoveMinTtl { get; init; }
 }

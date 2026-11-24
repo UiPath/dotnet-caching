@@ -63,6 +63,9 @@ internal sealed class KeyMoveNode
     /// <summary>True when the setup names a group, so the node has anything to run.</summary>
     public bool HasGroups => _setup.Groups.Count > 0;
 
+    /// <summary>The scan units of the current connection, for the mover; null before the node is started.</summary>
+    internal IScanUnits? ScanUnits => _wiring?.Units;
+
     /// <summary>The data view, scripts and key names of the current connection, for the router's data path; null before the node is started.</summary>
     internal KeyMoveDataAccess? DataAccess
     {
@@ -192,6 +195,7 @@ internal sealed class KeyMoveNode
         void Report(string kind, string detail) => _setup.Alert?.Invoke(new KeyMoveAlert(string.Empty, kind, detail));
         var sequence = new TransitionSequence(topology, names, state, Report, _time);
         var records = new ControlRecordReader(control, names);
+        var units = new MultiplexerScanUnits(() => database.Multiplexer);
         var scanner = new MasterScanner(connector.GetPrimaries, topology, database.Database, prefix, _time, ScanRetryDelay, alert: _setup.Alert);
         return new Wiring(
             database.Multiplexer,
@@ -211,7 +215,9 @@ internal sealed class KeyMoveNode
             new ClearCoordinator(store, stateScripts, controlScripts, records, names, state, _time),
             new KeyMoveSweep(scanner, _setup.KeySpace, control, names),
             new GroupRemoval(store, stateScripts, controlScripts, names, _setup.DropClaim),
-            control);
+            control,
+            units,
+            new MoverPasses(units, control, names, store.ReadAsync, _setup.KeySpace.HasHashCache, _ambiguity.Raise));
     }
 
     private void StartDriver(Wiring wiring, string[] names, CancellationToken token)
@@ -228,7 +234,7 @@ internal sealed class KeyMoveNode
                 _setup.Facts,
                 _setup.Claim,
                 wiring.Data,
-                new InventoryMoverStatus(wiring.Inventory, _time, _setup.MoverFinishedPass),
+                new InventoryMoverStatus(wiring.Inventory, _time, _setup.MoverFinishedPass ?? wiring.Passes.FinishedAfterAckAsync, _setup.State.ReplicaLagMax, _setup.MoverFinishedPass is null ? wiring.Passes.EvidenceAsync : null),
                 g => _leases[g].HoldsLease,
                 _monitor,
                 _ownScope,
@@ -436,5 +442,7 @@ internal sealed class KeyMoveNode
         ClearCoordinator Clear,
         KeyMoveSweep Sweep,
         GroupRemoval Removal,
-        IDatabase Control);
+        IDatabase Control,
+        MultiplexerScanUnits Units,
+        MoverPasses Passes);
 }

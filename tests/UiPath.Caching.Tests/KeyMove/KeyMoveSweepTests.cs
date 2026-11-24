@@ -6,7 +6,6 @@ using UiPath.Caching.Tests.Redis;
 
 namespace UiPath.Caching.Tests.KeyMove;
 
-// 3.6 step 3: the sweep of N for one cache, over keys the library's own key strategies make.
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
 public sealed class KeyMoveSweepTests(RedisContainerFixture fixture)
@@ -349,7 +348,7 @@ public sealed class KeyMoveSweepTests(RedisContainerFixture fixture)
     private static KeyMoveSweep SweepOver(StateKit kit, IGroupKeySpace space, string connectorPrefix, int batch = 512) =>
         new(new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, connectorPrefix, TimeProvider.System, TimeSpan.Zero), space, kit.ControlDb, kit.Names, batch);
 
-    private static string Format(IRedisKeyStrategy strategy, string name) => strategy.GetRedisKey(new CacheKey(name)).ToString()!;
+    private static string Format(IRedisKeyStrategy strategy, string name) => strategy.GetRedisKey(new CacheKey(name)).ToString();
 
     private CacheOptions Options(bool shardKeys)
     {
@@ -403,5 +402,11 @@ public sealed class KeyMoveSweepTests(RedisContainerFixture fixture)
         public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) => inner.IsMovable(group, side, cacheId, key, timeToLive);
 
         public TimeSpan? MaxSourceTtl(string group, string cacheId) => inner.MaxSourceTtl(group, cacheId);
+
+        public bool HasHashCache(string group) => inner.HasHashCache(group);
+
+        public string? CallerKeyOf(string group, MoveSide side, string cacheId, string key) => inner.CallerKeyOf(group, side, cacheId, key);
+
+        public TimeSpan MoveMinTtl(string group, string cacheId) => inner.MoveMinTtl(group, cacheId);
     }
 }

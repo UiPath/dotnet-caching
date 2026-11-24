@@ -117,26 +117,22 @@ internal sealed partial class MoveScripts
 
     /// <summary>CAP: takes the fence token in force (creating it from <paramref name="nonce"/> when absent) and the capture time of the Dst server.</summary>
     /// <param name="markerField">The marker field of the key's in-place copy: a marker bound to the record's binding value answers <see cref="LiveSupersession"/> with its value, before any token. Null for a direction that has none.</param>
-    public async Task<Capture> CaptureAsync(FencedKeys keys, string id, string cid, string nonce, long fenceTtlMilliseconds, string? markerField = null)
+    public async Task<Capture> CaptureAsync(FencedKeys keys, string id, string cid, string nonce, long fenceTtlMilliseconds, string? markerField = null, Func<bool>? owned = null)
     {
         var reply = await EvaluateAsync(CapScript, [keys.Fence, keys.Data, keys.Control], [fenceTtlMilliseconds, nonce, id, cid, markerField ?? string.Empty]).ConfigureAwait(false);
         if (reply is not null)
         {
-            var parts = ((RedisResult[]?)reply)!;
-            var code = (long)parts[0];
-            if (code == LiveSupersession)
-            {
-                return new Capture(code, null, false, null, 0, (string?)parts[1]);
-            }
-
-            return code != 0
-                ? new Capture(code, null, false, null, 0)
-                : new Capture(0, (string?)parts[1], (long)parts[2] == 1, (string?)parts[3], long.Parse(((string?)parts[4])!, CultureInfo.InvariantCulture));
+            return ReadCapture((RedisResult[]?)reply ?? []);
         }
 
         // A fence evicted or expired between its SET NX and its GET reads as no token, and the capture runs again.
         for (var attempt = 0; attempt < MaxWatchAborts; attempt++)
         {
+            if (owned?.Invoke() == false)
+            {
+                throw new OwnershipLostException();
+            }
+
             if (await CaptureInBatchAsync(keys, id, cid, nonce, fenceTtlMilliseconds, markerField).ConfigureAwait(false) is { } capture)
             {
                 return capture;
@@ -148,7 +144,7 @@ internal sealed partial class MoveScripts
 
     /// <summary>PUB: publishes <paramref name="value"/> under the fence and the gate and replaces the fence; never past the deadline <c>tcap + px</c> of the Dst server.</summary>
     /// <returns>-1 identity, -2 gate, 0 fence moved or gone, 2 destination exists, -3 past the deadline, 1 published.</returns>
-    public async Task<long> PublishAsync(FencedKeys keys, string id, RedisValue value, Publication publication)
+    public async Task<long> PublishAsync(FencedKeys keys, string id, RedisValue value, Publication publication, Func<bool>? owned = null)
     {
         CheckLife(publication.Px, nameof(publication));
         var p = publication;
@@ -176,7 +172,7 @@ internal sealed partial class MoveScripts
             }
         }
 
-        return await WatchedAsync(async () =>
+        async Task<long?> AttemptAsync()
         {
             var transaction = _db.CreateTransaction();
             var queued = new List<Task>();
@@ -198,7 +194,9 @@ internal sealed partial class MoveScripts
             }
 
             return await PublishRefusalAsync(keys, id, p).ConfigureAwait(false);
-        }).ConfigureAwait(false);
+        }
+
+        return await WatchedAsync(AttemptAsync, owned).ConfigureAwait(false);
     }
 
     /// <summary>PUBH: renames the staging hash over the destination under the fence and the gate, with the deadline rule of PUB.</summary>
@@ -335,6 +333,24 @@ internal sealed partial class MoveScripts
         }
 
         return result;
+    }
+
+    private static long ParseCaptureTime(string? s)
+    {
+        ArgumentNullException.ThrowIfNull(s);
+        return long.Parse(s, CultureInfo.InvariantCulture);
+    }
+
+    private static Capture ReadCapture(RedisResult[] parts)
+    {
+        var code = (long)parts[0];
+        if (code == 0)
+        {
+            return new Capture(0, (string?)parts[1], (long)parts[2] == 1, (string?)parts[3], ParseCaptureTime((string?)parts[4]));
+        }
+
+        var supersession = code == LiveSupersession && parts.Length > 1 ? (RedisValue)(string?)parts[1] : default;
+        return new Capture(code, null, false, null, 0, supersession);
     }
 
     private static bool IsClosed(string gate) => gate.StartsWith("CLOSED", StringComparison.Ordinal);
@@ -565,7 +581,7 @@ internal sealed partial class MoveScripts
             return new Capture(IdentityMismatch, null, false, null, 0);
         }
 
-        if (gate.Result.IsNull || IsClosed(gate.Result!))
+        if (gate.Result.IsNull || IsClosed(gate.Result.ToString()))
         {
             return new Capture(GateRefused, null, false, null, 0);
         }

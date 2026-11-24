@@ -145,7 +145,7 @@ internal sealed partial class MoveScripts
 
     /// <summary>CMPDEL: deletes the source only while it holds exactly <paramref name="expected"/>; a key of another type reads as changed.</summary>
     /// <returns>-1, 0 when the key changed or is gone, 1.</returns>
-    public async Task<long> CompareDeleteAsync(RedisKey key, RedisKey control, string id, RedisValue expected)
+    public async Task<long> CompareDeleteAsync(RedisKey key, RedisKey control, string id, RedisValue expected, Func<bool>? owned = null)
     {
         try
         {
@@ -155,7 +155,7 @@ internal sealed partial class MoveScripts
                 return (long)reply;
             }
 
-            return await WatchedAsync(async () =>
+            async Task<long?> AttemptAsync()
             {
                 var transaction = _db.CreateTransaction();
                 var queued = new List<Task>();
@@ -173,7 +173,9 @@ internal sealed partial class MoveScripts
                 }
 
                 return await _db.StringGetAsync(key, Master).ConfigureAwait(false) == expected ? null : 0;
-            }).ConfigureAwait(false);
+            }
+
+            return await WatchedAsync(AttemptAsync, owned).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsWrongType(ex))
         {

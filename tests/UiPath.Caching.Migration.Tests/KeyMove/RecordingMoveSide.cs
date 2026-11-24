@@ -83,7 +83,7 @@ internal sealed class RecordingMoveSide(IMoveSide<Item> inner) : IMoveSide<Item>
         return inner.DeleteAsync(logical, id);
     }
 
-    public Task<long> CompareDeleteAsync(string logical, string id, RedisValue expected)
+    public Task<long> CompareDeleteAsync(string logical, string id, RedisValue expected, Func<bool>? owned = null)
     {
         Record("CompareDelete");
         return inner.CompareDeleteAsync(logical, id, expected);

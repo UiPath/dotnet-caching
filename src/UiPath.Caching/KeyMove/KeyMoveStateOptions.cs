@@ -42,6 +42,9 @@ internal sealed class KeyMoveStateOptions
 
     public TimeSpan TransitionWait { get; init; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>How long a replica may lag behind its primary; the drain check takes its confirming primary inventory only this long after the mover's passes were seen to be clean.</summary>
+    public TimeSpan ReplicaLagMax { get; init; } = TimeSpan.FromSeconds(30);
+
     public TimeSpan LeaseTtl { get; init; } = TimeSpan.FromSeconds(30);
 
     public TimeSpan LeaseRenewInterval { get; init; } = TimeSpan.FromSeconds(10);
