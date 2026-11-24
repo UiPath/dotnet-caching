@@ -236,7 +236,7 @@ function Test-RedisContainerPing {
     return Test-RedisHostPing -HostName $Container.HostName -Port $Container.HostPort -Password $Container.Password
 }
 
-function Show-RedisContainerWhenReady {
+function Get-ReadyRedisContainer {
     param(
         [string]$NamePrefix,
         [int]$ContainerPort,
@@ -253,7 +253,7 @@ function Show-RedisContainerWhenReady {
 
         $publishedPort = Get-DockerPublishedPort -NamePrefix $NamePrefix -ContainerPort $ContainerPort -ExcludedContainerIds $ExcludedContainerIds
         if ($null -ne $publishedPort -and (Test-RedisContainerPing -Container $publishedPort -ContainerPort $ContainerPort)) {
-            Write-Host "Redis ready: $($publishedPort.Name) -> $($publishedPort.HostName):$($publishedPort.HostPort)"
+            Write-Information -InformationAction Continue "Redis ready: $($publishedPort.Name) -> $($publishedPort.HostName):$($publishedPort.HostPort)"
             return $publishedPort
         }
 
@@ -318,12 +318,12 @@ try {
 
     if ($UseShardedRedis) {
         $redisEndpoints = @(
-            Show-RedisContainerWhenReady -NamePrefix 'redis-master1-' -ContainerPort 6379 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Show-RedisContainerWhenReady -NamePrefix 'redis-slave1-master1-' -ContainerPort 6380 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Show-RedisContainerWhenReady -NamePrefix 'redis-slave2-master1-' -ContainerPort 6381 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Show-RedisContainerWhenReady -NamePrefix 'redis-master2-' -ContainerPort 6382 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Show-RedisContainerWhenReady -NamePrefix 'redis-slave1-master2-' -ContainerPort 6383 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Show-RedisContainerWhenReady -NamePrefix 'redis-slave2-master2-' -ContainerPort 6384 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Get-ReadyRedisContainer -NamePrefix 'redis-master1-' -ContainerPort 6379 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Get-ReadyRedisContainer -NamePrefix 'redis-slave1-master1-' -ContainerPort 6380 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Get-ReadyRedisContainer -NamePrefix 'redis-slave2-master1-' -ContainerPort 6381 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Get-ReadyRedisContainer -NamePrefix 'redis-master2-' -ContainerPort 6382 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Get-ReadyRedisContainer -NamePrefix 'redis-slave1-master2-' -ContainerPort 6383 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Get-ReadyRedisContainer -NamePrefix 'redis-slave2-master2-' -ContainerPort 6384 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
         ) | ForEach-Object { "$($_.HostName):$($_.HostPort)" }
 
         Set-ScopedEnvironmentVariable $originalEnvironment 'Caching__ShardKeyEnabled' 'true'
@@ -331,7 +331,7 @@ try {
         Set-ScopedEnvironmentVariable $originalEnvironment 'Caching__Connections__Redis__ConnectionStringExtraParams' 'allowAdmin=true,abortConnect=false,ssl=false,connectRetry=5,keepAlive=30,name=test,syncTimeout=10000,connectTimeout=10000'
     }
     else {
-        $redisEndpoint = Show-RedisContainerWhenReady -NamePrefix 'cache-' -ContainerPort 6380 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+        $redisEndpoint = Get-ReadyRedisContainer -NamePrefix 'cache-' -ContainerPort 6380 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
         $redisConnectionString = "$($redisEndpoint.HostName):$($redisEndpoint.HostPort),abortConnect=false,ssl=false"
         if (-not [string]::IsNullOrEmpty($redisEndpoint.Password)) {
             $redisConnectionString = "$redisConnectionString,password=$($redisEndpoint.Password)"

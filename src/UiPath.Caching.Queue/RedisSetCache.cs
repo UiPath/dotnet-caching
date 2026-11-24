@@ -124,12 +124,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
 
         var redisKey = ToRedisKey(cacheKey, token);
         NoteWritten(redisKey);
-        List<T?> ret = [];
         if (!IsConnected)
         {
-            return ret;
+            return [];
         }
 
+        IReadOnlyCollection<T?> ret = Array.Empty<T?>();
         var operation = StartOperation<T>();
         try
         {
@@ -162,12 +162,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        List<T?> ret = [];
         if (!IsConnected)
         {
-            return ret;
+            return [];
         }
 
+        IReadOnlyCollection<T?> ret = Array.Empty<T?>();
         var operation = StartOperation<T>();
         try
         {

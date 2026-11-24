@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
@@ -40,6 +41,7 @@ internal static class StreamNotifyDoorbellHarness
     private const string TimestampPrefix = "ts:";
     private static readonly string[] CountedCommands = ["psetex", "set", "xadd", "publish", "xreadgroup", "evalsha", "eval", "xack", "xinfo", "mget", "get", "pttl"];
 
+    [SuppressMessage("Globalization", "CA1303:Do not pass literals as localized parameters", Justification = "The benchmark harness prints fixed-width diagnostic column headers.")]
     public static async Task RunAsync(int durationSec = 20, int writeHz = 5)
     {
         var cells = new (bool NotifyEnabled, string PollInterval)[]
@@ -53,9 +55,7 @@ internal static class StreamNotifyDoorbellHarness
         };
 
         Console.WriteLine($"=== Cache-visibility latency: writer SetAsync → reader GetAsync sees new value ({durationSec}s @ {writeHz}Hz writes) ===");
-#pragma warning disable CA1303 // the header row is built from constants only; console output of a harness is not localized
         Console.WriteLine($"{"NotifyEnabled",14} | {"PollInterval",13} | {"Samples",8} | {"Mean (ms)",10} | {"P50 (ms)",10} | {"P95 (ms)",10} | {"P99 (ms)",10} | {"Max (ms)",10}");
-#pragma warning restore CA1303
         Console.WriteLine(new string('-', 110));
 
         foreach (var (notify, poll) in cells)
@@ -76,12 +76,11 @@ internal static class StreamNotifyDoorbellHarness
         }
     }
 
+    [SuppressMessage("Globalization", "CA1303:Do not pass literals as localized parameters", Justification = "The benchmark harness prints fixed-width diagnostic column headers.")]
     public static async Task RunLoadAsync(int durationSec, int writeHz, int keys, string cells)
     {
         Console.WriteLine($"=== Write-to-peer-visible latency under load: {keys} keys round-robin at {writeHz} Hz for {durationSec}s ===");
-#pragma warning disable CA1303 // the header row is built from constants only; console output of a harness is not localized
         Console.WriteLine($"{"Cell",12} | {"Written",8} | {"Seen",8} | {"Mean",8} | {"P50",8} | {"P95",8} | {"P99",8} | {"Max",8} | {"Writer ops",10} | {"Reader ops",10} | commands (server delta)");
-#pragma warning restore CA1303
         Console.WriteLine(new string('-', 150));
         foreach (var cell in cells.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {

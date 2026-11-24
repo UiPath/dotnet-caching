@@ -2329,15 +2329,18 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         // what bounds the call, so nothing here can hang.
         using var caller = new CancellationTokenSource();
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
-        async Task<string?> Generator(CancellationToken ct)
+        static async Task<string?> GenerateAsync(CancellationToken ct)
         {
             await Task.Delay(TimeSpan.FromSeconds(5), ct);
             return "never";
         }
 
-        var act = async () => await Sut.GetOrAddAsync(_cacheKey, Generator, policy: policy, token: caller.Token);
+        Task<string?>? generator = null;
+        var act = async () => await Sut.GetOrAddAsync(_cacheKey, ct => generator = GenerateAsync(ct), policy: policy, token: caller.Token);
 
         await act.Should().ThrowAsync<TimeoutException>();
+        generator.Should().NotBeNull();
+        generator!.IsCanceled.Should().BeTrue();
     }
 
     [Fact]

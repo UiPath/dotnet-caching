@@ -53,7 +53,7 @@ public class VerbatimKeyEndToEndTests
         read.Should().Be("v");
         added.Should().Be("v");
         generated.Should().Be(0);
-        await inner.DidNotReceive().GetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await inner.DidNotReceive().GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         var before = published.Count;
 
         (await sut.RemoveAsync<string>(key, token)).Should().BeTrue();
