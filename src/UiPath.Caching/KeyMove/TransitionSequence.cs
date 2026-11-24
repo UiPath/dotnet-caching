@@ -67,7 +67,8 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         }
 
         var prev = state.Prev.Split(':');
-        var target = new StateTarget(prev[0], prev[1], int.Parse(prev[2], System.Globalization.CultureInfo.InvariantCulture), state.Ep + 1, MoveScripts.NewNonce(), state.Prev, updatedAt);
+        var (restoreSet, restoreClear) = Generations.Restored(state);
+        var target = new StateTarget(prev[0], prev[1], int.Parse(prev[2], System.Globalization.CultureInfo.InvariantCulture), state.Ep + 1, MoveScripts.NewNonce(), state.Prev, updatedAt, Clear: restoreClear, Set: restoreSet);
         return await RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 0, abandon: true), target, (sequence ?? new SequenceOptions()) with { SkipAtOnce = true, WayBack = true }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -411,7 +412,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         // The default limit is written on the records' field count: the fixed fields, the cache list, one gate per cache and the markers a record may hold. The leader's LIMSET changes it later.
         if (state is { State: "S3", Direction: "fwd" })
         {
-            record = record with { Limit = ControlRecord.FixedFields + record.Gates.Count + options.MarkerLimit };
+            record = record with { Limit = MarkerSweeper.Floor(state) + options.MarkerLimit };
         }
 
         var phase = new SlotPhase(state.Ep, state.Id, NeedDurable: false, (channel, key) => channel.Control.ControlSyncWrite(key, record), code => code is MoveScripts.Written or MoveScripts.AlreadyWrittenOrOlder);

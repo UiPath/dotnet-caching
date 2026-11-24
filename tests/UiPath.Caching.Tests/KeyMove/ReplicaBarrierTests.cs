@@ -144,7 +144,7 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
 
         public async Task<Func<Task>> PrepareAsync(string kind)
         {
-            var key = new RedisKey($"it-pb3a-{kind}-{Guid.NewGuid():N}");
+            var key = new RedisKey($"it-kma-{kind}-{Guid.NewGuid():N}");
             _made.Add(key);
             const string id = "id-6";
             var record = MoveTestEnvironment.Record(6, id, ("c1", "n1"));

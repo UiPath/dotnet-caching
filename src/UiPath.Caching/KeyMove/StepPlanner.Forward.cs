@@ -15,7 +15,7 @@ internal static partial class StepPlanner
             ("S3", "fwd") => await FromMovingAsync(i, options, side).ConfigureAwait(false),
             ("S4", "fwd") => await FromDrainedAsync(i, options, side).ConfigureAwait(false),
             ("S5", _) => FromClosed(i),
-            ("S1", "rev") => FromReverseReady(i),
+            ("S1", "rev") => await FromReverseReadyAsync(i, options).ConfigureAwait(false),
             ("S3", "rev") => await FromReverseMovingAsync(i).ConfigureAwait(false),
             ("S4", "rev") => FromReverseDrained(i, side),
             _ => StepPlan.Wait("unknown_state", $"{state.State}:{state.Direction}"),
@@ -50,7 +50,7 @@ internal static partial class StepPlanner
             return StepPlan.Wait("start_blocked", string.Join(',', failures));
         }
 
-        var spec = new TransitionSpec("X1", "S1", "fwd", 0, NewMoveId: true, TakeClaim: i.Facts.TakesClaim(i.Group));
+        var spec = new TransitionSpec("X1", "S1", "fwd", 0, NewMoveId: true, TakeClaim: i.Facts.TakesClaim(i.Group), Binding: BindingChange.Mint);
         var plan = new StepPlan(StepKind.Transit, spec);
         return overrides.Count == 0 ? plan : plan.With(new StageAlert("gate_override", string.Join(',', overrides)));
     }

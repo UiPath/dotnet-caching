@@ -15,6 +15,9 @@ internal sealed class StageDriverOptions
 
     public TimeSpan DrainedSoak { get; init; } = TimeSpan.FromDays(7);
 
+    /// <summary>How long complete discovery passes may keep finding markers of the retiring generation before <c>reverse_blocked</c> is raised.</summary>
+    public TimeSpan RetireWait { get; init; } = TimeSpan.FromSeconds(60);
+
     /// <summary>How long a transition may sit at <c>dur=0</c> before another leader step resumes it.</summary>
     public TimeSpan DurRetry { get; init; } = TimeSpan.FromSeconds(10);
 

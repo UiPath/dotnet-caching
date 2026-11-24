@@ -28,7 +28,7 @@ internal sealed partial class StageDriver
             }
 
             var ep = state.Ep + 1;
-            var target = new StateTarget("S0", "none", 0, ep, MoveScripts.NewNonce(), StateRecord.FormatPrev(state.State, state.Direction, state.NPop, state.Ep, state.Id), time.GetUtcNow().ToUnixTimeMilliseconds());
+            var target = new StateTarget("S0", "none", 0, ep, MoveScripts.NewNonce(), StateRecord.FormatPrev(state.State, state.Direction, state.NPop, state.Ep, state.Id), time.GetUtcNow().ToUnixTimeMilliseconds(), Clear: [StateFields.Fg, StateFields.Rg]);
             return await services.Sequence.RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 1), target, new SequenceOptions(Ledger: services.Ledger, HoldsLease: () => services.HoldsLease(group), Fence: Fence(group)), cancellationToken).ConfigureAwait(false);
         }
 

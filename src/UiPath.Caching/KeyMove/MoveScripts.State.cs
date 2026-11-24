@@ -39,6 +39,10 @@ internal sealed partial class MoveScripts
         local v = redis.call('HMGET', KEYS[1], 'st', 'dir', 'nPop', 'ep')
         if (not v[1]) or (not v[2]) or (not v[3]) or (not v[4]) then return 0 end
         redis.call('HSET', KEYS[1], 'dur', '1', 'prev', v[1] .. ':' .. v[2] .. ':' .. v[3] .. ':' .. v[4] .. ':' .. ARGV[1])
+        local fg = redis.call('HGET', KEYS[1], 'fg')
+        if fg then redis.call('HSET', KEYS[1], 'pfg', fg) else redis.call('HDEL', KEYS[1], 'pfg') end
+        local rg = redis.call('HGET', KEYS[1], 'rg')
+        if rg then redis.call('HSET', KEYS[1], 'prg', rg) else redis.call('HDEL', KEYS[1], 'prg') end
         if ARGV[2] ~= '' then redis.call('HSET', KEYS[1], 'rel', ARGV[2]) end
         return 1
         """;
@@ -53,7 +57,7 @@ internal sealed partial class MoveScripts
     private const string AllAckScript = """
         if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[2] then return -7 end
         if redis.call('HGET', KEYS[1], 'id') ~= ARGV[1] then return 0 end
-        if ARGV[3] ~= '' and redis.call('HGET', KEYS[1], 'allAck') ~= ARGV[1] then redis.call('HSET', KEYS[1], 't3At', ARGV[3]) end
+        if ARGV[3] ~= '' and redis.call('HGET', KEYS[1], 'allAck') ~= ARGV[1] then redis.call('HSET', KEYS[1], 's3AckAt', ARGV[3]) end
         redis.call('HSET', KEYS[1], 'allAck', ARGV[1])
         return 1
         """;
@@ -99,6 +103,8 @@ internal sealed partial class MoveScripts
                 return new FallbackPlan(ExpectationFailed, null);
             }
 
+            var generations = await _db.HashGetAsync(state, [StateFields.Fg, StateFields.Rg], Master).ConfigureAwait(false);
+
             return new FallbackPlan(Written, (transaction, queued) =>
             {
                 foreach (var (field, value) in new[] { StateFields.Id, StateFields.State, StateFields.Direction, StateFields.NPop, StateFields.Ep }.Zip(held))
@@ -107,6 +113,21 @@ internal sealed partial class MoveScripts
                 }
 
                 var entries = new List<HashEntry> { new(StateFields.Durable, "1"), new(StateFields.Prev, $"{held[1]}:{held[2]}:{held[3]}:{held[4]}:{id}") };
+
+                // The generations of the identity that is now committed are what an abandon of the next transition restores.
+                foreach (var (field, previous, value) in new[] { (StateFields.Fg, StateFields.PrevFg, generations[0]), (StateFields.Rg, StateFields.PrevRg, generations[1]) })
+                {
+                    transaction.AddCondition(value.IsNull ? Condition.HashNotExists(state, field) : Condition.HashEqual(state, field, value));
+                    if (value.IsNull)
+                    {
+                        queued.Add(transaction.HashDeleteAsync(state, previous, Master));
+                    }
+                    else
+                    {
+                        entries.Add(new HashEntry(previous, value));
+                    }
+                }
+
                 if (release.Length > 0)
                 {
                     entries.Add(new HashEntry(StateFields.Release, release));
@@ -260,6 +281,11 @@ internal sealed partial class MoveScripts
         if (target.HoldOp is { } hold)
         {
             optional.Add((StateFields.HoldOp, hold));
+        }
+
+        foreach (var (field, value) in target.Set ?? [])
+        {
+            optional.Add((field, value));
         }
 
         return optional;

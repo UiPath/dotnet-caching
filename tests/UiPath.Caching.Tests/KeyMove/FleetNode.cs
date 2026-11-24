@@ -8,6 +8,8 @@ internal sealed class FleetNode(string name)
 
     public bool Km { get; set; } = true;
 
+    public bool Binding { get; set; } = true;
+
     public bool Pin { get; set; } = true;
 
     public bool Kmg { get; set; } = true;

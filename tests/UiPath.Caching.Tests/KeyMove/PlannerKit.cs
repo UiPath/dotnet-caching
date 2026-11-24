@@ -45,13 +45,18 @@ internal static class PlannerKit
         return state with { Values = values, FieldNames = [.. values.Keys] };
     }
 
-    public static NodeAdvert Advert(string node, int? fl = 3, bool km = true, bool pin = true, bool kmg = true, string? ca = "a", StateRecord? acks = null, string? scope = null, int? snap = 0, int? pi = 0, long? rc = null, bool byp = false, string? group = null)
+    public static NodeAdvert Advert(string node, int? fl = 3, bool km = true, bool pin = true, bool kmg = true, string? ca = "a", StateRecord? acks = null, string? scope = null, int? snap = 0, int? pi = 0, long? rc = null, bool byp = false, string? group = null, bool binding = true)
     {
         group ??= Group;
         var tokens = new List<string>();
         if (km)
         {
             tokens.Add(NodeAdvert.Km);
+        }
+
+        if (binding)
+        {
+            tokens.Add(NodeAdvert.Binding);
         }
 
         if (pin)
@@ -95,7 +100,8 @@ internal static class PlannerKit
         FakeGroupData? data = null,
         FakeMoverStatus? mover = null,
         PreflightResult? preflight = null,
-        string? conflict = null)
+        string? conflict = null,
+        RetireVerdict? retire = null)
     {
         facts ??= new FakeGroupFacts { ReleaseFloorAttested = true };
         data ??= new FakeGroupData();
@@ -115,7 +121,8 @@ internal static class PlannerKit
             _ => Task.FromResult(preflight ?? new PreflightResult([])),
             () => data.CountNativeAsync(Group, CancellationToken.None),
             () => mover.DrainAsync(Group, state.Direction, CancellationToken.None),
-            () => mover.ResidueInventoryAsync(Group, CancellationToken.None));
+            () => mover.ResidueInventoryAsync(Group, CancellationToken.None),
+            () => Task.FromResult(retire ?? RetireVerdict.Done));
     }
 
     // The S0 state with a recent dry run, so every start gate holds.

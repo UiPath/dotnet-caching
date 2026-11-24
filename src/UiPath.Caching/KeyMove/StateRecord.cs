@@ -31,6 +31,12 @@ internal sealed record StateRecord(
 
     public string Identity => $"{Ep}:{Id}";
 
+    /// <summary>The forward generation the markers of this run are bound to; empty before the start and after the way back began.</summary>
+    public string ForwardGeneration => Field(StateFields.Fg);
+
+    /// <summary>The generation that is retiring in S1(rev); empty elsewhere.</summary>
+    public string RetiringGeneration => Field(StateFields.Rg);
+
     public IReadOnlyList<string> CacheIds => Caches.Length == 0 ? [] : Caches.Split(CacheSeparator);
 
     /// <summary>A field of the hash by name, empty when it is absent.</summary>
@@ -110,7 +116,12 @@ internal sealed record StateRecord(
             throw new FormatException($"The state hash holds no previous state to copy into the control records: '{Prev}'.");
         }
 
-        return new ControlRecord(Ep, Id, State, Direction, NPop.ToString(CultureInfo.InvariantCulture), prev[0], prev[1], prev[2], prev[3], prev[4], gates);
+        return new ControlRecord(Ep, Id, State, Direction, NPop.ToString(CultureInfo.InvariantCulture), prev[0], prev[1], prev[2], prev[3], prev[4], gates)
+        {
+            BindingField = ForwardGeneration.Length > 0 || RetiringGeneration.Length > 0 ? StateFields.Fg : string.Empty,
+            ForwardGeneration = ForwardGeneration,
+            RetiringGeneration = RetiringGeneration,
+        };
     }
 
     private static IReadOnlyDictionary<string, long> ReadResidue(Dictionary<string, string?> fields) =>

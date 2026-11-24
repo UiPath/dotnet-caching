@@ -264,13 +264,4 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
 
         (await kit.StateAsync()).State.Should().Be("S0");
     }
-
-    private static async Task<StateRecord> ToDrainedAsync(DriverKit kit)
-    {
-        await kit.PrepareAsync();
-        await kit.StepUntilAsync("S3");
-        kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
-        kit.Mover.Inventory = new Dictionary<string, long> { ["a"] = 0 };
-        return await kit.StepUntilAsync("S4");
-    }
 }

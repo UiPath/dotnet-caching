@@ -52,6 +52,9 @@ internal sealed class KeyMoveStateOptions
     /// <summary>How long a current marker may stand before the leader takes its writer to be gone: longer than a marked set can still apply (its deadline and the clock bound).</summary>
     public TimeSpan MarkerOrphanAfter { get; init; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>How long one attempt of the retire gate scans before it returns and resumes at its cursor on the next.</summary>
+    public TimeSpan RetireDiscoveryBudget { get; init; } = TimeSpan.FromSeconds(2);
+
     public TimeSpan UpkeepInterval { get; init; } = TimeSpan.FromSeconds(60);
 
     public TimeSpan ClearLockTtl { get; init; } = TimeSpan.FromSeconds(120);

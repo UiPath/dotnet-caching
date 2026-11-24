@@ -16,6 +16,9 @@ internal static class ApprovalKinds
     public const string SkipBarrier = "skip_barrier";
     public const string Abandon = "abandon";
 
+    /// <summary>Consent to pass the retire gate with markers of the retiring generation left; they stay as obsolete markers.</summary>
+    public const string RetireMarkers = "retire_markers";
+
     public static IReadOnlyList<string> All { get; } =
-        [Start, StartUnsettled, StartNoDryRun, StartMemory, ControlRecordsEvictable, Close, CloseForce, Release, ForceReverse, SkipLsweptWait, SkipBarrier, Abandon];
+        [Start, StartUnsettled, StartNoDryRun, StartMemory, ControlRecordsEvictable, Close, CloseForce, Release, ForceReverse, SkipLsweptWait, SkipBarrier, Abandon, RetireMarkers];
 }

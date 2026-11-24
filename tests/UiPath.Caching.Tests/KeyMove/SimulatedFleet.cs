@@ -40,6 +40,7 @@ internal sealed class SimulatedFleet(StateStore store, string group) : IAdvertSo
                 n.Name,
                 fl: n.Fl,
                 km: n.Km,
+                binding: n.Binding,
                 pin: n.Pin,
                 kmg: n.Kmg,
                 ca: n.Ca,

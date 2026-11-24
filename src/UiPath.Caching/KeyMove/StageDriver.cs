@@ -59,6 +59,19 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
             return null;
         }
 
+        // The retire sweep runs before the step decides, so the retire gate sees what it removed. A sweep that fails is reported and the step goes on: the gate stays closed, and the consent and the wait still work.
+        if (services.Sweeper is { } sweeper && MarkerSweeper.Applies(state, SweepMode.Retire))
+        {
+            try
+            {
+                await sweeper.SweepAsync(group, state, SweepMode.Retire, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Notify(group, "retire_sweep_failed", ex.Message);
+            }
+        }
+
         var input = await InputAsync(group, state, memory, cancellationToken).ConfigureAwait(false);
         var plan = await StepPlanner.DecideAsync(input, options).ConfigureAwait(false);
         RaiseAlerts(group, memory, plan.AlertList);
@@ -122,7 +135,8 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
             approved => services.Preflight.CheckAsync(approved, cancellationToken),
             () => services.Data.CountNativeAsync(group, cancellationToken),
             drain,
-            inventory);
+            inventory,
+            () => services.Retire is { } gate ? gate.CheckAsync(group, state, cancellationToken) : Task.FromResult(new RetireVerdict(false, 0, Complete: false)));
     }
 
     private async Task<IReadOnlyList<NodeAdvert>> FreshAsync(CancellationToken cancellationToken) =>

@@ -132,19 +132,24 @@ internal sealed partial class StageDriver
         return null;
     }
 
-    private StateTarget CreateTransitTarget(string group, StateRecord state, TransitionSpec spec, string token, long ep) =>
-        new(
+    private StateTarget CreateTransitTarget(string group, StateRecord state, TransitionSpec spec, string token, long ep)
+    {
+        var id = MoveScripts.NewNonce();
+        var (generationSet, generationClear) = Generations.Of(spec.Binding, state, id);
+        return new(
             spec.State,
             spec.Direction,
             spec.NPop,
             ep,
-            MoveScripts.NewNonce(),
+            id,
             StateRecord.FormatPrev(state.State, state.Direction, state.NPop, state.Ep, state.Id),
             time.GetUtcNow().ToUnixTimeMilliseconds(),
             MoveId: spec.NewMoveId ? ep : null,
             Claim: spec.TakeClaim ? token : null,
             Move: spec.TakeClaim ? services.Facts.ClaimDescriptor(group) : null,
-            Clear: spec.TakeClaim ? [StateFields.PendToken, StateFields.PendUncertain] : null);
+            Clear: spec.TakeClaim ? [StateFields.PendToken, StateFields.PendUncertain, .. generationClear] : generationClear,
+            Set: generationSet);
+    }
 
     private SequenceOptions SequenceFor(string group, TransitionSpec spec, string token, long ep)
     {

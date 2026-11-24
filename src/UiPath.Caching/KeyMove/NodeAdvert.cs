@@ -5,11 +5,15 @@ namespace UiPath.Caching.KeyMove;
 internal sealed record NodeAdvert(string Node, TimeSpan Age, IReadOnlyList<string> Tokens)
 {
     public const string Km = "km";
+    public const string Binding = "kmb";
     public const string Bypass = "byp";
     public const string CtlQuestion = "ctlq";
     public const int SnapshotBucket = 5;
 
     public bool HasKm => Has(Km);
+
+    /// <summary>The node runs a build that keeps the marker binding: the forward generation.</summary>
+    public bool HasBinding => Has(Binding);
 
     public bool Bypasses => Has(Bypass);
 

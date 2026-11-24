@@ -68,6 +68,11 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 
     public bool Connected { get; set; } = true;
 
+    // The generations the records show: null for none, and with none the identity is the binding.
+    public string? Fg { get; set; }
+
+    public string? Rg { get; set; }
+
     public long Events => Interlocked.Read(ref _events);
 
     public string Id { get; private set; } = string.Empty;
@@ -194,7 +199,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         return data with { Db = db, Scripts = new MoveScripts(db, useScripts, version) };
     }
 
-    private ControlRecord Record(long ep, string id) => new(ep, id, "S3", "fwd", "1", "S0", "none", "0", "0", "id0", [(Cid, MoveScripts.NewNonce())]) { Limit = _limit ?? ControlRecord.FixedFields + 1 + 1024 };
+    private ControlRecord Record(long ep, string id) => new(ep, id, "S3", "fwd", "1", "S0", "none", "0", "0", "id0", [(Cid, MoveScripts.NewNonce())]) { Limit = _limit ?? ControlRecord.FixedFields + 1 + 1024, BindingField = Fg is null && Rg is null ? string.Empty : "fg", ForwardGeneration = Fg ?? string.Empty, RetiringGeneration = Rg ?? string.Empty };
 
     private async Task WriteRecordsAsync(string key) => await AdvanceRecordsAsync(key, _ep, Id);
 }

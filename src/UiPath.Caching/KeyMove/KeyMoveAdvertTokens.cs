@@ -13,6 +13,7 @@ internal sealed class KeyMoveAdvertTokens(
     public void AddTo(List<string> tokens)
     {
         tokens.Add(NodeAdvert.Km);
+        tokens.Add(NodeAdvert.Binding);
         foreach (var group in groups)
         {
             var rules = monitor.RulesFor(group.Name);
