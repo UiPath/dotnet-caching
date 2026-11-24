@@ -2,6 +2,9 @@ namespace UiPath.Caching.Migration;
 
 internal sealed record KeyMoveOptions
 {
+    /// <summary>The largest stored value that is promoted; a larger one is served from where it is, and dropped for a cache that has an origin.</summary>
+    public int MaxValueBytes { get; init; } = 4 * 1024 * 1024;
+
     /// <summary>How long a promotion holds work.</summary>
     public TimeSpan PromotionBudget { get; init; } = TimeSpan.FromSeconds(20);
 

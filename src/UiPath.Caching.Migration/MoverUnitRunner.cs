@@ -18,7 +18,7 @@ internal sealed class MoverUnitRunner
     private const int PacingReportedAfterSlices = 3;
 
     // The classes a pass accepts: a key in one of them is a settled answer, not a failure to move it.
-    private static readonly HashSet<string> Accepted = ["expired", "too_large", "unreadable", Unmappable, "short_ttl", "duplicate", "ambiguous"];
+    private static readonly HashSet<string> Accepted = ["expired", "too_large", "null_not_cached", "unreadable", Unmappable, "short_ttl", "duplicate", "ambiguous"];
 
     private readonly string _group;
     private readonly ScanUnit _unit;

@@ -14,6 +14,12 @@ internal sealed record KeyMoveSetup(
     IMoveClaim Claim,
     string LibraryPrefix)
 {
+    /// <summary>The registered caches, which the router binds a codec and a key map to.</summary>
+    public IReadOnlyList<KeyMoveCache> Caches { get; init; } = [];
+
+    /// <summary>The codec's verdict on stored values, for the inventory; null counts every owned key as movable.</summary>
+    public IValueClassifier? Values { get; init; }
+
     public KeyMoveStateOptions State { get; init; } = new();
 
     public StageDriverOptions Driver { get; init; } = new();

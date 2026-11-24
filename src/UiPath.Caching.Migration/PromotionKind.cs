@@ -42,6 +42,9 @@ internal enum PromotionKind
     /// <summary>The decoded value is too large to promote.</summary>
     TooLarge,
 
+    /// <summary>The decoded value is a cached null that the other side does not cache (the mover leaves it where it is).</summary>
+    NullNotCached,
+
     /// <summary>The key does not map to the other side.</summary>
     Unmappable,
 

@@ -87,6 +87,13 @@ public static class RouterServiceCollectionExtensions
         LibrarySettleBound.ThrowIfBeyondHorizon(LibrarySettleBound.Join(connection?.ConnectionString, connection?.ConnectionStringExtraParams));
     }
 
+    /// <summary>Both sides of a key move need a cache that can encode: the application's for the native format and the router's own for the in-place one.</summary>
+    internal static void ValidateCodecCaches(ICacheFactory application, ICacheFactory router)
+    {
+        _ = CodecCacheOf(application) ?? throw MissingNativeCodecCache();
+        _ = CodecCacheOf(router) ?? throw MissingRouterCodecCache();
+    }
+
     /// <summary>The key the stack's node list store uses: the same name, with braces escaped, through the stack's key strategy.</summary>
     internal static RedisKey NodeListKey(CacheOptions cacheOptions, RedisCacheOptions redisOptions)
     {
@@ -205,6 +212,12 @@ public static class RouterServiceCollectionExtensions
 
     private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate, string processId, PinFormatGate? gate, IConfigurationSection section)
     {
+        // A deterministic configuration error: it fails the host here, once, and never leaves a move cache on the source path.
+        if (builder.KeyMove is { Caches.Count: > 0 })
+        {
+            ValidateCodecCaches(root.GetRequiredService<ICacheFactory>(), root.GetRequiredKeyedService<ICacheFactory>(StackName));
+        }
+
         var logger = root.GetService<ILoggerFactory>()?.CreateLogger("UiPath.Caching.Migration") ?? NullLogger.Instance;
         var core = new RouterCore(root.GetRequiredService<TimeProvider>(), predicate, logger)
         {
@@ -213,6 +226,7 @@ public static class RouterServiceCollectionExtensions
             CleanupBound = builder.CleanupBound,
         };
         AdvertisementSetup? setup = null;
+
         var keyMove = builder.KeyMove is { } phaseSetup ? new KeyMoveNode(phaseSetup, root.GetRequiredService<TimeProvider>()) : null;
         try
         {
@@ -333,6 +347,7 @@ public static class RouterServiceCollectionExtensions
         var streams = new PrefixStrategy(RedisKeyspaces.Streams, options);
         var group = source.ToString().ToLowerInvariant();
         var libraryCache = root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis);
+        var binder = builder.KeyMove is { Caches.Count: > 0 } registered && keyMove is { HasGroups: true } ? KeyMoveBinderFor(root, libraryCache, registered) : null;
         return new LibraryParts(
             libraryCache.AsMigrationCache(),
             connector,
@@ -344,8 +359,27 @@ public static class RouterServiceCollectionExtensions
             (key, cancellationToken) => ReleaseTopicAsync(topics, connector, streams.GetRedisKey(key), group, key, cancellationToken),
             keyMove is { HasGroups: true } ? new NodePlane(keyMove, root.GetRequiredService<TimeProvider>(), builder.KeyMove?.Alert) : null,
             libraryCache,
-            root.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(StackName).Value.CacheNullValues);
+            root.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(StackName).Value.CacheNullValues,
+            binder);
     }
+
+    // The in-place side is the router's own library cache, so the codec cannot differ from what the library path writes, with or without an envelope; the native side is the application's Redis cache, with its serializers and effective format.
+    private static KeyMoveBinder KeyMoveBinderFor(IServiceProvider root, ICache routerCache, KeyMoveSetup setup) =>
+        routerCache is IByteCodecCache inPlace
+            ? new KeyMoveBinder(inPlace, NativeCodecCache(root) ?? throw MissingNativeCodecCache(), setup.Caches, classes: setup.Values as KeyMoveValueClasses)
+            : throw MissingRouterCodecCache();
+
+    // CreateCache falls back to the default cache, or a null cache, when there is no enabled Redis provider, so what comes back is checked by what it can do.
+    private static IByteCodecCache? CodecCacheOf(ICacheFactory factory) =>
+        factory.CreateCache(KnownCacheProviderNames.Redis) as IByteCodecCache;
+
+    private static IByteCodecCache? NativeCodecCache(IServiceProvider root) => CodecCacheOf(root.GetRequiredService<ICacheFactory>());
+
+    private static InvalidOperationException MissingNativeCodecCache() =>
+        new("UseKeyMove needs the application's Redis cache for the native format: add AddRedis to the application's caching and enable the Redis cache provider.");
+
+    private static InvalidOperationException MissingRouterCodecCache() =>
+        new("UseKeyMove needs the router's own Redis cache for the in-place format: enable the Redis cache provider in the router's caching section.");
 
     private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, KeyMoveNode? keyMove, AdvertisementSetup? setup, CancellationToken cancellationToken)
     {

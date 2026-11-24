@@ -72,6 +72,59 @@ public class KeyInventoryTests(RedisContainerFixture fixture)
         (await new InventoryMoverStatus(kit.Inventory, kit.Kit.Time, (_, _, _) => Task.FromResult(true)).DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("a movable key is left");
     }
 
+    // A value the codec refuses for good (a null N does not cache, one above the cap) is dropped by a delete: it stays in the residue and is counted apart, so it does not keep the drain from passing.
+    // The verdict comes from the stored length alone: no value is read.
+    [Fact]
+    public async Task A_droppable_value_stays_in_the_residue_is_counted_apart_does_not_block_the_drain_and_is_never_read()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        var calls = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var spy = InterceptingProxy.Wrap(kit.Kit.Db, (method, _) =>
+        {
+            calls.Enqueue(method.Name);
+            return InterceptingProxy.Proceed;
+        });
+        var lengths = new System.Collections.Concurrent.ConcurrentBag<long>();
+        var inventory = new KeyInventory(kit.Scanner, kit.Space, kit.Kit.Store, spy, kit.Prefix, kit.Kit.Time, values: new DropsAtLength(lengths));
+        var movable = await kit.SetAsync(MoveSide.Legacy, "a", "mv1");
+        await kit.SetAsync(MoveSide.Legacy, "a", "mv2", value: string.Empty);
+        await kit.SetAsync(MoveSide.Legacy, "a", "mv3", value: new string('x', 11));
+        var status = new InventoryMoverStatus(inventory, kit.Kit.Time, (_, _, _) => Task.FromResult(true));
+
+        var before = (await inventory.RunAsync(kit.Group, Ct))!;
+        var blocked = await status.DrainAsync(kit.Group, "fwd", Ct);
+        await kit.Kit.Db.KeyDeleteAsync(kit.Prefix + movable);
+        status = new InventoryMoverStatus(inventory, kit.Kit.Time, (_, _, _) => Task.FromResult(true));
+        var drained = await status.DrainAsync(kit.Group, "fwd", Ct);
+
+        before.Should().Match<InventoryResult>(r => r.Movable == 1 && r.Droppable == 2 && r.Residue["a"] == 3);
+        blocked!.Passed.Should().BeFalse("a movable key is left");
+        drained!.Should().Match<DrainReport>(r => r.Passed && r.Residue["a"] == 2, "only droppable keys remain, and they are still the residue");
+        calls.Should().NotContain(name => name.StartsWith("StringGet", StringComparison.Ordinal), "a value is never fetched to be classified");
+        calls.Should().Contain("StringLengthAsync");
+        lengths.Should().Contain([0L, 1L, 11L]);
+    }
+
+    [Fact]
+    public async Task A_scan_with_no_classifier_asks_for_no_length_and_no_value()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var calls = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var spy = InterceptingProxy.Wrap(kit.Kit.Db, (method, _) =>
+        {
+            calls.Enqueue(method.Name);
+            return InterceptingProxy.Proceed;
+        });
+        var inventory = new KeyInventory(kit.Scanner, kit.Space, kit.Kit.Store, spy, kit.Prefix, kit.Kit.Time);
+        await kit.SetAsync(MoveSide.Legacy, "a", "mv1");
+
+        (await inventory.RunAsync(kit.Group, Ct))!.Residue["a"].Should().Be(1);
+
+        calls.Should().NotContain(name => name.StartsWith("StringGet", StringComparison.Ordinal) || name.StartsWith("StringLength", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Drain_confirmation_requires_an_inventory_started_after_the_replica_lag_window()
     {
@@ -200,5 +253,14 @@ public class KeyInventoryTests(RedisContainerFixture fixture)
         inventory.InvalidMapping.Should().Be(1);
         inventory.Movable.Should().Be(0, "nothing is movable, and the mover pass is complete");
         (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("an invalid mapping is a defect, not a skip class");
+    }
+
+    private sealed class DropsAtLength(System.Collections.Concurrent.ConcurrentBag<long> seen) : IValueClassifier
+    {
+        public bool IsDroppable(string cacheId, MoveSide side, long length)
+        {
+            seen.Add(length);
+            return length == 0 || length > 10;
+        }
     }
 }

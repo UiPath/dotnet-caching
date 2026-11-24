@@ -5,7 +5,7 @@ namespace UiPath.Caching.KeyMove;
 
 /// <summary>The inventory on the masters: owned keys of the source side per cache, those a mover would still move, and the canary.</summary>
 /// <param name="database">The view without the connector prefix, for the life of a physical key.</param>
-internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, StateStore store, IDatabase database, string connectorPrefix, TimeProvider time, Action<KeyMoveAlert>? alert = null)
+internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, StateStore store, IDatabase database, string connectorPrefix, TimeProvider time, Action<KeyMoveAlert>? alert = null, IValueClassifier? values = null)
 {
     private const int LifeBatch = 256;
 
@@ -53,7 +53,7 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
         }
 
         await FlushAsync(group, side, now, t3, totals, batch).ConfigureAwait(false);
-        return new InventoryResult(residue, totals.Movable, totals.Canary, totals.Ambiguous, totals.Invalid);
+        return new InventoryResult(residue, totals.Movable, totals.Canary, totals.Ambiguous, totals.Invalid, totals.Droppable);
     }
 
     private string? CountKey(string group, MoveSide side, string key, Dictionary<string, long> residue, AttemptTotals totals)
@@ -86,6 +86,7 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
     private async Task FlushAsync(string group, MoveSide side, long now, long? t3, AttemptTotals totals, List<(string Key, string Cache)> batch)
     {
         var lives = await Task.WhenAll(batch.Select(b => database.KeyTimeToLiveAsync(connectorPrefix + b.Key, CommandFlags.DemandMaster))).ConfigureAwait(false);
+        var lengths = values is null ? null : await Task.WhenAll(batch.Select(b => LengthOfAsync(connectorPrefix + b.Key))).ConfigureAwait(false);
         for (var n = 0; n < batch.Count; n++)
         {
             var (key, cache) = batch[n];
@@ -96,7 +97,15 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
 
             if (space.IsMovable(group, side, cache, key, lives[n]))
             {
-                totals.Movable++;
+                // A value the codec refuses for good is dropped by a delete, not moved, so it must not keep the drain from finishing.
+                if (lengths?[n] is { } length && values!.IsDroppable(cache, side, length))
+                {
+                    totals.Droppable++;
+                }
+                else
+                {
+                    totals.Movable++;
+                }
             }
 
             if (t3 is { } start && lives[n] is { } life && space.MaxSourceTtl(group, cache) is { } longest && life.TotalMilliseconds + (now - start) > longest.TotalMilliseconds)
@@ -108,9 +117,24 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
         batch.Clear();
     }
 
+    // Only the stored length is asked for, so a batch never holds a value; a key of another type, or one that cannot be asked, is judged as movable.
+    private async Task<long?> LengthOfAsync(string key)
+    {
+        try
+        {
+            return await database.StringLengthAsync(key, CommandFlags.DemandMaster).ConfigureAwait(false);
+        }
+        catch (RedisServerException)
+        {
+            return null;
+        }
+    }
+
     private sealed class AttemptTotals(long? canary)
     {
         public long Movable { get; set; }
+
+        public long Droppable { get; set; }
 
         public long Ambiguous { get; set; }
 

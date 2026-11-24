@@ -40,6 +40,8 @@ internal sealed partial class KeyMoveClient<T>
             {
                 return await _p.Plain.ReadAsync(key, cancellationToken).ConfigureAwait(false);
             }
+
+            run++;
         }
     }
 
@@ -78,14 +80,14 @@ internal sealed partial class KeyMoveClient<T>
     private async ValueTask<ReadStep<T>> ReadUnionAsync(string key, bool withSource, CancellationToken cancellationToken)
     {
         var n = Native(key);
-        var first = Interpret(await SnapAsync(n, replica: true, SchedulePointStep.ReadDestination, cancellationToken).ConfigureAwait(false), _p.Native);
-        if (first.Kind != ReadOutcome.Absent)
+        var first = Interpret(await SnapAsync(n, replica: true, SchedulePointStep.ReadDestination, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
+        if (!first.FallsThrough)
         {
             return ReadStep<T>.Of(first);
         }
 
-        var master = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native);
-        if (master.Kind != ReadOutcome.Absent || !withSource)
+        var master = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
+        if (!master.FallsThrough || !withSource)
         {
             return ReadStep<T>.Of(master);
         }
@@ -96,6 +98,6 @@ internal sealed partial class KeyMoveClient<T>
             return ReadStep<T>.Of(source);
         }
 
-        return ReadStep<T>.Of(Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native));
+        return ReadStep<T>.Of(Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true));
     }
 }

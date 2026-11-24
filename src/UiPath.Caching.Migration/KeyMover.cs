@@ -71,6 +71,7 @@ internal sealed class KeyMover<T> : IMoveTarget
         PromotionKind.SourceAbsent => "duplicate",
         PromotionKind.Expired => "expired",
         PromotionKind.TooLarge => "too_large",
+        PromotionKind.NullNotCached => "null_not_cached",
         PromotionKind.Unreadable => "unreadable",
         PromotionKind.Unmappable => "unmappable",
         PromotionKind.ShortTtl => "short_ttl",

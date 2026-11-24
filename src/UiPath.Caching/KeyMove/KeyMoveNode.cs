@@ -66,6 +66,9 @@ internal sealed class KeyMoveNode
     /// <summary>The scan units of the current connection, for the mover; null before the node is started.</summary>
     internal IScanUnits? ScanUnits => _wiring?.Units;
 
+    /// <summary>The codec's verdict on stored values, as the inventory is told it.</summary>
+    internal IValueClassifier? Values => _setup.Values;
+
     /// <summary>The data view, scripts and key names of the current connection, for the router's data path; null before the node is started.</summary>
     internal KeyMoveDataAccess? DataAccess
     {
@@ -208,7 +211,7 @@ internal sealed class KeyMoveNode
             records,
             new ControlUpkeep(records, sequence, store, state, _time, Report),
             new GroupDataOps(scanner, _setup.KeySpace, store, stateScripts, controlScripts, names, alert: _ambiguity.Raise),
-            new KeyInventory(scanner, _setup.KeySpace, store, database, prefix, _time, _ambiguity.Raise),
+            new KeyInventory(scanner, _setup.KeySpace, store, database, prefix, _time, _ambiguity.Raise, _setup.Values),
             new StuckGateReopener(records, controlScripts, database, names, state, _time),
             new MarkerSweeper(control, controlScripts, names, state, _time),
             new RetireGate(control, names, state, _time),

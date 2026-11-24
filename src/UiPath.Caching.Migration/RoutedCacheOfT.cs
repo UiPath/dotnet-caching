@@ -67,6 +67,9 @@ internal sealed partial class RoutedCache<T> : IRouterParticipant, IRouterClear,
 
     internal string EventName => _eventName;
 
+    /// <summary>The library path in force: the key move client once the library is up and the cache is bound to a key move group.</summary>
+    internal IPathClient<T> Library => _library;
+
     internal InvalidationRetrier Retrier => _retrier;
 
     internal int HeldKeys => _keys.Count;
@@ -240,10 +243,15 @@ internal sealed partial class RoutedCache<T> : IRouterParticipant, IRouterClear,
     {
         CacheNullValues = library.CacheNullValues;
         var plain = new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin, WritePolicy(), ReadPolicy()) { CacheNulls = _registration.CacheNulls, Cache = library.Cache };
-        if (library.KeyMove is not { } plane || _registration.KeyMove is not { } binding)
+        // A registration that carries its own binding keeps it; otherwise the key move setup binds the library's codecs.
+        var binding = _registration.KeyMove ?? library.Binder?.Bind<T>(_registration.Name);
+        if (library.KeyMove is not { } plane || binding is null)
         {
             return plain;
         }
+
+        // The inventory judges the cache's values by the binding in force, whichever way it came.
+        library.Binder?.Register(_registration.Name, binding);
 
         return new KeyMoveClient<T>(new KeyMoveClientParts<T>(_registration.Group, _registration.Name, binding.NoOrigin, binding.InPlaceKey, binding.NativeKey, binding.InPlace, binding.Native, plain, plane, _core.Clock, library.LibrarySettleWithin) { Options = binding.Options });
     }

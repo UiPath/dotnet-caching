@@ -46,14 +46,14 @@ internal sealed partial class KeyMoveClient<T>
         if (!probed)
         {
             // Verify a replica miss on the master before consulting the hint.
-            var replica = Interpret(await SnapAsync(n, replica: true, SchedulePointStep.ReadDestination, cancellationToken).ConfigureAwait(false), _p.Native);
-            if (replica.Kind != ReadOutcome.Absent)
+            var replica = Interpret(await SnapAsync(n, replica: true, SchedulePointStep.ReadDestination, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
+            if (!replica.FallsThrough)
             {
                 return ReadStep<T>.Of(replica);
             }
 
-            var master = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native);
-            if (master.Kind != ReadOutcome.Absent)
+            var master = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
+            if (!master.FallsThrough)
             {
                 return ReadStep<T>.Of(master);
             }
@@ -120,8 +120,8 @@ internal sealed partial class KeyMoveClient<T>
     // A miss sets a hint only after one final master read.
     private async ValueTask<PathRead<T>> MissAsync(string key, string n, string identity, CancellationToken cancellationToken)
     {
-        var again = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native);
-        if (again.Kind == ReadOutcome.Absent)
+        var again = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
+        if (again.FallsThrough)
         {
             _hints.Set(key, identity);
         }

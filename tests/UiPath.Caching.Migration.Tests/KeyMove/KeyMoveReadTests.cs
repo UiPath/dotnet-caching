@@ -157,10 +157,12 @@ public sealed class KeyMoveReadTests(RedisFixture fixture)
         (await kit.ExistsAsync(kit.N("b"))).Should().BeFalse();
     }
 
-    [Fact]
-    public async Task A_too_large_entry_is_served_from_L_and_not_promoted()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task A_too_large_entry_is_served_from_L_and_not_promoted_and_dropped_only_when_the_cache_has_an_origin(bool noOrigin, bool stays)
     {
-        await using var kit = await KeyMoveKit.CreateAsync(fixture);
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: noOrigin);
         await kit.PrepareAsync("k");
         await kit.SetStateAsync("S3");
         await kit.Db.StringSetAsync(kit.L("k"), "big:1");
@@ -168,7 +170,7 @@ public sealed class KeyMoveReadTests(RedisFixture fixture)
         (await kit.Client.ReadAsync("k", Ct)).Value!.Name.Should().Be("big:1");
 
         (await kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
-        (await kit.ExistsAsync(kit.L("k"))).Should().BeTrue();
+        (await kit.ExistsAsync(kit.L("k"))).Should().Be(stays);
     }
 
     [Fact]

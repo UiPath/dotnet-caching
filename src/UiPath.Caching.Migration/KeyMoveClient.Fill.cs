@@ -74,6 +74,7 @@ internal sealed partial class KeyMoveClient<T>
                 CheckAdmissionRerun(run++);
                 await Task.Delay(_options.AdmissionPoll, _p.Clock, cancellationToken).ConfigureAwait(false);
                 plan = PlanFor(write: true);
+                run++;
                 continue;
             }
 
@@ -91,6 +92,7 @@ internal sealed partial class KeyMoveClient<T>
             }
 
             plan = PlanFor(write: true);
+            run++;
         }
     }
 
@@ -129,7 +131,7 @@ internal sealed partial class KeyMoveClient<T>
             // The losing fill returns the winner's value under the original fill mark.
             var held = source
                 ? Interpret(await SourceSnapAsync(key, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false), Source.Codec)
-                : Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native);
+                : Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
             KeepFillWinner(winner, held);
         }
 
