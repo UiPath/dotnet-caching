@@ -19,6 +19,22 @@ public sealed class LibraryHashPathClientTests : RouterTestBase
     }
 
     [Fact]
+    public async Task A_snapshot_that_cannot_be_read_still_answers_the_fields_asked_for_when_the_cache_reads_them_on_their_own()
+    {
+        _store.Read = (_, _) => Task.FromResult<object?>(SnapshotOutcome.Unreadable);
+        IDictionary<string, Item?> selected = new Dictionary<string, Item?> { ["a"] = new Item("1"), ["missing"] = null };
+        var cache = InterceptingProxy.Wrap<IHashCache>(null!, (method, _) => method.Name == nameof(IHashCache.GetAsync) ? new ValueTask<IDictionary<string, Item?>>(selected) : InterceptingProxy.Proceed);
+        var client = new LibraryHashPathClient<Item>(_store, _connection, key => key, Settle) { Cache = cache };
+
+        var read = await client.ReadAsync("k", ["a", "missing"], Ct);
+        var whole = await client.ReadAsync("k", null, Ct);
+
+        read.Kind.Should().Be(ReadOutcome.Found);
+        read.Fields!.Keys.Should().Equal("a", "missing");
+        whole.Kind.Should().Be(ReadOutcome.Unreadable, "a whole read has no field to fall back to");
+    }
+
+    [Fact]
     public async Task A_read_while_disconnected_is_unavailable_without_asking_the_library()
     {
         _connection.IsConnected = false;

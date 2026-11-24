@@ -7,6 +7,7 @@ namespace UiPath.Caching.Migration.Tests.Support;
 public abstract class RouterTestBase : IAsyncDisposable
 {
     private readonly List<TestNode> _nodes = [];
+    private readonly List<IAsyncDisposable> _owned = [];
 
     internal ManualTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 11, 18, 12, 0, 0, TimeSpan.Zero));
 
@@ -23,6 +24,11 @@ public abstract class RouterTestBase : IAsyncDisposable
         foreach (var node in _nodes)
         {
             await node.DisposeAsync();
+        }
+
+        foreach (var owned in _owned)
+        {
+            await owned.DisposeAsync();
         }
 
         GC.SuppressFinalize(this);
@@ -44,6 +50,14 @@ public abstract class RouterTestBase : IAsyncDisposable
         var next = new TaskCompletionSource<RouterMode>(TaskCreationOptions.RunContinuationsAsynchronously);
         node.Router.ModeChanged += (mode, _) => next.TrySetResult(mode);
         return next.Task;
+    }
+
+    /// <summary>Hands a node to the test base, which disposes it when the test ends.</summary>
+    internal TNode Own<TNode>(TNode node)
+        where TNode : IAsyncDisposable
+    {
+        _owned.Add(node);
+        return node;
     }
 
     internal TestNode NewNode(

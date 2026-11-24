@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Migration;
 
-// The ICache<T> surface of a routed cache: every abstract member is implemented here, explicitly, and has one rule in CacheMemberRules.
+// The ICache<T> surface of a routed cache: every abstract member is implemented here, explicitly, and has one rule in the test table CacheMemberRules (Migration tests, Support/SurfaceRules).
 // A sealed member of the interface (the span-key forms, the many-key forms) forwards to these, so it needs no rule of its own.
 internal sealed partial class RoutedCache<T>
 {
