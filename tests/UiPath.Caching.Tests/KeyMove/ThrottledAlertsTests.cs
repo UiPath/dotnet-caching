@@ -26,6 +26,26 @@ public class ThrottledAlertsTests
     }
 
     [Fact]
+    public async Task Concurrent_units_raise_one_missing_target_alert_per_cache_in_each_period()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var simultaneous = new Barrier(2);
+        var clock = new ConcurrentClock(simultaneous, cancellationToken);
+        var period = TimeSpan.FromSeconds(1);
+        var seen = 0;
+        var throttle = new ThrottledAlerts(_ => Interlocked.Increment(ref seen), clock, period);
+        var alert = new KeyMoveAlert("group", "mover_no_target", "cache");
+        throttle.Raise(alert);
+        clock.Timestamp = period.Ticks;
+
+        await Task.WhenAll(RaiseFromUnit(), RaiseFromUnit());
+
+        seen.Should().Be(2);
+
+        Task RaiseFromUnit() => Task.Factory.StartNew(() => throttle.Raise(alert), cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+    }
+
+    [Fact]
     public void Without_a_handler_nothing_is_kept()
     {
         var throttle = new ThrottledAlerts(null, new ManualTimeProvider(DateTimeOffset.UnixEpoch), TimeSpan.FromSeconds(2));
@@ -39,4 +59,26 @@ public class ThrottledAlertsTests
     }
 
     private static KeyMoveAlert Alert(string detail) => new("g1", "ambiguous_ownership", detail);
+
+    private sealed class ConcurrentClock(Barrier simultaneous, CancellationToken cancellationToken) : TimeProvider
+    {
+        private int _reads;
+
+        public long Timestamp { get; set; }
+
+        public override long TimestampFrequency
+        {
+            get
+            {
+                if (Interlocked.Increment(ref _reads) <= 2)
+                {
+                    simultaneous.SignalAndWait(cancellationToken);
+                }
+
+                return TimeSpan.TicksPerSecond;
+            }
+        }
+
+        public override long GetTimestamp() => Timestamp;
+    }
 }

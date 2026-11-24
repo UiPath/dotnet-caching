@@ -326,7 +326,7 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         var unit = (await kit.UnitIdsAsync()).Single();
         var passKey = kit.Kit.Names.UnitPass(kit.Kit.Group, unit, "fwd", MoverKit.MoveId);
         var ct = TestContext.Current.CancellationToken;
-        MoverPasses At(StateRecord state) => new(kit.Units, kit.Db, kit.Kit.Names, (_, _) => Task.FromResult<StateRecord?>(state));
+        MoverPasses At(StateRecord state) => new(kit.Units, kit.Db, kit.Kit.Names, kit.Space, (_, _) => Task.FromResult<StateRecord?>(state));
 
         (await At(kit.State()).FinishedAfterAckAsync(kit.Kit.Group, "fwd", ct)).Should().BeTrue();
         (await At(kit.State() with { Id = "newer" }).FinishedAfterAckAsync(kit.Kit.Group, "fwd", ct)).Should().BeFalse("the pass ran under an older identity");
@@ -339,21 +339,15 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         (await At(kit.State()).FinishedAfterAckAsync(kit.Kit.Group, "fwd", ct)).Should().BeFalse("a record under another move id");
     }
 
-    [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public async Task A_group_with_a_hash_cache_cannot_confirm_the_drain_from_mover_passes(bool hashCache, bool expected)
+    [Fact]
+    public async Task A_group_with_a_hash_cache_confirms_the_drain_from_mover_passes_like_any_other()
     {
-        await using var kit = await MoverKit.CreateAsync(fixture, hashCache: hashCache);
+        await using var kit = await MoverKit.CreateAsync(fixture, hashCache: true);
         await kit.SeedAsync("k");
         await kit.RunOnePassAsync(kit.Host());
-        var alerts = new List<KeyMoveAlert>();
-        var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, (_, _) => Task.FromResult<StateRecord?>(kit.State()), kit.Space.HasHashCache, alerts.Add);
+        var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, kit.Space, (_, _) => Task.FromResult<StateRecord?>(kit.State()));
 
-        (await passes.FinishedAfterAckAsync(kit.Kit.Group, "fwd", TestContext.Current.CancellationToken)).Should().Be(expected, "every pass finished under the current identity");
-
-        IEnumerable<string> expectedAlerts = hashCache ? [MoverPasses.NoHashPromotion] : [];
-        alerts.Select(a => a.Code).Should().Equal(expectedAlerts);
+        (await passes.FinishedAfterAckAsync(kit.Kit.Group, "fwd", TestContext.Current.CancellationToken)).Should().BeTrue("every pass finished under the current identity");
     }
 
     [Theory]
@@ -367,11 +361,12 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedAsync("k");
         var record = kit.State(state, acked, direction);
-        var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, (_, _) => Task.FromResult<StateRecord?>(record));
+        var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, kit.Space, (_, _) => Task.FromResult<StateRecord?>(record));
         var unit = (await kit.UnitIdsAsync()).Single();
 
         (await passes.FinishedAfterAckAsync(kit.Kit.Group, askedDirection, TestContext.Current.CancellationToken)).Should().BeFalse("no pass has finished yet");
-        await kit.Db.StringSetAsync(kit.Kit.Names.UnitPass(kit.Kit.Group, unit, askedDirection, MoverKit.MoveId), PassRecord.Text(record.Id, MoverKit.MoveId, 1, 0, unit));
+        var plan = MoveScan.HashOf(MoveScan.For(kit.Space, kit.Kit.Group, KeyInventory.SourceOf(record)));
+        await kit.Db.StringSetAsync(kit.Kit.Names.UnitPass(kit.Kit.Group, unit, askedDirection, MoverKit.MoveId), PassRecord.Text(record.Id, MoverKit.MoveId, 1, 0, unit, plan));
         (await passes.FinishedAfterAckAsync(kit.Kit.Group, askedDirection, TestContext.Current.CancellationToken)).Should().Be(expected);
     }
 

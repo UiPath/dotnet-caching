@@ -74,10 +74,7 @@ internal sealed partial class MoveScripts
     {
         for (var i = 0; i < MaxWatchAborts; i++)
         {
-            if (owned?.Invoke() == false)
-            {
-                throw new OwnershipLostException();
-            }
+            RequireOwnership(owned);
 
             if (await attempt().ConfigureAwait(false) is { } result)
             {
@@ -86,6 +83,14 @@ internal sealed partial class MoveScripts
         }
 
         throw new RedisException($"A move transaction aborted {MaxWatchAborts} times while its conditions held; the outcome is unknown.");
+    }
+
+    private static void RequireOwnership(Func<bool>? owned)
+    {
+        if (owned?.Invoke() == false)
+        {
+            throw new OwnershipLostException();
+        }
     }
 
     // EXEC commits even when one of its commands fails, for example on a key of another type; the script would raise that error, so this does too.

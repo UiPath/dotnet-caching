@@ -290,7 +290,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             _observedPass = state.Id;
         }
 
-        var passes = new MoverPasses(Node.ScanUnits!, Db, Names, Runtime.Store.ReadAsync);
+        var passes = new MoverPasses(Node.ScanUnits!, Db, Names, _space, Runtime.Store.ReadAsync);
         (await passes.FinishedAfterAckAsync(Group, direction, Ct)).Should().BeTrue();
     }
 
@@ -350,7 +350,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         await ApplyStateAsync();
         var advert = new NodeAdvert(advertiser.Field, TimeSpan.Zero, advertiser.Current().Tokens);
         advert.Acknowledges(Group, state).Should().BeTrue();
-        var passes = new MoverPasses(Node.ScanUnits!, Db, Names, Runtime.Store.ReadAsync);
+        var passes = new MoverPasses(Node.ScanUnits!, Db, Names, _space, Runtime.Store.ReadAsync);
         var retryClock = new ManualTimeProvider(Clock.GetUtcNow());
         var mover = new InventoryMoverStatus(Inventory(retryClock), Clock, passes.FinishedAfterAckAsync);
         var input = new StepInput(

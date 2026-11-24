@@ -1,6 +1,3 @@
-using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
 using StackExchange.Redis;
 using UiPath.Caching.KeyMove;
 
@@ -98,9 +95,6 @@ internal sealed class MoverUnitRunner
         }
     }
 
-    internal static string HashOf(IReadOnlyList<string> patterns) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', patterns))))[..16];
-
     private static bool SameEndpoint(string source, IServer server) =>
         source.StartsWith(server.EndPoint.ToString() + "#", StringComparison.Ordinal);
 
@@ -140,8 +134,8 @@ internal sealed class MoverUnitRunner
         }
 
         _renewedAt = sent;
-        var patterns = _space.Patterns(_group, _side);
-        var (cursor, wait) = await OpenCursorAsync(pass, code, HashOf(patterns)).ConfigureAwait(false);
+        var patterns = MoveScan.For(_space, _group, _side);
+        var (cursor, wait) = await OpenCursorAsync(pass, code, MoveScan.HashOf(patterns)).ConfigureAwait(false);
         if (cursor is null)
         {
             return wait;
@@ -174,15 +168,15 @@ internal sealed class MoverUnitRunner
                 return null;
             }
 
-            var (next, keys, scanned) = scan.Value;
+            var (next, keys, kind) = scan.Value;
             var tally = new Tally(_group);
-            if (!await MoveBatchAsync(pass, keys, tally, ownership, cancellationToken).ConfigureAwait(false))
+            if (!await MoveBatchAsync(pass, keys, kind, tally, ownership, cancellationToken).ConfigureAwait(false))
             {
                 await FlushAsync(data, tally).ConfigureAwait(false);
                 return null;
             }
 
-            (cursor, wait) = await EndBatchAsync(pass, next, patterns.Count, scanned, tally).ConfigureAwait(false);
+            (cursor, wait) = await EndBatchAsync(pass, next, patterns.Count, tally).ConfigureAwait(false);
             if (cursor is null)
             {
                 return wait;
@@ -231,7 +225,7 @@ internal sealed class MoverUnitRunner
     // Moves the keys of one batch. False when the pass must stop: the lease or the state was lost, or a key ended the batch.
     // The rate is charged before a key is captured: its key, and the bytes of the value published before it, which the promotion recorded after its publish.
     // Nothing waits while a fence or a marker is held, and the wait stays out of the mover's own timing.
-    private async Task<bool> MoveBatchAsync(PassKeys pass, List<string> keys, Tally tally, PassOwnership ownership, CancellationToken cancellationToken)
+    private async Task<bool> MoveBatchAsync(PassKeys pass, List<string> keys, KeyMoveKind kind, Tally tally, PassOwnership ownership, CancellationToken cancellationToken)
     {
         var renewal = new RenewalCount();
         foreach (var key in keys)
@@ -243,7 +237,7 @@ internal sealed class MoverUnitRunner
             }
 
             ownership.NewKey();
-            if (await MoveWithRetryAsync(pass, key, tally, ownership, renewal, cancellationToken).ConfigureAwait(false) == EndBatch)
+            if (await MoveWithRetryAsync(pass, key, kind, tally, ownership, renewal, cancellationToken).ConfigureAwait(false) == EndBatch)
             {
                 return false;
             }
@@ -255,7 +249,7 @@ internal sealed class MoverUnitRunner
 
     // A key the server refused for memory is tried once more when the backoff has ended, through the same checks; the retry runs CAP again, which asks the ownership first.
     // The second refusal is counted and left for the next pass.
-    private async Task<long> MoveWithRetryAsync(PassKeys pass, string key, Tally tally, PassOwnership ownership, RenewalCount renewal, CancellationToken cancellationToken)
+    private async Task<long> MoveWithRetryAsync(PassKeys pass, string key, KeyMoveKind kind, Tally tally, PassOwnership ownership, RenewalCount renewal, CancellationToken cancellationToken)
     {
         var retryOnOom = true;
         string? writtenCache = null;
@@ -267,7 +261,7 @@ internal sealed class MoverUnitRunner
                 return EndBatch;
             }
 
-            var moved = await MoveKeyAsync(key, tally, ownership, retryOnOom, ObserveWrite, cancellationToken).ConfigureAwait(false);
+            var moved = await MoveKeyAsync(key, kind, tally, ownership, retryOnOom, ObserveWrite, cancellationToken).ConfigureAwait(false);
             if (moved != RetryOom)
             {
                 if (moved != EndBatch && writtenCache is { } cache)
@@ -373,7 +367,7 @@ internal sealed class MoverUnitRunner
 
     // Stores the cursor after the batch, so a crash resumes from it; the batch's keys are idempotent, so the rescan of a half-moved one costs time only.
     // Returns the cursor of the next batch, or null with how long to wait when the pass finished or the lease was lost.
-    private async Task<(ScanCursor? Cursor, TimeSpan? Wait)> EndBatchAsync(PassKeys pass, ScanCursor next, int patternCount, string scanned, Tally tally)
+    private async Task<(ScanCursor? Cursor, TimeSpan? Wait)> EndBatchAsync(PassKeys pass, ScanCursor next, int patternCount, Tally tally)
     {
         next = next with { Failed = next.Failed + tally.Failed };
         var finished = next.Pattern >= patternCount;
@@ -389,7 +383,7 @@ internal sealed class MoverUnitRunner
             finished ? string.Empty : next.Text,
 
             // A pass in which a key failed is not a pass: no record, and the next pass starts from zero.
-            finished && next.Failed == 0 ? PassRecord.Text(_identity, _moveId, _time.GetUtcNow().ToUnixTimeMilliseconds(), 0, scanned) : string.Empty,
+            finished && next.Failed == 0 ? PassRecord.Text(_identity, _moveId, _time.GetUtcNow().ToUnixTimeMilliseconds(), 0, next.Source, next.Patterns) : string.Empty,
             (long)_options.CursorLife.TotalMilliseconds,
             (long)_options.PassRecordLife.TotalMilliseconds).ConfigureAwait(false);
         if (step == MoveScripts.UnitLeaseLost)
@@ -426,7 +420,7 @@ internal sealed class MoverUnitRunner
     }
 
     // One SCAN call, bound to the server that issues the cursor: a cursor of another server, a restarted one or another pattern list starts the pass from zero.
-    private async Task<(ScanCursor Next, List<string> Keys, string Source)?> ScanAsync(KeyMoveData data, ScanCursor at, IReadOnlyList<string> patterns, CancellationToken cancellationToken)
+    private async Task<(ScanCursor Next, List<string> Keys, KeyMoveKind Kind)?> ScanAsync(KeyMoveData data, ScanCursor at, IReadOnlyList<MoveScan> patterns, CancellationToken cancellationToken)
     {
         var server = at.Source.Length > 0 && SameEndpoint(at.Source, _unit.Primary) ? _unit.Primary : _unit.ScanServer;
         if (await SourceOfAsync(server).ConfigureAwait(false) is not { } source)
@@ -443,7 +437,7 @@ internal sealed class MoverUnitRunner
         at = at with { Source = source };
         if (at.Pattern >= patterns.Count)
         {
-            return (at, [], source);
+            return (at, [], default);
         }
 
         RedisResult reply;
@@ -466,7 +460,7 @@ internal sealed class MoverUnitRunner
         }
 
         var (cursor, keys) = ReadScanReply(reply);
-        return (cursor == "0" ? at with { Pattern = at.Pattern + 1, Cursor = "0" } : at with { Cursor = cursor }, keys, source);
+        return (cursor == "0" ? at with { Pattern = at.Pattern + 1, Cursor = "0" } : at with { Cursor = cursor }, keys, patterns[at.Pattern].Kind);
     }
 
     // The next cursor and the keys of one SCAN reply, with the connector prefix taken off; a key without the prefix is not the mover's.
@@ -485,13 +479,16 @@ internal sealed class MoverUnitRunner
         return (((string?)parts[0])!, keys);
     }
 
-    private Task<RedisResult> ExecuteScanAsync(IServer server, KeyMoveData data, ScanCursor at, IReadOnlyList<string> patterns, CancellationToken cancellationToken) =>
-        server.ExecuteAsync(data.Db.Database, "SCAN", [at.Cursor, "MATCH", MasterScanner.EscapeGlob(_connectorPrefix) + patterns[at.Pattern], "COUNT", _options.ScanCount, "TYPE", "string"]).WaitAsync(cancellationToken);
+    private Task<RedisResult> ExecuteScanAsync(IServer server, KeyMoveData data, ScanCursor at, IReadOnlyList<MoveScan> patterns, CancellationToken cancellationToken)
+    {
+        var scan = patterns[at.Pattern];
+        return server.ExecuteAsync(data.Db.Database, "SCAN", [at.Cursor, "MATCH", MasterScanner.EscapeGlob(_connectorPrefix) + scan.Pattern, "COUNT", _options.ScanCount, "TYPE", scan.RedisType]).WaitAsync(cancellationToken);
+    }
 
     // Check ownership and key mapping before promotion. EndBatch ends the batch, RetryOom asks for one more try of the key, and anything else is the bytes published.
-    private async Task<long> MoveKeyAsync(string key, Tally tally, IMoveOwnership ownership, bool retryOnOom, Action<string> observeWrite, CancellationToken cancellationToken)
+    private async Task<long> MoveKeyAsync(string key, KeyMoveKind kind, Tally tally, IMoveOwnership ownership, bool retryOnOom, Action<string> observeWrite, CancellationToken cancellationToken)
     {
-        var owners = _space.OwnersOf(_group, _side, key);
+        var owners = _space.OwnersOf(_group, _side, key, kind);
         if (owners.Count == 0)
         {
             // Another group's key, an unmanaged cache's, a direct cache's, or none: not the mover's, and not counted.
@@ -519,6 +516,7 @@ internal sealed class MoverUnitRunner
         if (!_targets.TryGetValue(cacheId, out var target))
         {
             _alerts.Raise(new KeyMoveAlert(_group, "mover_no_target", cacheId));
+            tally.Skip(cacheId, "no_target");
             return 0;
         }
 

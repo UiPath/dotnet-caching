@@ -257,7 +257,7 @@ internal sealed partial class MoveScripts
 
     /// <summary>PUBH: renames the staging hash over the destination under the fence and the gate, with the deadline rule of PUB.</summary>
     /// <returns>As <see cref="PublishAsync"/>; a missing staging key is 0, and every result but 1 deletes the staging key.</returns>
-    public async Task<long> PublishHashAsync(FencedKeys keys, RedisKey staging, string id, Publication publication)
+    public async Task<long> PublishHashAsync(FencedKeys keys, RedisKey staging, string id, Publication publication, Func<bool>? owned = null)
     {
         CheckLife(publication.Px, nameof(publication));
         var p = publication;
@@ -266,6 +266,7 @@ internal sealed partial class MoveScripts
             throw new ArgumentException("A hash publish with a life needs the capture time; a create goes through FILLH.", nameof(publication));
         }
 
+        RequireOwnership(owned);
         var reply = await EvaluateAsync(
             PubHashScript,
             [keys.Fence, keys.Data, staging, keys.Control],
@@ -298,7 +299,7 @@ internal sealed partial class MoveScripts
             }
         }
 
-        return await WatchedAsync(() => TryPublishHashAsync(keys, staging, id, p, deadline)).ConfigureAwait(false);
+        return await WatchedAsync(() => TryPublishHashAsync(keys, staging, id, p, deadline), owned).ConfigureAwait(false);
     }
 
     /// <summary>BUMP: replaces the fence in the same step as the writer's Dst write or delete.</summary>

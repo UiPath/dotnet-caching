@@ -391,21 +391,23 @@ public sealed class KeyMoveSweepTests(RedisContainerFixture fixture)
 
         public IReadOnlyList<string> PatternsOf(string group, string cacheId, MoveSide side) => inner.PatternsOf(group, cacheId, side);
 
-        public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key)
+        public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key, KeyMoveKind? kind = null)
         {
             onOwnersAsked();
-            return inner.OwnersOf(group, side, key);
+            return inner.OwnersOf(group, side, key, kind);
         }
 
         public bool HasValidDestination(string group, MoveSide side, string cacheId, string key) => inner.HasValidDestination(group, side, cacheId, key);
 
         public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) => inner.IsMovable(group, side, cacheId, key, timeToLive);
 
+        public bool HoldsHashes(string group, MoveSide side, string pattern) => inner.HoldsHashes(group, side, pattern);
+
+        public bool HoldsStrings(string group, MoveSide side, string pattern) => inner.HoldsStrings(group, side, pattern);
+
         public KeyMoveKind KindOf(string group, string cacheId) => inner.KindOf(group, cacheId);
 
         public TimeSpan? MaxSourceTtl(string group, string cacheId) => inner.MaxSourceTtl(group, cacheId);
-
-        public bool HasHashCache(string group) => inner.HasHashCache(group);
 
         public string? CallerKeyOf(string group, MoveSide side, string cacheId, string key) => inner.CallerKeyOf(group, side, cacheId, key);
 

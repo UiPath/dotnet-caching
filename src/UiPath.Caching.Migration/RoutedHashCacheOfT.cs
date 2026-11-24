@@ -112,7 +112,11 @@ internal sealed partial class RoutedHashCache<T> : IRouterParticipant, IRouterCl
 
         // The inventory judges the cache's hashes by the binding in force, whichever way it came.
         library.Binder?.RegisterHash(_registration.Name, binding);
-        return new KeyMoveHashClient<T>(KeyMoveHashClientParts<T>.From(_registration.Group, _registration.Name, binding, plain, plane, _core.Clock, library.LibrarySettleWithin));
+        var client = new KeyMoveHashClient<T>(KeyMoveHashClientParts<T>.From(_registration.Group, _registration.Name, binding, plain, plane, _core.Clock, library.LibrarySettleWithin));
+
+        // The mover promotes through the client's own promotion, so it helps a marked key the way the client does.
+        library.Movers?.Add(_registration.Group, new HashMover<T>(client.Parts, client.Promotion));
+        return client;
     }
 
     private bool Attach(IHashPathClient<T> library)

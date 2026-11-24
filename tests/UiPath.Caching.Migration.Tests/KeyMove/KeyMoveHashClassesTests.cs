@@ -83,6 +83,13 @@ public sealed class KeyMoveHashClassesTests(RedisFixture fixture)
         setup.Caches.Single(c => c.Name == "a").Kind.Should().Be(KeyMoveKind.Hash);
     }
 
+    [Fact]
+    public void Cache_kind_is_the_only_hash_registration_flag()
+    {
+        typeof(KeyMoveCache).GetProperty("Hash").Should().BeNull();
+        typeof(IGroupKeySpace).GetMethod("HasHashCache").Should().BeNull();
+    }
+
     // The inventory and the read judge a hash by one predicate: what the inventory calls droppable is what a read in S3 removes, and nothing else is.
     [Theory]
     [InlineData(false)]

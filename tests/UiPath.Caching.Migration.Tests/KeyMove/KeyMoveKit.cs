@@ -40,6 +40,9 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 
     public EpochGate Gate => _gate;
 
+    // The other caches of the group, whose gates the records of every key hold too.
+    public List<string> Others { get; } = [];
+
     public ConnectionMultiplexer Mux { get; }
 
     public string Unique { get; }
@@ -249,7 +252,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         return data with { Db = db, Scripts = new MoveScripts(db, useScripts, version) };
     }
 
-    private ControlRecord Record(long ep, string id) => new(ep, id, "S3", "fwd", "1", "S0", "none", "0", "0", "id0", [(Cid, MoveScripts.NewNonce())]) { Limit = _limit ?? ControlRecord.FixedFields + 1 + 1024, BindingField = Fg is null && Rg is null ? string.Empty : "fg", ForwardGeneration = Fg ?? string.Empty, RetiringGeneration = Rg ?? string.Empty };
+    private ControlRecord Record(long ep, string id) => new(ep, id, "S3", "fwd", "1", "S0", "none", "0", "0", "id0", [(Cid, MoveScripts.NewNonce()), .. Others.Select(o => (o, MoveScripts.NewNonce()))]) { Limit = _limit ?? ControlRecord.FixedFields + 1 + 1024, BindingField = Fg is null && Rg is null ? string.Empty : "fg", ForwardGeneration = Fg ?? string.Empty, RetiringGeneration = Rg ?? string.Empty };
 
     private async Task WriteRecordsAsync(string key) => await AdvanceRecordsAsync(key, _ep, Id);
 }

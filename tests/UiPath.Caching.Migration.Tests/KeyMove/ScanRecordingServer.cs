@@ -33,6 +33,8 @@ public class ScanRecordingServer : DispatchProxy
 
     public int FailAfter { get; set; } = int.MaxValue;
 
+    public Func<IReadOnlyList<object>, RedisResult>? Reply { get; set; }
+
     public IReadOnlyList<string> Cursors
     {
         get
@@ -106,6 +108,6 @@ public class ScanRecordingServer : DispatchProxy
             throw ScanFailure ?? new RedisException("The scan failed.");
         }
 
-        return ScanReply?.Invoke(cursor);
+        return Reply?.Invoke(scan.ToArray()) ?? ScanReply?.Invoke(cursor);
     }
 }

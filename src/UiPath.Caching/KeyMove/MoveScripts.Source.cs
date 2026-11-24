@@ -186,7 +186,7 @@ internal sealed partial class MoveScripts
 
     /// <summary>CMPDELH: deletes the source hash only while it holds exactly these fields and values; a key of another type reads as changed.</summary>
     /// <returns>-1, 0 when the hash changed or is gone, 1.</returns>
-    public async Task<long> CompareDeleteHashAsync(RedisKey key, RedisKey control, string id, IReadOnlyList<HashEntry> expected)
+    public async Task<long> CompareDeleteHashAsync(RedisKey key, RedisKey control, string id, IReadOnlyList<HashEntry> expected, Func<bool>? owned = null)
     {
         var args = new RedisValue[2 + (expected.Count * 2)];
         args[0] = id;
@@ -199,13 +199,14 @@ internal sealed partial class MoveScripts
 
         try
         {
+            RequireOwnership(owned);
             var reply = await EvaluateAsync(CmpDelHashScript, [key, control], args).ConfigureAwait(false);
             if (reply is not null)
             {
                 return (long)reply;
             }
 
-            return await WatchedAsync(() => TryCompareDeleteHashAsync(key, control, id, expected)).ConfigureAwait(false);
+            return await WatchedAsync(() => TryCompareDeleteHashAsync(key, control, id, expected), owned).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsWrongType(ex))
         {

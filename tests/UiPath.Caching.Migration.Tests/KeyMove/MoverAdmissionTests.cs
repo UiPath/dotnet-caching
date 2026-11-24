@@ -132,7 +132,7 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         var keys = Enumerable.Range(0, 20).Select(i => $"k{i}").ToArray();
         await kit.SeedAsync(keys);
         var unit = (await kit.UnitIdsAsync()).Single();
-        var patterns = MoverUnitRunner.HashOf(kit.Space.Patterns(kit.Kit.Group, MoveSide.Legacy));
+        var patterns = MoveScan.HashOf(MoveScan.For(kit.Space, kit.Kit.Group));
         await kit.Db.StringSetAsync(kit.Kit.Names.UnitCursor(kit.Kit.Group, unit, "fwd", MoverKit.MoveId), $"0|123456|{kit.Kit.Id}|another-server:6379#run-1|{patterns}|0");
         ScanRecordingServer? scans = null;
         var host = kit.Host(Small, units: new ProxyUnits(kit.Units, u => u with { Primary = ScanRecordingServer.Over(u.Primary, out scans) }));
@@ -199,12 +199,13 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedAsync("k");
         var unit = (await kit.UnitIdsAsync()).Single();
-        var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, (_, _) => Task.FromResult<StateRecord?>(kit.State()));
+        var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, kit.Space, (_, _) => Task.FromResult<StateRecord?>(kit.State()));
         var passKey = kit.Kit.Names.UnitPass(kit.Kit.Group, unit, "fwd", MoverKit.MoveId);
 
-        await kit.Db.StringSetAsync(passKey, $"{kit.Kit.Id}|{MoverKit.MoveId}|1|2|src");
+        var plan = MoveScan.HashOf(MoveScan.For(kit.Space, kit.Kit.Group));
+        await kit.Db.StringSetAsync(passKey, PassRecord.Text(kit.Kit.Id, MoverKit.MoveId, 1, 2, "src", plan));
         (await passes.FinishedAfterAckAsync(kit.Kit.Group, "fwd", Ct)).Should().BeFalse();
-        await kit.Db.StringSetAsync(passKey, $"{kit.Kit.Id}|{MoverKit.MoveId}|1|0|src");
+        await kit.Db.StringSetAsync(passKey, PassRecord.Text(kit.Kit.Id, MoverKit.MoveId, 1, 0, "src", plan));
         (await passes.FinishedAfterAckAsync(kit.Kit.Group, "fwd", Ct)).Should().BeTrue();
     }
 

@@ -21,12 +21,12 @@ public sealed class MoverEvidenceTests(RedisFixture fixture)
         second.RunId = "run-b";
         var listed = new List<ScanUnit> { one };
         var state = kit.State();
-        var passes = new MoverPasses(new Listed(() => listed), kit.Db, kit.Kit.Names, (_, _) => Task.FromResult<StateRecord?>(state));
+        var passes = new MoverPasses(new Listed(() => listed), kit.Db, kit.Kit.Names, kit.Space, (_, _) => Task.FromResult<StateRecord?>(state));
         async Task RecordAsync(string identity)
         {
             foreach (var id in new[] { "u1", "u2" })
             {
-                await kit.Db.StringSetAsync(kit.Kit.Names.UnitPass(kit.Kit.Group, id, "fwd", MoverKit.MoveId), PassRecord.Text(identity, MoverKit.MoveId, 1, 0, "ep#" + id), flags: StackExchange.Redis.CommandFlags.DemandMaster);
+                await kit.Db.StringSetAsync(kit.Kit.Names.UnitPass(kit.Kit.Group, id, "fwd", MoverKit.MoveId), PassRecord.Text(identity, MoverKit.MoveId, 1, 0, "ep#" + id, MoveScan.HashOf(MoveScan.For(kit.Space, kit.Kit.Group))), flags: StackExchange.Redis.CommandFlags.DemandMaster);
             }
         }
 
@@ -59,6 +59,28 @@ public sealed class MoverEvidenceTests(RedisFixture fixture)
 
         first.Info = InfoFault.Fail;
         (await Evidence()).Should().BeNull("a run id that cannot be read is no evidence");
+    }
+
+    [Fact]
+    public async Task A_pass_from_a_string_only_scan_plan_cannot_confirm_a_hash_group()
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture, hashCache: true);
+        await kit.SeedAsync("k");
+        await kit.RunOnePassAsync(kit.Host());
+        var group = kit.Kit.Group;
+        var unit = (await kit.UnitIdsAsync()).Single();
+        var key = kit.Kit.Names.UnitPass(group, unit, "fwd", MoverKit.MoveId);
+        var current = (await kit.Db.StringGetAsync(key)).ToString();
+        var source = PassRecord.SourceOf(current);
+        var scalarPlan = MoveScan.HashOf(MoveScan.For(kit.Space, group).Where(scan => scan.Kind == KeyMoveKind.String).ToArray());
+        var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, kit.Space, (_, _) => Task.FromResult<StateRecord?>(kit.State()));
+
+        await kit.Db.StringSetAsync(key, $"{kit.Kit.Id}|{MoverKit.MoveId}|1|0|{source}");
+        (await passes.FinishedAfterAckAsync(group, "fwd", Ct)).Should().BeFalse();
+        await kit.Db.StringSetAsync(key, PassRecord.Text(kit.Kit.Id, MoverKit.MoveId, 1, 0, source, scalarPlan));
+        (await passes.FinishedAfterAckAsync(group, "fwd", Ct)).Should().BeFalse();
+        await kit.Db.StringSetAsync(key, current);
+        (await passes.FinishedAfterAckAsync(group, "fwd", Ct)).Should().BeTrue();
     }
 
     private sealed class Listed(Func<IReadOnlyList<ScanUnit>> units) : IScanUnits

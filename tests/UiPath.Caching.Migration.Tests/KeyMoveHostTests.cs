@@ -525,17 +525,19 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
 
         public IReadOnlyList<string> PatternsOf(string group, string cacheId, MoveSide side) => [];
 
-        public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key) => [];
+        public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key, KeyMoveKind? kind = null) => [];
 
         public bool HasValidDestination(string group, MoveSide side, string cacheId, string key) => true;
 
         public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) => false;
 
+        public bool HoldsHashes(string group, MoveSide side, string pattern) => false;
+
+        public bool HoldsStrings(string group, MoveSide side, string pattern) => true;
+
         public KeyMoveKind KindOf(string group, string cacheId) => KeyMoveKind.String;
 
         public TimeSpan? MaxSourceTtl(string group, string cacheId) => null;
-
-        public bool HasHashCache(string group) => false;
 
         public string? CallerKeyOf(string group, MoveSide side, string cacheId, string key) => null;
 

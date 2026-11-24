@@ -26,7 +26,7 @@ public sealed class MoverCursorTests(RedisFixture fixture)
         scans!.Info = fault;
 
         // What a run left behind while the server named no run id: a position bound to the endpoint alone, which every later process of the server matches.
-        var patterns = MoverUnitRunner.HashOf(kit.Space.Patterns(kit.Kit.Group, MoveSide.Legacy));
+        var patterns = MoveScan.HashOf(MoveScan.For(kit.Space, kit.Kit.Group));
         var cursorKey = kit.Kit.Names.UnitCursor(kit.Kit.Group, unit.Id, "fwd", MoverKit.MoveId);
         var stored = new ScanCursor(0, "3", kit.Kit.Id, unit.Primary.EndPoint + "#", patterns, 0);
         await kit.Db.StringSetAsync(cursorKey, stored.Text);

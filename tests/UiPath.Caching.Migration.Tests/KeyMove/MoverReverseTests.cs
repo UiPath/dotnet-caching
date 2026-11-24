@@ -201,7 +201,7 @@ public sealed class MoverReverseTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedNativeAsync(new Dictionary<string, (string, TimeSpan?)> { ["k"] = ("v", null) });
         var reverse = kit.State(direction: "rev");
-        var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, (_, _) => Task.FromResult<StateRecord?>(reverse));
+        var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, kit.Space, (_, _) => Task.FromResult<StateRecord?>(reverse));
 
         (await passes.FinishedAfterAckAsync(kit.Kit.Group, "rev", Ct)).Should().BeFalse("no pass has run");
         await kit.RunOnePassAsync(kit.Host(state: () => reverse), "rev");

@@ -18,20 +18,37 @@ internal sealed class ThrottledAlerts(Action<KeyMoveAlert>? inner, TimeProvider 
 
         var now = time.GetTimestamp();
         var key = $"{alert.Group}|{alert.Code}|{alert.Detail}";
-        if (_sent.TryGetValue(key, out var at) && time.GetElapsedTime(at, now) < period)
+        if (!TryReserve(key, now))
         {
             return;
         }
 
         if (_sent.Count > PruneAbove)
         {
-            foreach (var old in _sent.Where(e => time.GetElapsedTime(e.Value, now) >= period).Select(e => e.Key).ToArray())
+            foreach (var old in _sent.Where(e => time.GetElapsedTime(e.Value, now) >= period).ToArray())
             {
-                _sent.TryRemove(old, out _);
+                _sent.TryRemove(old);
             }
         }
 
-        _sent[key] = now;
         inner(alert);
+    }
+
+    private bool TryReserve(string key, long now)
+    {
+        while (_sent.TryGetValue(key, out var previous))
+        {
+            if (time.GetElapsedTime(previous, now) < period)
+            {
+                return false;
+            }
+
+            if (_sent.TryUpdate(key, now, previous))
+            {
+                return true;
+            }
+        }
+
+        return _sent.TryAdd(key, now);
     }
 }
