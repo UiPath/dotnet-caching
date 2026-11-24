@@ -93,6 +93,12 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
 
     internal ValueMigration? Migration { get; init; }
 
+    // For tests: runs before each chunk of a traced chunked merge, with the index of the chunk.
+    internal Func<int, Task>? OnChunk { get; set; }
+
+    // For tests: false makes a traced chunked merge take the watched-transaction fallback instead of the script.
+    internal bool ChunkScriptsEnabled { get; set; } = true;
+
     // For tests: runs after a chunked replacement filled its staging key, before the rename.
     internal Func<IDatabase, RedisKey, Task>? OnStaged { get; set; }
 

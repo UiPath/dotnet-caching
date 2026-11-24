@@ -25,6 +25,14 @@ internal sealed class KeyMoveValueClasses : IValueClassifier
             binding.NoOrigin,
             (side == MoveSide.Native ? binding.InPlace : binding.Native).EncodeNull() is not null);
 
+    // The field count decides, as it does in the hash codec and in the read: the inventory asks for the HLEN and never reads a hash.
+    public void AddHash<T>(string cacheId, KeyMoveHashBinding<T> binding)
+        where T : class =>
+        _caches[cacheId] = (side, length) => Droppable(
+            KeyMoveHashSize.OfLength(length, binding.MaxHashFields),
+            binding.NoOrigin,
+            (side == MoveSide.Native ? binding.InPlace : binding.Native).CachesNulls);
+
     public bool IsDroppable(string cacheId, MoveSide side, long length) =>
         _caches.TryGetValue(cacheId, out var verdict) && verdict(side, length);
 

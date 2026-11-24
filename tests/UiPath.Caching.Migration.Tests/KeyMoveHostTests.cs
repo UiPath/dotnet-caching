@@ -282,6 +282,8 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
 
         public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) => false;
 
+        public KeyMoveKind KindOf(string group, string cacheId) => KeyMoveKind.String;
+
         public TimeSpan? MaxSourceTtl(string group, string cacheId) => null;
 
         public bool HasHashCache(string group) => false;

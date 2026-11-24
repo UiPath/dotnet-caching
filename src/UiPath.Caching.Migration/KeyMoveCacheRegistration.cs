@@ -1,3 +1,5 @@
+using UiPath.Caching.KeyMove;
+
 namespace UiPath.Caching.Migration;
 
 /// <summary>One cache of a key move group: its traits and the key map between its in-place and native keys.</summary>
@@ -44,4 +46,7 @@ public sealed class KeyMoveCacheRegistration
 
     /// <summary>The remaining life below which the mover leaves a key of this cache to its next read, overriding the group's <see cref="KeyMoveBuilder.UseMoveMinTtl"/>; null follows the group. Zero moves every key. A <see cref="NoOrigin"/> cache is always moved in full, and a read-through promotion ignores it.</summary>
     public TimeSpan? MoveMinTtl { get; init; }
+
+    /// <summary>What the cache stores under each key; a hash cache is judged by its field count in the inventory.</summary>
+    internal KeyMoveKind Kind { get; init; }
 }

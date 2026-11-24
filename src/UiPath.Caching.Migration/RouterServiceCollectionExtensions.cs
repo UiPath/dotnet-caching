@@ -347,7 +347,7 @@ public static class RouterServiceCollectionExtensions
         var streams = new PrefixStrategy(RedisKeyspaces.Streams, options);
         var group = source.ToString().ToLowerInvariant();
         var libraryCache = root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis);
-        var binder = builder.KeyMove is { Caches.Count: > 0 } registered && keyMove is { HasGroups: true } ? KeyMoveBinderFor(root, libraryCache, registered) : null;
+        var binder = builder.KeyMove is { Caches.Count: > 0 } registered && keyMove is { HasGroups: true } ? KeyMoveBinderFor(root, libraryCache, registered, builder.InPlaceKeepsSystemFields) : null;
         return new LibraryParts(
             libraryCache.AsMigrationCache(),
             connector,
@@ -364,10 +364,28 @@ public static class RouterServiceCollectionExtensions
     }
 
     // The in-place side is the router's own library cache, so the codec cannot differ from what the library path writes, with or without an envelope; the native side is the application's Redis cache, with its serializers and effective format.
-    private static KeyMoveBinder KeyMoveBinderFor(IServiceProvider root, ICache routerCache, KeyMoveSetup setup) =>
-        routerCache is IByteCodecCache inPlace
-            ? new KeyMoveBinder(inPlace, NativeCodecCache(root) ?? throw MissingNativeCodecCache(), setup.Caches, classes: setup.Values as KeyMoveValueClasses)
-            : throw MissingRouterCodecCache();
+    // The hash codec caches are made the same way and are optional: a host that registers no hash cache in a key move group never asks for them, and binding a hash cache without them fails at startup.
+    private static KeyMoveBinder KeyMoveBinderFor(IServiceProvider root, ICache routerCache, KeyMoveSetup setup, bool inPlaceKeepsSystemFields)
+    {
+        if (routerCache is not IByteCodecCache inPlace)
+        {
+            throw MissingRouterCodecCache();
+        }
+
+        // Only a group that holds hash caches asks for the hash codec caches.
+        var hashes = setup.Caches.Any(c => c.Kind == KeyMoveKind.Hash);
+        return new KeyMoveBinder(
+            inPlace,
+            NativeCodecCache(root) ?? throw MissingNativeCodecCache(),
+            setup.Caches,
+            classes: setup.Values as KeyMoveValueClasses,
+            inPlaceHash: hashes ? HashCodecCacheOf(root.GetRequiredKeyedService<ICacheFactory>(StackName)) : null,
+            nativeHash: hashes ? HashCodecCacheOf(root.GetRequiredService<ICacheFactory>()) : null,
+            inPlaceKeepsSystemFields: inPlaceKeepsSystemFields);
+    }
+
+    private static IByteHashCodecCache? HashCodecCacheOf(ICacheFactory factory) =>
+        factory.CreateHashCache(KnownCacheProviderNames.Redis) as IByteHashCodecCache;
 
     // CreateCache falls back to the default cache, or a null cache, when there is no enabled Redis provider, so what comes back is checked by what it can do.
     private static IByteCodecCache? CodecCacheOf(ICacheFactory factory) =>

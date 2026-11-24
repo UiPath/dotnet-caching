@@ -48,6 +48,15 @@ internal sealed partial class MultilayerHashCache : IMigrationHashCache
                 : Plain(await _innerCache.RefreshAsync<T>(cacheKey, options, policy, ct).ConfigureAwait(false)),
             token);
 
+    /// <summary>As <see cref="WriteAsync{T}"/>, for the expiry-only refresh. An inner tier without <see cref="IMigrationHashCache"/> reports <see cref="StoreOutcome.Committed"/> for a true refresh and <see cref="StoreOutcome.Unknown"/> otherwise.</summary>
+    public ValueTask<StoreOutcome> RenewExpiryAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default) =>
+        StoredAsync<T>(
+            cacheKey,
+            async ct => _innerCache is IMigrationHashCache migration
+                ? await migration.RenewExpiryAsync<T>(cacheKey, options with { ExpireTime = GetExpiration(options, policy ?? _defaultPolicy), TimeToLive = null }, policy, ct).ConfigureAwait(false)
+                : Plain(await _innerCache.RefreshAsync<T>(cacheKey, GetExpiration(options, policy ?? _defaultPolicy), policy, ct).ConfigureAwait(false)),
+            token);
+
     private static StoreOutcome Plain(bool done) => done ? StoreOutcome.Committed : StoreOutcome.Unknown;
 
     // The local copy goes first and every other node is told after, as for a delete; the store call is ordered with the key's other writes and is the only one that records the outcome.

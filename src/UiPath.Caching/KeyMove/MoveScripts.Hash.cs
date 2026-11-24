@@ -65,6 +65,8 @@ internal sealed partial class MoveScripts
         if redis.call('HGET', KEYS[2], 'id') ~= ARGV[1] then return -1 end
         if #KEYS == 3 then redis.call('SET', KEYS[3], ARGV[3], 'PX', ARGV[4]) end
         if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+        -- The metadata first, as the library's refresh does: an expiry that has passed deletes the key, and a field written after it would make a key of its own that never expires.
+        if ARGV[5] == 'del' then redis.call('HDEL', KEYS[1], ARGV[6]) elseif ARGV[5] == 'mark' then redis.call('HSET', KEYS[1], ARGV[6], '') end
         if ARGV[2] == '-1' then redis.call('PERSIST', KEYS[1]) else redis.call('PEXPIREAT', KEYS[1], ARGV[2]) end
         return 1
         """;
@@ -137,43 +139,21 @@ internal sealed partial class MoveScripts
         return result;
     }
 
-    /// <summary>HEXPC: sets the absolute expiry of a hash that exists, or removes it with -1, under the identity; on the Dst side it also replaces the fence.</summary>
+    /// <summary>HEXPC: sets the absolute expiry of a hash that exists, or removes it with -1, under the identity, and with <paramref name="clear"/> clears its metadata in the same step; on the Dst side it also replaces the fence.</summary>
+    /// <param name="clear">What the refresh does to the metadata field, as the library's options refresh does with no metadata: <see cref="HashMetadataClear.Remove"/> deletes it, and <see cref="HashMetadataClear.Mark"/> sets the empty marker where the library caches nulls.</param>
     /// <returns>-1, 0 when the hash is absent, 1.</returns>
-    public async Task<long> HashExpireAsync(RedisKey key, RedisKey control, string id, long expireAtMilliseconds, FenceBump? fence = null)
+    public async Task<long> HashExpireAsync(RedisKey key, RedisKey control, string id, long expireAtMilliseconds, FenceBump? fence = null, HashMetadataClear clear = HashMetadataClear.Keep)
     {
         var reply = await EvaluateAsync(
             HExpCScript,
             Keys(key, control, fence),
-            [id, expireAtMilliseconds == NoExpiry ? "-1" : expireAtMilliseconds, fence?.Nonce ?? string.Empty, fence?.TtlMilliseconds ?? 0]).ConfigureAwait(false);
+            [id, expireAtMilliseconds == NoExpiry ? "-1" : expireAtMilliseconds, fence?.Nonce ?? string.Empty, fence?.TtlMilliseconds ?? 0, clear switch { HashMetadataClear.Remove => "del", HashMetadataClear.Mark => "mark", _ => string.Empty }, KnownFieldNames.MetadataKey]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
         }
 
-        return await WatchedAsync(async () =>
-        {
-            var exists = await _db.KeyExistsAsync(key, Master).ConfigureAwait(false);
-            var transaction = _db.CreateTransaction();
-            var queued = new List<Task>();
-            transaction.AddCondition(Condition.HashEqual(control, "id", id));
-            transaction.AddCondition(exists ? Condition.KeyExists(key) : Condition.KeyNotExists(key));
-            BumpIn(transaction, queued, fence);
-            if (exists && expireAtMilliseconds == NoExpiry)
-            {
-                queued.Add(transaction.KeyPersistAsync(key, Master));
-            }
-            else if (exists)
-            {
-                queued.Add(transaction.KeyExpireAsync(key, At(expireAtMilliseconds), Master));
-            }
-
-            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
-            {
-                return exists ? 1 : 0;
-            }
-
-            return await HoldsIdentityAsync(control, id).ConfigureAwait(false) ? null : IdentityMismatch;
-        }).ConfigureAwait(false);
+        return await WatchedAsync(() => TryHashExpireAsync(key, control, id, expireAtMilliseconds, fence, clear)).ConfigureAwait(false);
     }
 
     // The version count when counting, which no refusal code can be.
@@ -373,6 +353,41 @@ internal sealed partial class MoveScripts
 
         string? held = await _db.StringGetAsync(fence.Fence, Master).ConfigureAwait(false);
         return held is null || (held != fence.Nonce && held != (retry.Observed ?? string.Empty)) ? (Superseded, null) : (0, held);
+    }
+
+    private async Task<long?> TryHashExpireAsync(RedisKey key, RedisKey control, string id, long expireAtMilliseconds, FenceBump? fence, HashMetadataClear clear)
+    {
+        var exists = await _db.KeyExistsAsync(key, Master).ConfigureAwait(false);
+        var transaction = _db.CreateTransaction();
+        var queued = new List<Task>();
+        transaction.AddCondition(Condition.HashEqual(control, "id", id));
+        transaction.AddCondition(exists ? Condition.KeyExists(key) : Condition.KeyNotExists(key));
+        BumpIn(transaction, queued, fence);
+        // The metadata first, as the library's refresh does: an expiry that has passed deletes the key, and a field written after it would make a key of its own that never expires.
+        if (exists && clear == HashMetadataClear.Remove)
+        {
+            queued.Add(transaction.HashDeleteAsync(key, KnownFieldNames.MetadataKey, Master));
+        }
+        else if (exists && clear == HashMetadataClear.Mark)
+        {
+            queued.Add(transaction.HashSetAsync(key, KnownFieldNames.MetadataKey, RedisValue.EmptyString, When.Always, Master));
+        }
+
+        if (exists && expireAtMilliseconds == NoExpiry)
+        {
+            queued.Add(transaction.KeyPersistAsync(key, Master));
+        }
+        else if (exists)
+        {
+            queued.Add(transaction.KeyExpireAsync(key, At(expireAtMilliseconds), Master));
+        }
+
+        if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
+        {
+            return exists ? 1 : 0;
+        }
+
+        return await HoldsIdentityAsync(control, id).ConfigureAwait(false) ? null : IdentityMismatch;
     }
 
     private async Task<long?> TryHashDeleteFieldsAsync(RedisKey key, RedisKey control, string id, IReadOnlyList<RedisValue> fields, string? versionField, long versionSeed, FenceBump? fence, FenceRetry? retry)

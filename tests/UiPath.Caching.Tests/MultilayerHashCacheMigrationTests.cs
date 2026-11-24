@@ -20,6 +20,7 @@ public class MultilayerHashCacheMigrationTests
     [InlineData("write")]
     [InlineData("delete")]
     [InlineData("fields")]
+    [InlineData("expiry")]
     public async Task A_read_that_reloads_while_the_store_changes_cannot_put_the_old_hash_back_even_with_no_broadcast(string operation)
     {
         var written = new Dictionary<string, string?> { ["f"] = "new" };
@@ -33,6 +34,7 @@ public class MultilayerHashCacheMigrationTests
         {
             "write" => ((IMigrationHashCache)cache).WriteAsync("k", written, new HashCacheEntryOptions(), Policy, Ct).AsTask(),
             "delete" => ((IMigrationHashCache)cache).DeleteAsync<string>("k", Ct).AsTask(),
+            "expiry" => ((IMigrationHashCache)cache).RenewExpiryAsync<string>("k", new HashCacheEntryOptions(), Policy, Ct).AsTask(),
             _ => ((IMigrationHashCache)cache).DeleteFieldsAsync<string>("k", ["f"], Ct).AsTask(),
         };
         await inner.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
@@ -100,6 +102,8 @@ public class MultilayerHashCacheMigrationTests
         public ValueTask<StoreOutcome> DeleteFieldsAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default) => PausedAsync();
 
         public ValueTask<StoreOutcome> RenewAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default) => PausedAsync();
+
+        public ValueTask<StoreOutcome> RenewExpiryAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default) => PausedAsync();
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) => targetMethod!.Name switch
         {

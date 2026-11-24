@@ -122,6 +122,9 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     /// <summary>Set by the cache to log the first refusal of EXPIRETIME; the base has no logger.</summary>
     private protected Action<Exception>? LogExpireTimeUnavailable { get; set; }
 
+    /// <summary>The version of the server, resolved on first use.</summary>
+    private protected Version ServerVersion => _redis.Version;
+
     public void Dispose()
     {
         Dispose(true);

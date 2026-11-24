@@ -141,7 +141,31 @@ internal sealed partial class RedisHashCache : IMigrationHashCache
         return await OutcomeOfAsync(refresh, trace, token).ConfigureAwait(false);
     }
 
-    private static async ValueTask<StoreOutcome> OutcomeOfAsync(ValueTask<bool> command, SendTrace trace, CancellationToken token)
+    public async ValueTask<StoreOutcome> RenewExpiryAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default)
+    {
+        var trace = new SendTrace();
+        ValueTask<bool> refresh;
+        try
+        {
+            NotCacheableException.ThrowIfNotCacheable<T>();
+            if (token.IsCancellationRequested || !IsConnected)
+            {
+                return StoreOutcome.NotSent;
+            }
+
+            // The library's expiry-only refresh, awaited and answered, on a hash that is there: the metadata stays, and a key that holds no hash is left as it is.
+            refresh = RefreshWithOptionsAsync<T>(cacheKey, options, policy, null, token, trace, requireKey: true, expiryOnly: true);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogRedisHashCacheException(ex);
+            return StoreOutcome.NotSent;
+        }
+
+        return await OutcomeOfAsync(refresh, trace, token).ConfigureAwait(false);
+    }
+
+    private async ValueTask<StoreOutcome> OutcomeOfAsync(ValueTask<bool> command, SendTrace trace, CancellationToken token)
     {
         try
         {
@@ -150,6 +174,11 @@ internal sealed partial class RedisHashCache : IMigrationHashCache
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             // Whatever was sent is judged by what was answered.
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            // A command that faulted is reported, not thrown: what was sent and not answered is unknown.
+            LogRedisHashCacheException(ex);
         }
 
         return trace.Outcome();

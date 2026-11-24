@@ -204,7 +204,7 @@ public sealed class KeyMoveBuilder
             throw new InvalidOperationException($"The key move cache '{cache.Name}' is not registered with the router in the group '{cache.Group}'.");
         }
 
-        return new KeyMoveCache(cache.Name, cache.Group, cache.NoOrigin || cache.AtMostOnce, cache.AtMostOnce, cache.AcceptRefill, cache.MaxSourceTtl, cache.InPlacePattern, router.InPlaceKey, cache.ParseInPlaceKey, cache.NativePattern, cache.FormatNativeKey, cache.ParseNativeKey, cache.OwnsInPlaceKey, cache.OwnsNativeKey, cache.MoveMinTtl);
+        return new KeyMoveCache(cache.Name, cache.Group, cache.NoOrigin || cache.AtMostOnce, cache.AtMostOnce, cache.AcceptRefill, cache.MaxSourceTtl, cache.InPlacePattern, router.InPlaceKey, cache.ParseInPlaceKey, cache.NativePattern, cache.FormatNativeKey, cache.ParseNativeKey, cache.OwnsInPlaceKey, cache.OwnsNativeKey, cache.MoveMinTtl, Kind: cache.Kind);
     }
 
     private static void ValidateKeyspace(KeyMoveCacheRegistration cache, string prefix)

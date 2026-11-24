@@ -15,6 +15,8 @@ public sealed class KeyMoveHashCodecTests(RedisFixture fixture) : IAsyncLifetime
     private const int FieldCap = 5;
     private static readonly TimeSpan Life = TimeSpan.FromMinutes(5);
     private static readonly string RunTag = Guid.NewGuid().ToString("N")[..8];
+    private static readonly string[] EnvelopeKeys = ["a"];
+    private static readonly string[] PlainKeys = ["a", "_metadata_"];
 
     private readonly string _unique = Guid.NewGuid().ToString("N")[..10];
     private readonly List<ServiceProvider> _providers = [];
@@ -118,7 +120,7 @@ public sealed class KeyMoveHashCodecTests(RedisFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_native_side_stores_what_the_applications_hash_cache_stores_and_the_in_place_side_stores_user_fields_only()
+    public async Task The_native_side_stores_what_the_applications_hash_cache_stores_and_the_in_place_side_of_the_envelope_stores_user_fields_only()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
         var binding = Binding(cacheNulls: true);
@@ -138,10 +140,48 @@ public sealed class KeyMoveHashCodecTests(RedisFixture fixture) : IAsyncLifetime
             native[field].Should().Equal(bytes, field);
         }
 
-        inPlace.Select(e => e.Key).Should().Equal(["a", "b"], "the metadata is no part of an in-place hash");
+        inPlace.Select(e => e.Key).Should().Equal(["a", "b"], "the older client's hashes hold no metadata");
         binding.InPlace.EncodeFields(new Dictionary<string, HashItem?>(), null).Should().BeEmpty("nor is the empty marker");
         binding.Native.EncodeFields(new Dictionary<string, HashItem?>(), null).Should().ContainSingle().Which.Key.Should().Be("_metadata_");
         binding.InPlace.CachesNulls.Should().BeTrue();
+        binding.InPlace.CarriesMetadata.Should().BeFalse();
+        binding.Native.CarriesMetadata.Should().BeTrue();
+    }
+
+    // The capability of L comes from the configuration the router's library path is built from: with the older client's envelope L is that client's format, which reads no system field; a move between library formats has no envelope.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void The_binder_binds_the_metadata_capability_of_L_from_whether_the_router_has_an_envelope(bool withEnvelope)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var router = new RouterBuilder();
+        if (withEnvelope)
+        {
+            router.UseEnvelope(new SystemJsonByteSerializerProxy());
+        }
+
+        var binding = new KeyMoveBinder(Strings(), Strings(), [Cache()], inPlaceHash: Codec(false), nativeHash: Codec(false), inPlaceKeepsSystemFields: router.InPlaceKeepsSystemFields).BindHash<HashItem>("items")!;
+        var metadata = new Dictionary<string, string?> { ["owner"] = "me" };
+        var fields = new Dictionary<string, HashItem?> { ["a"] = new("1") };
+
+        binding.InPlace.CarriesMetadata.Should().Be(!withEnvelope);
+        binding.InPlace.EncodeFields(fields, metadata).Select(e => e.Key).Should().BeEquivalentTo(withEnvelope ? EnvelopeKeys : PlainKeys);
+        binding.Native.CarriesMetadata.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_codec_over_a_library_format_with_system_fields_carries_the_metadata_it_is_given()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var codec = new LibraryKeyMoveHashCodec<HashItem>(Codec(false), 4 * 1024 * 1024, FieldCap, systemFields: true);
+        var metadata = new Dictionary<string, string?> { ["owner"] = "me" };
+
+        var stored = codec.EncodeFields(new Dictionary<string, HashItem?> { ["a"] = new("1") }, metadata);
+
+        codec.CarriesMetadata.Should().BeTrue();
+        stored.Select(e => e.Key).Should().BeEquivalentTo("a", "_metadata_");
+        codec.DecodeFields(stored).Metadata.Should().ContainKey("owner");
     }
 
     [Fact]
