@@ -202,7 +202,6 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
         await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
         try
         {
-            await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "LOG", "RESET");
             using var harness = MigrateOnReadHarness.Build($"{fixture.ConnectionString},user={user},password=pw", FormatNegotiationMode.Force, App(), scripts: true);
             var (first, firstKey) = await SeedAsync(harness, admin, JsonX);
             var (second, secondKey) = await SeedAsync(harness, admin, JsonX);
@@ -481,7 +480,6 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
         await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-@scripting");
         try
         {
-            await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "LOG", "RESET");
             using var harness = MigrateOnReadHarness.Build($"{fixture.ConnectionString},user={user},password=pw", FormatNegotiationMode.Force, App(), scripts: false);
             var (key, redisKey) = await SeedAsync(harness, admin, JsonX);
 
@@ -851,6 +849,7 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
     private static async Task<byte[]?> RawValueAsync(ConnectionMultiplexer raw, string key) =>
         await raw.GetDatabase().StringGetAsync(await RawKeyAsync(raw, key));
 
+    // The ACL log is server wide and other tests write it at the same time: count only this test's own user, and never reset the log.
     private static async Task<long> ScriptRefusalsAsync(IConnectionMultiplexer admin, string user)
     {
         var log = (await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "LOG")).SelectMany(reply => (RedisResult[])reply!).ToArray();

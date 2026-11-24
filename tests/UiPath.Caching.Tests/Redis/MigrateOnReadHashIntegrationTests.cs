@@ -465,7 +465,6 @@ public class MigrateOnReadHashIntegrationTests(RedisContainerFixture fixture)
             var app = App();
             using var seeder = Build(FormatNegotiationMode.Force, app: app);
 
-            await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "LOG", "RESET");
             using (var off = MigrateOnReadHarness.Build(connection, FormatNegotiationMode.Force, app, scripts: false))
             {
                 var (key, redisKey) = await SeedAsync(seeder, admin, ("a", JsonX));
@@ -715,6 +714,7 @@ public class MigrateOnReadHashIntegrationTests(RedisContainerFixture fixture)
         }
     }
 
+    // The ACL log is server wide and other tests write it at the same time: count only this test's own user, and never reset the log.
     private static async Task<long> ScriptRefusalsAsync(IConnectionMultiplexer admin, string user)
     {
         var log = (await RedisTestKeys.OnPrimariesAsync(admin, "ACL", "LOG")).SelectMany(reply => (RedisResult[])reply!).ToArray();

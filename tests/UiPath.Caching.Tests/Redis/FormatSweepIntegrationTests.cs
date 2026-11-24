@@ -294,7 +294,6 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
             await rig.SetAsync(db, "a", Json(new Item("a")), TimeSpan.FromMinutes(5));
             await rig.SetAsync(db, "b", Json(new Item("b")), TimeSpan.FromMinutes(5));
             var expiry = await rig.ExpiryAsync(db, "a");
-            await server.ExecuteAsync("ACL", "LOG", "RESET");
 
             var first = await rig.Provider.SweepFormatsAsync<Item>(rig.Pattern, new FormatSweepOptions { RatePerSecond = 1000 }, Ct);
             var refusals = await ScriptRefusalsAsync(server, user);
@@ -396,6 +395,7 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
         return value;
     }
 
+    // The ACL log is server wide and other tests write it at the same time: count only this test's own user, and never reset the log.
     private static async Task<long> ScriptRefusalsAsync(IServer server, string user)
     {
         var log = (RedisResult[])(await server.ExecuteAsync("ACL", "LOG"))!;
