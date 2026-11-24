@@ -58,13 +58,13 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         // A merge has probed L itself. A read goes N on a replica, N on the master, the hint, then the probe, so a genuine miss makes no fence.
         if (!ensure)
         {
-            var replica = HashReads<T>.Interpret(await reads.SnapAsync(n, replica: true, SchedulePointStep.ReadDestination, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
+            var replica = reads.InterpretRead(await reads.SnapAsync(n, replica: true, SchedulePointStep.ReadDestination, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
             if (!replica.FallsThrough)
             {
                 return Done(replica);
             }
 
-            var master = HashReads<T>.Interpret(await reads.SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
+            var master = reads.InterpretRead(await reads.SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
             if (!master.FallsThrough)
             {
                 return Done(master);
@@ -193,7 +193,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
 
         if (snap.Kind == ReadOutcome.Unreadable)
         {
-            return UnreadableSource();
+            return UnreadableSource(snap);
         }
 
         if (snap.Kind != ReadOutcome.Found)
@@ -207,10 +207,10 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
     private async ValueTask<HashPromotionResult<T>> AbsentSourceAsync(PromotionPass pass, CancellationToken cancellationToken) =>
         pass.Ensure ? Done(ReadOutcome.Absent) : Done(await MissAsync(pass.Key, pass.N, pass.Plan.Identity, cancellationToken).ConfigureAwait(false));
 
-    private HashPromotionResult<T> UnreadableSource()
+    private HashPromotionResult<T> UnreadableSource(HashSnap snap)
     {
         Count("unreadable_source");
-        return HashPromotionResult<T>.Of(HashPromotionStatus.Unreadable, ReadOutcome.Unreadable);
+        return HashPromotionResult<T>.Of(HashPromotionStatus.Unreadable, reads.RecoverFields(snap, parts.InPlace));
     }
 
     private async ValueTask<HashPromotionResult<T>?> DecodeSourceAsync(PromotionPass pass, CancellationToken cancellationToken)
@@ -220,7 +220,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         pass.Decoded = decoded;
         if (decoded.Class == DecodeClass.Unreadable)
         {
-            return UnreadableSource();
+            return UnreadableSource(snap);
         }
 
         pass.Expiration = snap.TtlMs < 0 ? null : snap.At.AddMilliseconds(snap.TtlMs);
@@ -455,7 +455,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
             };
         }
 
-        var existing = HashReads<T>.Interpret(await reads.SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
+        var existing = reads.InterpretRead(await reads.SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
         return existing.Kind == ReadOutcome.Found || existing.Stops || uncached is null
             ? Done(existing)
             : HashPromotionResult<T>.Of(HashPromotionStatus.NotPromoted, uncached.Value);
@@ -489,7 +489,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
     // The miss path of steps 5 and 7: N is read on the master once more, and only an N that is absent again sets the hint.
     private async ValueTask<HashRead<T>> MissAsync(string key, string n, string identity, CancellationToken cancellationToken)
     {
-        var again = HashReads<T>.Interpret(await reads.SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
+        var again = reads.InterpretRead(await reads.SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
         if (again.FallsThrough)
         {
             hints.Set(key, identity);

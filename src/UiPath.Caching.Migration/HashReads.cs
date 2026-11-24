@@ -4,7 +4,7 @@ using UiPath.Caching.KeyMove;
 namespace UiPath.Caching.Migration;
 
 /// <summary>The reads of a hash cache's two sides that the key move client and the promotion share: the snapshot of one primary, the existence probe, and the union read.</summary>
-internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
+internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts, string[]? fields = null)
     where T : class
 {
     private const CommandFlags Master = CommandFlags.DemandMaster;
@@ -36,6 +36,45 @@ internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
             DecodeClass.Unreadable => HashRead<T>.Of(ReadOutcome.Unreadable),
             _ => new HashRead<T>(ReadOutcome.Found, new Dictionary<string, T?>(decoded.Fields, StringComparer.Ordinal), snap.TtlMs < 0 ? null : snap.At.AddMilliseconds(snap.TtlMs), decoded.Metadata, decoded.Version),
         };
+    }
+
+    public HashRead<T> InterpretRead(HashSnap snap, IKeyMoveHashCodec<T> codec, bool authoritativeNull = false)
+    {
+        var read = Interpret(snap, codec, authoritativeNull);
+        return read.Kind == ReadOutcome.Unreadable ? RecoverFields(snap, codec) : read;
+    }
+
+    public HashRead<T> RecoverFields(HashSnap snap, IKeyMoveHashCodec<T> codec)
+    {
+        if (fields is null || snap.Entries is null)
+        {
+            return HashRead<T>.Of(ReadOutcome.Unreadable);
+        }
+
+        // Recover from the same snapshot so a decode failure cannot switch sides or mix versions.
+        var selected = new HashSet<string>(fields, StringComparer.Ordinal);
+        var recovered = new Dictionary<string, T?>(StringComparer.Ordinal);
+        foreach (var entry in snap.Entries)
+        {
+            var field = entry.Name.ToString();
+            if (!selected.Contains(field))
+            {
+                continue;
+            }
+
+            var read = Interpret(snap with { Entries = [entry] }, codec);
+            if (read.Fields is { } decoded && decoded.TryGetValue(field, out var value))
+            {
+                recovered.Add(field, value);
+            }
+        }
+
+        if (recovered.Count == 0)
+        {
+            return HashRead<T>.Of(ReadOutcome.Unreadable);
+        }
+
+        return new HashRead<T>(ReadOutcome.Found, recovered, snap.TtlMs < 0 ? null : snap.At.AddMilliseconds(snap.TtlMs), Uncached: true);
     }
 
     public ValueTask At(SchedulePointStep step) => parts.Schedule.AtAsync(step);
@@ -121,25 +160,25 @@ internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
     public async ValueTask<HashReadStep<T>> ReadUnionAsync(string key, bool withSource, CancellationToken cancellationToken)
     {
         var n = parts.NativeKey(key);
-        var first = Interpret(await SnapAsync(n, replica: true, SchedulePointStep.ReadDestination, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
+        var first = InterpretRead(await SnapAsync(n, replica: true, SchedulePointStep.ReadDestination, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
         if (!first.FallsThrough)
         {
             return HashReadStep<T>.Of(first);
         }
 
-        var master = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
+        var master = InterpretRead(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
         if (!master.FallsThrough || !withSource)
         {
             return HashReadStep<T>.Of(master);
         }
 
-        var source = Interpret(await SnapAsync(parts.InPlaceKey(key), replica: false, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false), parts.InPlace);
+        var source = InterpretRead(await SnapAsync(parts.InPlaceKey(key), replica: false, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false), parts.InPlace);
         if (source.Kind != ReadOutcome.Absent)
         {
             return HashReadStep<T>.Of(source);
         }
 
-        return HashReadStep<T>.Of(Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true));
+        return HashReadStep<T>.Of(InterpretRead(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true));
     }
 
     // A hash with no field is absent, and one above the cap is reported without being read; null when the hash is to be read.
