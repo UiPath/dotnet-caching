@@ -92,6 +92,7 @@ internal sealed partial class KeyMoveClient<T>
                 return await UnpromotedAsync(key, cancellationToken).ConfigureAwait(false);
             case { Captured: false }:
                 // A clear may have closed the gate. Leave the miss hint alone.
+                Count("gate_closed");
                 return ReadStep<T>.Of(ReadOutcome.Absent);
             case { DestinationExists: true }:
                 return ReadStep<T>.Of(Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native));

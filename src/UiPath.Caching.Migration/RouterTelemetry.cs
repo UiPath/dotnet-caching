@@ -49,7 +49,7 @@ internal static class RouterTelemetry
         }
     }
 
-    /// <summary>A counter of the key move data path: <c>capture_slow</c>, <c>fence_refused</c>, <c>promotion_expiring</c>, <c>identity_rerun</c>, <c>retry_exhausted</c>, <c>unreadable_source</c>.</summary>
+    /// <summary>A counter of the key move data path: <c>capture_slow</c>, <c>fence_refused</c>, <c>gate_closed</c>, <c>promotion_expiring</c>, <c>identity_rerun</c>, <c>retry_exhausted</c>, <c>unreadable_source</c>.</summary>
     public static void CountMove(string counter, string cache, string group)
     {
         var made = MoveCounters.GetOrAdd(counter, name => RouterMeter.CreateCounter<long>("move_" + name));

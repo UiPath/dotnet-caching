@@ -105,7 +105,7 @@ internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScript
 
         try
         {
-            await hooks.Sweep(sweepToken).ConfigureAwait(false);
+            await (hooks.GuardedSweep is { } guarded ? guarded(lockLost, sweepToken) : hooks.Sweep(sweepToken)).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (lockLost() && !cancellationToken.IsCancellationRequested)
         {

@@ -274,6 +274,8 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
     {
         public IReadOnlyList<string> Patterns(string group, MoveSide side) => [];
 
+        public IReadOnlyList<string> PatternsOf(string group, string cacheId, MoveSide side) => [];
+
         public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key) => [];
 
         public bool HasValidDestination(string group, MoveSide side, string cacheId, string key) => true;

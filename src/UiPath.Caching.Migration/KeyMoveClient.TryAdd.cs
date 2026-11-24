@@ -46,6 +46,7 @@ internal sealed partial class KeyMoveClient<T>
             }
 
             plan = PlanFor(write: true);
+            run++;
         }
     }
 
@@ -168,6 +169,7 @@ internal sealed partial class KeyMoveClient<T>
 
             if (!capture.Captured)
             {
+                Count("gate_closed");
                 throw Unavailable();
             }
 
