@@ -37,36 +37,36 @@ internal static class SideProbe
     /// <param name="probePrefix">The library prefix and keyspace probe keys are written under, so they never meet application keys.</param>
     /// <param name="scanPattern">The pattern the mover scans with on this side, matched as the server stores keys.</param>
     /// <param name="slotEnforced">Set by configuration instead of probed, for a server whose policy is known.</param>
-    /// <param name="cancellationToken">Cancels the probe, including the scan, which can walk the whole keyspace of every primary.</param>
     /// <param name="scanCount">The COUNT of each scan step; tests lower it to force many steps.</param>
     /// <param name="timeProvider">The clock of the scan budget and the probe expiry; <see cref="TimeProvider.System"/> when null.</param>
+    /// <param name="cancellationToken">Cancels the probe, including the scan, which can walk the whole keyspace of every primary.</param>
     public static Task<SideCaps> ProbeAsync(
         IDatabase database,
         string probePrefix,
         string scanPattern,
         bool? slotEnforced = null,
-        CancellationToken cancellationToken = default,
         int scanCount = DefaultScanCount,
-        TimeProvider? timeProvider = null) =>
-        ProbeAsync(database, probePrefix, scanPattern, DefaultScanBudget, slotEnforced, cancellationToken, scanCount, timeProvider);
+        TimeProvider? timeProvider = null,
+        CancellationToken cancellationToken = default) =>
+        ProbeAsync(database, probePrefix, scanPattern, DefaultScanBudget, slotEnforced, scanCount, timeProvider, cancellationToken);
 
     /// <param name="database">The side's view: the Src prefixed view or the Dst view.</param>
     /// <param name="probePrefix">The library prefix and keyspace probe keys are written under, so they never meet application keys.</param>
     /// <param name="scanPattern">The pattern the mover scans with on this side, matched as the server stores keys.</param>
     /// <param name="scanBudget">The time the scan may take, 30 s by default of the other overload; null is a full traversal. The scan is then <see cref="ScanMode.Incomplete"/>.</param>
     /// <param name="slotEnforced">Set by configuration instead of probed, for a server whose policy is known.</param>
-    /// <param name="cancellationToken">Cancels the probe, including the scan, which can walk the whole keyspace of every primary.</param>
     /// <param name="scanCount">The COUNT of each scan step; tests lower it to force many steps.</param>
     /// <param name="timeProvider">The clock of the scan budget and the probe expiry; <see cref="TimeProvider.System"/> when null.</param>
+    /// <param name="cancellationToken">Cancels the probe, including the scan, which can walk the whole keyspace of every primary.</param>
     public static async Task<SideCaps> ProbeAsync(
         IDatabase database,
         string probePrefix,
         string scanPattern,
         TimeSpan? scanBudget,
         bool? slotEnforced = null,
-        CancellationToken cancellationToken = default,
         int scanCount = DefaultScanCount,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        CancellationToken cancellationToken = default)
     {
         var clock = timeProvider ?? TimeProvider.System;
         var nonce = MoveScripts.NewNonce();
@@ -555,7 +555,7 @@ internal static class SideProbe
     {
         try
         {
-            var reply = (RedisResult[])(await server.ExecuteAsync("CONFIG", "GET", "maxmemory-policy").ConfigureAwait(false))!;
+            var reply = ((RedisResult[]?)await server.ExecuteAsync("CONFIG", "GET", "maxmemory-policy").ConfigureAwait(false))!;
             if (reply.Length == 2)
             {
                 return (string?)reply[1];

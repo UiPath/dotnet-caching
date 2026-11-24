@@ -304,14 +304,14 @@ internal sealed class ClaimStore
                     case AbortCause.ProofDenied:
                         return await RunAsync(script, args, decide, bound: false).ConfigureAwait(false);
                     case AbortCause.ScriptsRefused:
-                        throw new ScriptsRefusedSignal();
+                        throw new ScriptsRefusedException();
                 }
             }
 
             var code = (long)await result.ConfigureAwait(false);
             return new(code, await ProofOf(clientId, info).ConfigureAwait(false));
         }
-        catch (Exception ex) when (ex is ScriptsRefusedSignal || RedisUtils.RefusesScript(ex))
+        catch (Exception ex) when (ex is ScriptsRefusedException || RedisUtils.RefusesScript(ex))
         {
             Volatile.Write(ref _useScripts, 0);
             return null;

@@ -243,6 +243,7 @@ internal sealed class GroupStateMonitor(IStateReader reader, KeyMoveStateOptions
         }
         catch (Exception)
         {
+            // Ignored on purpose: the alert callback belongs to the caller and its failure must not stop the loop.
         }
     }
 }
