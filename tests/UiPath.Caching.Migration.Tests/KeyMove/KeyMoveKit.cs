@@ -12,7 +12,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
     private long _events;
     private long _ep;
 
-    private KeyMoveKit(ConnectionMultiplexer mux, bool useScripts, bool noOrigin, TimeProvider clock, KeyMoveOptions options, string unique, Version version)
+    private KeyMoveKit(ConnectionMultiplexer mux, bool useScripts, bool noOrigin, TimeProvider clock, KeyMoveOptions options, string unique, Version version, Func<KeyMoveKit, IMoveSide<Item>>? source, Func<IDatabase, IDatabase>? interceptDb)
     {
         Mux = mux;
         Unique = unique;
@@ -21,7 +21,9 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         var cluster = mux.GetServers().Any(s => s.ServerType == ServerType.Cluster);
         Names = new MoveKeyNames(string.Empty, $"lib{unique}:", cluster);
         Scripts = new MoveScripts(mux.GetDatabase(), useScripts, version);
-        Plane = new StubPlane(Group, _gate) { Data = new KeyMoveData(mux.GetDatabase(), Scripts, Names, () => Interlocked.Read(ref _events), () => Connected) };
+        SideData = new KeyMoveData(mux.GetDatabase(), Scripts, Names, () => Interlocked.Read(ref _events), () => Connected);
+        SidePlane = new StubPlane(Group, _gate) { Data = SideData };
+        Plane = new StubPlane(Group, _gate) { Data = interceptDb is null ? SideData : Intercepted(SideData, interceptDb, useScripts, version) };
         Plain = new PlainPathStub();
         Clock = clock;
         Client = new KeyMoveClient<Item>(new KeyMoveClientParts<Item>(Group, Cid, noOrigin, L, N, ItemCodec.Instance, ItemCodec.Instance, Plain, Plane, clock, () => TimeSpan.FromSeconds(30))
@@ -29,6 +31,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
             Options = options,
             Schedule = Schedule,
             RunRetriesInBackground = false,
+            Source = source?.Invoke(this),
         });
     }
 
@@ -46,6 +49,10 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 
     public StubPlane Plane { get; }
 
+    public StubPlane SidePlane { get; }
+
+    public KeyMoveData SideData { get; }
+
     public PlainPathStub Plain { get; }
 
     public TimeProvider Clock { get; }
@@ -62,7 +69,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 
     public long Ep => _ep;
 
-    public static async Task<KeyMoveKit> CreateAsync(RedisFixture fixture, bool useScripts = true, bool noOrigin = false, bool cluster = false, TimeProvider? clock = null, KeyMoveOptions? options = null)
+    public static async Task<KeyMoveKit> CreateAsync(RedisFixture fixture, bool useScripts = true, bool noOrigin = false, bool cluster = false, TimeProvider? clock = null, KeyMoveOptions? options = null, Func<KeyMoveKit, IMoveSide<Item>>? source = null, Func<IDatabase, IDatabase>? interceptDb = null)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 and REDIS_CONNECTION_STRING to run.");
         var connection = fixture.ConnectionString;
@@ -74,7 +81,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 
         var mux = await ConnectionMultiplexer.ConnectAsync(connection + ",allowAdmin=true");
         var version = mux.GetServers().Where(s => !s.IsReplica).Select(s => s.Version).Min() ?? new Version(7, 0);
-        return new KeyMoveKit(mux, useScripts, noOrigin, clock ?? TimeProvider.System, options ?? new KeyMoveOptions(), Guid.NewGuid().ToString("N")[..10], version);
+        return new KeyMoveKit(mux, useScripts, noOrigin, clock ?? TimeProvider.System, options ?? new KeyMoveOptions(), Guid.NewGuid().ToString("N")[..10], version, source, interceptDb);
     }
 
     public string L(string key) => $"km4:{Unique}:L:{key}";
@@ -155,6 +162,13 @@ internal sealed class KeyMoveKit : IAsyncDisposable
             Client.Dispose();
             await Mux.DisposeAsync();
         }
+    }
+
+    // Record script accesses as well as direct database calls made by the client.
+    private static KeyMoveData Intercepted(KeyMoveData data, Func<IDatabase, IDatabase> intercept, bool useScripts, Version version)
+    {
+        var db = intercept(data.Db);
+        return data with { Db = db, Scripts = new MoveScripts(db, useScripts, version) };
     }
 
     private ControlRecord Record(long ep, string id) => new(ep, id, "S3", "fwd", "1", "S0", "none", "0", "0", "id0", [(Cid, MoveScripts.NewNonce())]);

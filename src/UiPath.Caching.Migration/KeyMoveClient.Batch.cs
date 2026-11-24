@@ -36,7 +36,7 @@ internal sealed partial class KeyMoveClient<T>
 
         if (plan.Mode == KeyMoveMode.S3)
         {
-            await ReadMissingWithPromotionAsync(missing, plan, data, result, cancellationToken).ConfigureAwait(false);
+            await ReadMissingWithPromotionAsync(missing, plan, result, cancellationToken).ConfigureAwait(false);
             return result;
         }
 
@@ -158,7 +158,7 @@ internal sealed partial class KeyMoveClient<T>
         return values;
     }
 
-    private async Task ReadMissingWithPromotionAsync(List<string> missing, KeyMovePlan plan, KeyMoveData data, Dictionary<string, PathRead<T>> result, CancellationToken cancellationToken)
+    private async Task ReadMissingWithPromotionAsync(List<string> missing, KeyMovePlan plan, Dictionary<string, PathRead<T>> result, CancellationToken cancellationToken)
     {
         // Only the source existence probe is batched, using one pipeline of EXISTS on the masters.
         var identity = plan.Identity;
@@ -173,7 +173,7 @@ internal sealed partial class KeyMoveClient<T>
         {
             try
             {
-                return await data.Db.KeyExistsAsync(Key(InPlace(k)), Master).ConfigureAwait(false) ? (bool?)true : false;
+                return await Source.ExistsAsync(k, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
@@ -181,6 +181,15 @@ internal sealed partial class KeyMoveClient<T>
             }
         })).ConfigureAwait(false);
 
+        var work = ResolveSourceProbes(candidates, probes, plan, identity, result, cancellationToken);
+        foreach (var (key, read) in await Task.WhenAll(work).ConfigureAwait(false))
+        {
+            result[key] = read;
+        }
+    }
+
+    private List<Task<(string Key, PathRead<T> Read)>> ResolveSourceProbes(List<string> candidates, bool?[] probes, KeyMovePlan plan, string identity, Dictionary<string, PathRead<T>> result, CancellationToken cancellationToken)
+    {
         var work = new List<Task<(string Key, PathRead<T> Read)>>();
         for (var i = 0; i < candidates.Count; i++)
         {
@@ -199,10 +208,7 @@ internal sealed partial class KeyMoveClient<T>
             }
         }
 
-        foreach (var (key, read) in await Task.WhenAll(work).ConfigureAwait(false))
-        {
-            result[key] = read;
-        }
+        return work;
     }
 
     private async Task<(string Key, PathRead<T> Read)> MissOfAsync(string key, string identity, CancellationToken cancellationToken) =>

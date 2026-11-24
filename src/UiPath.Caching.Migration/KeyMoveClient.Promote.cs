@@ -22,7 +22,6 @@ internal sealed partial class KeyMoveClient<T>
             ReadStep<T> step;
             do
             {
-                var l = InPlace(key);
                 var n = Native(key);
                 var identity = plan.Identity;
                 var alreadyProbed = probed && attempt == 0;
@@ -43,7 +42,7 @@ internal sealed partial class KeyMoveClient<T>
                 }
 
                 // An absent source creates no fence. Recheck N in case another caller promoted.
-                switch (await ProbeSource(l, alreadyProbed, cancellationToken).ConfigureAwait(false))
+                switch (await ProbeSource(key, alreadyProbed, cancellationToken).ConfigureAwait(false))
                 {
                     case null:
                         return ReadStep<T>.Of(ReadOutcome.Unavailable);
@@ -51,7 +50,7 @@ internal sealed partial class KeyMoveClient<T>
                         return ReadStep<T>.Of(await MissAsync(key, n, identity, cancellationToken).ConfigureAwait(false));
                 }
 
-                step = await PromoteOnceAsync(key, l, n, identity, plan.Act?.Id, attempt++, cancellationToken).ConfigureAwait(false);
+                step = await PromoteOnceAsync(key, n, identity, plan.Act?.Id, attempt++, cancellationToken).ConfigureAwait(false);
             }
             while (step.Restart);
 
@@ -64,11 +63,11 @@ internal sealed partial class KeyMoveClient<T>
     }
 
     private ValueTask<bool?> ProbeSource(string key, bool probed, CancellationToken cancellationToken) =>
-        probed ? ValueTask.FromResult<bool?>(true) : ExistsAsync(key, SchedulePointStep.ProbeSource, cancellationToken);
+        probed ? ValueTask.FromResult<bool?>(true) : SourceExistsAsync(key, SchedulePointStep.ProbeSource, cancellationToken);
 
     private bool CanUseMissHint(string key, string identity, bool probed) => !probed && _hints.Has(key, identity);
 
-    private async ValueTask<ReadStep<T>> PromoteOnceAsync(string key, string l, string n, string identity, string? expectedId, int attempt, CancellationToken cancellationToken)
+    private async ValueTask<ReadStep<T>> PromoteOnceAsync(string key, string n, string identity, string? expectedId, int attempt, CancellationToken cancellationToken)
     {
         var (admitted, _) = await AdmitAsync(promotion: true, expectedId, cancellationToken).ConfigureAwait(false);
         using var unit = admitted;
@@ -99,7 +98,7 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         // Read L after the capture.
-        var snap = await SnapAsync(l, replica: false, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);
+        var snap = await SourceSnapAsync(key, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);
         var replied = _p.Clock.GetTimestamp();
         if (snap.Kind == ReadOutcome.Absent)
         {
@@ -142,7 +141,7 @@ internal sealed partial class KeyMoveClient<T>
         await At(SchedulePointStep.CompareDelete).ConfigureAwait(false);
         try
         {
-            _ = await data.Scripts.CompareDeleteAsync(Key(l), ControlOf(data, l), unit.Id, snap.Bytes ?? []).ConfigureAwait(false);
+            _ = await Source.CompareDeleteAsync(key, unit.Id, snap.Bytes ?? []).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
         {
@@ -168,7 +167,7 @@ internal sealed partial class KeyMoveClient<T>
         Decoded<T> decoded;
         try
         {
-            decoded = _p.InPlace.Decode(snap.Bytes ?? []);
+            decoded = Source.Codec.Decode(snap.Bytes ?? []);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -193,7 +192,7 @@ internal sealed partial class KeyMoveClient<T>
     private bool ShouldServeWithoutPublishing(string key, long ttl, DecodeClass classification, T value, KeyMoveData data, long events, long started, long replied, out byte[] encoded, out bool cacheLocally)
     {
         encoded = [];
-        cacheLocally = classification == DecodeClass.TooLarge || _p.Mappable?.Invoke(key) == false;
+        cacheLocally = classification == DecodeClass.TooLarge || !Source.Maps(key);
         if (cacheLocally || PromotionTimedOut(data, events, started, replied) || ttl is >= 0 and < 1)
         {
             return true;

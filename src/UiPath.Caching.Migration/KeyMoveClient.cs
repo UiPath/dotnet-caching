@@ -17,11 +17,13 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
     private readonly KeyMoveOptions _options;
     private readonly NegativeHints _hints;
     private readonly MoveRetrySet _retries;
+    private readonly IMoveSide<T> _source;
 
     public KeyMoveClient(KeyMoveClientParts<T> parts)
     {
         _p = parts ?? throw new ArgumentNullException(nameof(parts));
         _options = parts.Options;
+        _source = parts.Source ?? new InPlaceMoveSide<T>(parts.Plane, parts.Group, parts.InPlaceKey, parts.InPlace, parts.Mappable, parts.Clock);
         _hints = new NegativeHints(parts.Clock, _options.HintTtl, _options.MaxHints);
         _retries = new MoveRetrySet(parts.Clock, _options, ExhaustedStep, parts.RunRetriesInBackground, _ => Count(RetrySuperseded));
     }
@@ -37,6 +39,8 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
     internal MoveRetrySet Retries => _retries;
 
     internal NegativeHints Hints => _hints;
+
+    private IMoveSide<T> Source => _source;
 
     private KeyMoveData? Data => _p.Plane.Data;
 
@@ -122,8 +126,6 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
         return mode;
     }
 
-    private string InPlace(string key) => _p.InPlaceKey(key);
-
     private string Native(string key) => _p.NativeKey(key);
 
     private RedisKey ControlOf(KeyMoveData data, string dataKey) => data.Names.ControlFor(_p.Group, dataKey);
@@ -131,6 +133,8 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
     private long Ticks(TimeSpan span) => (long)(span.TotalSeconds * _p.Clock.TimestampFrequency);
 
     private ValueTask At(SchedulePointStep step) => _p.Schedule.AtAsync(step);
+
+    private bool SourceUnavailable(bool required) => required && !Source.IsAvailable;
 
     private void Count(string counter) => RouterTelemetry.CountMove(counter, _p.CacheId, _p.Group);
 

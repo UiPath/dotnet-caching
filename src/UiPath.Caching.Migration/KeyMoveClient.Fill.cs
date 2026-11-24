@@ -15,6 +15,13 @@ internal sealed partial class KeyMoveClient<T>
 
     private static FillBox<T>? BoxForWinner(long code, FillBox<T>? box) => code == MoveScripts.DestinationExists ? box : null;
 
+    private static SchedulePointStep FillPoint(KeyMoveMode mode) => mode switch
+    {
+        KeyMoveMode.S1 or KeyMoveMode.S2 => SchedulePointStep.SourceSet,
+        KeyMoveMode.S5 => SchedulePointStep.NativeWrite,
+        _ => SchedulePointStep.Fill,
+    };
+
     private static (WriteResult Result, bool Rerun) FillOutcome(long code, AdmittedUnit unit) => code switch
     {
         MoveScripts.IdentityMismatch when unit.Readmit() => (default, true),
@@ -87,12 +94,12 @@ internal sealed partial class KeyMoveClient<T>
 
     private async ValueTask<(WriteResult Result, bool Rerun)> FillOnceAsync(string key, T value, long px, KeyMoveMode mode, AdmittedUnit unit, FillBox<T>? box, CancellationToken cancellationToken)
     {
-        if (cancellationToken.IsCancellationRequested || Data is not { } data || !data.IsConnected())
+        var source = mode is KeyMoveMode.S1 or KeyMoveMode.S2;
+        if (cancellationToken.IsCancellationRequested || Data is not { } data || !data.IsConnected() || SourceUnavailable(source))
         {
             return (WriteOutcome.NotSent, false);
         }
 
-        var l = InPlace(key);
         var n = Native(key);
         if (EncodeFill(value, mode) is not { } bytes)
         {
@@ -102,22 +109,13 @@ internal sealed partial class KeyMoveClient<T>
         long code;
         try
         {
-            switch (mode)
+            await At(FillPoint(mode)).ConfigureAwait(false);
+            code = mode switch
             {
-                case KeyMoveMode.S1:
-                case KeyMoveMode.S2:
-                    await At(SchedulePointStep.SourceSet).ConfigureAwait(false);
-                    code = await data.Scripts.SourceSetAsync(Key(l), ControlOf(data, l), unit.Id, bytes, px, true).ConfigureAwait(false);
-                    break;
-                case KeyMoveMode.S5:
-                    await At(SchedulePointStep.NativeWrite).ConfigureAwait(false);
-                    code = CreatedCode(await data.Db.StringSetAsync(Key(n), bytes, Expiry(px), When.NotExists, Master).ConfigureAwait(false));
-                    break;
-                default:
-                    await At(SchedulePointStep.Fill).ConfigureAwait(false);
-                    code = await data.Scripts.FillAsync(Fenced(data, n), unit.Id, bytes, px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false);
-                    break;
-            }
+                KeyMoveMode.S1 or KeyMoveMode.S2 => await Source.SetAsync(key, unit.Id, bytes, px, true).ConfigureAwait(false),
+                KeyMoveMode.S5 => CreatedCode(await data.Db.StringSetAsync(Key(n), bytes, Expiry(px), When.NotExists, Master).ConfigureAwait(false)),
+                _ => await data.Scripts.FillAsync(Fenced(data, n), unit.Id, bytes, px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
+            };
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -127,9 +125,9 @@ internal sealed partial class KeyMoveClient<T>
         if (BoxForWinner(code, box) is { } winner)
         {
             // The losing fill returns the winner's value under the original fill mark.
-            var source = mode is KeyMoveMode.S1 or KeyMoveMode.S2;
-            var (keyToRead, point, codec) = source ? (l, SchedulePointStep.ReadSource, _p.InPlace) : (n, SchedulePointStep.ReadDestinationOnMaster, _p.Native);
-            var held = Interpret(await SnapAsync(keyToRead, replica: false, point, cancellationToken).ConfigureAwait(false), codec);
+            var held = source
+                ? Interpret(await SourceSnapAsync(key, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false), Source.Codec)
+                : Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native);
             KeepFillWinner(winner, held);
         }
 
@@ -142,7 +140,7 @@ internal sealed partial class KeyMoveClient<T>
     {
         try
         {
-            return mode is KeyMoveMode.S1 or KeyMoveMode.S2 ? _p.InPlace.Encode(value) : _p.Native.Encode(value);
+            return mode is KeyMoveMode.S1 or KeyMoveMode.S2 ? Source.Codec.Encode(value) : _p.Native.Encode(value);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException && ex is not OperationCanceledException)
         {

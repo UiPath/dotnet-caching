@@ -61,6 +61,30 @@ internal sealed partial class KeyMoveClient<T>
         }
     }
 
+    private async ValueTask<KeyMoveSnap> SourceSnapAsync(string key, SchedulePointStep step, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Source.IsAvailable)
+        {
+            return KeyMoveSnap.Of(ReadOutcome.Unavailable);
+        }
+
+        await At(step).ConfigureAwait(false);
+        return await Source.SnapshotAsync(key, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<bool?> SourceExistsAsync(string key, SchedulePointStep step, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Source.IsAvailable)
+        {
+            return null;
+        }
+
+        await At(step).ConfigureAwait(false);
+        return await Source.ExistsAsync(key, cancellationToken).ConfigureAwait(false);
+    }
+
     private async ValueTask<bool?> ExistsAsync(string key, SchedulePointStep step, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

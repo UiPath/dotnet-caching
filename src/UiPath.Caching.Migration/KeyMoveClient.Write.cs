@@ -147,7 +147,7 @@ internal sealed partial class KeyMoveClient<T>
         {
             if (value is not null)
             {
-                inPlace = steps.Contains(WriteStep.SrcSet) ? _p.InPlace.Encode(value) : null;
+                inPlace = steps.Contains(WriteStep.SrcSet) ? Source.Codec.Encode(value) : null;
                 native = steps.Contains(WriteStep.BumpSet) || steps.Contains(WriteStep.NativeSet) ? _p.Native.Encode(value) : null;
             }
 
@@ -235,7 +235,7 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         await At(Point(step)).ConfigureAwait(false);
-        if (cancellationToken.IsCancellationRequested || Data is not { } data || !data.IsConnected())
+        if (cancellationToken.IsCancellationRequested || Data is not { } data || !data.IsConnected() || SourceUnavailable(step is WriteStep.SrcDel or WriteStep.SrcSet))
         {
             return StepSent.NotSent;
         }
@@ -246,14 +246,13 @@ internal sealed partial class KeyMoveClient<T>
             return new StepSent(MoveScripts.Superseded);
         }
 
-        var l = InPlace(form.CallerKey);
         var n = Native(form.CallerKey);
         try
         {
             var code = step switch
             {
-                WriteStep.SrcDel => await data.Scripts.SourceDeleteAsync(Key(l), ControlOf(data, l), form.Id).ConfigureAwait(false),
-                WriteStep.SrcSet => await data.Scripts.SourceSetAsync(Key(l), ControlOf(data, l), form.Id, form.SourceBytes ?? throw MissingWriteValue(), px, false).ConfigureAwait(false),
+                WriteStep.SrcDel => await Source.DeleteAsync(form.CallerKey, form.Id).ConfigureAwait(false),
+                WriteStep.SrcSet => await Source.SetAsync(form.CallerKey, form.Id, form.SourceBytes ?? throw MissingWriteValue(), px, false).ConfigureAwait(false),
                 WriteStep.BumpSet when retry => await data.Scripts.BumpIfFenceAsync(Fenced(data, n), form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Set, form.NativeBytes ?? throw MissingWriteValue(), px).ConfigureAwait(false),
                 WriteStep.BumpDel when retry => await data.Scripts.BumpIfFenceAsync(Fenced(data, n), form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Delete).ConfigureAwait(false),
                 WriteStep.BumpSet => await data.Scripts.BumpAsync(Fenced(data, n), form.Id, form.Nonce, FenceTtlMs, BumpOperation.Set, form.NativeBytes ?? throw MissingWriteValue(), px).ConfigureAwait(false),

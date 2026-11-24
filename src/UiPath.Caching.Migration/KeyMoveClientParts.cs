@@ -29,4 +29,7 @@ internal sealed record KeyMoveClientParts<T>(
     public ISchedulePoint Schedule { get; init; } = NoSchedulePoint.Instance;
 
     public Func<string, bool>? Mappable { get; init; }
+
+    /// <summary>Defaults to the in-place source configured by these parts.</summary>
+    public IMoveSide<T>? Source { get; init; }
 }
