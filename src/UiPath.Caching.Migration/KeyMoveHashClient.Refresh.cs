@@ -188,19 +188,38 @@ internal sealed partial class KeyMoveHashClient<T>
         return Judged(await ExpireAsync(data, n, unit, at, fence, clear).ConfigureAwait(false));
     }
 
-    // S3(rev): acknowledged only when it lands on L. While N holds the hash it must be promoted first, so the refresh is refused.
+    // A reverse promotion can replace L even if it already exists. Finish moving N before refreshing L, then bump the fence so a promotion that read N earlier cannot publish over the refresh.
     private async ValueTask<(WriteResult Result, bool Again)> RefreshReverseAsync(string key, long at, HashMetadataClear clear, AdmittedUnit unit, KeyMoveData data, CancellationToken cancellationToken)
     {
         var l = InPlace(key);
-        var code = await ExpireAsync(data, l, unit, at, ReverseFence(data, l), clear).ConfigureAwait(false);
-        if (code != 0)
+        var present = await _reads.ExistsAsync(Native(key), SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false);
+        if (present == false)
         {
-            return Judged(code);
+            return Judged(await ExpireAsync(data, l, unit, at, ReverseFence(data, l), clear).ConfigureAwait(false));
         }
 
-        // Neither side holds the hash, or N could not be asked: nothing was extended.
-        var present = await _reads.ExistsAsync(Native(key), SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false);
-        return (present == true ? Blocked("reverse_unpromoted") : WriteOutcome.NotSent, false);
+        if (present is null)
+        {
+            return (WriteOutcome.NotSent, false);
+        }
+
+        for (var attempt = 0; attempt < MaxEnsureAttempts; attempt++)
+        {
+            var promoted = await _reversePromotion.PromoteAsync(key, HashPromotionFlavour.Ensure, cancellationToken).ConfigureAwait(false);
+            switch (promoted.Status)
+            {
+                case HashPromotionStatus.Replan:
+                    return (default, true);
+                case HashPromotionStatus.Unavailable:
+                case HashPromotionStatus.TooLarge:
+                case HashPromotionStatus.Unreadable:
+                    return (WriteOutcome.NotSent, false);
+                case HashPromotionStatus.Complete:
+                    return Judged(await ExpireAsync(data, l, unit, at, ReverseFence(data, l), clear).ConfigureAwait(false));
+            }
+        }
+
+        return (WriteOutcome.NotSent, false);
     }
 
     // The first side, then the other when the first holds no hash.

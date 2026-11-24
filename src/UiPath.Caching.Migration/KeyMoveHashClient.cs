@@ -17,6 +17,7 @@ internal sealed partial class KeyMoveHashClient<T> : IHashPathClient<T>, IDispos
     private readonly SupersessionHelper _helper;
     private readonly HashReads<T> _reads;
     private readonly HashPromotion<T> _promotion;
+    private readonly HashPromotion<T> _reversePromotion;
 
     public KeyMoveHashClient(KeyMoveHashClientParts<T> parts)
     {
@@ -28,6 +29,7 @@ internal sealed partial class KeyMoveHashClient<T> : IHashPathClient<T>, IDispos
         _helper = new SupersessionHelper(() => _p.Plane.Data, parts.InPlaceKey, parts.NativeKey, parts.Group, parts.CacheId);
         _reads = new HashReads<T>(parts);
         _promotion = new HashPromotion<T>(parts, _reads, _hints, _helper);
+        _reversePromotion = new HashPromotion<T>(parts, _reads, _hints, _helper, reverse: true);
     }
 
     public TimeSpan? SettleWithin => _p.SettleWithin();

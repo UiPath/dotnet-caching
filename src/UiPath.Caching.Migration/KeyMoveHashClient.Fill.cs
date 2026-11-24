@@ -81,11 +81,7 @@ internal sealed partial class KeyMoveHashClient<T>
 
     private void ThrowIfFillRefused(IDictionary<string, string?>? metadata, KeyMoveMode mode)
     {
-        if (KeyMovePlanning.IsReverseWrite(mode))
-        {
-            throw Unavailable();
-        }
-
+        ThrowIfNoOriginReverseWrite(mode);
         ThrowIfMetadataRefused(metadata, mode);
     }
 
@@ -118,13 +114,13 @@ internal sealed partial class KeyMoveHashClient<T>
 
         var l = InPlace(key);
         var n = Native(key);
-        var inPlace = mode is KeyMoveMode.S1 or KeyMoveMode.S2;
+        var inPlace = FillAttempt.LandsInPlace(mode);
         if (!TryEncodeFill(fields, metadata, inPlace, out var stored) || stored.Count == 0)
         {
             return (WriteOutcome.NotSent, false);
         }
 
-        // The staging key sits in the destination's slot: L's for S1 and S2, N's otherwise.
+        // The staging key sits in the destination's slot: L's for S1, S2, S3(rev) and S4(rev), N's otherwise.
         var staging = inPlace ? data.Names.ReverseStaging(l, MoveScripts.NewNonce()) : data.Names.ForwardStaging(n, MoveScripts.NewNonce());
         var fill = new FillAttempt(data, l, n, staging, expireAt, mode, unit);
         var (code, early) = await SendFillAsync(fill, stored, cancellationToken).ConfigureAwait(false);
@@ -189,6 +185,9 @@ internal sealed partial class KeyMoveHashClient<T>
         {
             KeyMoveMode.S1 or KeyMoveMode.S2 => await data.Scripts.FillHashUntilAsync(Key(l), ControlOf(data, l), staging, unit.Id, expireAt, null).ConfigureAwait(false),
             KeyMoveMode.S5 => await data.Scripts.FillHashUntilAsync(Key(n), ControlOf(data, n), staging, unit.Id, expireAt, null).ConfigureAwait(false),
+            KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4 => await data.Scripts.FillHashUntilAsync(Key(l), ControlOf(data, l), staging, unit.Id, expireAt, new FenceBump(data.Names.ReverseFence(l), MoveScripts.NewNonce(), FenceTtlMs)).ConfigureAwait(false),
+
+            // S3 and S4, and S1(rev), whose Src is N: forward promoters on lagging nodes are refused by G.
             _ => await data.Scripts.FillHashUntilAsync(Key(n), ControlOf(data, n), staging, unit.Id, expireAt, new FenceBump(data.Names.ForwardFence(n), MoveScripts.NewNonce(), FenceTtlMs)).ConfigureAwait(false),
         };
     }
@@ -237,6 +236,8 @@ internal sealed partial class KeyMoveHashClient<T>
 
     private readonly record struct FillAttempt(KeyMoveData Data, string L, string N, RedisKey Staging, long ExpireAt, KeyMoveMode Mode, AdmittedUnit Unit)
     {
-        public bool InPlace => Mode is KeyMoveMode.S1 or KeyMoveMode.S2;
+        public bool InPlace => LandsInPlace(Mode);
+
+        public static bool LandsInPlace(KeyMoveMode mode) => mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4;
     }
 }

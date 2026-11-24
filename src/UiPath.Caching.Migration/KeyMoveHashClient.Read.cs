@@ -87,6 +87,7 @@ internal sealed partial class KeyMoveHashClient<T>
                 KeyMoveMode.S1 or KeyMoveMode.S2 => await ReadLegacyOnlyAsync(key, plan, fields, cancellationToken).ConfigureAwait(false),
                 KeyMoveMode.S3 => await PromoteReadAsync(key, fields, cancellationToken).ConfigureAwait(false),
                 KeyMoveMode.S5 => await _reads.ReadUnionAsync(key, withSource: false, fields, cancellationToken).ConfigureAwait(false),
+                _ when KeyMovePlanning.PromotesReverse(plan) => await ReadReverseAsync(key, fields, cancellationToken).ConfigureAwait(false),
                 _ => await _reads.ReadUnionAsync(key, withSource: true, fields, cancellationToken).ConfigureAwait(false),
             };
             if (!step.Rerun)
@@ -112,6 +113,25 @@ internal sealed partial class KeyMoveHashClient<T>
     {
         var promoted = await _promotion.PromoteAsync(key, HashPromotionFlavour.Read, fields, cancellationToken).ConfigureAwait(false);
         return promoted.Status == HashPromotionStatus.Replan ? HashReadStep<T>.Again : HashReadStep<T>.Of(promoted.Read);
+    }
+
+    // A reverse promoter publishes L before deleting N, so an N miss only needs one read of L and sets no hint.
+    private async ValueTask<HashReadStep<T>> ReadReverseAsync(string key, string[]? fields, CancellationToken cancellationToken)
+    {
+        var snap = await _reads.SnapAsync(Native(key), replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false);
+        var native = HashReads<T>.Interpret(snap, _p.Native, authoritativeNull: true, fields: fields);
+        if (native.Kind == ReadOutcome.Found && !native.Uncached && !_p.NoOrigin)
+        {
+            _ = await _reversePromotion.PromoteAsync(key, HashPromotionFlavour.Ensure, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!native.FallsThrough)
+        {
+            return HashReadStep<T>.Of(native);
+        }
+
+        var inPlace = await _reads.SnapAsync(InPlace(key), replica: false, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);
+        return HashReadStep<T>.Of(HashReads<T>.Interpret(inPlace, _p.InPlace, fields: fields));
     }
 
     // S1 and S2 while nothing is promoted: L only; a NoOrigin miss reads the identity first, because a promotion may have moved the key.
