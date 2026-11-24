@@ -30,11 +30,17 @@ internal sealed class MoverHost
     /// <param name="readState">The stored state of the group, as the node's state store reads it.</param>
     /// <param name="rate">The one rate of the process (a singleton), which every host takes, so that the node's cap holds across groups.</param>
     public MoverHost(string group, IKeyMovePlane plane, IGroupKeySpace space, IEnumerable<IMoveTarget> targets, IScanUnits units, Func<CancellationToken, Task<StateRecord?>> readState, string connectorPrefix, TimeProvider time, IMoveRate rate, MoverOptions? options = null)
+        : this(group, plane, space, (targets ?? throw new ArgumentNullException(nameof(targets))).ToDictionary(t => t.CacheId, StringComparer.Ordinal), units, readState, connectorPrefix, time, rate, options)
+    {
+    }
+
+    /// <param name="targets">The targets by cache id, read live, so a cache bound after the start is moved too.</param>
+    public MoverHost(string group, IKeyMovePlane plane, IGroupKeySpace space, IReadOnlyDictionary<string, IMoveTarget> targets, IScanUnits units, Func<CancellationToken, Task<StateRecord?>> readState, string connectorPrefix, TimeProvider time, IMoveRate rate, MoverOptions? options = null)
     {
         _group = group;
         _plane = plane ?? throw new ArgumentNullException(nameof(plane));
         _space = space ?? throw new ArgumentNullException(nameof(space));
-        _targets = (targets ?? throw new ArgumentNullException(nameof(targets))).ToDictionary(t => t.CacheId, StringComparer.Ordinal);
+        _targets = targets ?? throw new ArgumentNullException(nameof(targets));
         _units = units ?? throw new ArgumentNullException(nameof(units));
         _readState = readState ?? throw new ArgumentNullException(nameof(readState));
         _connectorPrefix = connectorPrefix ?? throw new ArgumentNullException(nameof(connectorPrefix));
@@ -87,6 +93,8 @@ internal sealed class MoverHost
         && rules is { Relevant: true, Acting: { Direction: MoverPasses.Forward } acting } && acting.Id == state.Id
             ? (id, state.Id)
             : null;
+
+    private static bool ActsForward(GroupRules rules) => rules is { Relevant: true, Acting.Direction: MoverPasses.Forward };
 
     private static async Task RunUnitAsync(MoverUnitRunner runner, CancellationToken cancellationToken)
     {
@@ -174,8 +182,10 @@ internal sealed class MoverHost
 
     private async Task ReconcileAsync(CancellationToken cancellationToken)
     {
-        var state = await _readState(cancellationToken).ConfigureAwait(false);
         var rules = _plane.RulesFor(_group);
+
+        // The stored state is read only while the node's rules say a forward move acts, so a group with no move costs the server nothing.
+        var state = ActsForward(rules) ? await _readState(cancellationToken).ConfigureAwait(false) : null;
         var key = Allowed(state, rules);
         if (key != _runningKey)
         {

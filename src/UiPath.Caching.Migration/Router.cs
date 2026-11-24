@@ -51,6 +51,8 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
     internal KeyMoveNode? KeyMove { get; init; }
 
+    internal LibraryParts? Library => _core.StartedParts;
+
     public async Task ClearAsync(string cacheName, CancellationToken cancellationToken = default)
     {
         _core.ThrowIfStopped();

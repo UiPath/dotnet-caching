@@ -180,6 +180,10 @@ internal sealed class KeyMoveNode
     }
 
     // Everything that holds a connection, built over the connector's current one; rebuilt when the connector replaces it.
+    /// <summary>The stored state of <paramref name="group"/>, for the mover; null before the node is started or when none is stored.</summary>
+    internal Task<StateRecord?> ReadStateAsync(string group, CancellationToken cancellationToken) =>
+        _wiring is { } wiring ? wiring.Store.ReadAsync(group, cancellationToken) : Task.FromResult<StateRecord?>(null);
+
     private Wiring Wire()
     {
         var connector = _connector!;

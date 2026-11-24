@@ -23,6 +23,8 @@ internal sealed class KeyMover<T> : IMoveTarget
 
     public bool NoOrigin => _p.NoOrigin;
 
+    internal ISupersessionHandler Supersession => _supersession;
+
     public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
     {
         // A NoOrigin cache is moved in full, whatever the minimum says.
