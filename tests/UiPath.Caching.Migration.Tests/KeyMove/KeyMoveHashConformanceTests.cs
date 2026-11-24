@@ -159,6 +159,76 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().Be(native, "a partially decoded hash is never promoted");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Field_recovery_matches_the_stored_bytes_of_the_requested_name(bool includeReplacement)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 to run.");
+        const string replacement = "\uFFFD";
+        var app = Hashes(false);
+        var (binding, nativePrefix) = await BindingAsync(app, false);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, native: binding.Native, nativePrefix: nativePrefix);
+        await kit.Kit.PrepareAsync("k");
+        await kit.Kit.SetStateAsync("S5", swept: true);
+        var expected = KeyMoveHashKit.Items(("good", "value"));
+        if (includeReplacement)
+        {
+            expected[replacement] = new Item("replacement");
+        }
+
+        HashEntry[] entries = [.. CorruptHash(binding.Native, expected), new(new byte[] { 0xFF }, binding.Native.EncodeFields(KeyMoveHashKit.Items(("raw", "invalid name")), null).Single().Value)];
+        await Db.HashSetAsync(kit.N("k"), entries);
+
+        var read = await kit.Client.ReadAsync("k", ["good", replacement, replacement], Ct);
+
+        read.Kind.Should().Be(ReadOutcome.Found);
+        read.Fields.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public async Task Missing_selected_fields_on_a_corrupt_hash_are_an_empty_hit()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 to run.");
+        var app = Hashes(false);
+        var (binding, nativePrefix) = await BindingAsync(app, false);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, native: binding.Native, nativePrefix: nativePrefix);
+        await kit.Kit.PrepareAsync("k");
+        await kit.Kit.SetStateAsync("S5", swept: true);
+        await Db.HashSetAsync(kit.N("k"), CorruptHash(binding.Native, KeyMoveHashKit.Items(("good", "value"))));
+
+        var read = await kit.Client.ReadAsync("k", ["missing", "also missing"], Ct);
+
+        read.Kind.Should().Be(ReadOutcome.Found);
+        read.Fields.Should().BeEmpty();
+        read.Uncached.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("good", false)]
+    [InlineData("missing", false)]
+    [InlineData("good", true)]
+    public async Task Field_recovery_keeps_the_system_fields_that_decode(string field, bool corruptMetadata)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 to run.");
+        var app = Hashes(false);
+        var (binding, nativePrefix) = await BindingAsync(app, false);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, native: binding.Native, nativePrefix: nativePrefix);
+        await kit.Kit.PrepareAsync("k");
+        await kit.Kit.SetStateAsync("S5", swept: true);
+        var metadata = new Dictionary<string, string?> { ["owner"] = "me" };
+        var counted = await ((ISharedHashTier)app).SetVersionedAsync(CacheKey.Verbatim(AppKey("k")), KeyMoveHashKit.Items(("good", "value")), new HashCacheEntryOptions(TimeToLive: Life, Metadata: metadata), null, new PeerFieldLimits(0, 0), Ct);
+        counted.Version.Should().BeGreaterThan(0);
+        RedisValue corrupt = new byte[] { 0x1E, 1, 2, 3 };
+        await Db.HashSetAsync(kit.N("k"), corruptMetadata ? "_metadata_" : "broken", corrupt);
+
+        var read = await kit.Client.ReadAsync("k", [field], Ct);
+
+        read.Version.Should().Be(counted.Version);
+        read.Metadata.Should().BeEquivalentTo(corruptMetadata ? null : metadata);
+        read.Kind.Should().Be(ReadOutcome.Found);
+    }
+
     [Fact]
     public async Task The_plain_library_path_reads_what_it_writes_and_what_the_cache_reads_and_a_fill_never_replaces_a_hash()
     {

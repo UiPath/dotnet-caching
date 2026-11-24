@@ -32,9 +32,8 @@ internal sealed class LibraryKeyMoveHashCodec<T>(IByteHashCodecCache cache, int 
             var bytes = stored.Sum(e => (long)Encoding.UTF8.GetByteCount(e.Key) + e.Value.Length);
             return decoded.Outcome switch
             {
-                SnapshotOutcome.Found when decoded.Values.Count == 0 => DecodedHash<T>.Of(DecodeClass.Null, length, bytes),
-                SnapshotOutcome.Found => new DecodedHash<T>(capped && KeyMoveHashSize.ExceedsBytes(bytes, maxValueBytes) ? DecodeClass.TooLarge : DecodeClass.Ok, decoded.Values, decoded.Metadata, decoded.Version, length, bytes),
-                SnapshotOutcome.Absent => DecodedHash<T>.Of(DecodeClass.Null, length, bytes),
+                SnapshotOutcome.Found when decoded.Values.Count != 0 => new DecodedHash<T>(capped && KeyMoveHashSize.ExceedsBytes(bytes, maxValueBytes) ? DecodeClass.TooLarge : DecodeClass.Ok, decoded.Values, decoded.Metadata, decoded.Version, length, bytes),
+                SnapshotOutcome.Found or SnapshotOutcome.Absent => new DecodedHash<T>(DecodeClass.Null, decoded.Values, decoded.Metadata, decoded.Version, length, bytes),
                 _ => DecodedHash<T>.Of(DecodeClass.Unreadable, length, bytes),
             };
         }
