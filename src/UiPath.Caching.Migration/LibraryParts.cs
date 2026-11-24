@@ -8,6 +8,7 @@ namespace UiPath.Caching.Migration;
 /// <param name="KeyMove">The key move node's plane, when the router has key move groups.</param>
 /// <param name="Cache">The library cache behind <paramref name="Store"/>, for a conditional create and a refresh.</param>
 /// <param name="CacheNullValues">The library stores a null as a value; a router write of null then stores it, and without it removes.</param>
+/// <param name="Binder">Binds the byte codecs and key maps of the key move caches; none when the router has no key move group.</param>
 internal sealed record LibraryParts(
     IMigrationCache Store,
     IConnectionState Connection,
@@ -19,7 +20,8 @@ internal sealed record LibraryParts(
     Func<TopicKey, CancellationToken, Task>? ReleaseTopic = null,
     IKeyMovePlane? KeyMove = null,
     ICache? Cache = null,
-    bool CacheNullValues = false)
+    bool CacheNullValues = false,
+    KeyMoveBinder? Binder = null)
 {
     public IReadOnlyList<IHostedService> Started { get; } = Started ?? [];
 

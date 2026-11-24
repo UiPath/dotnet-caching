@@ -51,6 +51,21 @@ public sealed class MoverClassTests(RedisFixture fixture)
     }
 
     [Theory]
+    [InlineData(false, "skipped:null_not_cached")]
+    [InlineData(true, "moved")]
+    public async Task A_cached_null_moves_only_when_the_other_side_caches_nulls_and_is_otherwise_left_in_L(bool nativeCachesNulls, string counter)
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture, nativeCodec: nativeCachesNulls ? new ItemCodec([0x6E]) : null);
+        await kit.SeedAsync(new Dictionary<string, (string, TimeSpan?)> { ["null:1"] = ("null:1", null) });
+
+        await kit.RunOnePassAsync(kit.Host());
+
+        await kit.WaitProgressAsync(new Dictionary<string, long> { [counter] = 1 });
+        (await kit.Kit.ExistsAsync(kit.Kit.L("null:1"))).Should().Be(!nativeCachesNulls);
+        (await kit.Kit.ExistsAsync(kit.Kit.N("null:1"))).Should().Be(nativeCachesNulls);
+    }
+
+    [Theory]
     [InlineData(null, null, false, 1, "short_ttl")]
     [InlineData(0, null, false, 1, "moved")]
     [InlineData(null, 0, false, 1, "moved")]

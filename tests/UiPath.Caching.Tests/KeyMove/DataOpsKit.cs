@@ -60,11 +60,11 @@ internal sealed class DataOpsKit : IAsyncDisposable
     public async Task<StateRecord> StateAsync() => (await Kit.Store.ReadAsync(Group, CancellationToken.None))!;
 
     // The logical key of a cache on a side, written under the connector prefix; a ttl of null leaves it without expiry.
-    public async Task<string> SetAsync(MoveSide side, string cache, string name, TimeSpan? ttl = null)
+    public async Task<string> SetAsync(MoveSide side, string cache, string name, TimeSpan? ttl = null, string value = "v")
     {
         var key = $"{Space.PrefixOf(side)}{cache}:{name}";
         _made.Add(Prefix + key);
-        await Kit.Db.StringSetAsync(Prefix + key, "v");
+        await Kit.Db.StringSetAsync(Prefix + key, value);
         if (ttl is { } life)
         {
             await Kit.Db.KeyExpireAsync(Prefix + key, life);

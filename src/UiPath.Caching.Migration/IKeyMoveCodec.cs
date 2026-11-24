@@ -7,4 +7,7 @@ internal interface IKeyMoveCodec<T>
     byte[] Encode(T value);
 
     Decoded<T> Decode(byte[] bytes);
+
+    /// <summary>The bytes of a cached null on this side, or null when the side does not cache nulls.</summary>
+    byte[]? EncodeNull();
 }

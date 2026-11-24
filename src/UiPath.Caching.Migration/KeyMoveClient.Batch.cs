@@ -125,8 +125,8 @@ internal sealed partial class KeyMoveClient<T>
         {
             var read = values[i].IsNull || life[i] == -2
                 ? PathRead<T>.Of(ReadOutcome.Absent)
-                : Interpret(new KeyMoveSnap(ReadOutcome.Found, (byte[]?)values[i] ?? [], Math.Max(-1, life[i]), _p.Clock.GetUtcNow()), _p.Native);
-            if (read.Kind == ReadOutcome.Absent)
+                : Interpret(new KeyMoveSnap(ReadOutcome.Found, (byte[]?)values[i] ?? [], Math.Max(-1, life[i]), _p.Clock.GetUtcNow()), _p.Native, authoritativeNull: true);
+            if (read.FallsThrough)
             {
                 still.Add(missing[i]);
             }

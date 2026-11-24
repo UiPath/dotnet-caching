@@ -26,7 +26,8 @@ internal sealed class KeyPromotion<T>
 
     private long FenceTtlMs => (long)_options.FenceTtl.TotalMilliseconds;
 
-    public static PathRead<T> Interpret(KeyMoveSnap snap, IKeyMoveCodec<T> codec)
+    // A cached null on the native side is the answer when that side caches nulls; on the in-place side it is a miss.
+    public static PathRead<T> Interpret(KeyMoveSnap snap, IKeyMoveCodec<T> codec, bool authoritativeNull = false)
     {
         if (snap.Kind != ReadOutcome.Found)
         {
@@ -45,7 +46,8 @@ internal sealed class KeyPromotion<T>
 
         return decoded.Class switch
         {
-            DecodeClass.Expired => PathRead<T>.Of(ReadOutcome.Absent),
+            DecodeClass.Null when authoritativeNull && codec.EncodeNull() is not null => new PathRead<T>(ReadOutcome.Absent, null, null) { Stops = true },
+            DecodeClass.Expired or DecodeClass.Null => PathRead<T>.Of(ReadOutcome.Absent),
             DecodeClass.Unreadable => PathRead<T>.Of(ReadOutcome.Unreadable),
             _ when decoded.Value is null => PathRead<T>.Of(ReadOutcome.Unreadable),
             _ => new PathRead<T>(ReadOutcome.Found, decoded.Value, snap.TtlMs < 0 ? null : snap.At.AddMilliseconds(snap.TtlMs)),
@@ -121,7 +123,7 @@ internal sealed class KeyPromotion<T>
 
         var snap = await SourceSnapAsync(key, cancellationToken).ConfigureAwait(false);
         var replied = _p.Clock.GetTimestamp();
-        var (served, skipped) = ReadSource(run, snap);
+        var (served, skipped) = await ReadSourceAsync(run, snap, cancellationToken).ConfigureAwait(false);
         if (skipped is { } skip)
         {
             return skip;
@@ -136,7 +138,7 @@ internal sealed class KeyPromotion<T>
         byte[] encoded;
         try
         {
-            encoded = _p.Native.Encode(served.Value!);
+            encoded = served.Value is null ? _p.Native.EncodeNull()! : _p.Native.Encode(served.Value);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -228,29 +230,18 @@ internal sealed class KeyPromotion<T>
         };
     }
 
-    // Reads the snapshot of L into the value to serve, or the result that ends the run before publishing.
-    private (PathRead<T> Served, PromotionResult<T>? Skipped) ReadSource(PromotionRun run, KeyMoveSnap snap)
+    // Reads the snapshot of L into the value to serve, or the result that ends the run before publishing. A cached null serves as a miss and goes on as the other side's null.
+    private async ValueTask<(PathRead<T> Served, PromotionResult<T>? Skipped)> ReadSourceAsync(PromotionRun run, KeyMoveSnap snap, CancellationToken cancellationToken)
     {
-        if (snap.Kind == ReadOutcome.Absent)
-        {
-            return (default, PromotionResult<T>.Of(PromotionKind.SourceAbsent));
-        }
-
         if (snap.Kind != ReadOutcome.Found)
         {
-            if (snap.Kind == ReadOutcome.Unreadable)
-            {
-                Count("unreadable_source");
-            }
-
-            return (default, PromotionResult<T>.Of(snap.Kind == ReadOutcome.Unreadable ? PromotionKind.Unreadable : PromotionKind.Unavailable, snap.Kind));
+            return (default, Unfound(snap.Kind));
         }
 
         var decoded = Decode(_source.Codec, snap);
-        if (decoded.Class == DecodeClass.Unreadable || (decoded.Class != DecodeClass.Expired && decoded.Value is null))
+        if (decoded.Class == DecodeClass.Unreadable || (decoded.Class is not (DecodeClass.Expired or DecodeClass.Null) && decoded.Value is null))
         {
-            Count("unreadable_source");
-            return (default, PromotionResult<T>.Of(PromotionKind.Unreadable, ReadOutcome.Unreadable));
+            return (default, await UnreadableSourceAsync(run, snap, cancellationToken).ConfigureAwait(false));
         }
 
         if (decoded.Class == DecodeClass.Expired)
@@ -258,10 +249,59 @@ internal sealed class KeyPromotion<T>
             return (default, PromotionResult<T>.Of(PromotionKind.Expired, ReadOutcome.Absent));
         }
 
+        // A read-through drops a value the codec refuses for good (a null the other side does not cache, one too large for a cache with an origin) by a compare-delete, and the next read reloads it; the mover leaves it where it is.
+        var isNull = decoded.Class == DecodeClass.Null;
+        var droppable = run.Mover is null && KeyMoveValueClasses.Droppable(decoded.Class, _p.NoOrigin, _p.Native.EncodeNull() is not null);
+        if (isNull && droppable)
+        {
+            return (default, await DroppedAsync(run, snap, PromotionResult<T>.Of(PromotionKind.SourceAbsent), cancellationToken).ConfigureAwait(false));
+        }
+
+        if (isNull && run.Mover is not null && _p.Native.EncodeNull() is null)
+        {
+            return (default, PromotionResult<T>.Of(PromotionKind.NullNotCached));
+        }
+
         var expiration = snap.TtlMs < 0 ? (DateTimeOffset?)null : snap.At.AddMilliseconds(snap.TtlMs);
-        var served = new PathRead<T>(ReadOutcome.Found, decoded.Value, expiration);
-        return (served, Unmoved(run, snap, decoded.Class, served));
+        var served = isNull ? PathRead<T>.Of(ReadOutcome.Absent) : new PathRead<T>(ReadOutcome.Found, decoded.Value, expiration);
+        var unmoved = Unmoved(run, snap, decoded.Class, served);
+        if (unmoved is { } stop && droppable)
+        {
+            unmoved = await DroppedAsync(run, snap, stop, cancellationToken).ConfigureAwait(false);
+        }
+
+        return (served, unmoved);
     }
+
+    private PromotionResult<T> Unfound(ReadOutcome kind)
+    {
+        if (kind == ReadOutcome.Unreadable)
+        {
+            Count("unreadable_source");
+        }
+
+        if (kind == ReadOutcome.Absent)
+        {
+            return PromotionResult<T>.Of(PromotionKind.SourceAbsent);
+        }
+
+        return PromotionResult<T>.Of(kind == ReadOutcome.Unreadable ? PromotionKind.Unreadable : PromotionKind.Unavailable, kind);
+    }
+
+    private async ValueTask<PromotionResult<T>> UnreadableSourceAsync(PromotionRun run, KeyMoveSnap snap, CancellationToken cancellationToken)
+    {
+        Count("unreadable_source");
+        var unreadable = PromotionResult<T>.Of(PromotionKind.Unreadable, ReadOutcome.Unreadable);
+
+        // The same drop as for a readable value above the cap: the inventory judges by length alone, so a value it calls droppable must go here too.
+        return run.Mover is null && (snap.Bytes?.Length ?? 0) > _options.MaxValueBytes && KeyMoveValueClasses.Droppable(DecodeClass.TooLarge, _p.NoOrigin, false)
+            ? await DroppedAsync(run, snap, unreadable, cancellationToken).ConfigureAwait(false)
+            : unreadable;
+    }
+
+    // The source copy is gone: what the run ends with, or that the owner lost it first.
+    private async ValueTask<PromotionResult<T>> DroppedAsync(PromotionRun run, KeyMoveSnap snap, PromotionResult<T> ended, CancellationToken cancellationToken) =>
+        await DropSourceAsync(run, snap, cancellationToken).ConfigureAwait(false) ?? ended;
 
     private PromotionResult<T>? Unmoved(PromotionRun run, KeyMoveSnap snap, DecodeClass decoded, PathRead<T> served)
     {
@@ -336,7 +376,7 @@ internal sealed class KeyPromotion<T>
                 return (false, null);
             case MoveScripts.DestinationExists when run.Mover is null:
                 var found = await ReadNativeAsync(run.N, cancellationToken).ConfigureAwait(false);
-                return (false, PromotionResult<T>.Of(PromotionKind.PublishFoundNative, found is { Kind: ReadOutcome.Found } ? found : uncached));
+                return (false, PromotionResult<T>.Of(PromotionKind.PublishFoundNative, found.Kind == ReadOutcome.Found || found.Stops ? found : uncached));
             case MoveScripts.DestinationExists:
                 // The duplicate runs its compare-delete anyway, so L drains.
                 return (true, null);
@@ -364,6 +404,12 @@ internal sealed class KeyPromotion<T>
             return null;
         }
 
+        return await DropSourceAsync(run, snap, cancellationToken).ConfigureAwait(false);
+    }
+
+    // The delete is a compare against the exact bytes read: a key that changed since stays. Null unless ownership was lost.
+    private async ValueTask<PromotionResult<T>?> DropSourceAsync(PromotionRun run, KeyMoveSnap snap, CancellationToken cancellationToken)
+    {
         await At(SchedulePointStep.CompareDelete).ConfigureAwait(false);
         if (!await run.Ownership.HoldsAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -388,7 +434,7 @@ internal sealed class KeyPromotion<T>
     }
 
     private async ValueTask<PathRead<T>> ReadNativeAsync(string n, CancellationToken cancellationToken) =>
-        Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native);
+        Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
 
     private async ValueTask<KeyMoveSnap> SourceSnapAsync(string key, CancellationToken cancellationToken)
     {

@@ -190,7 +190,9 @@ internal sealed partial class RedisCache
         InterpretReadResult<T, TFormat>(key, value, format, out _);
 
     /// <param name="undecoded">Stored bytes were present but gave no value.</param>
-    private (bool Found, T? Value, int Unreadable) InterpretReadResult<T, TFormat>(RedisKey key, RedisValue value, TFormat format, out bool undecoded)
+    /// <param name="offerRewrite">False for bytes that were never read from <paramref name="key"/>, which no rewrite may be queued for.</param>
+    /// <param name="quiet">True for a decode that is not a read: a miss is not logged or counted, and no serializer read is counted.</param>
+    private (bool Found, T? Value, int Unreadable) InterpretReadResult<T, TFormat>(RedisKey key, RedisValue value, TFormat format, out bool undecoded, bool offerRewrite = true, bool quiet = false)
         where TFormat : struct, IValueFormat
     {
         undecoded = false;
@@ -211,11 +213,11 @@ internal sealed partial class RedisCache
             var outcome = _formats.Reader!.Read<T>(stored!, format.Readable);
             if (outcome.IsMiss)
             {
-                return InterpretSniffedMiss(value, outcome, out undecoded);
+                return InterpretSniffedMiss(value, outcome, quiet, out undecoded);
             }
 
             deserialized = outcome.Value;
-            TrackSniffedRead(outcome);
+            TrackSniffedRead(outcome, quiet);
         }
         else
         {
@@ -234,15 +236,24 @@ internal sealed partial class RedisCache
             return (false, default, 0);
         }
 
-        if (format.Sniff && stored is not null && format.Readable!.MigrateTo is { } target && Migration is { } migration && !IsDefault(deserialized) && migration.Wants(target, stored))
+        if (offerRewrite && format.Sniff && stored is not null)
         {
-            OfferRewrite<T>(key, stored, target, migration);
+            OfferRewriteWhenWanted(key, stored, format, deserialized);
         }
 
         return (true, deserialized, 0);
     }
 
-    private (bool Found, T? Value, int Unreadable) InterpretSniffedMiss<T>(in RedisValue value, in ReadOutcome<T> outcome, out bool undecoded)
+    private void OfferRewriteWhenWanted<T, TFormat>(RedisKey key, byte[] stored, TFormat format, T? deserialized)
+        where TFormat : struct, IValueFormat
+    {
+        if (format.Readable!.MigrateTo is { } target && Migration is { } migration && !IsDefault(deserialized) && migration.Wants(target, stored))
+        {
+            OfferRewrite<T>(key, stored, target, migration);
+        }
+    }
+
+    private (bool Found, T? Value, int Unreadable) InterpretSniffedMiss<T>(in RedisValue value, in ReadOutcome<T> outcome, bool quiet, out bool undecoded)
     {
         // A tombstone a node with the option left is also a miss, even when this node does not set one.
         if (TombstoneValue.Is(value))
@@ -251,14 +262,18 @@ internal sealed partial class RedisCache
             return (false, default, 0);
         }
 
-        ReportReadMiss(outcome);
+        if (!quiet)
+        {
+            ReportReadMiss(outcome);
+        }
+
         undecoded = true;
         return (false, default, outcome.UnreadableFormat);
     }
 
-    private void TrackSniffedRead<T>(in ReadOutcome<T> outcome)
+    private void TrackSniffedRead<T>(in ReadOutcome<T> outcome, bool quiet)
     {
-        if (SerializerMetricsOn)
+        if (SerializerMetricsOn && !quiet)
         {
             TrackSerializer(Metrics.SerializerRead, _formats.Reader!.NameOf(outcome.SourceFormat), Name);
         }
@@ -600,27 +615,39 @@ internal sealed partial class RedisCache
     private SnapshotRead<T> InterpretSnapshot<T, TFormat>(RedisKey key, RedisValue value, DateTimeOffset expiration, TFormat format)
         where TFormat : struct, IValueFormat
     {
+        var (outcome, deserialized) = InterpretStored<T, TFormat>(key, value, format, offerRewrite: true);
+        return outcome == SnapshotOutcome.Found
+            ? new SnapshotRead<T>(SnapshotOutcome.Found, _cacheEntryFactory.Create<T?>(deserialized, expiration))
+            : new SnapshotRead<T>(outcome, null);
+    }
+
+    /// <summary>What a snapshot read makes of stored bytes; the codec seam reads through it too, so the two cannot differ.</summary>
+    private (SnapshotOutcome Outcome, T? Value) InterpretStored<T, TFormat>(RedisKey key, RedisValue value, TFormat format, bool offerRewrite, bool quiet = false)
+        where TFormat : struct, IValueFormat
+    {
         bool found;
         T? deserialized;
         bool undecoded;
         try
         {
-            (found, deserialized, _) = InterpretReadResult<T, TFormat>(key, value, format, out undecoded);
+            (found, deserialized, _) = InterpretReadResult<T, TFormat>(key, value, format, out undecoded, offerRewrite, quiet);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException && ex is not OperationCanceledException)
         {
-            LogRedisCacheException(ex);
-            return new SnapshotRead<T>(SnapshotOutcome.Unreadable, null);
+            if (!quiet)
+            {
+                LogRedisCacheException(ex);
+            }
+
+            return (SnapshotOutcome.Unreadable, default);
         }
 
         if (undecoded)
         {
-            return new SnapshotRead<T>(SnapshotOutcome.Unreadable, null);
+            return (SnapshotOutcome.Unreadable, default);
         }
 
-        return found
-            ? new SnapshotRead<T>(SnapshotOutcome.Found, _cacheEntryFactory.Create<T?>(deserialized, expiration))
-            : new SnapshotRead<T>(SnapshotOutcome.Absent, null);
+        return found ? (SnapshotOutcome.Found, deserialized) : (SnapshotOutcome.Absent, default);
     }
 
     private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInternalAsync<T, TFormat>(CacheKey[] keys, TFormat format, CancellationToken token)

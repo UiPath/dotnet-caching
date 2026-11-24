@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\UiPath.Caching.Migration\UiPath.Caching.Migration.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching.MessagePack\UiPath.Caching.MessagePack.csproj" />
   </ItemGroup>
 
 </Project>

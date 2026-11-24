@@ -153,7 +153,7 @@ public sealed class KeyMoveBuilder
         RefuseExcludedOverlap(caches);
         RefuseSharedPatterns(caches);
         var registrations = _groups.Select(g => new GroupRegistration(g.Name, true, g.Listed, [.. caches.Where(c => c.Group == g.Name).Select(c => c.Name)])).ToArray();
-        return new KeyMoveSetup(registrations, stages, new RegisteredGroupFacts(caches, _floorAttested, _formatSettled, _nodeListComplete, _memoryFits), new RegisteredKeySpace(caches, prefix, _alert, [.. _excluded], new Dictionary<string, TimeSpan>(_moveMinTtl)), new UnavailableMoveClaim(), prefix) { Alert = _alert };
+        return new KeyMoveSetup(registrations, stages, new RegisteredGroupFacts(caches, _floorAttested, _formatSettled, _nodeListComplete, _memoryFits), new RegisteredKeySpace(caches, prefix, _alert, [.. _excluded], new Dictionary<string, TimeSpan>(_moveMinTtl)), new UnavailableMoveClaim(), prefix) { Alert = _alert, Caches = caches, Values = new KeyMoveValueClasses() };
     }
 
     // The prefix heads every scan pattern, so a character that a pattern reads as a wildcard would make the scan miss the keys it names.

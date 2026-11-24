@@ -5,6 +5,9 @@ internal enum DecodeClass
     Ok,
     Unreadable,
 
+    /// <summary>A cached null: no value, but the entry exists.</summary>
+    Null,
+
     /// <summary>Not promoted: it is served from where it is.</summary>
     TooLarge,
 

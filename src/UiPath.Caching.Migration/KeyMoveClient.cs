@@ -45,6 +45,8 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
 
     public ILibraryBatch<T>? PlainBatch => Moving ? null : _p.Plain.PlainBatch;
 
+    internal KeyMoveClientParts<T> Parts => _p;
+
     internal MoveRetrySet Retries => _retries;
 
     internal UnmarkQueue Unmarks => _node.Unmarks;

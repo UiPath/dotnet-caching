@@ -9,12 +9,14 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 {
     private readonly List<string> _prepared = [];
     private readonly EpochGate _gate = new();
+    private readonly string? _nativePrefix;
     private long _events;
     private long _ep;
     private long? _limit;
 
-    private KeyMoveKit(ConnectionMultiplexer mux, bool useScripts, bool noOrigin, TimeProvider clock, KeyMoveOptions options, string unique, Version version, Func<KeyMoveKit, IMoveSide<Item>>? source, Func<IDatabase, IDatabase>? interceptDb)
+    private KeyMoveKit(ConnectionMultiplexer mux, bool useScripts, bool noOrigin, TimeProvider clock, KeyMoveOptions options, string unique, Version version, Func<KeyMoveKit, IMoveSide<Item>>? source, Func<IDatabase, IDatabase>? interceptDb, IKeyMoveCodec<Item>? inPlace, IKeyMoveCodec<Item>? native, string? nativePrefix)
     {
+        _nativePrefix = nativePrefix;
         Mux = mux;
         Unique = unique;
         Group = "g" + unique;
@@ -27,7 +29,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         Plane = new StubPlane(Group, _gate) { Data = interceptDb is null ? SideData : Intercepted(SideData, interceptDb, useScripts, version) };
         Plain = new PlainPathStub();
         Clock = clock;
-        Client = new KeyMoveClient<Item>(new KeyMoveClientParts<Item>(Group, Cid, noOrigin, L, N, ItemCodec.Instance, ItemCodec.Instance, Plain, Plane, clock, () => TimeSpan.FromSeconds(30))
+        Client = new KeyMoveClient<Item>(new KeyMoveClientParts<Item>(Group, Cid, noOrigin, L, N, inPlace ?? ItemCodec.Instance, native ?? ItemCodec.Instance, Plain, Plane, clock, () => TimeSpan.FromSeconds(30))
         {
             Options = options,
             Schedule = Schedule,
@@ -79,7 +81,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 
     public long Ep => _ep;
 
-    public static async Task<KeyMoveKit> CreateAsync(RedisFixture fixture, bool useScripts = true, bool noOrigin = false, bool cluster = false, TimeProvider? clock = null, KeyMoveOptions? options = null, Func<KeyMoveKit, IMoveSide<Item>>? source = null, Func<IDatabase, IDatabase>? interceptDb = null, int? database = null)
+    public static async Task<KeyMoveKit> CreateAsync(RedisFixture fixture, bool useScripts = true, bool noOrigin = false, bool cluster = false, TimeProvider? clock = null, KeyMoveOptions? options = null, Func<KeyMoveKit, IMoveSide<Item>>? source = null, Func<IDatabase, IDatabase>? interceptDb = null, int? database = null, IKeyMoveCodec<Item>? inPlace = null, IKeyMoveCodec<Item>? native = null, string? nativePrefix = null)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 and REDIS_CONNECTION_STRING to run.");
         var connection = fixture.ConnectionString;
@@ -91,13 +93,21 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 
         var mux = await ConnectionMultiplexer.ConnectAsync(connection + ",allowAdmin=true" + (database is { } db ? $",defaultDatabase={db}" : string.Empty));
         var version = mux.GetServers().Where(s => !s.IsReplica).Select(s => s.Version).Min() ?? new Version(7, 0);
-        return new KeyMoveKit(mux, useScripts, noOrigin, clock ?? TimeProvider.System, options ?? new KeyMoveOptions(), Guid.NewGuid().ToString("N")[..10], version, source, interceptDb);
+        return new KeyMoveKit(mux, useScripts, noOrigin, clock ?? TimeProvider.System, options ?? new KeyMoveOptions(), Guid.NewGuid().ToString("N")[..10], version, source, interceptDb, inPlace, native, nativePrefix);
     }
 
     public string L(string key) => $"km4:{Unique}:L:{key}";
 
     // A cluster needs a tag in every native key, so its fence and control record sit in its slot.
-    public string N(string key) => Names.Cluster ? $"km4:{{{Unique}.{key}}}:N" : $"km4:{Unique}:N:{key}";
+    public string N(string key)
+    {
+        if (_nativePrefix is { } prefix)
+        {
+            return prefix + key;
+        }
+
+        return Names.Cluster ? $"km4:{{{Unique}.{key}}}:N" : $"km4:{Unique}:N:{key}";
+    }
 
     public NegativeHints Hints() => Client.Hints;
 

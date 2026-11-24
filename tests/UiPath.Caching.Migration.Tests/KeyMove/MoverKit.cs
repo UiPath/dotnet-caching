@@ -13,7 +13,7 @@ internal sealed class MoverKit : IAsyncDisposable
     private readonly string _nHead;
     private readonly string _nTail;
 
-    private MoverKit(KeyMoveKit kit, bool twoOwners, bool hashCache, bool noOrigin, TimeSpan? groupMin, TimeSpan? cacheMin, string? excluded, ISupersessionHandler? supersession, Func<MoverKit, IMoveSide<Item>>? source, ISchedulePoint? schedule, KeyMoveOptions? moveOptions)
+    private MoverKit(KeyMoveKit kit, bool twoOwners, bool hashCache, bool noOrigin, TimeSpan? groupMin, TimeSpan? cacheMin, string? excluded, ISupersessionHandler? supersession, Func<MoverKit, IMoveSide<Item>>? source, ISchedulePoint? schedule, KeyMoveOptions? moveOptions, IKeyMoveCodec<Item>? nativeCodec)
     {
         Kit = kit;
         _lPrefix = kit.L(string.Empty);
@@ -33,7 +33,7 @@ internal sealed class MoverKit : IAsyncDisposable
         }
 
         Space = new RegisteredKeySpace(caches, _nHead, null, excluded is null ? null : [excluded], groupMin is { } g ? new Dictionary<string, TimeSpan> { [kit.Group] = g } : null);
-        var parts = new KeyMoveClientParts<Item>(kit.Group, kit.Cid, noOrigin, kit.L, kit.N, ItemCodec.Instance, ItemCodec.Instance, kit.Plain, kit.Plane, kit.Clock, () => TimeSpan.FromSeconds(30))
+        var parts = new KeyMoveClientParts<Item>(kit.Group, kit.Cid, noOrigin, kit.L, kit.N, ItemCodec.Instance, nativeCodec ?? ItemCodec.Instance, kit.Plain, kit.Plane, kit.Clock, () => TimeSpan.FromSeconds(30))
         {
             Options = moveOptions ?? new KeyMoveOptions(),
             Source = source?.Invoke(this),
@@ -70,12 +70,13 @@ internal sealed class MoverKit : IAsyncDisposable
         int? database = null,
         ISchedulePoint? schedule = null,
         TimeProvider? clock = null,
-        KeyMoveOptions? moveOptions = null)
+        KeyMoveOptions? moveOptions = null,
+        IKeyMoveCodec<Item>? nativeCodec = null)
     {
         var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: noOrigin, cluster: cluster, interceptDb: interceptDb, database: database, clock: clock);
         try
         {
-            var made = new MoverKit(kit, twoOwners, hashCache, noOrigin, groupMin, cacheMin, excluded?.Replace("{U}", kit.Unique, StringComparison.Ordinal), supersession, source, schedule, moveOptions);
+            var made = new MoverKit(kit, twoOwners, hashCache, noOrigin, groupMin, cacheMin, excluded?.Replace("{U}", kit.Unique, StringComparison.Ordinal), supersession, source, schedule, moveOptions, nativeCodec);
             return made;
         }
         catch
