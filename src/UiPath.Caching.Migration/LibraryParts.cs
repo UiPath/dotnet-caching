@@ -29,7 +29,8 @@ internal sealed record LibraryParts(
     MoveTargets? Movers = null,
     IMigrationHashCache? HashStore = null,
     IHashCache? HashCache = null,
-    ISharedHashTier? HashTier = null)
+    ISharedHashTier? HashTier = null,
+    DryRunService? DryRuns = null)
 {
     public IReadOnlyList<IHostedService> Started { get; } = Started ?? [];
 

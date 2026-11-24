@@ -15,6 +15,7 @@ public class ScanRecordingServer : DispatchProxy
     private readonly List<string> _cursors = [];
     private IServer _inner = default!;
     private EndPoint? _pose;
+    private bool _disconnected;
 
     public bool Fail { get; set; }
 
@@ -23,6 +24,12 @@ public class ScanRecordingServer : DispatchProxy
 
     /// <summary>When set, INFO names this run id instead of the server's own.</summary>
     public string? RunId { get; set; }
+
+    public Exception? ScanFailure { get; set; }
+
+    public bool DisconnectOnFailure { get; set; }
+
+    public Func<string, RedisResult>? ScanReply { get; set; }
 
     public int FailAfter { get; set; } = int.MaxValue;
 
@@ -53,6 +60,11 @@ public class ScanRecordingServer : DispatchProxy
             return _pose;
         }
 
+        if (_disconnected && targetMethod!.Name == "get_IsConnected")
+        {
+            return false;
+        }
+
         if (targetMethod!.Name == "InfoAsync" && (Info != InfoFault.None || RunId is not null))
         {
             return Info switch
@@ -63,19 +75,9 @@ public class ScanRecordingServer : DispatchProxy
             };
         }
 
-        if (targetMethod.Name == "ExecuteAsync" && args is [int, "SCAN", ICollection<object> scan, ..])
+        if (targetMethod.Name == "ExecuteAsync" && args is [int, "SCAN", ICollection<object> scan, ..] && RecordScan(scan) is { } recorded)
         {
-            int seen;
-            lock (_gate)
-            {
-                _cursors.Add((string)scan.First());
-                seen = _cursors.Count;
-            }
-
-            if (Fail || seen > FailAfter)
-            {
-                throw new RedisException("The scan failed.");
-            }
+            return Task.FromResult(recorded);
         }
 
         try
@@ -86,5 +88,24 @@ public class ScanRecordingServer : DispatchProxy
         {
             throw ex.InnerException;
         }
+    }
+
+    private RedisResult? RecordScan(ICollection<object> scan)
+    {
+        var cursor = (string)scan.First();
+        int seen;
+        lock (_gate)
+        {
+            _cursors.Add(cursor);
+            seen = _cursors.Count;
+        }
+
+        if (Fail || seen > FailAfter)
+        {
+            _disconnected = DisconnectOnFailure;
+            throw ScanFailure ?? new RedisException("The scan failed.");
+        }
+
+        return ScanReply?.Invoke(cursor);
     }
 }

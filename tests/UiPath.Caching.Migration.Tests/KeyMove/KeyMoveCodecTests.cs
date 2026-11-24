@@ -20,6 +20,7 @@ namespace UiPath.Caching.Migration.Tests.KeyMove;
 public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
 {
     // The application's key strategy writes a native key as the app name, the string keyspace and the caller key.
+    private const string RedisFixtureReason = "Set RUN_REDIS_INTEGRATION_TESTS=1 to run.";
     private const string Library = "kmk:";
     private const string AppPrefix = Library + RedisKeyspaces.String + ":";
 
@@ -43,6 +44,10 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
     private IDatabase Db => _redis!.GetDatabase();
 
     private string Group => $"kc{_unique}";
+
+    private string StateKey => $"{Library}mg:{{{Group}}}:state";
+
+    private string ReportKey => $"{Library}mg:{{{Group}}}:dry";
 
     private string InPlacePrefix => $"kcl{RunTag}{_unique}:";
 
@@ -375,6 +380,150 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         supplied.Parts.Native.Should().BeSameAs(ItemCodec.Instance);
     }
 
+    [Fact]
+    public async Task A_dry_run_stores_its_stamp_and_report_and_a_reverse_run_stores_only_its_report()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var (provider, _, _) = await HostAsync(InPlace.Envelope, rate: new Unpaced());
+        var router = (Router)provider.GetRequiredService<IRouter>();
+        (await router.KeyMove!.Runtime!.Commands.InitAsync(Group, ["items"], Ct)).Should().NotBeNull();
+        foreach (var key in new[] { "k1", "k2", "k3" })
+        {
+            await Db.StringSetAsync(L(key), OldClientBytes(InPlace.Envelope, new Item(key)), TimeSpan.FromDays(1));
+        }
+
+        var started = router.Clock.GetUtcNow();
+        var report = await router.DryRunAsync(Group, cancellationToken: Ct);
+        var ended = router.Clock.GetUtcNow();
+
+        var stamp = DryRunStamp.TryParse((await Db.HashGetAsync(StateKey, StateFields.DryRun)).ToString());
+        stamp.Should().NotBeNull();
+        stamp.EstimatedBytes.Should().Be(report.EstimatedNativeBytes).And.BeGreaterThan(0);
+        stamp.Summary.Should().Be(report.Summary()).And.Contain("movable=3");
+        stamp.At.Should().BeOnOrAfter(DateTimeOffset.FromUnixTimeMilliseconds(started.ToUnixTimeMilliseconds())).And.BeOnOrBefore(ended);
+        var stored = await Db.HashGetAllAsync(ReportKey);
+        stored.Select(e => e.Name.ToString()).Should().Contain(["units", "scanned", "estimated_native_bytes", "items:movable", "items:size:0", "items:sampled"]);
+        stored.Single(e => e.Name == "items:movable").Value.ToString().Should().Be("3");
+        (await Db.KeyTimeToLiveAsync(ReportKey)).Should().BeCloseTo(new StageDriverOptions().DryRunMaxAge, TimeSpan.FromMinutes(1));
+
+        await Db.StringSetAsync(N("n1"), "x", Life);
+        var reverse = await router.DryRunAsync(Group, "rev", Ct);
+
+        reverse.Caches["items"].Movable.Should().Be(1);
+        var reverseFields = (await Db.HashGetAllAsync(ReportKey + ":rev")).ToDictionary(e => e.Name.ToString(), e => e.Value.ToString());
+        reverseFields.Should().Contain("items:movable", "1");
+        reverseFields.Should().NotContainKeys("estimated_native_bytes", "estimated_duration_ms");
+        (await Db.HashGetAsync(StateKey, StateFields.DryRun)).ToString().Should().Be(stamp.Encode());
+    }
+
+    [Fact]
+    public async Task A_dry_run_of_a_group_without_state_or_of_an_unknown_group_is_refused()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var (provider, _, _) = await HostAsync(InPlace.Envelope, rate: new Unpaced());
+        var router = (Router)provider.GetRequiredService<IRouter>();
+
+        var noState = () => router.DryRunAsync(Group, cancellationToken: Ct);
+        var unknown = () => router.DryRunAsync("nobody", cancellationToken: Ct);
+        var direction = () => router.DryRunAsync(Group, "sideways", Ct);
+
+        (await noState.Should().ThrowAsync<InvalidOperationException>()).WithMessage("*Init it first*");
+        await unknown.Should().ThrowAsync<ArgumentException>();
+        await direction.Should().ThrowAsync<ArgumentException>();
+        (await Db.KeyExistsAsync(ReportKey)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_missing_store_fails_before_starting_the_scan()
+    {
+        Assert.SkipUnless(fixture.Enabled, RedisFixtureReason);
+        var (provider, _, _) = await HostAsync(
+            InPlace.Envelope,
+            rate: new Unpaced(),
+            configureServices: services => services.AddSingleton<IScanUnits, UnexpectedScan>());
+        var router = (Router)provider.GetRequiredService<IRouter>();
+        await router.KeyMove!.StopAsync();
+
+        var run = () => router.DryRunAsync(Group, cancellationToken: Ct);
+
+        (await run.Should().ThrowAsync<InvalidOperationException>()).WithMessage("The key move node is not running.");
+    }
+
+    [Fact]
+    public async Task Stopping_the_router_cancels_a_dry_run_waiting_to_scan()
+    {
+        Assert.SkipUnless(fixture.Enabled, RedisFixtureReason);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rate = new Unpaced(async token =>
+        {
+            reached.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, TimeProvider.System, token);
+            return null;
+        });
+        var router = await ReadyDryRunRouterAsync(rate);
+        using var runStop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var run = router.DryRunAsync(Group, cancellationToken: runStop.Token);
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(3), router.Clock, Ct);
+            await router.StopAsync(Ct);
+
+            var result = () => run.WaitAsync(TimeSpan.FromSeconds(3), router.Clock, Ct);
+            await result.Should().ThrowAsync<OperationCanceledException>();
+            (await Db.KeyExistsAsync(ReportKey)).Should().BeFalse();
+        }
+        finally
+        {
+            await runStop.CancelAsync();
+        }
+    }
+
+    [Fact]
+    public async Task A_state_id_changed_during_the_scan_refuses_the_report_and_stamp()
+    {
+        Assert.SkipUnless(fixture.Enabled, RedisFixtureReason);
+        var replacement = MoveScripts.NewNonce();
+        var router = await ReadyDryRunRouterAsync(new Unpaced(async _ =>
+        {
+            await Db.HashSetAsync(StateKey, StateFields.Id, replacement);
+            return null;
+        }));
+        await Db.StringSetAsync(L("key"), OldClientBytes(InPlace.Envelope, new Item("value")), Life);
+
+        var run = () => router.DryRunAsync(Group, cancellationToken: Ct);
+
+        (await run.Should().ThrowAsync<InvalidOperationException>()).WithMessage("The group's key move state changed during the dry run.");
+        (await Db.KeyExistsAsync(ReportKey)).Should().BeFalse();
+        (await Db.HashExistsAsync(StateKey, StateFields.DryRun)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task An_unavailable_key_still_stores_a_report_without_a_stamp()
+    {
+        Assert.SkipUnless(fixture.Enabled, RedisFixtureReason);
+        var router = await ReadyDryRunRouterAsync(new Unpaced());
+        router.Library!.Movers!.Add(Group, new UnavailableTarget());
+        await Db.StringSetAsync(L("key"), "value", Life);
+
+        var report = await router.DryRunAsync(Group, cancellationToken: Ct);
+
+        report.Caches["items"].Counts.Should().Contain(DryRunClasses.Unavailable, 1);
+        (await Db.HashGetAsync(ReportKey, "items:unavailable")).ToString().Should().Be("1");
+        (await Db.HashExistsAsync(StateKey, StateFields.DryRun)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_dry_run_uses_the_configured_starting_rate_in_its_estimate()
+    {
+        Assert.SkipUnless(fixture.Enabled, RedisFixtureReason);
+        var router = await ReadyDryRunRouterAsync(new Unpaced(), services => services.Configure<KeyMoveMoverOptions>(options => options.StartKeysPerSecond = 2));
+        await Db.StringSetAsync(L("key"), OldClientBytes(InPlace.Envelope, new Item("value")), TimeSpan.FromDays(1));
+
+        var report = await router.DryRunAsync(Group, cancellationToken: Ct);
+
+        report.EstimatedDuration.Should().Be(TimeSpan.FromMilliseconds(500));
+    }
+
     // Without an envelope the router's library keeps its own format, the library's JSON.
     private static byte[] OldClientBytes(InPlace inPlace, Item value) => inPlace switch
     {
@@ -390,6 +539,14 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         _ => router,
     };
 
+    private async Task<Router> ReadyDryRunRouterAsync(IMoveRate rate, Action<IServiceCollection>? configureServices = null)
+    {
+        var (provider, _, _) = await HostAsync(InPlace.Envelope, rate: rate, configureServices: configureServices);
+        var router = (Router)provider.GetRequiredService<IRouter>();
+        (await router.KeyMove!.Runtime!.Commands.InitAsync(Group, ["items"], Ct)).Should().NotBeNull();
+        return router;
+    }
+
     // What LibraryPathClient does for a set: the router stack's own cache writes the key verbatim with the default policy.
     private async Task WriteOnLibraryPathAsync(ServiceProvider provider, string key, Item value)
     {
@@ -403,7 +560,7 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
 
     private string AppKey(string key) => $"{_unique}:N:{key}";
 
-    private async Task<(ServiceProvider Provider, RoutedCache<Item> Cache, KeyMoveClient<Item> Client)> HostAsync(InPlace inPlace, bool messagePackDefault = false, bool supplied = false, bool cacheNulls = false)
+    private async Task<(ServiceProvider Provider, RoutedCache<Item> Cache, KeyMoveClient<Item> Client)> HostAsync(InPlace inPlace, bool messagePackDefault = false, bool supplied = false, bool cacheNulls = false, IMoveRate? rate = null, Action<IServiceCollection>? configureServices = null)
     {
         var settings = new Dictionary<string, string?>
         {
@@ -456,6 +613,12 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
             };
         }
 
+        if (rate is not null)
+        {
+            services.AddSingleton(rate);
+        }
+
+        configureServices?.Invoke(services);
         services.AddCachingRouter(
             configuration,
             router => WithEnvelope(router.UseLibraryWhen(_ => true), inPlace)
@@ -491,6 +654,44 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         var redisOptions = provider.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(RouterServiceCollectionExtensions.StackName).Value;
         _entries.Add((RouterServiceCollectionExtensions.NodeListKey(cacheOptions, redisOptions), router.Advertiser!.Field));
         return (provider, cache, client);
+    }
+
+    // The real rate pauses on the health of the test server; a dry run only needs it to let the scan through.
+    private sealed class UnexpectedScan : IScanUnits
+    {
+        public Task<IReadOnlyList<ScanUnit>> ListAsync(CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("The dry run tried to list the scan units.");
+    }
+
+    private sealed class UnavailableTarget : IMoveTarget
+    {
+        public string CacheId => "items";
+
+        public bool NoOrigin => false;
+
+        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new DryRunProbe(DryRunClasses.Unavailable, null, null));
+
+        public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class Unpaced(Func<CancellationToken, ValueTask<string?>>? checkPause = null) : IMoveRate
+    {
+        public ValueTask<string?> PauseReasonAsync(string unit, CancellationToken cancellationToken) =>
+            checkPause is null ? ValueTask.FromResult<string?>(null) : checkPause(cancellationToken);
+
+        public TimeSpan Reserve(string unit, int keys, long bytes) => TimeSpan.Zero;
+
+        public void Owe(string unit, long bytes)
+        {
+        }
+
+        public long TakeDebt(string unit) => 0;
+
+        public void Observed(string unit, MoveResult result, TimeSpan elapsed)
+        {
+        }
     }
 
     private sealed class Stage : IMigrationStageSource
