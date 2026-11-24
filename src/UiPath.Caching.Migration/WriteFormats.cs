@@ -1,7 +1,7 @@
 namespace UiPath.Caching.Migration;
 
 /// <summary>The write formats a group can ask for and the per-call policy that carries each to the library.</summary>
-/// <remarks>The envelope policy names <c>json</c>, which for a header-free envelope is the proxy's own bytes; the MessagePack policy names the serializer the application registered under that name.</remarks>
+/// <remarks>The envelope policy names <c>json</c>, which for a header-free envelope is the proxy's own bytes, and without an envelope the library's own JSON; the MessagePack policy names the serializer the application registered under that name.</remarks>
 internal static class WriteFormats
 {
     public const string MessagePack = "messagepack";

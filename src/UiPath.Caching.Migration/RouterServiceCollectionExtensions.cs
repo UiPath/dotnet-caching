@@ -32,10 +32,14 @@ public static class RouterServiceCollectionExtensions
         var builder = new RouterBuilder();
         configure(builder);
         var predicate = builder.LibraryPredicate ?? throw new InvalidOperationException("The router needs UseLibraryWhen: the predicate that picks the path of a group.");
-        var envelope = builder.Envelope ?? throw new InvalidOperationException("The router needs UseEnvelope: the serializer of the older client's value format.");
         if (builder.Registrations.Count == 0)
         {
             throw new InvalidOperationException("The router has no registered cache.");
+        }
+
+        if (builder.Bridge is not null && builder.Envelope is null)
+        {
+            throw new InvalidOperationException("UseChannelBridge needs UseEnvelope: the bridge carries the older client's invalidations, and without an envelope the in-place keys hold the library's own format.");
         }
 
         if (builder.WriteFormatPredicate is not null && builder.PinPredicate is null)
@@ -51,7 +55,7 @@ public static class RouterServiceCollectionExtensions
         builder.BuildKeyMove();
         var processId = builder.NodeIdentity ?? $"{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}";
         var gate = builder.PinPredicate is null ? null : new PinFormatGate();
-        RegisterLibraryStack(services, configuration, sectionName, builder, envelope, processId, gate);
+        RegisterLibraryStack(services, configuration, sectionName, builder, processId, gate);
 
         var section = configuration.GetSection(sectionName);
         services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId, gate, section));
@@ -138,7 +142,7 @@ public static class RouterServiceCollectionExtensions
         }
     }
 
-    private static void RegisterLibraryStack(IServiceCollection services, IConfiguration configuration, string sectionName, RouterBuilder builder, ISerializerProxy<byte[]> envelope, string processId, PinFormatGate? gate)
+    private static void RegisterLibraryStack(IServiceCollection services, IConfiguration configuration, string sectionName, RouterBuilder builder, string processId, PinFormatGate? gate)
     {
         var registered = services.Count;
         services
@@ -165,7 +169,11 @@ public static class RouterServiceCollectionExtensions
                 sectionName,
                 (stack, _) =>
                 {
-                    AddEnvelope(stack, envelope);
+                    if (builder.Envelope is { } envelope)
+                    {
+                        AddEnvelope(stack, envelope);
+                    }
+
                     if (gate is not null)
                     {
                         stack.AddSingleton<IFormatWriteGate>(gate);
@@ -177,6 +185,7 @@ public static class RouterServiceCollectionExtensions
             .Expose<ICacheEventFactory>()
             .Expose<IOptions<CacheOptions>>()
             .Expose<IOptions<RedisCacheOptions>>()
+            .Expose<ISerializerProxy<byte[]>>()
             .Expose(stack => new StackServices([.. stack.GetServices<IHostedService>()]));
 
         RemoveStackHostedServices(services, registered);

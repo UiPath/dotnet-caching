@@ -47,7 +47,7 @@ internal static class RegistrationValidator
         // The router's provider is Redis-only, passes absolute deadlines and awaits its writes, so jitter, fail-safe and background writes never reach it.
         if (cacheOptions.DefaultCachePolicy?.Serializer is not null)
         {
-            violations.Add($"{nameof(CacheOptions.DefaultCachePolicy)}.{nameof(CachePolicy.Serializer)} is set: values are written with the source's envelope only.");
+            violations.Add($"{nameof(CacheOptions.DefaultCachePolicy)}.{nameof(CachePolicy.Serializer)} is set: values are written in the source's format only (its envelope, or the library's own JSON without one).");
         }
 
         return violations;

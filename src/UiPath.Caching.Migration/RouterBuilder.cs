@@ -25,6 +25,8 @@ public sealed class RouterBuilder
 
     internal ISerializerProxy<byte[]>? Envelope { get; private set; }
 
+    internal bool InPlaceKeepsSystemFields => Envelope is null;
+
     internal Func<string, string?>? WriteFormatPredicate { get; private set; }
 
     internal Action<ICachingBuilder>? ValueSerializers { get; private set; }
@@ -157,7 +159,7 @@ public sealed class RouterBuilder
         return this;
     }
 
-    /// <summary>The serializer of the older client's value envelope; it must never start a value with a format header byte, and a write that does fails.</summary>
+    /// <summary>Optional: the serializer of the older client's value envelope, which the in-place keys hold; without it they hold the library's own format. It must never start a value with a format header byte, and a write that does fails.</summary>
     public RouterBuilder UseEnvelope(ISerializerProxy<byte[]> envelope)
     {
         Envelope = envelope ?? throw new ArgumentNullException(nameof(envelope));
@@ -174,7 +176,7 @@ public sealed class RouterBuilder
 
     /// <summary>A live setting read on every library write: the group's value format, <c>"messagepack"</c>, <c>"json"</c> or null for <c>"json"</c>.</summary>
     /// <remarks>
-    /// <c>"json"</c> writes the older client's envelope. <c>"messagepack"</c> writes MessagePack only while the group is pinned, acknowledged and switched, every node reads it, and the gate
+    /// <c>"json"</c> writes the older client's envelope, or the library's own JSON without one. <c>"messagepack"</c> writes MessagePack only while the group is pinned, acknowledged and switched, every node reads it, and the gate
     /// over the groups that ask for it is open; until then the group writes the envelope. Setting it back to <c>"json"</c> downgrades at once, and the group never returns to the older client.
     /// An answer that throws or is not one of these names writes the envelope. Needs <see cref="UsePinWhen"/> and <see cref="UseValueSerializers"/>.
     /// </remarks>

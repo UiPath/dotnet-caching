@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
@@ -52,6 +53,30 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         report.Passed.Should().BeTrue(report.ToString());
         report.Samples.Should().Be(4);
         (await _redis!.GetDatabase().KeyExistsAsync($"n:{_cacheName},c:one")).Should().BeFalse("the check deletes its sample keys");
+    }
+
+    [Fact]
+    public async Task Without_an_envelope_a_source_in_the_library_format_conforms()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var provider = Provider(null, source: new JsonSource(_redis!, _cacheName));
+
+        var report = await RouterConformance.CheckAsync(provider, _cacheName, Samples, Ct);
+
+        report.Passed.Should().BeTrue(report.ToString());
+        report.Samples.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task Without_an_envelope_a_source_in_another_format_is_reported()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var provider = Provider(null);
+
+        var report = await RouterConformance.CheckAsync(provider, _cacheName, Samples, Ct);
+
+        report.Passed.Should().BeFalse();
+        report.Failures.Should().Contain(f => f.Contains("different bytes", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -148,7 +173,7 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         }
     }
 
-    private ServiceProvider Provider(ISerializerProxy<byte[]> envelope, bool cacheNulls = false, Action<IServiceCollection>? after = null)
+    private ServiceProvider Provider(ISerializerProxy<byte[]>? envelope, bool cacheNulls = false, Action<IServiceCollection>? after = null, ISourceCache<List<long>>? source = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -158,17 +183,49 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
             ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
             ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
         }).Build();
-        var source = new LegacySource(_redis!, _cacheName);
+        var legacy = new LegacySource(_redis!, _cacheName);
+        source ??= legacy;
         var services = new ServiceCollection().AddLogging();
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
-        services.AddCachingRouter(configuration, router => router
-            .UseLibraryWhen(_ => true)
-            .UseEnvelope(envelope)
-            .Add(new RouterCacheRegistration<List<long>> { Name = _cacheName, Group = "cfg", Source = source, RedisKey = source.RedisKey, CacheNulls = cacheNulls }));
+        services.AddCachingRouter(configuration, router =>
+        {
+            router.UseLibraryWhen(_ => true);
+            if (envelope is not null)
+            {
+                router.UseEnvelope(envelope);
+            }
+
+            router.Add(new RouterCacheRegistration<List<long>> { Name = _cacheName, Group = "cfg", Source = source, RedisKey = legacy.RedisKey, CacheNulls = cacheNulls });
+        });
         after?.Invoke(services);
         var provider = services.BuildServiceProvider();
         _ = provider.GetRequiredService<IRouter>();
         return provider;
+    }
+
+    /// <summary>A source that keeps the value as the library's own JSON, as a move between library formats has it.</summary>
+    private sealed class JsonSource(IConnectionMultiplexer redis, string cacheName) : ISourceCache<List<long>>
+    {
+        private readonly LegacySource _inner = new(redis, cacheName);
+
+        public async ValueTask<SourceRead<List<long>>> GetAsync(string key, CancellationToken cancellationToken)
+        {
+            var raw = await redis.GetDatabase().StringGetAsync(_inner.RedisKey(key)).ConfigureAwait(false);
+            return raw.IsNull ? SourceRead<List<long>>.Absent : SourceRead<List<long>>.Found(JsonSerializer.Deserialize<List<long>>((byte[])raw!)!);
+        }
+
+        public async ValueTask<WriteResult> SetAsync(string key, List<long> value, CacheExpiry expiry, CancellationToken cancellationToken)
+        {
+            var ttl = expiry.Deadline is { } deadline ? deadline - DateTimeOffset.UtcNow : TimeSpan.FromMinutes(10);
+            await redis.GetDatabase().StringSetAsync(_inner.RedisKey(key), JsonSerializer.SerializeToUtf8Bytes(value), ttl).ConfigureAwait(false);
+            return WriteOutcome.Committed;
+        }
+
+        public ValueTask<AddResult> TryAddAsync(string key, List<long> value, CacheExpiry expiry, CancellationToken cancellationToken) => _inner.TryAddAsync(key, value, expiry, cancellationToken);
+
+        public ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken) => _inner.RemoveAsync(key, cancellationToken);
+
+        public ValueTask ClearAsync(CancellationToken cancellationToken) => _inner.ClearAsync(cancellationToken);
     }
 
     /// <summary>Writes one byte more than the source's envelope, as a library default leaking into the envelope would.</summary>
