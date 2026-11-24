@@ -333,6 +333,8 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
 
         public bool NoOrigin => inner.NoOrigin;
 
+        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
+
         public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
         {
             if (Interlocked.Increment(ref _seen) == crashAt)
@@ -357,6 +359,8 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         public string CacheId => inner.CacheId;
 
         public bool NoOrigin => inner.NoOrigin;
+
+        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
         public void Release() => _released.TrySetResult();
 

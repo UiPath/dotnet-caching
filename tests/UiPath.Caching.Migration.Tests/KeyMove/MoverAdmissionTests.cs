@@ -337,6 +337,8 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
 
         public bool NoOrigin => inner.NoOrigin;
 
+        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
+
         public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken) => inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
     }
 }

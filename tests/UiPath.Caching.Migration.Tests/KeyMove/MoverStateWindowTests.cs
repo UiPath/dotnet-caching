@@ -124,6 +124,8 @@ public sealed class MoverStateWindowTests(RedisFixture fixture)
 
         public bool NoOrigin => inner.NoOrigin;
 
+        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
+
         public void Release() => _released.TrySetResult();
 
         public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)

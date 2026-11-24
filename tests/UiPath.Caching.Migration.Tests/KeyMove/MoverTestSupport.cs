@@ -23,6 +23,8 @@ internal sealed class CountingTarget(IMoveTarget inner) : IMoveTarget
 
     public int Moved(string key) => _moved.GetValueOrDefault(key);
 
+    public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
+
     public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
     {
         var n = _calls.AddOrUpdate(key, 1, (_, c) => c + 1);
@@ -94,6 +96,8 @@ internal sealed class DoneTarget(IMoveTarget inner) : IMoveTarget
     public string CacheId => inner.CacheId;
 
     public bool NoOrigin => inner.NoOrigin;
+
+    public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
     public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
     {

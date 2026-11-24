@@ -155,6 +155,30 @@ internal sealed class KeyPromotion<T>
         return lost ?? new PromotionResult<T>(drained ? PromotionKind.Drained : PromotionKind.Promoted, served, Bytes: encoded.Length);
     }
 
+    /// <summary>Classifies <paramref name="key"/> as the mover would meet it, reading L and asking N whether it holds the key, and writes and counts nothing.</summary>
+    public async ValueTask<DryRunProbe> ProbeAsync(string key, MoverFlavor mover, bool decode, CancellationToken cancellationToken)
+    {
+        var snap = await SourceSnapAsync(key, cancellationToken).ConfigureAwait(false);
+        if (snap.Kind != ReadOutcome.Found)
+        {
+            return new DryRunProbe(UnfoundClass(snap.Kind), 0, null);
+        }
+
+        var bytes = snap.Bytes?.Length ?? 0;
+        var exists = await ExistsAsync(_p.NativeKey(key), SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false);
+        if (exists != false)
+        {
+            return new DryRunProbe(exists is null ? DryRunClasses.Unavailable : DryRunClasses.Duplicate, bytes, null);
+        }
+
+        if (!decode)
+        {
+            return new DryRunProbe(IsShort(snap, mover) ? DryRunClasses.ShortTtl : DryRunClasses.Movable, bytes, null);
+        }
+
+        return await ProbeDecodedAsync(key, mover, snap, cancellationToken).ConfigureAwait(false);
+    }
+
     // Null for an always-owned caller, so the read-through's operations run exactly as they did.
     internal static Func<bool>? StillHeld(IMoveOwnership ownership) => ReferenceEquals(ownership, AlwaysOwned.Instance) ? null : () => ownership.StillHeld;
 
@@ -169,6 +193,26 @@ internal sealed class KeyPromotion<T>
             return new Decoded<T>(DecodeClass.Unreadable, null);
         }
     }
+
+    private static bool IsShort(KeyMoveSnap snap, MoverFlavor mover) => snap.TtlMs >= 0 && snap.TtlMs < mover.MinTtl.TotalMilliseconds;
+
+    private static string UnfoundClass(ReadOutcome kind) => kind switch
+    {
+        ReadOutcome.Absent => DryRunClasses.Absent,
+        ReadOutcome.Unreadable => DryRunClasses.Unreadable,
+        _ => DryRunClasses.Unavailable,
+    };
+
+    private static string SkippedClass(PromotionKind kind) => kind switch
+    {
+        PromotionKind.Expired => DryRunClasses.Expired,
+        PromotionKind.TooLarge => DryRunClasses.TooLarge,
+        PromotionKind.NullNotCached => DryRunClasses.NullNotCached,
+        PromotionKind.Unreadable => DryRunClasses.Unreadable,
+        PromotionKind.Unmappable => DryRunClasses.Unmappable,
+        PromotionKind.ShortTtl => DryRunClasses.ShortTtl,
+        _ => DryRunClasses.Unavailable,
+    };
 
     private async ValueTask<(Capture Capture, PromotionResult<T>? Refused)> CaptureAsync(PromotionRun run, CancellationToken cancellationToken)
     {
@@ -290,7 +334,11 @@ internal sealed class KeyPromotion<T>
 
     private async ValueTask<PromotionResult<T>> UnreadableSourceAsync(PromotionRun run, KeyMoveSnap snap, CancellationToken cancellationToken)
     {
-        Count("unreadable_source");
+        if (!run.Quiet)
+        {
+            Count("unreadable_source");
+        }
+
         var unreadable = PromotionResult<T>.Of(PromotionKind.Unreadable, ReadOutcome.Unreadable);
 
         // The same drop as for a readable value above the cap: the inventory judges by length alone, so a value it calls droppable must go here too.
@@ -300,8 +348,9 @@ internal sealed class KeyPromotion<T>
     }
 
     // The source copy is gone: what the run ends with, or that the owner lost it first.
+    // A quiet run only reads, so it never drops L.
     private async ValueTask<PromotionResult<T>> DroppedAsync(PromotionRun run, KeyMoveSnap snap, PromotionResult<T> ended, CancellationToken cancellationToken) =>
-        await DropSourceAsync(run, snap, cancellationToken).ConfigureAwait(false) ?? ended;
+        run.Quiet ? ended : await DropSourceAsync(run, snap, cancellationToken).ConfigureAwait(false) ?? ended;
 
     private PromotionResult<T>? Unmoved(PromotionRun run, KeyMoveSnap snap, DecodeClass decoded, PathRead<T> served)
     {
@@ -316,7 +365,7 @@ internal sealed class KeyPromotion<T>
         }
 
         // A key with a count of life below the minimum is left to its next read; none is never short.
-        if (run.Mover is { } mover && snap.TtlMs >= 0 && snap.TtlMs < mover.MinTtl.TotalMilliseconds)
+        if (run.Mover is { } mover && IsShort(snap, mover))
         {
             return PromotionResult<T>.Of(PromotionKind.ShortTtl, served);
         }
@@ -433,6 +482,28 @@ internal sealed class KeyPromotion<T>
         return null;
     }
 
+    private async ValueTask<DryRunProbe> ProbeDecodedAsync(string key, MoverFlavor mover, KeyMoveSnap snap, CancellationToken cancellationToken)
+    {
+        // Only the mover and the key of the run are read on this path: it never fences, publishes or deletes.
+        var run = new PromotionRun(key, _p.NativeKey(key), default, mover, null!, null!, 0, AlwaysOwned.Instance, Quiet: true);
+        var bytes = snap.Bytes?.Length ?? 0;
+        var (served, skipped) = await ReadSourceAsync(run, snap, cancellationToken).ConfigureAwait(false);
+        if (skipped is { } stop)
+        {
+            return new DryRunProbe(SkippedClass(stop.Kind), bytes, null);
+        }
+
+        try
+        {
+            var encoded = served.Value is null ? _p.Native.EncodeNull()! : _p.Native.Encode(served.Value);
+            return new DryRunProbe(DryRunClasses.Movable, bytes, encoded.Length);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return new DryRunProbe(DryRunClasses.Unreadable, bytes, null);
+        }
+    }
+
     private async ValueTask<PathRead<T>> ReadNativeAsync(string n, CancellationToken cancellationToken) =>
         Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
 
@@ -454,5 +525,5 @@ internal sealed class KeyPromotion<T>
 
     private void Count(string counter) => RouterTelemetry.CountMove(counter, _p.CacheId, _p.Group);
 
-    private readonly record struct PromotionRun(string Key, string N, FencedKeys Keys, MoverFlavor? Mover, AdmittedUnit Unit, KeyMoveData Data, int Attempt, IMoveOwnership Ownership);
+    private readonly record struct PromotionRun(string Key, string N, FencedKeys Keys, MoverFlavor? Mover, AdmittedUnit Unit, KeyMoveData Data, int Attempt, IMoveOwnership Ownership, bool Quiet = false);
 }
