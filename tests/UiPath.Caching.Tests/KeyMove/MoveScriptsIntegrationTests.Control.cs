@@ -28,6 +28,7 @@ public partial class MoveScriptsIntegrationTests
             ["pnp"] = "np0",
             ["pep"] = "6",
             ["pid"] = "id-6",
+            ["cl"] = "c1+c2",
             ["c:c1"] = "OPEN:n1",
             ["c:c2"] = "OPEN:n2",
         });

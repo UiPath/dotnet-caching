@@ -407,6 +407,13 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
     private async Task<TransitionResult?> SyncStepAsync(string group, StateRecord state, Episode episode, CancellationToken cancellationToken)
     {
         var record = state.ToControlRecord([.. state.CacheIds.Select(cid => (cid, MoveScripts.NewNonce()))]);
+
+        // The default limit is written on the records' field count: the fixed fields, the cache list, one gate per cache and the markers a record may hold. The leader's LIMSET changes it later.
+        if (state is { State: "S3", Direction: "fwd" })
+        {
+            record = record with { Limit = ControlRecord.FixedFields + record.Gates.Count + options.MarkerLimit };
+        }
+
         var phase = new SlotPhase(state.Ep, state.Id, NeedDurable: false, (channel, key) => channel.Control.ControlSyncWrite(key, record), code => code is MoveScripts.Written or MoveScripts.AlreadyWrittenOrOlder);
         var result = await RunSlotPhaseAsync(group, episode, phase, cancellationToken).ConfigureAwait(false);
         if (result.Conflict)

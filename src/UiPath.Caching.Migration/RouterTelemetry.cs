@@ -11,6 +11,7 @@ internal static class RouterTelemetry
     private static readonly Meter RouterMeter = new(MeterName);
 
     private static readonly ConcurrentDictionary<string, Counter<long>> MoveCounters = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, Counter<long>> MarkerCounters = new(StringComparer.Ordinal);
     private static readonly Counter<long> LocalHit = RouterMeter.CreateCounter<long>("local_hit");
     private static readonly Counter<long> RedisHit = RouterMeter.CreateCounter<long>("redis_hit");
     private static readonly Counter<long> Miss = RouterMeter.CreateCounter<long>("miss");
@@ -53,6 +54,16 @@ internal static class RouterTelemetry
     public static void CountMove(string counter, string cache, string group)
     {
         var made = MoveCounters.GetOrAdd(counter, name => RouterMeter.CreateCounter<long>("move_" + name));
+        if (made.Enabled)
+        {
+            made.Add(1, new TagList { { "cache", cache }, { "group", group } });
+        }
+    }
+
+    /// <summary>A counter of the supersession marker, named <c>cache.keymove.</c> and the counter: <c>unmark_dropped</c>, <c>superseded_helped</c>, <c>pending_write</c>, <c>marker_capacity</c>.</summary>
+    public static void CountMarker(string counter, string cache, string group)
+    {
+        var made = MarkerCounters.GetOrAdd(counter, name => RouterMeter.CreateCounter<long>("cache.keymove." + name));
         if (made.Enabled)
         {
             made.Add(1, new TagList { { "cache", cache }, { "group", group } });

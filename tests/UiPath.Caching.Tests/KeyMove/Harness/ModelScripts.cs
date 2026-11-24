@@ -7,7 +7,8 @@ namespace UiPath.Caching.Tests.KeyMove.Harness;
 // A conformance test runs a shared table of scenarios against this model and against the real scripts.
 internal static partial class ModelScripts
 {
-    public static CapResult Cap(ShardStore s, long now, string fence, string data, string ctl, long fenceTtl, string nonce, string id, string cid, ModelFaults f) =>
+    // markerField empty: no marker is looked at. A marker counts while it starts with the record's binding value and a bar.
+    public static CapResult Cap(ShardStore s, long now, string fence, string data, string ctl, long fenceTtl, string nonce, string id, string cid, ModelFaults f, string markerField = "") =>
         s.Scripted(() =>
         {
             if (!IdentityHolds(s, ctl, id, f))
@@ -24,6 +25,11 @@ internal static partial class ModelScripts
             if (m is null || m.StartsWith("CLOSED", StringComparison.Ordinal))
             {
                 return new CapResult(-2, null, false, null, 0);
+            }
+
+            if (markerField.Length > 0 && s.HGet(ctl, markerField) is { } sm && SmLive(sm, Binding(s, ctl)))
+            {
+                return new CapResult(-4, null, false, null, 0, sm);
             }
 
             var g = s.GetString(fence);
@@ -112,22 +118,51 @@ internal static partial class ModelScripts
             return 1;
         });
 
-    // op: "set", "del" or "none".
-    public static long Bump(ShardStore s, long now, string fence, string data, string ctl, long fenceTtl, string op, string value, bool hash, long px, string nonce, string id, ModelFaults f) =>
-        s.Scripted(() =>
+    // op: "set", "del" or "none"; del removes the marker field when one is given. A marked set goes through BumpMarked.
+    public static long Bump(ShardStore s, long now, string fence, string data, string ctl, long fenceTtl, string op, string value, bool hash, long px, string nonce, string id, ModelFaults f, string markerField = "") =>
+        BumpMarked(s, now, fence, data, ctl, fenceTtl, op, value, hash, px, nonce, id, f, markerField, false, 0).Code;
+
+    // setm is set plus the marker. -7 late (now is past the deadline, 0 for none), -8 no binding value, -6 a first attempt at a record whose field count is at its lim: each changes nothing. Else 1 with the field count and the marker written.
+    public static (long Code, long Length, string? Marker) BumpMarked(ShardStore s, long now, string fence, string data, string ctl, long fenceTtl, string op, string value, bool hash, long px, string nonce, string id, ModelFaults f, string markerField, bool first, long deadline) =>
+        s.Scripted<(long, long, string?)>(() =>
         {
             if (!IdentityHolds(s, ctl, id, f))
             {
-                return -1;
+                return (-1, 0, null);
+            }
+
+            string? b = null;
+            if (op == "setm")
+            {
+                if (deadline != 0 && now > deadline)
+                {
+                    return (-7, 0, null);
+                }
+
+                b = Binding(s, ctl);
+                if (string.IsNullOrEmpty(b))
+                {
+                    return (-8, 0, null);
+                }
+
+                if (first && s.HGet(ctl, markerField) is null && FieldCount(s, ctl) >= long.Parse(s.HGet(ctl, "lim") ?? "0", CultureInfo.InvariantCulture))
+                {
+                    return (-6, 0, null);
+                }
             }
 
             ReplaceFence(s, now, fence, nonce, fenceTtl, f);
             switch (op)
             {
                 case "none":
-                    return 1;
+                    return (1, 0, null);
                 case "del":
-                    return s.Remove(data) ? 1 : 0;
+                    if (markerField.Length > 0)
+                    {
+                        s.HDel(ctl, markerField);
+                    }
+
+                    return (s.Remove(data) ? 1 : 0, 0, null);
                 default:
                     s.Put(data, Entry.OfVersion(value, hash));
                     if (px != -1)
@@ -135,8 +170,98 @@ internal static partial class ModelScripts
                         s.ExpireAt(data, now + px, now);
                     }
 
-                    return 1;
+                    if (op != "setm")
+                    {
+                        return (1, 0, null);
+                    }
+
+                    var marker = b + "|" + nonce;
+                    s.HSet(ctl, markerField, marker);
+                    var n = FieldCount(s, ctl);
+                    if (n > long.Parse(s.HGet(ctl, "pk") ?? "0", CultureInfo.InvariantCulture))
+                    {
+                        s.HSet(ctl, "pk", n.ToString(CultureInfo.InvariantCulture));
+                    }
+
+                    return (1, n, marker);
             }
+        });
+
+    public static long Unmark(ShardStore s, string ctl, string field, string expected) =>
+        s.Scripted(() => s.HGet(ctl, field) == expected && s.HDel(ctl, field) ? 1 : 0);
+
+    public static long UnmarkMany(ShardStore s, string ctl, IReadOnlyList<(string Field, string Expected)> markers) =>
+        s.Scripted(() => markers.Sum(m => s.HGet(ctl, m.Field) == m.Expected && s.HDel(ctl, m.Field) ? 1L : 0L));
+
+    public static long Smgc(ShardStore s, string ctl, string field, string expected) =>
+        s.Scripted(() =>
+        {
+            var v = s.HGet(ctl, field);
+            if (v != expected)
+            {
+                return 0;
+            }
+
+            var binding = BindingOf(v!);
+            var cur = Binding(s, ctl);
+            if ((cur is not null && binding == cur) || binding == s.HGet(ctl, "rg"))
+            {
+                return -1;
+            }
+
+            return s.HDel(ctl, field) ? 1 : 0;
+        });
+
+    public static long[] SmgcMany(ShardStore s, string ctl, IReadOnlyList<(string Field, string Expected)> markers) =>
+        [.. markers.Select(m => Smgc(s, ctl, m.Field, m.Expected))];
+
+    // -1 identity, -9 the binding is neither the record's current one nor its rg, else the delete count.
+    public static long SrcDelG(ShardStore s, string key, string ctl, string id, string binding, ModelFaults f) =>
+        s.Scripted(() =>
+        {
+            if (!SourceIdentityHolds(s, ctl, id, f))
+            {
+                return -1;
+            }
+
+            var cur = Binding(s, ctl);
+            var rg = s.HGet(ctl, "rg");
+            if (binding.Length == 0 || (binding != cur && binding != rg))
+            {
+                return -9;
+            }
+
+            return s.Remove(key) ? 1 : 0;
+        });
+
+    public static long LimSet(ShardStore s, string ctl, string id, long limit) =>
+        s.Scripted(() =>
+        {
+            if (s.HGet(ctl, "id") != id)
+            {
+                return -1;
+            }
+
+            s.HSet(ctl, "lim", limit.ToString(CultureInfo.InvariantCulture));
+            return 1;
+        });
+
+    // The record is rewritten whole (so its table is new) and pk starts again from the length that the rewrite gave.
+    public static long Compact(ShardStore s, string ctl, string id) =>
+        s.Scripted(() =>
+        {
+            if (s.HGet(ctl, "id") != id)
+            {
+                return -1;
+            }
+
+            if (FieldCount(s, ctl) > 2048)
+            {
+                return -2;
+            }
+
+            s.HSet(ctl, "pk", FieldCount(s, ctl).ToString(CultureInfo.InvariantCulture));
+            return FieldCount(s, ctl);
         });
 
     public static long Fill(ShardStore s, long now, string fence, string data, string ctl, string value, bool hash, long px, string nonce, long fenceTtl, string id, ModelFaults f) =>
@@ -196,7 +321,15 @@ internal static partial class ModelScripts
         });
 
     public static long SrcDel(ShardStore s, string key, string ctl, string id, ModelFaults f) =>
-        s.Scripted(() => SourceIdentityHolds(s, ctl, id, f) ? (s.Remove(key) ? 1 : 0) : -1);
+        s.Scripted(() =>
+        {
+            if (!SourceIdentityHolds(s, ctl, id, f))
+            {
+                return -1;
+            }
+
+            return s.Remove(key) ? 1 : 0;
+        });
 
     public static long SrcSet(ShardStore s, long now, string key, string ctl, string id, string value, bool hash, long px, string mode, ModelFaults f) =>
         s.Scripted(() =>
@@ -284,7 +417,7 @@ internal static partial class ModelScripts
             return s.Remove(key) ? 1 : 0;
         });
 
-    public static long CtlSync(ShardStore s, string ctl, long ep, string id, string st, string dir, string np, string pst, string pdir, string pnp, string pep, string pid, IReadOnlyList<(string Cid, string Nonce)> gates, ModelFaults f) =>
+    public static long CtlSync(ShardStore s, string ctl, long ep, string id, string st, string dir, string np, string pst, string pdir, string pnp, string pep, string pid, IReadOnlyList<(string Cid, string Nonce)> gates, ModelFaults f, long? limit = null, string bf = "", string fg = "", string rg = "") =>
         s.Scripted(() =>
         {
             var cur = s.HGet(ctl, "ep");
@@ -308,14 +441,37 @@ internal static partial class ModelScripts
                 }
             }
 
-            foreach (var (field, value) in new[] { ("ep", ep.ToString(CultureInfo.InvariantCulture)), ("id", id), ("st", st), ("dir", dir), ("np", np), ("dur", "0"), ("pst", pst), ("pdir", pdir), ("pnp", pnp), ("pep", pep), ("pid", pid) })
+            // The gates to drop are the cache ids of the previous list; a record with no list is scanned.
+            var previous = s.HGet(ctl, "cl");
+            var old = previous is null
+                ? s.Get(ctl)?.Fields?.Keys.Where(k => k.StartsWith("c:", StringComparison.Ordinal)).ToList() ?? []
+                : previous.Split('+', StringSplitOptions.RemoveEmptyEntries).Select(c => "c:" + c).ToList();
+            var cl = string.Join('+', gates.Select(g => g.Cid).Order(StringComparer.Ordinal));
+            foreach (var (field, value) in new[] { ("ep", ep.ToString(CultureInfo.InvariantCulture)), ("id", id), ("st", st), ("dir", dir), ("np", np), ("dur", "0"), ("pst", pst), ("pdir", pdir), ("pnp", pnp), ("pep", pep), ("pid", pid), ("cl", cl) })
             {
                 s.HSet(ctl, field, value);
             }
 
-            foreach (var field in s.Get(ctl)!.Fields!.Keys.Where(k => k.StartsWith("c:", StringComparison.Ordinal)).ToList())
+            foreach (var field in old)
             {
                 s.HDel(ctl, field);
+            }
+
+            if (limit is { } l)
+            {
+                s.HSet(ctl, "lim", l.ToString(CultureInfo.InvariantCulture));
+            }
+
+            foreach (var (field, value) in new[] { ("bf", bf), ("fg", fg), ("rg", rg) })
+            {
+                if (value.Length > 0)
+                {
+                    s.HSet(ctl, field, value);
+                }
+                else
+                {
+                    s.HDel(ctl, field);
+                }
             }
 
             foreach (var (cid, nonce) in gates)
@@ -508,6 +664,15 @@ internal static partial class ModelScripts
     [GeneratedRegex("^(0|-?[1-9][0-9]*)$")]
     private static partial Regex CanonicalInteger();
 
+    // The record's binding value: the field named by bf, or id when it names none.
+    private static string? Binding(ShardStore s, string ctl) => s.HGet(ctl, s.HGet(ctl, "bf") ?? "id");
+
+    private static string BindingOf(string marker) => marker.Contains('|', StringComparison.Ordinal) ? marker[..marker.IndexOf('|', StringComparison.Ordinal)] : marker;
+
+    private static bool SmLive(string marker, string? current) => !string.IsNullOrEmpty(current) && marker.StartsWith(current + "|", StringComparison.Ordinal);
+
+    private static long FieldCount(ShardStore s, string ctl) => s.Get(ctl)?.Fields?.Count ?? 0;
+
     private static bool IdentityHolds(ShardStore s, string ctl, string id, ModelFaults f) =>
         s.HGet(ctl, "id") == id || (f.AbsentRecordIsOpen && !s.Exists(ctl));
 
@@ -530,9 +695,19 @@ internal static partial class ModelScripts
         }
 
         var g = s.GetString(fence);
-        var tokenHolds = f.LengthOnlyToken ? g is not null && g.Length == token.Length
-            : f.AbsentTokenPasses ? g is null || g == token
-            : f.PostPublishRecheck || g == token;
+        bool tokenHolds;
+        if (f.LengthOnlyToken)
+        {
+            tokenHolds = g is not null && g.Length == token.Length;
+        }
+        else if (f.AbsentTokenPasses)
+        {
+            tokenHolds = g is null || g == token;
+        }
+        else
+        {
+            tokenHolds = f.PostPublishRecheck || g == token;
+        }
         if (!tokenHolds)
         {
             return 0;

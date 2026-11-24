@@ -386,7 +386,7 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
         await kit.SetStateAsync("S3");
         var steps = kit.Client.StepsFor(kit.Client.PlanFor(write: true), delete: false);
 
-        steps.Should().Equal(WriteStep.BumpSet, WriteStep.SrcDel);
+        steps.Should().Equal(WriteStep.BumpSetMarked, WriteStep.SrcDel);
     }
 
     private static DateTimeOffset In(TimeSpan span) => DateTimeOffset.UtcNow + span;

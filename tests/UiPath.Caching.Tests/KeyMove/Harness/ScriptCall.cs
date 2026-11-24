@@ -46,4 +46,22 @@ internal sealed record ScriptCall(ScriptCallKind Kind)
     public long? AtOffset { get; init; }
 
     public bool Only { get; init; }
+
+    // The marker field of CAP, BUMP and UNMARK; empty for none. PutField writes it, and the other control fields, into the hash named by Key.
+    public string MarkerField { get; init; } = string.Empty;
+
+    public bool First { get; init; }
+
+    // The binding value SRCDELG is given.
+    public string Binding { get; init; } = string.Empty;
+
+    // LIMSET's value, and the lim CTLSYNC writes; null leaves the record's own.
+    public long? Limit { get; init; }
+
+    // What CTLSYNC copies into the record: the field that names the binding, the forward generation and the retiring one.
+    public string BindingField { get; init; } = string.Empty;
+
+    public string Fg { get; init; } = string.Empty;
+
+    public string Rg { get; init; } = string.Empty;
 }

@@ -8,6 +8,8 @@ internal sealed class StubPlane(string registeredGroup, EpochGate gate) : IKeyMo
 
     public bool Residue { get; set; } = true;
 
+    public bool RefuseEntry { get; set; }
+
     public int DataReads { get; private set; }
 
     public KeyMoveData? Held { get; set; }
@@ -29,7 +31,7 @@ internal sealed class StubPlane(string registeredGroup, EpochGate gate) : IKeyMo
 
     public bool KeepsSourceFallback(string group, string cacheId) => Residue;
 
-    public AdmittedUnit? Enter(string group, bool promotion) => gate.Enter(registeredGroup, promotion);
+    public AdmittedUnit? Enter(string group, bool promotion) => RefuseEntry ? null : gate.Enter(registeredGroup, promotion);
 
     public void Alert(string group, string code, string detail) => Alerts.Add(new KeyMoveAlert(group, code, detail));
 }

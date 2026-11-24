@@ -18,6 +18,8 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
     private readonly NegativeHints _hints;
     private readonly MoveRetrySet _retries;
     private readonly IMoveSide<T> _source;
+    private readonly MarkerNode _node;
+    private readonly SupersessionHelper _helper;
 
     public KeyMoveClient(KeyMoveClientParts<T> parts)
     {
@@ -26,6 +28,8 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
         _source = parts.Source ?? new InPlaceMoveSide<T>(parts.Plane, parts.Group, parts.InPlaceKey, parts.InPlace, parts.Mappable, parts.Clock);
         _hints = new NegativeHints(parts.Clock, _options.HintTtl, _options.MaxHints);
         _retries = new MoveRetrySet(parts.Clock, _options, ExhaustedStep, parts.RunRetriesInBackground, _ => Count(RetrySuperseded));
+        _node = MarkerNode.For(parts.Plane, parts.Clock, _options, parts.RunRetriesInBackground);
+        _helper = new SupersessionHelper(() => _p.Plane.Data, parts.InPlaceKey, parts.NativeKey, parts.Group, parts.CacheId);
     }
 
     public TimeSpan? SettleWithin => _p.SettleWithin();
@@ -41,6 +45,13 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
     public ILibraryBatch<T>? PlainBatch => Moving ? null : _p.Plain.PlainBatch;
 
     internal MoveRetrySet Retries => _retries;
+
+    internal UnmarkQueue Unmarks => _node.Unmarks;
+
+    internal WritePermits Permits => _node.Permits;
+
+    /// <summary>The helper that answers a live marker for this cache; the mover takes it as its supersession handler.</summary>
+    internal ISupersessionHandler Supersession => _helper;
 
     internal NegativeHints Hints => _hints;
 
@@ -58,7 +69,10 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
 
     public void Gap() => _hints.Clear();
 
-    public void Dispose() => _retries.Dispose();
+    public void Dispose()
+    {
+        _retries.Dispose();
+    }
 
     internal KeyMovePlan PlanFor(bool write)
     {

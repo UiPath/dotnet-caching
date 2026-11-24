@@ -11,6 +11,12 @@ internal sealed partial class MoveScripts
     public const long IdentityMismatch = -1;
     public const long GateRefused = -2;
     public const long PastDeadline = -3;
+    public const long LiveSupersession = -4;
+    public const long RecordFull = -6;
+    public const long Late = -7;
+    public const long NoBinding = -8;
+    public const long BindingEnded = -9;
+    public const long CompactRefused = -2;
     public const long IdentityConflict = -5;
 
     /// <summary>How often a transaction is sent again when every condition still holds after it aborted: another field of a watched key changed.</summary>
@@ -58,6 +64,19 @@ internal sealed partial class MoveScripts
         ex is RedisServerException && ex.Message.Contains("WRONGTYPE", StringComparison.OrdinalIgnoreCase);
 
     private static DateTime At(long unixMilliseconds) => DateTimeOffset.FromUnixTimeMilliseconds(unixMilliseconds).UtcDateTime;
+
+    private static async Task<MarkedBump> WatchedMarkedAsync(Func<Task<MarkedBump?>> attempt)
+    {
+        for (var i = 0; i < MaxWatchAborts; i++)
+        {
+            if (await attempt().ConfigureAwait(false) is { } result)
+            {
+                return result;
+            }
+        }
+
+        throw new RedisException($"A move transaction aborted {MaxWatchAborts} times while its conditions held; the outcome is unknown.");
+    }
 
     private static async Task<long> WatchedAsync(Func<Task<long?>> attempt)
     {

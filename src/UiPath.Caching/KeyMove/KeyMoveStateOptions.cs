@@ -27,6 +27,9 @@ internal sealed class KeyMoveStateOptions
     /// <summary>How long a pending claim whose token the state does not show (<c>ct</c>) stays unchanged before the leader releases it to idle (the leader's monotonic clock).</summary>
     public TimeSpan ClaimPendHold { get; init; } = TimeSpan.FromSeconds(60);
 
+    /// <summary>The markers a control record may hold before a first marked write is refused, until the capacity budget sets limits per slot; the transition writes it into the records.</summary>
+    public int MarkerLimit { get; init; } = 1024;
+
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(2);
 
     public TimeSpan SlowPollInterval { get; init; } = TimeSpan.FromSeconds(60);
@@ -42,6 +45,9 @@ internal sealed class KeyMoveStateOptions
     public TimeSpan LeaseTtl { get; init; } = TimeSpan.FromSeconds(30);
 
     public TimeSpan LeaseRenewInterval { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long a current marker may stand before the leader takes its writer to be gone: longer than a marked set can still apply (its deadline and the clock bound).</summary>
+    public TimeSpan MarkerOrphanAfter { get; init; } = TimeSpan.FromSeconds(10);
 
     public TimeSpan UpkeepInterval { get; init; } = TimeSpan.FromSeconds(60);
 

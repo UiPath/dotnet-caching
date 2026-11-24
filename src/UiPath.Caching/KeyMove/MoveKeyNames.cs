@@ -114,6 +114,9 @@ internal sealed class MoveKeyNames
         return $"{LibraryPrefix}{Keyspace}:{{{group}}}:clrlock:{cacheId}";
     }
 
+    /// <summary>The field of the supersession marker of an in-place key in the control record of its native key's slot: <c>sm:</c> and the key's physical text.</summary>
+    public string MarkerField(string inPlaceKey) => "sm:" + ConnectorPrefix + inPlaceKey;
+
     /// <summary>The control record of <paramref name="group"/> in the slot of <paramref name="dataKey"/>.</summary>
     public RedisKey ControlFor(string group, string dataKey) => Control(group, SlotOf(dataKey));
 

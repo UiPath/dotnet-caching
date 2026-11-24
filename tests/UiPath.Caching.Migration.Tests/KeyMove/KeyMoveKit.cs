@@ -11,6 +11,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
     private readonly EpochGate _gate = new();
     private long _events;
     private long _ep;
+    private long? _limit;
 
     private KeyMoveKit(ConnectionMultiplexer mux, bool useScripts, bool noOrigin, TimeProvider clock, KeyMoveOptions options, string unique, Version version, Func<KeyMoveKit, IMoveSide<Item>>? source, Func<IDatabase, IDatabase>? interceptDb)
     {
@@ -64,6 +65,8 @@ internal sealed class KeyMoveKit : IAsyncDisposable
     public IDatabase Db => Mux.GetDatabase();
 
     public bool Connected { get; set; } = true;
+
+    public long Events => Interlocked.Read(ref _events);
 
     public string Id { get; private set; } = string.Empty;
 
@@ -147,6 +150,15 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         }
     }
 
+    // The records of a key's slot hold room for this many more markers than they hold now: the limit the scripts judge a first marked write against.
+    public async Task LimitMarkersAsync(string key, int room)
+    {
+        var control = Names.ControlFor(Group, N(key));
+        var fields = await Db.HashLengthAsync(control);
+        _limit = fields + room;
+        (await Scripts.LimitSetAsync(control, Id, fields + room)).Should().Be(1);
+    }
+
     public async Task<string?> GetAsync(string redisKey) => await Db.StringGetAsync(redisKey);
 
     public async Task<bool> ExistsAsync(string redisKey) => await Db.KeyExistsAsync(redisKey);
@@ -180,7 +192,7 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         return data with { Db = db, Scripts = new MoveScripts(db, useScripts, version) };
     }
 
-    private ControlRecord Record(long ep, string id) => new(ep, id, "S3", "fwd", "1", "S0", "none", "0", "0", "id0", [(Cid, MoveScripts.NewNonce())]);
+    private ControlRecord Record(long ep, string id) => new(ep, id, "S3", "fwd", "1", "S0", "none", "0", "0", "id0", [(Cid, MoveScripts.NewNonce())]) { Limit = _limit ?? ControlRecord.FixedFields + 1 + 1024 };
 
     private async Task WriteRecordsAsync(string key) => await AdvanceRecordsAsync(key, _ep, Id);
 }

@@ -55,16 +55,22 @@ internal sealed class ModelExecutor(long now)
                 return string.Empty;
             case ScriptCallKind.Cap:
             {
-                var r = ModelScripts.Cap(s, Now, Fence, Dst, Ctl, c.FenceTtl, c.Nonce, c.Id, c.Cid, _f);
-                return $"{r.Code}|{r.Token}|{r.DestinationExists}|{r.Gate}";
+                var r = ModelScripts.Cap(s, Now, Fence, Dst, Ctl, c.FenceTtl, c.Nonce, c.Id, c.Cid, _f, c.MarkerField);
+                return $"{r.Code}|{r.Token}|{r.DestinationExists}|{r.Gate}|{r.Marker}";
             }
 
             case ScriptCallKind.Pub:
                 return Text(ModelScripts.Pub(s, Now, Fence, Dst, Ctl, c.Token, c.Value, false, c.Px, c.Mode, c.Gate, c.Id, c.Cid, c.Nonce, c.FenceTtl, c.AtOffset is null ? -1 : At(c), _f));
             case ScriptCallKind.PubHash:
                 return Text(ModelScripts.PubHash(s, Now, Fence, Dst, Stg, Ctl, c.Token, c.Px, c.Mode, c.Gate, c.Id, c.Cid, c.Nonce, c.FenceTtl, At(c), _f));
+            case ScriptCallKind.Bump when c.Op == "setm":
+            {
+                var (code, length, marker) = ModelScripts.BumpMarked(s, Now, Fence, Dst, Ctl, c.FenceTtl, c.Op, c.Value, false, c.Px, c.Nonce, c.Id, _f, c.MarkerField, c.First, c.AtOffset is null ? 0 : At(c));
+                return $"{code}|{length}|{marker}";
+            }
+
             case ScriptCallKind.Bump:
-                return Text(ModelScripts.Bump(s, Now, Fence, Dst, Ctl, c.FenceTtl, c.Op, c.Value, false, c.Px, c.Nonce, c.Id, _f));
+                return Text(ModelScripts.Bump(s, Now, Fence, Dst, Ctl, c.FenceTtl, c.Op, c.Value, false, c.Px, c.Nonce, c.Id, _f, c.MarkerField));
             case ScriptCallKind.Fill:
                 return Text(ModelScripts.Fill(s, Now, Fence, Dst, Ctl, c.Value, false, c.Px, c.Nonce, c.FenceTtl, c.Id, _f));
             case ScriptCallKind.FillHash:
@@ -80,7 +86,7 @@ internal sealed class ModelExecutor(long now)
             case ScriptCallKind.CmpDelHash:
                 return Text(ModelScripts.CmpDelHash(s, Src, Ctl, c.Id, [.. Pairs(c.Fields)], _f));
             case ScriptCallKind.CtlSync:
-                return Text(ModelScripts.CtlSync(s, Ctl, c.Ep, c.Id, "S1", "fwd", "n", "S0", "none", "n0", "0", "id0", [(c.Cid, c.Nonce)], _f));
+                return Text(ModelScripts.CtlSync(s, Ctl, c.Ep, c.Id, "S1", "fwd", "n", "S0", "none", "n0", "0", "id0", [(c.Cid, c.Nonce)], _f, c.Limit, c.BindingField, c.Fg, c.Rg));
             case ScriptCallKind.CtlCommit:
                 return Text(ModelScripts.CtlCommit(s, Ctl, c.Ep, c.Id));
             case ScriptCallKind.Gate:
@@ -89,6 +95,23 @@ internal sealed class ModelExecutor(long now)
                 return Text(ModelScripts.HSetC(s, Now, Src, Ctl, c.Id, c.ReplaceKey, At(c), c.DropField, c.VersionField, c.VersionSeed, c.WithFence ? Fence : null, c.WithFence ? c.Nonce : null, c.FenceTtl, [.. Pairs(c.Fields)], _f));
             case ScriptCallKind.HDelC:
                 return Text(ModelScripts.HDelC(s, Now, Src, Ctl, c.Id, c.VersionField, c.VersionSeed, c.WithFence ? Fence : null, c.WithFence ? c.Nonce : null, c.FenceTtl, [.. Pairs(c.Fields).Select(p => p.Key)], _f));
+            case ScriptCallKind.PutField:
+                s.HSet(c.Key, c.MarkerField, c.Value);
+                return string.Empty;
+            case ScriptCallKind.Unmark:
+                return Text(ModelScripts.Unmark(s, Ctl, c.MarkerField, c.Value));
+            case ScriptCallKind.UnmarkMany:
+                return Text(ModelScripts.UnmarkMany(s, Ctl, [.. Pairs(c.Fields).Select(p => (p.Key, p.Value))]));
+            case ScriptCallKind.Smgc:
+                return Text(ModelScripts.Smgc(s, Ctl, c.MarkerField, c.Value));
+            case ScriptCallKind.SmgcMany:
+                return string.Join(',', ModelScripts.SmgcMany(s, Ctl, [.. Pairs(c.Fields).Select(p => (p.Key, p.Value))]).Select(Text));
+            case ScriptCallKind.SrcDelG:
+                return Text(ModelScripts.SrcDelG(s, Src, Ctl, c.Id, c.Binding, _f));
+            case ScriptCallKind.LimSet:
+                return Text(ModelScripts.LimSet(s, Ctl, c.Id, c.Limit ?? 0));
+            case ScriptCallKind.Compact:
+                return Text(ModelScripts.Compact(s, Ctl, c.Id));
             default:
                 return Text(ModelScripts.HExpC(s, Now, Src, Ctl, c.Id, At(c), c.WithFence ? Fence : null, c.WithFence ? c.Nonce : null, c.FenceTtl, _f));
         }
