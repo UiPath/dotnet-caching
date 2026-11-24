@@ -65,9 +65,10 @@ internal sealed partial class RedisHashCache
     }
 
     /// <summary>A merge is not atomic across chunks; a replacement fills a staging key and renames it over the key.</summary>
-    private async ValueTask<bool> WriteInChunksAsync(RedisKey redisKey, RedisKey staging, HashEntry[] entries, HashCacheSetOption setOption, DateTimeOffset expiration, WriteReport? report, CancellationToken token)
+    private async ValueTask<bool> WriteInChunksAsync(RedisKey redisKey, RedisKey staging, HashEntry[] entries, HashCacheSetOption setOption, DateTimeOffset expiration, WriteReport? report, CancellationToken token, SendTrace? trace = null)
     {
         token.ThrowIfCancellationRequested();
+        trace?.MarkSent();
         var target = setOption == HashCacheSetOption.HashReplace ? redisKey : staging;
         var pending = new List<Task>((entries.Length / _fieldBatchSize) + 1);
         try
@@ -96,6 +97,7 @@ internal sealed partial class RedisHashCache
                         {
                             report.Existed = true;
                             DropStaging(staging);
+                            trace?.MarkAnswered(false);
                             return false;
                         }
                     }
@@ -107,10 +109,13 @@ internal sealed partial class RedisHashCache
                 catch (Exception renameFailed) when (expiration < Clock.GetUtcNow())
                 {
                     // A fill of an absent key must not delete what is held, so its expired replacement is only dropped.
-                    return report?.OnlyIfAbsent != true && await DeleteExpiredReplacementAsync(redisKey, renameFailed).ConfigureAwait(false);
+                    var deleted = report?.OnlyIfAbsent != true && await DeleteExpiredReplacementAsync(redisKey, renameFailed).ConfigureAwait(false);
+                    trace?.MarkAnswered(deleted);
+                    return deleted;
                 }
             }
 
+            trace?.MarkAnswered(true);
             return true;
         }
         catch

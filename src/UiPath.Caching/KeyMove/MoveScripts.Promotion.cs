@@ -105,13 +105,14 @@ internal sealed partial class MoveScripts
         return 1
         """;
 
+    // KEYS 1 staging, 2 destination, 3 control, then the fence when there is one (an in-place fill has none). ARGV 1 id, 2 life, 3 nonce, 4 fence life.
     private const string FillHashScript = """
-        if redis.call('HGET', KEYS[4], 'id') ~= ARGV[1] then return -1 end
+        if redis.call('HGET', KEYS[3], 'id') ~= ARGV[1] then return -1 end
         if redis.call('EXISTS', KEYS[1]) == 0 then return 3 end
         if redis.call('EXISTS', KEYS[2]) == 1 then return 2 end
         redis.call('RENAME', KEYS[1], KEYS[2])
         if ARGV[2] == '-1' then redis.call('PERSIST', KEYS[2]) else redis.call('PEXPIRE', KEYS[2], ARGV[2]) end
-        redis.call('SET', KEYS[3], ARGV[3], 'PX', ARGV[4])
+        if #KEYS == 4 then redis.call('SET', KEYS[4], ARGV[3], 'PX', ARGV[4]) end
         return 1
         """;
 
@@ -323,10 +324,15 @@ internal sealed partial class MoveScripts
 
     /// <summary>FILLH: renames a filled staging hash over an absent destination with a relative life, and replaces the fence.</summary>
     /// <returns>-1, 3 when staging is missing, 2 when the destination exists (staging is then deleted), 1.</returns>
-    public async Task<long> FillHashAsync(FencedKeys keys, RedisKey staging, string id, long px, string nonce, long fenceTtlMilliseconds)
+    public Task<long> FillHashAsync(FencedKeys keys, RedisKey staging, string id, long px, string nonce, long fenceTtlMilliseconds) =>
+        FillHashAsync(keys.Data, keys.Control, staging, id, px, new FenceBump(keys.Fence, nonce, fenceTtlMilliseconds));
+
+    /// <summary>FILLH with an optional fence: with none it fills an in-place hash, which has no fence to replace.</summary>
+    /// <param name="fence">The fence to replace, or null for a destination that has none.</param>
+    public async Task<long> FillHashAsync(RedisKey data, RedisKey control, RedisKey staging, string id, long px, FenceBump? fence)
     {
         CheckLife(px, nameof(px));
-        var result = await FillHashCoreAsync(keys, staging, id, px, nonce, fenceTtlMilliseconds).ConfigureAwait(false);
+        var result = await FillHashCoreAsync(data, control, staging, id, px, fence).ConfigureAwait(false);
         if (result == DestinationExists)
         {
             await _db.KeyDeleteAsync(staging, Master).ConfigureAwait(false);
@@ -410,38 +416,17 @@ internal sealed partial class MoveScripts
         }
 
         // The fallback reads no server clock, so the deadline is not enforced here.
-        var field = await _db.HashGetAsync(keys.Control, MarkerBinding.BindingFieldName, Master).ConfigureAwait(false);
-        var limit = await _db.HashGetAsync(keys.Control, "lim", Master).ConfigureAwait(false);
-        var present = await _db.HashExistsAsync(keys.Control, markerField, Master).ConfigureAwait(false);
-        var length = await _db.HashLengthAsync(keys.Control, Master).ConfigureAwait(false);
-        var bindingField = field.IsNull ? MarkerBinding.IdentityField : field.ToString();
-        var binding = await _db.HashGetAsync(keys.Control, bindingField, Master).ConfigureAwait(false);
-        if (binding.IsNull || binding == string.Empty)
+        var admission = await AdmitMarkerAsync(keys.Control, markerField, first).ConfigureAwait(false);
+        if (admission.Refusal != 0)
         {
-            return new MarkedBump(NoBinding);
+            return new MarkedBump(admission.Refusal);
         }
 
-        var ceiling = limit.IsNull ? 0 : (long)limit;
-        if (first && !present && length >= ceiling)
-        {
-            return new MarkedBump(RecordFull);
-        }
-
-        var marker = $"{binding}|{nonce}";
+        var marker = $"{admission.Binding}|{nonce}";
         var transaction = _db.CreateTransaction();
         var queued = new List<Task>();
         transaction.AddCondition(Condition.HashEqual(keys.Control, "id", id));
-        transaction.AddCondition(field.IsNull ? Condition.HashNotExists(keys.Control, MarkerBinding.BindingFieldName) : Condition.HashEqual(keys.Control, MarkerBinding.BindingFieldName, field));
-        transaction.AddCondition(Condition.HashEqual(keys.Control, bindingField, binding));
-
-        // What the admission rested on is checked when the transaction runs: the limit, whether the key has its field, and for a new field the room that was seen.
-        transaction.AddCondition(limit.IsNull ? Condition.HashNotExists(keys.Control, "lim") : Condition.HashEqual(keys.Control, "lim", limit));
-        transaction.AddCondition(present ? Condition.HashExists(keys.Control, markerField) : Condition.HashNotExists(keys.Control, markerField));
-        if (first && !present)
-        {
-            transaction.AddCondition(Condition.HashLengthLessThan(keys.Control, ceiling));
-        }
-
+        AddMarkerConditions(transaction, keys.Control, markerField, admission, first);
         queued.Add(transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master));
         queued.Add(transaction.StringSetAsync(keys.Data, value, px == NoExpiry ? null : TimeSpan.FromMilliseconds(px), When.Always, Master));
         queued.Add(transaction.HashSetAsync(keys.Control, markerField, marker, When.Always, Master));
@@ -491,9 +476,10 @@ internal sealed partial class MoveScripts
         return await HoldsIdentityAsync(keys.Control, id).ConfigureAwait(false) ? null : IdentityMismatch;
     }
 
-    private async Task<long> FillHashCoreAsync(FencedKeys keys, RedisKey staging, string id, long px, string nonce, long fenceTtlMilliseconds)
+    private async Task<long> FillHashCoreAsync(RedisKey data, RedisKey control, RedisKey staging, string id, long px, FenceBump? fence)
     {
-        var reply = await EvaluateAsync(FillHashScript, [staging, keys.Data, keys.Fence, keys.Control], [id, Ttl(px), nonce, fenceTtlMilliseconds]).ConfigureAwait(false);
+        RedisKey[] keys = fence is { } f ? [staging, data, control, f.Fence] : [staging, data, control];
+        var reply = await EvaluateAsync(FillHashScript, keys, [id, Ttl(px), fence?.Nonce ?? string.Empty, fence?.TtlMilliseconds ?? 0]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
@@ -503,26 +489,26 @@ internal sealed partial class MoveScripts
         {
             var transaction = _db.CreateTransaction();
             var queued = new List<Task>();
-            transaction.AddCondition(Condition.HashEqual(keys.Control, "id", id));
-            transaction.AddCondition(Condition.KeyNotExists(keys.Data));
+            transaction.AddCondition(Condition.HashEqual(control, "id", id));
+            transaction.AddCondition(Condition.KeyNotExists(data));
             transaction.AddCondition(Condition.KeyExists(staging));
-            queued.Add(transaction.KeyRenameAsync(staging, keys.Data, When.Always, Master));
+            queued.Add(transaction.KeyRenameAsync(staging, data, When.Always, Master));
             if (px == NoExpiry)
             {
-                queued.Add(transaction.KeyPersistAsync(keys.Data, Master));
+                queued.Add(transaction.KeyPersistAsync(data, Master));
             }
             else
             {
-                queued.Add(transaction.KeyExpireAsync(keys.Data, TimeSpan.FromMilliseconds(px), Master));
+                queued.Add(transaction.KeyExpireAsync(data, TimeSpan.FromMilliseconds(px), Master));
             }
 
-            queued.Add(transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master));
+            BumpIn(transaction, queued, fence);
             if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
             {
                 return Published;
             }
 
-            if (!await HoldsIdentityAsync(keys.Control, id).ConfigureAwait(false))
+            if (!await HoldsIdentityAsync(control, id).ConfigureAwait(false))
             {
                 return IdentityMismatch;
             }
@@ -532,7 +518,7 @@ internal sealed partial class MoveScripts
                 return StagingMissing;
             }
 
-            return await _db.KeyExistsAsync(keys.Data, Master).ConfigureAwait(false) ? DestinationExists : null;
+            return await _db.KeyExistsAsync(data, Master).ConfigureAwait(false) ? DestinationExists : null;
         }).ConfigureAwait(false);
     }
 

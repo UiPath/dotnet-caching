@@ -278,6 +278,9 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
 
     IDisposable ISharedTier.DemandMaster() => DemandMaster();
 
+    /// <summary>What an empty hash is stored as while nulls are cached: the metadata field, empty.</summary>
+    private static HashEntry[] EmptyMarkerEntries() => [new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString)];
+
     private static ImmutableDictionary<string, T?> Empty<T>() => ImmutableDictionary<string, T?>.Empty;
 
     private TelemetryScope StartOperation<T>([CallerMemberName] string methodName = "") =>

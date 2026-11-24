@@ -65,20 +65,12 @@ internal sealed partial class MoveScripts
 
     private static DateTime At(long unixMilliseconds) => DateTimeOffset.FromUnixTimeMilliseconds(unixMilliseconds).UtcDateTime;
 
-    private static async Task<MarkedBump> WatchedMarkedAsync(Func<Task<MarkedBump?>> attempt)
-    {
-        for (var i = 0; i < MaxWatchAborts; i++)
-        {
-            if (await attempt().ConfigureAwait(false) is { } result)
-            {
-                return result;
-            }
-        }
+    private static Task<MarkedBump> WatchedMarkedAsync(Func<Task<MarkedBump?>> attempt) => WatchedOfAsync(attempt);
 
-        throw new RedisException($"A move transaction aborted {MaxWatchAborts} times while its conditions held; the outcome is unknown.");
-    }
+    private static Task<long> WatchedAsync(Func<Task<long?>> attempt, Func<bool>? owned = null) => WatchedOfAsync(attempt, owned);
 
-    private static async Task<long> WatchedAsync(Func<Task<long?>> attempt, Func<bool>? owned = null)
+    private static async Task<TResult> WatchedOfAsync<TResult>(Func<Task<TResult?>> attempt, Func<bool>? owned = null)
+        where TResult : struct
     {
         for (var i = 0; i < MaxWatchAborts; i++)
         {
