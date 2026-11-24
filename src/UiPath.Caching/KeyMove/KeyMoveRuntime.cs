@@ -6,6 +6,7 @@ internal sealed record KeyMoveRuntime(
     StageCommands Commands,
     GroupDataOps Data,
     ClearCoordinator Clear,
+    KeyMoveSweep Sweep,
     GroupRemoval Removal,
     StateRecovery Recovery,
     StageDriver? Driver);

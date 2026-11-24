@@ -18,6 +18,8 @@ internal sealed class FakeKeySpace(string nativePrefix, string legacyPrefix) : I
 
     public IReadOnlyList<string> Patterns(string group, MoveSide side) => [PrefixOf(side) + "*"];
 
+    public IReadOnlyList<string> PatternsOf(string group, string cacheId, MoveSide side) => [$"{PrefixOf(side)}{cacheId}:*"];
+
     public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key)
     {
         OnOwnerOf?.Invoke(key);

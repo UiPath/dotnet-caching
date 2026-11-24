@@ -6,6 +6,9 @@ internal interface IGroupKeySpace
     /// <summary>Glob patterns that together cover every key of the group's caches on <paramref name="side"/>, each starting with the library prefix of the keys.</summary>
     IReadOnlyList<string> Patterns(string group, MoveSide side);
 
+    /// <summary>The glob patterns of one cache's keys on <paramref name="side"/>, each starting with the library prefix; empty for a cache that is not registered in the group.</summary>
+    IReadOnlyList<string> PatternsOf(string group, string cacheId, MoveSide side);
+
     /// <summary>Every registered cache of the group, managed or not, whose ownership predicate accepts <paramref name="key"/>: none, one, or several, which is an error the caller refuses when one of them is managed.</summary>
     IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key);
 

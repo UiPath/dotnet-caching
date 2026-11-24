@@ -14,6 +14,9 @@ internal sealed class RegisteredKeySpace(IReadOnlyList<KeyMoveCache> caches, str
     public IReadOnlyList<string> Patterns(string group, MoveSide side) =>
         [.. caches.Where(c => c.Group == group).Select(c => c.PatternOf(side)).Distinct(StringComparer.Ordinal)];
 
+    public IReadOnlyList<string> PatternsOf(string group, string cacheId, MoveSide side) =>
+        [.. caches.Where(c => c.Group == group && c.Name == cacheId).Select(c => c.PatternOf(side)).Distinct(StringComparer.Ordinal)];
+
     public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key) =>
         Accepting(side, key).Select(c => c.Name).Order(StringComparer.Ordinal).ToArray();
 

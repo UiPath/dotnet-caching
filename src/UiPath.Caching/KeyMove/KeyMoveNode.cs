@@ -189,8 +189,8 @@ internal sealed class KeyMoveNode
         var topology = new MultiplexerTopology(database.Multiplexer, prefix, true, version, state.ExpectedReplicasPerMaster, barrierWait: state.BarrierWait);
         var sampler = new ControlSampler(control, names, topology);
         var store = new StateStore(database, names, stateScripts, sampler, _time);
-        var report = (string kind, string detail) => _setup.Alert?.Invoke(new KeyMoveAlert(string.Empty, kind, detail));
-        var sequence = new TransitionSequence(topology, names, state, report, _time);
+        void Report(string kind, string detail) => _setup.Alert?.Invoke(new KeyMoveAlert(string.Empty, kind, detail));
+        var sequence = new TransitionSequence(topology, names, state, Report, _time);
         var records = new ControlRecordReader(control, names);
         var scanner = new MasterScanner(connector.GetPrimaries, topology, database.Database, prefix, _time, ScanRetryDelay, alert: _setup.Alert);
         return new Wiring(
@@ -202,12 +202,13 @@ internal sealed class KeyMoveNode
             topology,
             sequence,
             records,
-            new ControlUpkeep(records, sequence, store, state, _time, report),
+            new ControlUpkeep(records, sequence, store, state, _time, Report),
             new GroupDataOps(scanner, _setup.KeySpace, store, stateScripts, controlScripts, names, alert: _ambiguity.Raise),
             new KeyInventory(scanner, _setup.KeySpace, store, database, prefix, _time, _ambiguity.Raise),
             new StuckGateReopener(records, controlScripts, database, names, state, _time),
             new StateRecovery(store, store, records, sequence, _time),
             new ClearCoordinator(store, stateScripts, controlScripts, records, names, state, _time),
+            new KeyMoveSweep(scanner, _setup.KeySpace, control, names),
             new GroupRemoval(store, stateScripts, controlScripts, names, _setup.DropClaim),
             control);
     }
@@ -242,7 +243,7 @@ internal sealed class KeyMoveNode
     }
 
     private KeyMoveRuntime RuntimeOf(Wiring w) =>
-        new(w.Store, new StageCommands(w.Store, w.StateScripts, w.Names, _setup.Driver), w.Data, w.Clear, w.Removal, w.Recovery, _driver);
+        new(w.Store, new StageCommands(w.Store, w.StateScripts, w.Names, _setup.Driver), w.Data, w.Clear, w.Sweep, w.Removal, w.Recovery, _driver);
 
     // The connector replaces its connection after a failure and on a forced reconnect, and disposes the old one: the services are rebuilt over the new one, keeping the leases and their tokens.
     private async Task RunRewireAsync(string[] names, CancellationToken cancellationToken)
@@ -425,6 +426,7 @@ internal sealed class KeyMoveNode
         StuckGateReopener Stuck,
         StateRecovery Recovery,
         ClearCoordinator Clear,
+        KeyMoveSweep Sweep,
         GroupRemoval Removal,
         IDatabase Control);
 }

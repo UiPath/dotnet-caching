@@ -113,6 +113,15 @@ internal sealed class KeyMoveKit : IAsyncDisposable
     }
 
     // The rules follow the identity in force.
+    // The identity of a state a real transition wrote, records included: the gate and the rules of the node follow it.
+    public void Adopt(StateRecord state, bool swept = false)
+    {
+        _ep = state.Ep;
+        Id = state.Id;
+        _gate.Switch(Group, _ep, Id);
+        ApplyRules(state.State, state.NPop, swept, state.Direction);
+    }
+
     public void ApplyRules(string state, int nPop = 1, bool swept = false, string direction = "fwd") =>
         Plane.Rules = new GroupRules(true, ReadRule.Follow, WriteRule.Follow, new ActedState(state, direction, _ep, Id, nPop, swept), null, false, true, [], new HashSet<string> { Cid });
 

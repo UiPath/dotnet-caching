@@ -11,6 +11,14 @@ internal static partial class ReservedKeys
         || key.StartsWith(libraryPrefix + MoveKeyNames.Keyspace + ":", StringComparison.Ordinal)
         || Staging().IsMatch(key);
 
+    /// <summary>The data key a staging key was made for, when <paramref name="key"/> is one.</summary>
+    public static bool TryStagedKey(string key, out string dataKey)
+    {
+        var match = Staging().Match(key);
+        dataKey = match.Success ? key[..match.Index] : string.Empty;
+        return match.Success;
+    }
+
     [GeneratedRegex(":stg:[0-9a-f]{32}$", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 1000)]
     private static partial Regex Staging();
 }
