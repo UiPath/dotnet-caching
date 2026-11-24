@@ -4,7 +4,7 @@ using StackExchange.Redis;
 namespace UiPath.Caching.KeyMove;
 
 /// <summary>
-/// The leader's removal of markers that no writer will remove: an obsolete one goes by SMGC, and a current one whose writer is gone (it has stood for longer than a write can run) is helped,
+/// The leader's removal of markers that no writer will remove, in two modes (the orphans of a forward run, and the retiring generation in S1(rev)): an obsolete one goes by SMGC, and a current one whose writer is gone (it has stood for longer than a write can run) is helped,
 /// by the deletion of the superseded copy fenced by the marker's binding and then the removal of the exact marker.
 /// </summary>
 internal sealed class MarkerSweeper(IDatabase control, MoveScripts scripts, MoveKeyNames names, KeyMoveStateOptions options, TimeProvider time)
@@ -15,6 +15,7 @@ internal sealed class MarkerSweeper(IDatabase control, MoveScripts scripts, Move
     private const string FieldPrefix = "sm:";
 
     private readonly ConcurrentDictionary<string, long> _firstSeen = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _retireFrom = new(StringComparer.Ordinal);
 
     private enum Help
     {
@@ -23,31 +24,44 @@ internal sealed class MarkerSweeper(IDatabase control, MoveScripts scripts, Move
         Absent,
     }
 
-    public static bool Applies(StateRecord state) => ControlUpkeep.Applies(state) && state.Direction == "fwd";
+    /// <summary>The field count at or below which a record holds no marker: the fixed fields, the two of the binding, and a gate per cache. A marker comes with <c>pk</c> and a limit written before it.</summary>
+    public static long Floor(StateRecord state) =>
+        ControlRecord.FixedFields + (state.ForwardGeneration.Length > 0 || state.RetiringGeneration.Length > 0 ? 2 : 0) + state.CacheIds.Count;
+
+    public static bool Applies(StateRecord state, SweepMode mode) => mode == SweepMode.Retire
+        ? state is { State: "S1", Direction: "rev", Durable: true } && state.RetiringGeneration.Length > 0
+        : ControlUpkeep.Applies(state) && state.Direction == "fwd";
 
     /// <summary>One pass over the group's records, found by the length of each: a record that holds no more than its fixed fields and gates has no marker.</summary>
-    public async Task<MarkerSweepResult> SweepAsync(string group, StateRecord state, CancellationToken cancellationToken)
+    public async Task<MarkerSweepResult> SweepAsync(string group, StateRecord state, SweepMode mode, CancellationToken cancellationToken)
     {
         var total = new MarkerSweepResult();
-        if (!Applies(state))
+        if (!Applies(state, mode))
         {
             return total;
         }
 
-        // lim and pk are not assumed: a record that has neither is scanned at one field more than the state's own.
-        var floor = ControlRecord.FixedFields - 2 + state.CacheIds.Count;
+        var floor = Floor(state);
         var live = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var chunk in names.SlotSet().Chunk(Batch))
+        var slots = names.SlotSet();
+        var from = mode == SweepMode.Retire && _retireFrom.TryGetValue(group, out var resume) && resume < slots.Count ? resume : 0;
+        var started = time.GetTimestamp();
+        var stopped = false;
+        for (var at = from; at < slots.Count && !stopped; at += Batch)
         {
-            var lengths = await Task.WhenAll(chunk.Select(slot => control.HashLengthAsync(names.Control(group, slot), Master))).WaitAsync(cancellationToken).ConfigureAwait(false);
-            for (var i = 0; i < chunk.Length; i++)
+            total = Add(total, await SweepBatchAsync(group, state, slots.Skip(at).Take(Batch).ToArray(), mode, floor, live, cancellationToken).ConfigureAwait(false));
+
+            // The retire sweep runs inside a step of the leader, so it stops after the discovery budget and the next step goes on from the slot it stopped at.
+            if (mode == SweepMode.Retire && at + Batch < slots.Count && time.GetElapsedTime(started) >= options.RetireDiscoveryBudget)
             {
-                if (lengths[i] > floor)
-                {
-                    var part = await SweepSlotAsync(group, state, chunk[i], live, cancellationToken).ConfigureAwait(false);
-                    total = new MarkerSweepResult(total.Seen + part.Seen, total.Obsolete + part.Obsolete, total.Helped + part.Helped, total.Orphans + part.Orphans);
-                }
+                _retireFrom[group] = at + Batch;
+                stopped = true;
             }
+        }
+
+        if (mode == SweepMode.Retire && !stopped)
+        {
+            _retireFrom.TryRemove(group, out _);
         }
 
         KeyMoveTelemetry.CountMarkerOrphans(group, total.Orphans);
@@ -60,7 +74,25 @@ internal sealed class MarkerSweeper(IDatabase control, MoveScripts scripts, Move
         return total;
     }
 
-    private async Task<MarkerSweepResult> SweepSlotAsync(string group, StateRecord state, int slot, HashSet<string> live, CancellationToken cancellationToken)
+    private static MarkerSweepResult Add(MarkerSweepResult total, MarkerSweepResult part) =>
+        new(total.Seen + part.Seen, total.Obsolete + part.Obsolete, total.Helped + part.Helped, total.Orphans + part.Orphans);
+
+    private async Task<MarkerSweepResult> SweepBatchAsync(string group, StateRecord state, int[] chunk, SweepMode mode, long floor, HashSet<string> live, CancellationToken cancellationToken)
+    {
+        var total = new MarkerSweepResult();
+        var lengths = await Task.WhenAll(chunk.Select(slot => control.HashLengthAsync(names.Control(group, slot), Master))).WaitAsync(cancellationToken).ConfigureAwait(false);
+        for (var i = 0; i < chunk.Length; i++)
+        {
+            if (lengths[i] > floor)
+            {
+                total = Add(total, await SweepSlotAsync(group, state, chunk[i], mode, live, cancellationToken).ConfigureAwait(false));
+            }
+        }
+
+        return total;
+    }
+
+    private async Task<MarkerSweepResult> SweepSlotAsync(string group, StateRecord state, int slot, SweepMode mode, HashSet<string> live, CancellationToken cancellationToken)
     {
         var record = names.Control(group, slot);
 
@@ -88,11 +120,14 @@ internal sealed class MarkerSweeper(IDatabase control, MoveScripts scripts, Move
             }
 
             var seen = $"{group}\n{slot}\n{field}\n{value}";
-            live.Add(seen);
-            var since = _firstSeen.GetOrAdd(seen, _ => time.GetTimestamp());
-            if (time.GetElapsedTime(since) <= options.MarkerOrphanAfter)
+            if (mode == SweepMode.Orphans)
             {
-                continue;
+                live.Add(seen);
+                var since = _firstSeen.GetOrAdd(seen, _ => time.GetTimestamp());
+                if (time.GetElapsedTime(since) <= options.MarkerOrphanAfter)
+                {
+                    continue;
+                }
             }
 
             var outcome = await HelpAsync(group, state.Id, record, field, value, cancellationToken).ConfigureAwait(false);

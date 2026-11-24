@@ -78,6 +78,11 @@ internal static class StartGates
             failures.Add(new GateFailure(KeyMoveGateIds.StartKeyMoveSupport, noKm));
         }
 
+        if (Nodes(i, a => !a.HasBinding) is { Length: > 0 } unbound)
+        {
+            failures.Add(new GateFailure(KeyMoveGateIds.StartBinding, unbound));
+        }
+
         if (Nodes(i, a => !a.Pinned(group) || a.Bypasses) is { Length: > 0 } unpinned)
         {
             failures.Add(new GateFailure(KeyMoveGateIds.StartPins, unpinned));

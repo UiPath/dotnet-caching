@@ -10,6 +10,7 @@ internal static class KeyMoveGateIds
     public const string CloseInventory = "close.inventory";
     public const string CloseViews = "close.views";
     public const string StartKeyMoveSupport = "start.km_support";
+    public const string StartBinding = "start.binding";
     public const string StartPins = "start.pins";
     public const string StartNodeList = "start.node_list";
     public const string StartForeignNode = "start.foreign_node";

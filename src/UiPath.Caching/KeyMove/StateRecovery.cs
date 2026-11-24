@@ -4,7 +4,7 @@ namespace UiPath.Caching.KeyMove;
 
 internal sealed class StateRecovery(StateStore store, IStateReader samples, IRecordReader records, ITransitionSequence sequence, TimeProvider time, InstanceClaimReader? claims = null, InstanceClaimRecovery? claimRecovery = null)
 {
-    private static readonly string[] AlwaysCleared = [StateFields.AllAck, StateFields.T3At, StateFields.Swept, StateFields.DrainedAt, StateFields.ClosedAt, StateFields.DryRun, StateFields.HoldAuto];
+    private static readonly string[] AlwaysCleared = [StateFields.Fg, StateFields.Rg, StateFields.PrevFg, StateFields.PrevRg, StateFields.AllAck, StateFields.T3At, StateFields.Swept, StateFields.DrainedAt, StateFields.ClosedAt, StateFields.DryRun, StateFields.HoldAuto];
 
     /// <param name="registeredCaches">The caches the nodes registered (<c>ca</c>), used only for S0; S1 to S5 take the set from the surviving records.</param>
     public async Task<RecoveryResult> RecreateAsync(string group, IReadOnlyList<PeerIdentity> peers, IReadOnlyList<string> registeredCaches, ClaimFields? claim, CancellationToken cancellationToken, SequenceOptions? sequenceOptions = null)
@@ -31,14 +31,14 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
             return new RecoveryResult(RecoveryOutcome.RecordsDisagree);
         }
 
-        var (caches, failure) = await ReadRecreationCachesAsync(group, identity, sample, registeredCaches, cancellationToken).ConfigureAwait(false);
+        var (caches, recorded, failure) = await ReadRecreationCachesAsync(group, identity, sample, registeredCaches, cancellationToken).ConfigureAwait(false);
         if (failure is not null)
         {
             return failure;
         }
 
         claim ??= await ClaimAsync(group, cancellationToken).ConfigureAwait(false);
-        var target = RecreatedTarget(identity, sample, caches, claim);
+        var target = RecreatedTarget(identity, sample, caches, recorded, claim);
         var result = await sequence.RunAsync(group, StateExpectation.Absent, target, sequenceOptions, cancellationToken).ConfigureAwait(false);
         await RepairMirrorAsync(group, result, cancellationToken).ConfigureAwait(false);
         return new RecoveryResult(RecoveryOutcome.Done, result);
@@ -77,6 +77,8 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
         string state;
         string direction;
         int nPop;
+        string? recordedFg = null;
+        string? recordedRg = null;
         long committedEp;
         string committedId;
         var highest = found.Max(r => long.Parse(r[StateFields.Ep], CultureInfo.InvariantCulture));
@@ -91,6 +93,9 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
             }
 
             (state, direction, nPop, committedId) = (atEp[0][StateFields.State], atEp[0][StateFields.Direction], ParseNPop(atEp[0], "np"), atEp[0][StateFields.Id]);
+
+            // The generations come from the committed state: an uncommitted reverse never hands its retiring generation to the rebuilt one.
+            (recordedFg, recordedRg) = (atEp[0].GetValueOrDefault(StateFields.Fg), atEp[0].GetValueOrDefault(StateFields.Rg));
         }
         else
         {
@@ -101,7 +106,7 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
         }
 
         var gates = found.First(r => long.Parse(r[StateFields.Ep], CultureInfo.InvariantCulture) == highest).Keys.Where(k => k.StartsWith("c:", StringComparison.Ordinal)).Select(k => k[2..]);
-        return new RecoveryEvidence(state, direction, nPop, StateRecord.EncodeCaches(gates), highest, committedEp, committedId);
+        return new RecoveryEvidence(state, direction, nPop, StateRecord.EncodeCaches(gates), highest, committedEp, committedId, recordedFg, recordedRg);
     }
 
     private static StateExpectation ExpectationOf(StateRecord? stored)
@@ -115,6 +120,26 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
     }
 
     private static int DerivedNPop(string state, string direction) => state is "S3" or "S4" or "S5" || direction == "rev" ? 1 : 0;
+
+    // The generation comes from the committed record; with none shown, a forward run gets a new one, so the markers of the old one are obsolete.
+    // The previous-generation fields are written with it, so the abandon of a recovery that stopped before its commit restores them.
+    private static List<(string Field, string Value)> GenerationsAfterLoss(string state, string direction, string? recordedFg, string? recordedRg, string newId)
+    {
+        var set = new List<(string, string)>();
+        if (state != "S0" && direction == "fwd")
+        {
+            var fg = string.IsNullOrEmpty(recordedFg) ? newId : recordedFg;
+            set.Add((StateFields.Fg, fg));
+            set.Add((StateFields.PrevFg, fg));
+        }
+        else if (state == "S1" && direction == "rev" && !string.IsNullOrEmpty(recordedRg))
+        {
+            set.Add((StateFields.Rg, recordedRg));
+            set.Add((StateFields.PrevRg, recordedRg));
+        }
+
+        return set;
+    }
 
     private static int ParseNPop(IReadOnlyDictionary<string, string> record, string field) =>
         record.TryGetValue(field, out var v) && int.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : 0;
@@ -155,12 +180,13 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
         var clear = stored?.FieldNames?
             .Where(f => f.StartsWith(StateFields.ResiduePrefix, StringComparison.Ordinal) || f.StartsWith(StateFields.ApprovalPrefix, StringComparison.Ordinal) || AlwaysCleared.Contains(f))
             .ToArray() ?? [];
+        var newId = MoveScripts.NewNonce();
         return new StateTarget(
             evidence.State,
             evidence.Direction,
             evidence.NPop,
             newEp,
-            MoveScripts.NewNonce(),
+            newId,
             StateRecord.FormatPrev(evidence.State, evidence.Direction, evidence.NPop, evidence.CommittedEp, evidence.CommittedId),
             time.GetUtcNow().ToUnixTimeMilliseconds(),
             MoveId: newEp,
@@ -169,20 +195,21 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
             Move: claim?.Move,
             Release: claim?.Release,
             HoldOp: "reassert",
-            Clear: clear);
+            Clear: clear,
+            Set: GenerationsAfterLoss(evidence.State, evidence.Direction, evidence.Fg, evidence.Rg, newId));
     }
 
-    private async Task<(string Caches, RecoveryResult? Failure)> ReadRecreationCachesAsync(
+    private async Task<(string Caches, (string? Fg, string? Rg) Recorded, RecoveryResult? Failure)> ReadRecreationCachesAsync(
         string group, PeerIdentity identity, ControlSample? sample, IReadOnlyList<string> registeredCaches, CancellationToken cancellationToken)
     {
         if (identity.State == "S0")
         {
-            return (StateRecord.EncodeCaches(registeredCaches), null);
+            return (StateRecord.EncodeCaches(registeredCaches), default, null);
         }
 
         if (sample is null)
         {
-            return (string.Empty, new RecoveryResult(RecoveryOutcome.NeedsReassert));
+            return (string.Empty, default, new RecoveryResult(RecoveryOutcome.NeedsReassert));
         }
 
         // The identity and gates must come from one record read to reject a replacement or empty set.
@@ -190,21 +217,24 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
         var gates = fields.Keys.Where(k => k.StartsWith("c:", StringComparison.Ordinal)).Select(k => k[2..]).ToArray();
         if (fields.GetValueOrDefault(StateFields.Ep) != identity.Ep.ToString(CultureInfo.InvariantCulture) || fields.GetValueOrDefault(StateFields.Id) != identity.Id || gates.Length == 0)
         {
-            return (string.Empty, new RecoveryResult(RecoveryOutcome.NeedsReassert, Detail: "the record that named the managed set is gone, changed or holds no gate"));
+            return (string.Empty, default, new RecoveryResult(RecoveryOutcome.NeedsReassert, Detail: "the record that named the managed set is gone, changed or holds no gate"));
         }
 
-        return (StateRecord.EncodeCaches(gates), null);
+        // Only a committed record hands its generations on.
+        var committed = fields.GetValueOrDefault(StateFields.Durable) == "1";
+        return (StateRecord.EncodeCaches(gates), committed ? (fields.GetValueOrDefault(StateFields.Fg), fields.GetValueOrDefault(StateFields.Rg)) : default, null);
     }
 
-    private StateTarget RecreatedTarget(PeerIdentity identity, ControlSample? sample, string caches, ClaimFields? claim)
+    private StateTarget RecreatedTarget(PeerIdentity identity, ControlSample? sample, string caches, (string? Fg, string? Rg) recorded, ClaimFields? claim)
     {
         var newEp = Math.Max(identity.Ep, sample?.Ep ?? 0) + 1;
+        var newId = MoveScripts.NewNonce();
         return new StateTarget(
             identity.State,
             identity.Direction,
             DerivedNPop(identity.State, identity.Direction),
             newEp,
-            MoveScripts.NewNonce(),
+            newId,
             StateRecord.FormatPrev(identity.State, identity.Direction, DerivedNPop(identity.State, identity.Direction), identity.Ep, identity.Id),
             time.GetUtcNow().ToUnixTimeMilliseconds(),
             MoveId: newEp,
@@ -212,7 +242,8 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
             Caches: (caches, StateRecord.HashOfCaches(caches)),
             Move: claim?.Move,
             Release: claim?.Release,
-            HoldOp: "recreated");
+            HoldOp: "recreated",
+            Set: GenerationsAfterLoss(identity.State, identity.Direction, recorded.Fg, recorded.Rg, newId));
     }
 
     private Task<ClaimFields?> ClaimAsync(string group, CancellationToken cancellationToken) =>
@@ -226,5 +257,5 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
         }
     }
 
-    private readonly record struct RecoveryEvidence(string State, string Direction, int NPop, string Encoded, long Highest, long CommittedEp, string CommittedId);
+    private readonly record struct RecoveryEvidence(string State, string Direction, int NPop, string Encoded, long Highest, long CommittedEp, string CommittedId, string? Fg = null, string? Rg = null);
 }

@@ -79,6 +79,38 @@ public sealed class KeyMoveSupersessionHelperTests(RedisFixture fixture)
         (await kit.MarkerAsync("k")).Should().NotBeNull();
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Under_the_generation_binding_a_marker_of_fg_or_of_rg_is_helped_and_after_the_retire_gate_it_never_reaches_a_reverse_written_L(bool scripts)
+    {
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, scripts, noOrigin: true);
+        kit.Fg = "gen-a";
+        await kit.PrepareAsync("k");
+        await kit.SetStateAsync("S3");
+        await kit.Db.HashSetAsync(kit.Control("k"), kit.Field("k"), "gen-a|n0");
+        await kit.Db.StringSetAsync(kit.L("k"), "forward");
+        SupersededKey Key(string marker) => new(kit.Group, kit.Cid, "k", marker, kit.Id);
+
+        (await kit.Client.Supersession.OnSupersededAsync(Key("gen-a|n0"), Ct)).Should().Be(SupersessionAction.Retry);
+        (await kit.ExistsAsync(kit.L("k"))).Should().BeFalse();
+
+        // The reverse begins: the generation retires; the copy is still the retire sweep's to delete.
+        kit.Fg = null;
+        kit.Rg = "gen-a";
+        await kit.MoveGateAsync();
+        await kit.Db.StringSetAsync(kit.L("k"), "forward-again");
+        (await kit.Client.Supersession.OnSupersededAsync(Key("gen-a|n1"), Ct)).Should().Be(SupersessionAction.Retry);
+        (await kit.ExistsAsync(kit.L("k"))).Should().BeFalse();
+
+        // The retire gate is passed: the binding has ended, and a value the reverse wrote stays.
+        kit.Rg = null;
+        await kit.MoveGateAsync();
+        await kit.Db.StringSetAsync(kit.L("k"), "written-by-the-reverse");
+        (await kit.Client.Supersession.OnSupersededAsync(Key("gen-a|n2"), Ct)).Should().Be(SupersessionAction.Rerun);
+        (await kit.GetAsync(kit.L("k"))).Should().Be("written-by-the-reverse");
+    }
+
     [Fact]
     public async Task Without_a_data_connection_the_key_is_skipped()
     {

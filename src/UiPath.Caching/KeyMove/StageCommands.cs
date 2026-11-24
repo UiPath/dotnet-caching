@@ -59,6 +59,7 @@ internal sealed class StageCommands(StateStore store, MoveScripts scripts, MoveK
         ApprovalKinds.Release => state is { State: "S4", Direction: "rev" },
         ApprovalKinds.ForceReverse => state is { State: "S3" or "S4", Direction: "fwd" },
         ApprovalKinds.SkipBarrier => !state.Durable,
+        ApprovalKinds.RetireMarkers => state is { State: "S1", Direction: "rev" },
         ApprovalKinds.Abandon or ApprovalKinds.SkipLsweptWait => state is { State: "S5" },
         _ => false,
     };

@@ -32,9 +32,13 @@ internal static class StateFields
     public const string DrainedAt = "drainedAt";
     public const string ClosedAt = "closedAt";
     public const string DryRun = "dry";
-    public const string ColdStart = "x11";
+    public const string ColdStart = "cold";
     public const string CanaryAt = "canaryAt";
     public const string ResidueId = "resId";
-    public const string T3At = "t3At";
+    public const string T3At = "s3AckAt";
     public const string Attested = "att";
+    public const string Fg = "fg";
+    public const string Rg = "rg";
+    public const string PrevFg = "pfg";
+    public const string PrevRg = "prg";
 }

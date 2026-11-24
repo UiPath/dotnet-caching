@@ -6,7 +6,7 @@ namespace UiPath.Caching.Tests.KeyMove;
 // The leader's loop over a real state store with a simulated fleet and the seams faked; time is the kit's manual clock.
 internal sealed class DriverKit : IAsyncDisposable
 {
-    private DriverKit(StateKit kit, StageDriverOptions options, bool withMonitor, Func<ITransitionSequence, ITransitionSequence>? wrapSequence)
+    private DriverKit(StateKit kit, StageDriverOptions options, bool withMonitor, Func<ITransitionSequence, ITransitionSequence>? wrapSequence, bool sweeper, Func<StateKit, MarkerSweeper>? sweeperFactory)
     {
         if (withMonitor)
         {
@@ -20,7 +20,7 @@ internal sealed class DriverKit : IAsyncDisposable
         Facts = new FakeGroupFacts { ReleaseFloorAttested = true };
         var flags = new FlagViews(options, kit.Time);
         Driver = new StageDriver(
-            new StageDriverServices(kit.Store, kit.Scripts, kit.Names, wrapSequence is null ? kit.Sequence : wrapSequence(kit.Sequence), kit.Preflight, kit.Ledger, Fleet, Facts, Claim, Data, Mover, _ => LeaseCheck?.Invoke() ?? HoldsLease, Monitor, null, a => Alerts.Add((a.Code, a.Detail)), _ => Fence, kit.Upkeep),
+            new StageDriverServices(kit.Store, kit.Scripts, kit.Names, wrapSequence is null ? kit.Sequence : wrapSequence(kit.Sequence), kit.Preflight, kit.Ledger, Fleet, Facts, Claim, Data, Mover, _ => LeaseCheck?.Invoke() ?? HoldsLease, Monitor, null, a => Alerts.Add((a.Code, a.Detail)), _ => Fence, kit.Upkeep, new RetireGate(kit.ControlDb, kit.Names, kit.Options, kit.Time), sweeperFactory?.Invoke(kit) ?? (sweeper ? new MarkerSweeper(kit.ControlDb, kit.Scripts, kit.Names, kit.Options, kit.Time) : null)),
             options,
             kit.Options,
             flags,
@@ -60,10 +60,10 @@ internal sealed class DriverKit : IAsyncDisposable
 
     public string Group => Kit.Group;
 
-    public static async Task<DriverKit> CreateAsync(RedisContainerFixture fixture, bool useScripts = true, StageDriverOptions? options = null, KeyMoveStateOptions? state = null, bool withMonitor = false, Func<ITransitionSequence, ITransitionSequence>? wrapSequence = null)
+    public static async Task<DriverKit> CreateAsync(RedisContainerFixture fixture, bool useScripts = true, StageDriverOptions? options = null, KeyMoveStateOptions? state = null, bool withMonitor = false, Func<ITransitionSequence, ITransitionSequence>? wrapSequence = null, bool retireSweeper = true, Func<StateKit, MarkerSweeper>? sweeperFactory = null)
     {
         var kit = await StateKit.StandaloneAsync(fixture, useScripts, state ?? new KeyMoveStateOptions { ExpectedReplicasPerMaster = 0, EvictionPolicyAttested = true });
-        return new DriverKit(kit, options ?? new StageDriverOptions { UpgradeHold = TimeSpan.Zero, AckStable = TimeSpan.Zero, DrainedSoak = TimeSpan.Zero }, withMonitor, wrapSequence);
+        return new DriverKit(kit, options ?? new StageDriverOptions { UpgradeHold = TimeSpan.Zero, AckStable = TimeSpan.Zero, DrainedSoak = TimeSpan.Zero }, withMonitor, wrapSequence, retireSweeper, sweeperFactory);
     }
 
     public async Task<StateRecord> StateAsync() => (await Kit.Store.ReadAsync(Group, CancellationToken.None))!;

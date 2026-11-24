@@ -19,4 +19,5 @@ internal sealed record StepInput(
     Func<bool, Task<PreflightResult>> Preflight,
     Func<Task<long>> NativeCount,
     Func<Task<DrainReport?>> Drain,
-    Func<Task<IReadOnlyDictionary<string, long>>> ResidueInventory);
+    Func<Task<IReadOnlyDictionary<string, long>>> ResidueInventory,
+    Func<Task<RetireVerdict>> Retire);
