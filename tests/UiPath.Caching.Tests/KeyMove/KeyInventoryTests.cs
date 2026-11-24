@@ -73,6 +73,54 @@ public class KeyInventoryTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task Drain_confirmation_requires_an_inventory_started_after_the_replica_lag_window()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        await kit.SetAsync(MoveSide.Legacy, "a", "k1");
+        var clean = true;
+        var status = new InventoryMoverStatus(kit.Inventory, kit.Kit.Time, (_, _, _) => Task.FromResult(clean), TimeSpan.FromSeconds(10));
+
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("the passes were just seen");
+        kit.Kit.Time.Advance(TimeSpan.FromSeconds(9));
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("not a replica lag yet");
+        kit.Kit.Time.Advance(TimeSpan.FromSeconds(2));
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeTrue("the inventory cached before the wait is not the confirmation, and a fresh one agrees");
+
+        clean = false;
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse();
+        clean = true;
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("the wait starts again when the passes stop being clean");
+    }
+
+    [Fact]
+    public async Task Changed_evidence_restarts_the_wait_and_invalidates_the_previous_inventory()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        var state = await kit.StateAsync();
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        await kit.SetAsync(MoveSide.Legacy, "a", "k1");
+        string? evidence = "topology-one";
+        var status = new InventoryMoverStatus(kit.Inventory, kit.Kit.Time, null, TimeSpan.FromSeconds(10), (_, _, _) => Task.FromResult<string?>(evidence));
+
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("the passes were just seen");
+        kit.Kit.Time.Advance(TimeSpan.FromSeconds(9));
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("not a replica lag yet");
+
+        // A primary joined and finished its pass between two looks: the passes are the same as far as the count of a clean group goes, but they are not the ones the wait began for.
+        evidence = "topology-two";
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("the evidence changed, so the wait begins again");
+        kit.Kit.Time.Advance(TimeSpan.FromSeconds(2));
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("only two seconds since the new evidence, though eleven since the first");
+        kit.Kit.Time.Advance(TimeSpan.FromSeconds(9));
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeTrue("a replica lag after the new evidence was first seen");
+
+        evidence = null;
+        (await status.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("no evidence");
+    }
+
+    [Fact]
     public async Task A_forward_report_is_null_without_the_time_of_S3_and_the_residue_inventory_still_answers()
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
@@ -113,7 +161,7 @@ public class KeyInventoryTests(RedisContainerFixture fixture)
         await status.DrainAsync(kit.Group, "fwd", Ct);
         await status.DrainAsync(kit.Group, "fwd", Ct);
         events.Count(e => e == "scan").Should().Be(1, "the second report reuses the inventory");
-        events.First().Should().Be("mover");
+        events[0].Should().Be("mover");
         kit.Kit.Time.Advance(TimeSpan.FromSeconds(31));
         await status.DrainAsync(kit.Group, "fwd", Ct);
 

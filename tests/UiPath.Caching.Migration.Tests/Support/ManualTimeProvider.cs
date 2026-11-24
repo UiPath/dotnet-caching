@@ -9,6 +9,18 @@ internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
+    /// <summary>How many timers are waiting to fire.</summary>
+    public int TimerCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Count;
+            }
+        }
+    }
+
     /// <summary>Whether a timer is waiting to fire.</summary>
     public bool HasTimers
     {

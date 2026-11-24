@@ -7,7 +7,8 @@ namespace UiPath.Caching.KeyMove;
 /// <param name="libraryPrefix">The application's namespace in native keys, and the prefix of every key of the move.</param>
 /// <param name="excluded">Glob patterns of the keyspaces of caches the app uses directly; a key that matches one is nobody's, whatever a delegate says.</param>
 /// <param name="alert">Told once for each cache whose mapping lands outside its own namespace, until the mapping is valid again.</param>
-internal sealed class RegisteredKeySpace(IReadOnlyList<KeyMoveCache> caches, string libraryPrefix, Action<KeyMoveAlert>? alert = null, IReadOnlyList<string>? excluded = null) : IGroupKeySpace
+/// <param name="groupMinTtl">The minimum remaining life the mover moves, by group; a group not named takes <see cref="IGroupKeySpace.DefaultMoveMinTtl"/>.</param>
+internal sealed class RegisteredKeySpace(IReadOnlyList<KeyMoveCache> caches, string libraryPrefix, Action<KeyMoveAlert>? alert = null, IReadOnlyList<string>? excluded = null, IReadOnlyDictionary<string, TimeSpan>? groupMinTtl = null) : IGroupKeySpace
 {
     private readonly ConcurrentDictionary<string, byte> _alerted = new(StringComparer.Ordinal);
 
@@ -21,12 +22,28 @@ internal sealed class RegisteredKeySpace(IReadOnlyList<KeyMoveCache> caches, str
         Accepting(side, key).Select(c => c.Name).Order(StringComparer.Ordinal).ToArray();
 
     public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) =>
-        Accepting(side, key).ToArray() is [{ } only] && only.Name == cacheId && only.RoundTrips(side, key) && DestinationIsOwned(group, only, side, key);
+        Accepting(side, key).ToArray() is [{ } only] && only.Name == cacheId && only.RoundTrips(side, key) && !IsShort(group, only, side, timeToLive) && DestinationIsOwned(group, only, side, key);
 
     public bool HasValidDestination(string group, MoveSide side, string cacheId, string key) =>
         Accepting(side, key).ToArray() is not [{ } only] || only.Name != cacheId || !CanBeParsed(only, side, key) || DestinationIsOwned(group, only, side, key);
 
+    public bool HasHashCache(string group) => caches.Any(c => c.Group == group && c.Hash);
+
+    public string? CallerKeyOf(string group, MoveSide side, string cacheId, string key)
+    {
+        if (caches.FirstOrDefault(c => c.Group == group && c.Name == cacheId) is not { } cache || !CanBeParsed(cache, side, key))
+        {
+            return null;
+        }
+
+        return side == MoveSide.Legacy ? cache.ParseInPlace(key) : cache.ParseNative(key);
+    }
+
     public TimeSpan? MaxSourceTtl(string group, string cacheId) => caches.FirstOrDefault(c => c.Group == group && c.Name == cacheId)?.MaxSourceTtl;
+
+    public TimeSpan MoveMinTtl(string group, string cacheId) =>
+        caches.FirstOrDefault(c => c.Group == group && c.Name == cacheId)?.MoveMinTtl
+        ?? (groupMinTtl is not null && groupMinTtl.TryGetValue(group, out var own) ? own : IGroupKeySpace.DefaultMoveMinTtl);
 
     private static bool CanBeParsed(KeyMoveCache cache, MoveSide side, string key)
     {
@@ -39,6 +56,10 @@ internal sealed class RegisteredKeySpace(IReadOnlyList<KeyMoveCache> caches, str
             return false;
         }
     }
+
+    // A short-lived key can wait for read-through only if the cache has an origin.
+    private bool IsShort(string group, KeyMoveCache cache, MoveSide side, TimeSpan? timeToLive) =>
+        side == MoveSide.Legacy && !cache.NoOrigin && timeToLive is { } life && life < MoveMinTtl(group, cache.Name);
 
     // The key the move would write, checked as it is made: a function cannot be proved for every key at build time. It must be a key of the same cache, in its own namespace, that reads back as the same caller key.
     private bool DestinationIsOwned(string group, KeyMoveCache cache, MoveSide side, string key)

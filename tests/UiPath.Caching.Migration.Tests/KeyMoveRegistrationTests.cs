@@ -7,6 +7,8 @@ namespace UiPath.Caching.Migration.Tests;
 // UseKeyMove: what a build accepts, each rule that refuses, and the traits and key map the setup carries.
 public class KeyMoveRegistrationTests
 {
+    private static readonly string[] ExpectedCacheIds = ["a", "b"];
+
     private static StateRecord Fresh { get; } = new("S0", "none", 1, "id1", true, 0, string.Empty, null, "a", "cs", string.Empty, string.Empty, string.Empty, string.Empty);
 
     [Fact]
@@ -20,7 +22,7 @@ public class KeyMoveRegistrationTests
             .AddCache(Cache("b", refill: true, ttl: TimeSpan.FromHours(3)))).BuildKeyMove()!;
 
         setup.LibraryPrefix.Should().Be("lib:");
-        setup.Groups.Should().ContainSingle().Which.Should().Match<GroupRegistration>(g => g.Name == "g1" && g.Flagged && g.Listed && g.CacheIds!.SequenceEqual(new[] { "a", "b" }));
+        setup.Groups.Should().ContainSingle().Which.Should().Match<GroupRegistration>(g => g.Name == "g1" && g.Flagged && g.Listed && g.CacheIds != null && g.CacheIds.SequenceEqual(ExpectedCacheIds));
         setup.Facts.ReleaseFloorAttested.Should().BeTrue();
         setup.Facts.HasNoOrigin("g1", ["a", "b"]).Should().BeTrue("a NoOrigin cache takes the S2 barrier");
         setup.Facts.HasNoOrigin("g1", ["b"]).Should().BeFalse();
@@ -47,6 +49,34 @@ public class KeyMoveRegistrationTests
     }
 
     [Fact]
+    public static void MoveMinTtl_is_ten_minutes_unless_the_group_says_otherwise_and_a_cache_overrides_the_group()
+    {
+        var setup = Builder(Routed("a", "g1"), Routed("b", "g1"), Routed("c", "g2")).UseKeyMove(new Stage(), p => p
+            .UseLibraryKeyPrefix("lib:")
+            .AddGroup("g1")
+            .AddGroup("g2")
+            .UseMoveMinTtl("g1", TimeSpan.FromMinutes(3))
+            .AddCache(Cache("a"))
+            .AddCache(Cache("b", moveMinTtl: TimeSpan.Zero))
+            .AddCache(Cache("c", group: "g2"))).BuildKeyMove()!;
+
+        setup.KeySpace.MoveMinTtl("g1", "a").Should().Be(TimeSpan.FromMinutes(3));
+        setup.KeySpace.MoveMinTtl("g1", "b").Should().Be(TimeSpan.Zero);
+        setup.KeySpace.MoveMinTtl("g2", "c").Should().Be(TimeSpan.FromMinutes(10));
+    }
+
+    [Fact]
+    public static void A_negative_MoveMinTtl_or_one_for_a_group_that_was_not_added_is_refused()
+    {
+        var negative = () => new KeyMoveBuilder().UseMoveMinTtl("g1", TimeSpan.FromSeconds(-1));
+        negative.Should().Throw<ArgumentOutOfRangeException>();
+        var negativeCache = () => Builder(Routed("a", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", moveMinTtl: TimeSpan.FromSeconds(-1)))).BuildKeyMove();
+        negativeCache.Should().Throw<InvalidOperationException>().WithMessage("*MoveMinTtl*");
+        var unknown = () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).UseMoveMinTtl("g9", TimeSpan.Zero)).BuildKeyMove();
+        unknown.Should().Throw<InvalidOperationException>().WithMessage("*g9*");
+    }
+
+    [Fact]
     public static void The_key_map_uses_the_router_registration_for_the_in_place_side_and_the_registered_one_for_the_native_side()
     {
         var setup = Valid().BuildKeyMove()!;
@@ -67,47 +97,24 @@ public class KeyMoveRegistrationTests
 
     [Theory]
     [MemberData(nameof(Refusals))]
-    public static void Each_rule_refuses_at_build(string rule, Func<RouterBuilder> make, string message)
+    public static void Each_rule_refuses_at_build(string rule)
     {
+        var (_, make, message) = RefusalCases().Single(item => item.Rule == rule);
         var act = () => make().BuildKeyMove();
 
         act.Should().Throw<Exception>(rule).WithMessage($"*{message}*");
     }
 
-    public static TheoryData<string, Func<RouterBuilder>, string> Refusals() => new()
+    public static TheoryData<string> Refusals()
     {
-        { "no prefix", () => Using(p => p.AddGroup("g1").AddCache(Cache("a"))), "UseLibraryKeyPrefix" },
-        { "prefix with a brace", () => Using(p => p.UseLibraryKeyPrefix("a{b:").AddGroup("g1").AddCache(Cache("a"))), "brace" },
-        { "prefix with a glob character", () => Using(p => p.UseLibraryKeyPrefix("app[1]:").AddGroup("g1").AddCache(Cache("a"))), "glob character" },
-        { "prefix with a star", () => Using(p => p.UseLibraryKeyPrefix("app*:").AddGroup("g1").AddCache(Cache("a"))), "glob character" },
-        { "no group", () => Using(p => p.UseLibraryKeyPrefix("lib:")), "no group" },
-        { "group name with a forbidden character", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g+1").AddCache(Cache("a", group: "g+1"))), "cannot take part" },
-        { "group added twice", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddGroup("g1").AddCache(Cache("a"))), "added twice" },
-        { "cache name with a forbidden character", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a=b"))), "cannot take part" },
-        { "cache in two groups", () => Builder(Routed("a", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddGroup("g2").AddCache(Cache("a")).AddCache(Cache("a", group: "g2"))), "added twice" },
-        { "cache added twice with other patterns", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AddCache(Cache("a", nativePattern: "lib:n:other:*", owns: _ => true))), "added twice" },
-        { "native pattern outside the namespace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", nativePattern: "n:*"))), "outside the application's namespace" },
-        { "formatted native key outside the namespace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", formatNative: key => "n:" + key))), "outside the application's namespace" },
-        { "native pattern that can overlap an excluded keyspace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).ExcludeKeyspace("lib:n:*")), "can overlap the excluded keyspace" },
-        { "native pattern under a wider excluded keyspace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).ExcludeKeyspace("lib:*")), "can overlap the excluded keyspace" },
-        { "in-place pattern that can overlap an excluded keyspace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).ExcludeKeyspace("l:a:k*")), "in-place pattern" },
-        { "in-place pattern that is a bare wildcard", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", inPlacePattern: "*"))), "starts with a wildcard" },
-        { "router cache of the group left out of AddCache", () => Builder(Routed("a", "g1"), Routed("forgotten", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))), "not registered with AddCache" },
-        { "pattern shared across groups without predicates", () => Builder(Routed("a", "g1"), Routed("b", "g2")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddGroup("g2").AddCache(Cache("a", nativePattern: "lib:n:*")).AddCache(Cache("b", group: "g2", nativePattern: "lib:n:*"))), "ownership predicate" },
-        { "second UseKeyMove", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))).UseKeyMove(new Stage(), _ => { }), "already called" },
-        { "attested twice", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestFormatSettled("g1", "e1").AttestFormatSettled("g1", "e2")), "attested twice" },
-        { "evidence id with a comma", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestNodeListComplete("g1", "a,b")), "comma, a colon or whitespace" },
-        { "null cache name", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache(null!))), "cannot take part" },
-        { "null parse delegate", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(NullParse())), "needs ParseInPlaceKey" },
-        { "attestation for a group that was not added", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestMemoryFits("ghost", "r")), "which was not added" },
-        { "cache group not added", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", group: "other"))), "was not added" },
-        { "cache not routed", () => Builder().UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))), "not registered with the router" },
-        { "cache routed in another group", () => Builder(Routed("a", "g2")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))), "not registered with the router in the group 'g1'" },
-        { "group without a cache", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddGroup("empty").AddCache(Cache("a"))), "has no cache" },
-        { "empty scan pattern", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", nativePattern: " "))), "scan pattern" },
-        { "source life not positive", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", ttl: TimeSpan.Zero))), "MaxSourceTtl" },
-        { "caches that share a pattern without predicates", () => Builder(Routed("a", "g1"), Routed("b", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", nativePattern: "lib:n:*")).AddCache(Cache("b", nativePattern: "lib:n:*"))), "ownership predicate" },
-    };
+        var data = new TheoryData<string>();
+        foreach (var (rule, _, _) in RefusalCases())
+        {
+            data.Add(rule);
+        }
+
+        return data;
+    }
 
     [Fact]
     public static void Caches_that_share_a_pattern_are_accepted_when_each_has_a_predicate()
@@ -226,6 +233,41 @@ public class KeyMoveRegistrationTests
         ParseNativeKey = _ => null,
     };
 
+    private static (string Rule, Func<RouterBuilder> Make, string Message)[] RefusalCases() =>
+    [
+        ("no prefix", () => Using(p => p.AddGroup("g1").AddCache(Cache("a"))), "UseLibraryKeyPrefix"),
+        ("prefix with a brace", () => Using(p => p.UseLibraryKeyPrefix("a{b:").AddGroup("g1").AddCache(Cache("a"))), "brace"),
+        ("prefix with a glob character", () => Using(p => p.UseLibraryKeyPrefix("app[1]:").AddGroup("g1").AddCache(Cache("a"))), "glob character"),
+        ("prefix with a star", () => Using(p => p.UseLibraryKeyPrefix("app*:").AddGroup("g1").AddCache(Cache("a"))), "glob character"),
+        ("no group", () => Using(p => p.UseLibraryKeyPrefix("lib:")), "no group"),
+        ("group name with a forbidden character", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g+1").AddCache(Cache("a", group: "g+1"))), "cannot take part"),
+        ("group added twice", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddGroup("g1").AddCache(Cache("a"))), "added twice"),
+        ("cache name with a forbidden character", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a=b"))), "cannot take part"),
+        ("cache in two groups", () => Builder(Routed("a", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddGroup("g2").AddCache(Cache("a")).AddCache(Cache("a", group: "g2"))), "added twice"),
+        ("cache added twice with other patterns", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AddCache(Cache("a", nativePattern: "lib:n:other:*", owns: _ => true))), "added twice"),
+        ("native pattern outside the namespace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", nativePattern: "n:*"))), "outside the application's namespace"),
+        ("formatted native key outside the namespace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", formatNative: key => "n:" + key))), "outside the application's namespace"),
+        ("native pattern that can overlap an excluded keyspace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).ExcludeKeyspace("lib:n:*")), "can overlap the excluded keyspace"),
+        ("native pattern under a wider excluded keyspace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).ExcludeKeyspace("lib:*")), "can overlap the excluded keyspace"),
+        ("in-place pattern that can overlap an excluded keyspace", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).ExcludeKeyspace("l:a:k*")), "in-place pattern"),
+        ("in-place pattern that is a bare wildcard", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", inPlacePattern: "*"))), "starts with a wildcard"),
+        ("router cache of the group left out of AddCache", () => Builder(Routed("a", "g1"), Routed("forgotten", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))), "not registered with AddCache"),
+        ("pattern shared across groups without predicates", () => Builder(Routed("a", "g1"), Routed("b", "g2")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddGroup("g2").AddCache(Cache("a", nativePattern: "lib:n:*")).AddCache(Cache("b", group: "g2", nativePattern: "lib:n:*"))), "ownership predicate"),
+        ("second UseKeyMove", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))).UseKeyMove(new Stage(), _ => { }), "already called"),
+        ("attested twice", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestFormatSettled("g1", "e1").AttestFormatSettled("g1", "e2")), "attested twice"),
+        ("evidence id with a comma", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestNodeListComplete("g1", "a,b")), "comma, a colon or whitespace"),
+        ("null cache name", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache(null!))), "cannot take part"),
+        ("null parse delegate", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(NullParse())), "needs ParseInPlaceKey"),
+        ("attestation for a group that was not added", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestMemoryFits("ghost", "r")), "which was not added"),
+        ("cache group not added", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", group: "other"))), "was not added"),
+        ("cache not routed", () => Builder().UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))), "not registered with the router"),
+        ("cache routed in another group", () => Builder(Routed("a", "g2")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))), "not registered with the router in the group 'g1'"),
+        ("group without a cache", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddGroup("empty").AddCache(Cache("a"))), "has no cache"),
+        ("empty scan pattern", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", nativePattern: " "))), "scan pattern"),
+        ("source life not positive", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", ttl: TimeSpan.Zero))), "MaxSourceTtl"),
+        ("caches that share a pattern without predicates", () => Builder(Routed("a", "g1"), Routed("b", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", nativePattern: "lib:n:*")).AddCache(Cache("b", nativePattern: "lib:n:*"))), "ownership predicate"),
+    ];
+
     private static RouterBuilder Valid() => Builder(Routed("a", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")));
 
     private static RouterBuilder Using(Action<KeyMoveBuilder> configure) => Builder(Routed("a", "g1")).UseKeyMove(new Stage(), configure);
@@ -246,7 +288,7 @@ public class KeyMoveRegistrationTests
     private static RouterCacheRegistration<string> Router(string name, string group) =>
         new() { Name = name, Group = group, Source = new Source(), RedisKey = key => $"l:{name}:{key}" };
 
-    private static KeyMoveCacheRegistration Cache(string name, string group = "g1", bool noOrigin = false, bool refill = false, TimeSpan? ttl = null, string? inPlacePattern = null, string? nativePattern = null, Func<string, bool>? owns = null, bool atMostOnce = false, Func<string, string>? formatNative = null) => new()
+    private static KeyMoveCacheRegistration Cache(string name, string group = "g1", bool noOrigin = false, bool refill = false, TimeSpan? ttl = null, string? inPlacePattern = null, string? nativePattern = null, Func<string, bool>? owns = null, bool atMostOnce = false, Func<string, string>? formatNative = null, TimeSpan? moveMinTtl = null) => new()
     {
         Name = name,
         Group = group,
@@ -260,6 +302,7 @@ public class KeyMoveRegistrationTests
         FormatNativeKey = formatNative ?? (key => $"lib:n:{name}:{key}"),
         ParseNativeKey = key => key.StartsWith($"lib:n:{name}:", StringComparison.Ordinal) ? key[$"lib:n:{name}:".Length..] : null,
         OwnsNativeKey = owns,
+        MoveMinTtl = moveMinTtl,
     };
 
     private sealed class Stage : IMigrationStageSource

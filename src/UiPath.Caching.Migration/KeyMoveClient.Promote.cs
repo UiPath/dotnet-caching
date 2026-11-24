@@ -5,56 +5,30 @@ namespace UiPath.Caching.Migration;
 
 internal sealed partial class KeyMoveClient<T>
 {
-    private static int FirstDestinationProbe(bool probed) => probed ? 2 : 0;
+    private static ReadStep<T> PromotionRead(PromotionResult<T> result) => result.Kind switch
+    {
+        PromotionKind.IdentityAtCapture => ReadStep<T>.Again,
+        PromotionKind.IdentityAtPublish when result.Readmitted => ReadStep<T>.Again,
+        PromotionKind.Restart => ReadStep<T>.Retry,
+        _ => ReadStep<T>.Of(result.Read),
+    };
 
-    private static (bool Replica, SchedulePointStep Point) DestinationProbe(int read) =>
-        read == 0 ? (true, SchedulePointStep.ReadDestination) : (false, SchedulePointStep.ReadDestinationOnMaster);
-
-    private static ReadStep<T> PreferCurrent(PathRead<T> current, PathRead<T> uncached) =>
-        ReadStep<T>.Of(current.Kind == ReadOutcome.Found ? current : uncached);
-
-    // Forward read-through promotion in S3 starts after the router checks its local tier.
+    // Promotion runs after the router checks the local tier.
     private async ValueTask<ReadStep<T>> PromoteAsync(string key, KeyMovePlan plan, CancellationToken cancellationToken, bool probed = false)
     {
         try
         {
             var attempt = 0;
-            ReadStep<T> step;
-            do
+            while (true)
             {
-                var n = Native(key);
-                var identity = plan.Identity;
-                var alreadyProbed = probed && attempt == 0;
-                // Batch reads arrive with the destination and source existence checked.
-                for (var read = FirstDestinationProbe(alreadyProbed); read < 2; read++)
+                var step = await PromoteOnceAsync(key, plan, attempt, probed && attempt == 0, cancellationToken).ConfigureAwait(false);
+                if (!step.Restart)
                 {
-                    var (replica, point) = DestinationProbe(read);
-                    var found = Interpret(await SnapAsync(n, replica, point, cancellationToken).ConfigureAwait(false), _p.Native);
-                    if (found.Kind != ReadOutcome.Absent)
-                    {
-                        return ReadStep<T>.Of(found);
-                    }
+                    return step;
                 }
 
-                if (CanUseMissHint(key, identity, alreadyProbed))
-                {
-                    return ReadStep<T>.Of(ReadOutcome.Absent);
-                }
-
-                // An absent source creates no fence. Recheck N in case another caller promoted.
-                switch (await ProbeSource(key, alreadyProbed, cancellationToken).ConfigureAwait(false))
-                {
-                    case null:
-                        return ReadStep<T>.Of(ReadOutcome.Unavailable);
-                    case false:
-                        return ReadStep<T>.Of(await MissAsync(key, n, identity, cancellationToken).ConfigureAwait(false));
-                }
-
-                step = await PromoteOnceAsync(key, n, identity, plan.Act?.Id, attempt++, cancellationToken).ConfigureAwait(false);
+                attempt++;
             }
-            while (step.Restart);
-
-            return step;
         }
         catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
         {
@@ -62,195 +36,68 @@ internal sealed partial class KeyMoveClient<T>
         }
     }
 
-    private ValueTask<bool?> ProbeSource(string key, bool probed, CancellationToken cancellationToken) =>
-        probed ? ValueTask.FromResult<bool?>(true) : SourceExistsAsync(key, SchedulePointStep.ProbeSource, cancellationToken);
-
-    private bool CanUseMissHint(string key, string identity, bool probed) => !probed && _hints.Has(key, identity);
-
-    private async ValueTask<ReadStep<T>> PromoteOnceAsync(string key, string n, string identity, string? expectedId, int attempt, CancellationToken cancellationToken)
+    private async ValueTask<ReadStep<T>> PromoteOnceAsync(string key, KeyMovePlan plan, int attempt, bool probed, CancellationToken cancellationToken)
     {
-        var (admitted, _) = await AdmitAsync(promotion: true, expectedId, cancellationToken).ConfigureAwait(false);
+        var n = Native(key);
+
+        var identity = plan.Identity;
+
+        // A batch read has already checked the destination and probed the source.
+        if (!probed)
+        {
+            // Verify a replica miss on the master before consulting the hint.
+            var replica = Interpret(await SnapAsync(n, replica: true, SchedulePointStep.ReadDestination, cancellationToken).ConfigureAwait(false), _p.Native);
+            if (replica.Kind != ReadOutcome.Absent)
+            {
+                return ReadStep<T>.Of(replica);
+            }
+
+            var master = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native);
+            if (master.Kind != ReadOutcome.Absent)
+            {
+                return ReadStep<T>.Of(master);
+            }
+
+            if (_hints.Has(key, identity))
+            {
+                return ReadStep<T>.Of(ReadOutcome.Absent);
+            }
+
+            // Probe before capture so a genuine miss creates no fence.
+            var probe = await SourceExistsAsync(key, SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false);
+            switch (probe)
+            {
+                case null:
+                    return ReadStep<T>.Of(ReadOutcome.Unavailable);
+                case false:
+                    return ReadStep<T>.Of(await MissAsync(key, n, identity, cancellationToken).ConfigureAwait(false));
+            }
+        }
+
+        var (admitted, _) = await AdmitAsync(promotion: true, plan.Act?.Id, cancellationToken).ConfigureAwait(false);
         using var unit = admitted;
         if (unit is null || Data is not { } data)
         {
-            // When no unit is admitted under the rules' identity or the gate holds a different identity, skip publishing and read the union with a final check on N.
+            // If admission fails, confirm the destination again before serving a source value.
             return await UnpromotedAsync(key, cancellationToken).ConfigureAwait(false);
         }
 
-        var keys = new FencedKeys(data.Names.ForwardFence(n), Key(n), ControlOf(data, n));
-
-        // Capture the fence before taking the snapshot of L. The elapsed-time bound includes the CAP round trip.
-        var events = data.ConnectionEvents();
-        var started = _p.Clock.GetTimestamp();
-        await At(SchedulePointStep.Capture).ConfigureAwait(false);
-        var capture = await data.Scripts.CaptureAsync(keys, unit.Id, _p.CacheId, MoveScripts.NewNonce(), (long)_options.FenceTtl.TotalMilliseconds, MarkerFieldOf(data, key)).ConfigureAwait(false);
-        switch (capture)
+        var result = await _promotion.RunAsync(key, null, unit, data, attempt, AlwaysOwned.Instance, cancellationToken).ConfigureAwait(false);
+        switch (result.Kind)
         {
-            case { Code: MoveScripts.IdentityMismatch } when unit.Readmit():
-                return ReadStep<T>.Again;
-            case { Code: MoveScripts.IdentityMismatch }:
+            case PromotionKind.IdentityAtCapture when !result.Readmitted:
                 return await UnpromotedAsync(key, cancellationToken).ConfigureAwait(false);
-            case { Code: MoveScripts.LiveSupersession }:
-                // The copy of L is older than the newest write of N: delete it, remove the marker and serve N.
-                return await HelpAsync(key, n, capture.Marker, unit, identity, cancellationToken).ConfigureAwait(false);
-            case { Captured: false }:
-                // A clear may have closed the gate. Leave the miss hint alone.
-                Count("gate_closed");
-                return ReadStep<T>.Of(ReadOutcome.Absent);
-            case { DestinationExists: true }:
-                return ReadStep<T>.Of(Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native));
-        }
-
-        // Read L after the capture.
-        var snap = await SourceSnapAsync(key, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);
-        var replied = _p.Clock.GetTimestamp();
-        if (snap.Kind == ReadOutcome.Absent)
-        {
-            return ReadStep<T>.Of(await MissAsync(key, n, identity, cancellationToken).ConfigureAwait(false));
-        }
-
-        var (served, classification) = DecodeSource(snap);
-        if (served is not { Kind: ReadOutcome.Found, Value: { } value })
-        {
-            return ReadStep<T>.Of(served);
-        }
-
-        if (ShouldServeWithoutPublishing(key, snap.TtlMs, classification, value, data, events, started, replied, out var encoded, out var cacheLocally))
-        {
-            return ReadStep<T>.Of(served with { Uncached = !cacheLocally });
-        }
-
-        var uncached = served with { Uncached = true };
-        var publication = CapturedPublication(capture, snap.TtlMs);
-        await At(SchedulePointStep.Publish).ConfigureAwait(false);
-        var published = await data.Scripts.PublishAsync(keys, unit.Id, encoded, publication).ConfigureAwait(false);
-        switch (published)
-        {
-            case MoveScripts.DestinationExists:
-                var current = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native);
-                return PreferCurrent(current, uncached);
-            case MoveScripts.Published:
-                break;
+            case PromotionKind.SourceAbsent or PromotionKind.SupersededRetry:
+                // A superseded copy of L was deleted with its marker, so the key reads as N alone.
+                return ReadStep<T>.Of(await MissAsync(key, n, identity, cancellationToken).ConfigureAwait(false));
+            case PromotionKind.SupersededRerun:
+                return result.Readmitted ? ReadStep<T>.Again : await UnpromotedAsync(key, cancellationToken).ConfigureAwait(false);
+            case PromotionKind.Superseded:
+                return ReadStep<T>.Of(ReadOutcome.Unavailable);
             default:
-                return PublishRefusal(published, attempt, unit, uncached);
-        }
-
-        // Confirm N exists before deleting L, and delete L only if its bytes still match the source snapshot.
-        var exists = await ExistsAsync(n, SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false);
-        if (exists != true)
-        {
-            return ReadStep<T>.Of(served);
-        }
-
-        await At(SchedulePointStep.CompareDelete).ConfigureAwait(false);
-        try
-        {
-            _ = await Source.CompareDeleteAsync(key, unit.Id, snap.Bytes ?? []).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
-        {
-            // The surviving source copy is lower priority than N.
-        }
-
-        // A successful promotion emits no event.
-        return ReadStep<T>.Of(served);
-    }
-
-    private (PathRead<T> Read, DecodeClass Classification) DecodeSource(KeyMoveSnap snap)
-    {
-        if (snap.Kind != ReadOutcome.Found)
-        {
-            if (snap.Kind == ReadOutcome.Unreadable)
-            {
-                Count(UnreadableSource);
-            }
-
-            return (PathRead<T>.Of(snap.Kind), DecodeClass.Unreadable);
-        }
-
-        Decoded<T> decoded;
-        try
-        {
-            decoded = Source.Codec.Decode(snap.Bytes ?? []);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            decoded = new Decoded<T>(DecodeClass.Unreadable, null);
-        }
-
-        if (decoded.Class == DecodeClass.Expired)
-        {
-            return (PathRead<T>.Of(ReadOutcome.Absent), decoded.Class);
-        }
-
-        if (decoded.Class == DecodeClass.Unreadable || decoded.Value is null)
-        {
-            Count(UnreadableSource);
-            return (PathRead<T>.Of(ReadOutcome.Unreadable), decoded.Class);
-        }
-
-        var expiration = snap.TtlMs < 0 ? (DateTimeOffset?)null : snap.At.AddMilliseconds(snap.TtlMs);
-        return (new PathRead<T>(ReadOutcome.Found, decoded.Value, expiration), decoded.Class);
-    }
-
-    private bool ShouldServeWithoutPublishing(string key, long ttl, DecodeClass classification, T value, KeyMoveData data, long events, long started, long replied, out byte[] encoded, out bool cacheLocally)
-    {
-        encoded = [];
-        cacheLocally = classification == DecodeClass.TooLarge || !Source.Maps(key);
-        if (cacheLocally || PromotionTimedOut(data, events, started, replied) || ttl is >= 0 and < 1)
-        {
-            return true;
-        }
-
-        try
-        {
-            encoded = _p.Native.Encode(value);
-            return false;
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            return true;
+                return PromotionRead(result);
         }
     }
-
-    private bool PromotionTimedOut(KeyMoveData data, long events, long started, long replied)
-    {
-        if (_p.Clock.GetElapsedTime(started, replied) > _options.CaptureToSnapshotMax)
-        {
-            Count("capture_slow");
-            return true;
-        }
-
-        if (_p.Clock.GetElapsedTime(started) > _options.PromotionBudget || data.ConnectionEvents() != events)
-        {
-            Count("promotion_abandoned");
-            return true;
-        }
-
-        return false;
-    }
-
-    private ReadStep<T> PublishRefusal(long code, int attempt, AdmittedUnit unit, PathRead<T> uncached)
-    {
-        switch (code)
-        {
-            case MoveScripts.FenceMoved when attempt < _options.MaxFenceRetries:
-                return ReadStep<T>.Retry;
-            case MoveScripts.FenceMoved:
-                Count("fence_refused");
-                break;
-            case MoveScripts.IdentityMismatch when unit.Readmit():
-                return ReadStep<T>.Again;
-            case MoveScripts.PastDeadline:
-                Count("promotion_expiring");
-                break;
-        }
-
-        return ReadStep<T>.Of(uncached);
-    }
-
-    private Publication CapturedPublication(Capture capture, long ttl) =>
-        ttl < 0 ? PublicationFor(capture, MoveScripts.NoExpiry, MoveScripts.NoExpiry) : PublicationFor(capture, ttl, capture.Tcap);
 
     private Publication PublicationFor(Capture capture, long px, long tcap) =>
         new(
@@ -263,19 +110,6 @@ internal sealed partial class KeyMoveClient<T>
             tcap,
             true);
 
-    private async ValueTask<ReadStep<T>> HelpAsync(string key, string n, RedisValue marker, AdmittedUnit unit, string identity, CancellationToken cancellationToken)
-    {
-        switch (await _helper.OnSupersededAsync(new SupersededKey(_p.Group, _p.CacheId, key, marker, unit.Id), cancellationToken).ConfigureAwait(false))
-        {
-            case SupersessionAction.Retry:
-                return ReadStep<T>.Of(await MissAsync(key, n, identity, cancellationToken).ConfigureAwait(false));
-            case SupersessionAction.Rerun:
-                return unit.Readmit() ? ReadStep<T>.Again : await UnpromotedAsync(key, cancellationToken).ConfigureAwait(false);
-            default:
-                return ReadStep<T>.Of(ReadOutcome.Unavailable);
-        }
-    }
-
     // The non-promoting union read, N first and L, then N on the master again; what it finds is served and not kept locally, as an abandoned promotion's value is.
     private async ValueTask<ReadStep<T>> UnpromotedAsync(string key, CancellationToken cancellationToken)
     {
@@ -283,7 +117,7 @@ internal sealed partial class KeyMoveClient<T>
         return union.Read.Kind == ReadOutcome.Found ? ReadStep<T>.Of(union.Read with { Uncached = true }) : union;
     }
 
-    // If the source probe or snapshot misses, read N on the master again and set a hint only if N is still absent.
+    // A miss sets a hint only after one final master read.
     private async ValueTask<PathRead<T>> MissAsync(string key, string n, string identity, CancellationToken cancellationToken)
     {
         var again = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native);
@@ -294,5 +128,4 @@ internal sealed partial class KeyMoveClient<T>
 
         return again;
     }
-
 }

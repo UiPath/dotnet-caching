@@ -30,7 +30,7 @@ internal interface IMoveSide<T>
     Task<long> DeleteAsync(string logical, string id);
 
     /// <summary>Returns the compare-delete script code.</summary>
-    Task<long> CompareDeleteAsync(string logical, string id, RedisValue expected);
+    Task<long> CompareDeleteAsync(string logical, string id, RedisValue expected, Func<bool>? owned = null);
 
     /// <summary>Uses <c>SET NX</c> without consulting the control record.</summary>
     Task<bool> CreateAsync(string logical, RedisValue bytes, long px);

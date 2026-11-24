@@ -39,4 +39,10 @@ internal sealed class FakeKeySpace(string nativePrefix, string legacyPrefix) : I
     public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) => Movable(key);
 
     public TimeSpan? MaxSourceTtl(string group, string cacheId) => MaxTtl.TryGetValue(cacheId, out var ttl) ? ttl : null;
+
+    public bool HasHashCache(string group) => false;
+
+    public string? CallerKeyOf(string group, MoveSide side, string cacheId, string key) => null;
+
+    public TimeSpan MoveMinTtl(string group, string cacheId) => IGroupKeySpace.DefaultMoveMinTtl;
 }

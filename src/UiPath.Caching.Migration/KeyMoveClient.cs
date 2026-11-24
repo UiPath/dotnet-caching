@@ -11,7 +11,6 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
     private const string IdentityRerun = "identity_rerun";
     private const string RetrySuperseded = "retry_superseded";
     private const string RetryExhausted = "retry_exhausted";
-    private const string UnreadableSource = "unreadable_source";
 
     private readonly KeyMoveClientParts<T> _p;
     private readonly KeyMoveOptions _options;
@@ -20,6 +19,7 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
     private readonly IMoveSide<T> _source;
     private readonly MarkerNode _node;
     private readonly SupersessionHelper _helper;
+    private readonly KeyPromotion<T> _promotion;
 
     public KeyMoveClient(KeyMoveClientParts<T> parts)
     {
@@ -30,6 +30,7 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
         _retries = new MoveRetrySet(parts.Clock, _options, ExhaustedStep, parts.RunRetriesInBackground, _ => Count(RetrySuperseded));
         _node = MarkerNode.For(parts.Plane, parts.Clock, _options, parts.RunRetriesInBackground);
         _helper = new SupersessionHelper(() => _p.Plane.Data, parts.InPlaceKey, parts.NativeKey, parts.Group, parts.CacheId);
+        _promotion = new KeyPromotion<T>(parts, _source, _helper);
     }
 
     public TimeSpan? SettleWithin => _p.SettleWithin();

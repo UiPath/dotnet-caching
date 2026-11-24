@@ -78,10 +78,15 @@ internal sealed partial class MoveScripts
         throw new RedisException($"A move transaction aborted {MaxWatchAborts} times while its conditions held; the outcome is unknown.");
     }
 
-    private static async Task<long> WatchedAsync(Func<Task<long?>> attempt)
+    private static async Task<long> WatchedAsync(Func<Task<long?>> attempt, Func<bool>? owned = null)
     {
         for (var i = 0; i < MaxWatchAborts; i++)
         {
+            if (owned?.Invoke() == false)
+            {
+                throw new OwnershipLostException();
+            }
+
             if (await attempt().ConfigureAwait(false) is { } result)
             {
                 return result;

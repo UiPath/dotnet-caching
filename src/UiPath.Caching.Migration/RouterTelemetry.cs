@@ -12,6 +12,9 @@ internal static class RouterTelemetry
 
     private static readonly ConcurrentDictionary<string, Counter<long>> MoveCounters = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, Counter<long>> MarkerCounters = new(StringComparer.Ordinal);
+    private static readonly Counter<long> MoverSkipped = RouterMeter.CreateCounter<long>("move_skipped");
+    private static readonly UpDownCounter<long> MoverUnits = RouterMeter.CreateUpDownCounter<long>("move_units_active");
+    private static readonly Counter<long> MoverTakeovers = RouterMeter.CreateCounter<long>("move_lease_takeovers");
     private static readonly Counter<long> LocalHit = RouterMeter.CreateCounter<long>("local_hit");
     private static readonly Counter<long> RedisHit = RouterMeter.CreateCounter<long>("redis_hit");
     private static readonly Counter<long> Miss = RouterMeter.CreateCounter<long>("miss");
@@ -69,6 +72,24 @@ internal static class RouterTelemetry
             made.Add(1, new TagList { { "cache", cache }, { "group", group } });
         }
     }
+
+    /// <summary>The mover moved a key: <c>move_moved</c>.</summary>
+    public static void CountMoverMoved(string cache, string group) => CountMove("moved", cache, group);
+
+    /// <summary>The mover left a key in an accepted class or for its next pass: <c>move_skipped</c> with a <c>reason</c> tag, which is a bounded set and never a key.</summary>
+    public static void CountMoverSkipped(string cache, string group, string reason)
+    {
+        if (MoverSkipped.Enabled)
+        {
+            MoverSkipped.Add(1, new TagList { { "cache", cache }, { "group", group }, { "reason", reason } });
+        }
+    }
+
+    /// <summary>A scan unit of the mover started (+1) or stopped (-1) on this node: <c>move_units_active</c>.</summary>
+    public static void AddMoverUnits(int delta, string group) => MoverUnits.Add(delta, new TagList { { "group", group } });
+
+    /// <summary>A runner took over a unit with a cursor a lapsed lease left behind: <c>move_lease_takeovers</c>.</summary>
+    public static void CountMoverLeaseTakeover(string group) => MoverTakeovers.Add(1, new TagList { { "group", group } });
 
     public static void CountLibraryStartFailed() => LibraryStartFailed.Add(1);
 

@@ -209,3 +209,6 @@ UiPath.Caching.Migration.KeyMoveBuilder.AttestMemoryFits(string! group, string! 
 UiPath.Caching.Migration.KeyMoveBuilder.AttestNodeListComplete(string! group, string! evidenceId) -> UiPath.Caching.Migration.KeyMoveBuilder!
 UiPath.Caching.Migration.KeyMoveBuilder.OnAlert(System.Action<UiPath.Caching.KeyMove.KeyMoveAlert!>! alert) -> UiPath.Caching.Migration.KeyMoveBuilder!
 UiPath.Caching.Migration.KeyMoveBuilder.ExcludeKeyspace(string! pattern) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.UseMoveMinTtl(string! group, System.TimeSpan minTtl) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveCacheRegistration.MoveMinTtl.get -> System.TimeSpan?
+UiPath.Caching.Migration.KeyMoveCacheRegistration.MoveMinTtl.init -> void

@@ -91,11 +91,11 @@ internal sealed class InPlaceMoveSide<T> : IMoveSide<T>
         return data.Scripts.SourceDeleteAsync(key, ControlOf(data, key), id);
     }
 
-    public Task<long> CompareDeleteAsync(string logical, string id, RedisValue expected)
+    public Task<long> CompareDeleteAsync(string logical, string id, RedisValue expected, Func<bool>? owned = null)
     {
         var data = Data;
         var key = Key(logical);
-        return data.Scripts.CompareDeleteAsync(key, ControlOf(data, key), id, expected);
+        return data.Scripts.CompareDeleteAsync(key, ControlOf(data, key), id, expected, owned);
     }
 
     public Task<bool> CreateAsync(string logical, RedisValue bytes, long px) =>
