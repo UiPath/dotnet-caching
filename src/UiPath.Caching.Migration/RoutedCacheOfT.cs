@@ -257,7 +257,10 @@ internal sealed partial class RoutedCache<T> : IRouterParticipant, IRouterClear,
         var client = new KeyMoveClient<T>(parts);
 
         // The mover helps a marked key the way the client does.
-        library.Movers?.Add(_registration.Group, new KeyMover<T>(parts, client.Supersession));
+        if (library.Movers is { } movers)
+        {
+            movers.Add(_registration.Group, new KeyMover<T>(movers.Schedule is { } schedule ? parts with { Schedule = schedule } : parts, client.Supersession));
+        }
         return client;
     }
 

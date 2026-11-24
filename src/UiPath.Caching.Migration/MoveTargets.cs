@@ -9,6 +9,9 @@ internal sealed class MoveTargets
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, IMoveTarget>> _groups = new(StringComparer.Ordinal);
 
+    /// <summary>The schedule point every target's promotions run under; null keeps the client's.</summary>
+    public ISchedulePoint? Schedule { get; init; }
+
     /// <summary>The live targets of <paramref name="group"/>, which later bindings add to.</summary>
     public IReadOnlyDictionary<string, IMoveTarget> Of(string group) => Group(group);
 

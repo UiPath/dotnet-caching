@@ -346,13 +346,13 @@ public static class RouterServiceCollectionExtensions
         return new RouterAdvertiser(setup.Store, setup.NodeId, setup.Build, sources, setup.RefreshInterval, setup.LivenessWindow, core.Clock, logger);
     }
 
-    private static List<MoverHost> MoverHosts(IServiceProvider root, KeyMoveSetup setup, KeyMoveNode node, IKeyMovePlane plane, MoveTargets movers)
+    private static List<MoverHost> MoverHosts(IServiceProvider root, KeyMoveSetup setup, KeyMoveNode node, IKeyMovePlane plane, MoveTargets movers, MoverOptions? options)
     {
         var prefix = root.GetService<IOptions<RedisCacheOptions>>()?.Value.KeyPrefix ?? string.Empty;
         var units = root.GetRequiredService<IScanUnits>();
         var rate = root.GetRequiredService<IMoveRate>();
         var time = root.GetRequiredService<TimeProvider>();
-        return [.. setup.Groups.Select(g => new MoverHost(g.Name, plane, setup.KeySpace, movers.Of(g.Name), units, ct => node.ReadStateAsync(g.Name, ct), prefix, time, rate))];
+        return [.. setup.Groups.Select(g => new MoverHost(g.Name, plane, setup.KeySpace, movers.Of(g.Name), units, ct => node.ReadStateAsync(g.Name, ct), prefix, time, rate, options))];
     }
 
     private static LibraryParts CollectLibraryParts(IServiceProvider root, RouterBuilder builder, IRedisConnector connector, List<IHostedService> started, IKeyMovePlane? plane, MoveTargets? movers)
@@ -442,10 +442,10 @@ public static class RouterServiceCollectionExtensions
             if (keyMove is { HasGroups: true } && builder.KeyMove is { } moveSetup)
             {
                 plane = new NodePlane(keyMove, root.GetRequiredService<TimeProvider>(), moveSetup.Alert);
-                movers = new MoveTargets();
+                movers = new MoveTargets { Schedule = builder.MoverSchedule };
 
                 // After the node, so the router stops the movers first.
-                var mover = new MoverHostedService(MoverHosts(root, moveSetup, keyMove, plane, movers));
+                var mover = new MoverHostedService(MoverHosts(root, moveSetup, keyMove, plane, movers, builder.MoverOptions));
                 await mover.StartAsync(cancellationToken).ConfigureAwait(false);
                 started.Add(mover);
             }
