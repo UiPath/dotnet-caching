@@ -45,6 +45,8 @@ internal sealed class RegisteredKeySpace(IReadOnlyList<KeyMoveCache> caches, str
         caches.FirstOrDefault(c => c.Group == group && c.Name == cacheId)?.MoveMinTtl
         ?? (groupMinTtl is not null && groupMinTtl.TryGetValue(group, out var own) ? own : IGroupKeySpace.DefaultMoveMinTtl);
 
+    public KeyMoveKind KindOf(string group, string cacheId) => caches.FirstOrDefault(c => c.Group == group && c.Name == cacheId)?.Kind ?? KeyMoveKind.String;
+
     private static bool CanBeParsed(KeyMoveCache cache, MoveSide side, string key)
     {
         try

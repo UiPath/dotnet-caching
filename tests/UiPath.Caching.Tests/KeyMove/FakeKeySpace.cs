@@ -11,6 +11,9 @@ internal sealed class FakeKeySpace(string nativePrefix, string legacyPrefix) : I
 
     public Dictionary<string, TimeSpan> MaxTtl { get; } = [];
 
+    // A cache that is not listed stores strings.
+    public Dictionary<string, KeyMoveKind> Kinds { get; } = [];
+
     // Runs on every ownership question, which a scan asks once per key it finds.
     public Action<string>? OnOwnerOf { get; set; }
 
@@ -37,6 +40,8 @@ internal sealed class FakeKeySpace(string nativePrefix, string legacyPrefix) : I
     public bool HasValidDestination(string group, MoveSide side, string cacheId, string key) => InvalidDestination?.Invoke(key) != true;
 
     public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) => Movable(key);
+
+    public KeyMoveKind KindOf(string group, string cacheId) => Kinds.TryGetValue(cacheId, out var kind) ? kind : KeyMoveKind.String;
 
     public TimeSpan? MaxSourceTtl(string group, string cacheId) => MaxTtl.TryGetValue(cacheId, out var ttl) ? ttl : null;
 

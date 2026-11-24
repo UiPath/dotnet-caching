@@ -54,6 +54,26 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
         return data;
     }
 
+    public static TheoryData<string, bool, bool, bool> MergeCases()
+    {
+        var data = new TheoryData<string, bool, bool, bool>();
+        foreach (var kind in new[] { "absent", "hash", "string" })
+        {
+            foreach (var seedPersistent in new[] { false, true })
+            {
+                foreach (var writePersistent in new[] { false, true })
+                {
+                    foreach (var chunked in new[] { false, true })
+                    {
+                        data.Add(kind, seedPersistent, writePersistent, chunked);
+                    }
+                }
+            }
+        }
+
+        return data;
+    }
+
     [Fact]
     public async Task A_snapshot_finds_the_fields_the_metadata_and_the_lifetime_together()
     {
@@ -266,23 +286,229 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
         (await migration.RenewAsync<string>(key, past, null, Ct)).Should().Be(StoreOutcome.Failed);
     }
 
-    [Fact]
-    public async Task A_write_or_a_renew_that_meets_a_string_key_is_failed_though_the_transaction_commits()
+    // The expiry-only refresh is awaited and answered, whatever the library does with its own: it has the library's effect on a hash that is there, keeps the metadata, and leaves a key that holds no hash as it is.
+    [Theory]
+    [InlineData("hash", "future", false, false)]
+    [InlineData("hash", "future", true, false)]
+    [InlineData("hash", "persistent", false, false)]
+    [InlineData("hash", "persistent", true, false)]
+    [InlineData("hash", "past", false, false)]
+    [InlineData("hash", "future", false, true)]
+    [InlineData("hash", "persistent", true, true)]
+    [InlineData("string", "future", false, false)]
+    [InlineData("string", "persistent", false, false)]
+    [InlineData("missing", "future", false, false)]
+    [InlineData("missing", "past", false, false)]
+    public async Task An_expiry_only_renew_has_the_effect_of_the_libraries_expiry_overload_keeps_the_metadata_and_is_failed_for_a_key_with_no_hash(string kind, string expiry, bool cacheNulls, bool layered)
+    {
+        using var harness = Harness(layered, cacheNulls);
+        var cache = harness.Hashes(layered);
+        var migration = Migration(cache);
+        await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = raw.GetDatabase();
+        var (byLibrary, byRenew) = (Key(), Key());
+        var seed = new HashCacheEntryOptions(TimeToLive: Life, Metadata: new Dictionary<string, string?> { ["old"] = "1" });
+        RedisKey? libraryKey = null;
+        RedisKey? renewKey = null;
+        if (kind != "missing")
+        {
+            await cache.SetAsync(byLibrary, new Dictionary<string, string?> { ["a"] = "x" }, seed, null, Ct);
+            await cache.SetAsync(byRenew, new Dictionary<string, string?> { ["a"] = "x" }, seed, null, Ct);
+            (libraryKey, renewKey) = (Find(raw, byLibrary), Find(raw, byRenew));
+            if (kind == "string")
+            {
+                await db.KeyDeleteAsync(renewKey.Value);
+                await db.StringSetAsync(renewKey.Value, "not a hash", Life);
+            }
+        }
+
+        var deadline = expiry switch
+        {
+            "past" => DateTimeOffset.UtcNow.AddMinutes(-1),
+            "persistent" => DateTimeOffset.MaxValue,
+            _ => DateTimeOffset.UtcNow.AddHours(2),
+        };
+        var outcome = await migration.RenewExpiryAsync<string>(byRenew, new HashCacheEntryOptions(ExpireTime: deadline, Metadata: new Dictionary<string, string?> { ["ignored"] = "9" }), null, Ct);
+
+        if (kind == "hash")
+        {
+            outcome.Should().Be(StoreOutcome.Committed);
+            if (expiry == "past")
+            {
+                (await db.KeyExistsAsync(renewKey!.Value)).Should().BeFalse();
+                return;
+            }
+
+            (await FieldsAsync(db, renewKey!.Value)).Should().ContainKey("_metadata_", "the metadata stays");
+            (await cache.GetCacheEntryAsync<string>(byRenew, Ct)).Metadata.Should().BeEquivalentTo(new Dictionary<string, string?> { ["old"] = "1" });
+            var ttl = await db.KeyTimeToLiveAsync(renewKey.Value);
+            if (expiry == "persistent")
+            {
+                ttl.Should().BeNull();
+            }
+            else
+            {
+                ttl!.Value.Should().BeCloseTo(TimeSpan.FromHours(2), TimeSpan.FromMinutes(1));
+            }
+
+            if (!layered)
+            {
+                await AssertLibraryOverloadAgreesAsync(cache, db, byLibrary, (libraryKey!.Value, renewKey.Value), deadline, expiry);
+            }
+        }
+        else if (kind == "string")
+        {
+            outcome.Should().Be(StoreOutcome.Failed);
+            ((string?)await db.StringGetAsync(renewKey!.Value)).Should().Be("not a hash");
+            (await db.KeyTimeToLiveAsync(renewKey.Value))!.Value.Should().BeCloseTo(Life, TimeSpan.FromSeconds(30));
+        }
+        else
+        {
+            outcome.Should().Be(StoreOutcome.Failed);
+            raw.GetServer(raw.GetEndPoints()[0]).Keys(pattern: $"*{byRenew}*").Should().BeEmpty();
+        }
+    }
+
+    // A merge acts on an absent key or on a hash: a string is refused with nothing applied, its lifetime included, whether the write is persistent or finite, in one transaction or in chunks. A renew is refused by its condition.
+    [Theory]
+    [MemberData(nameof(MergeCases))]
+    public async Task A_merge_acts_on_an_absent_key_or_a_hash_and_a_string_is_refused_with_its_contents_and_its_lifetime_untouched(string kind, bool seedPersistent, bool writePersistent, bool chunked)
     {
         using var harness = Harness(layered: false);
         var cache = harness.Hashes();
         var migration = Migration(cache);
         await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = raw.GetDatabase();
+        var key = Key();
+        var seed = seedPersistent ? new HashCacheEntryOptions(ExpireTime: DateTimeOffset.MaxValue) : Replace;
+        RedisKey? redisKey = null;
+        if (kind != "absent")
+        {
+            await cache.SetAsync(key, new Dictionary<string, string?> { ["a"] = "x" }, seed, null, Ct);
+            redisKey = Find(raw, key);
+        }
+
+        if (kind == "string")
+        {
+            await db.KeyDeleteAsync(redisKey!.Value);
+            if (seedPersistent)
+            {
+                await db.StringSetAsync(redisKey.Value, "not a hash");
+            }
+            else
+            {
+                await db.StringSetAsync(redisKey.Value, "not a hash", Life);
+            }
+        }
+
+        var fields = Enumerable.Range(0, chunked ? 1100 : 1).ToDictionary(i => $"f{i}", i => (string?)"y");
+        var options = new HashCacheEntryOptions(TimeToLive: writePersistent ? null : TimeSpan.FromHours(2), ExpireTime: writePersistent ? DateTimeOffset.MaxValue : null, SetOption: HashCacheSetOption.HashReplace);
+
+        var outcome = await migration.WriteAsync(key, fields, options, null, Ct);
+
+        if (kind == "string")
+        {
+            outcome.Should().Be(StoreOutcome.Failed, "nothing was applied");
+            ((string?)await db.StringGetAsync(redisKey!.Value)).Should().Be("not a hash");
+            var ttl = await db.KeyTimeToLiveAsync(redisKey.Value);
+            if (seedPersistent)
+            {
+                ttl.Should().BeNull("a persistent string does not take the expiry of the write");
+            }
+            else
+            {
+                ttl!.Value.Should().BeCloseTo(Life, TimeSpan.FromSeconds(30), "an expiring string does not become persistent or take the write's life");
+            }
+
+            (await migration.RenewAsync<string>(key, Replace, null, Ct)).Should().Be(StoreOutcome.Failed);
+            (await db.KeyTimeToLiveAsync(redisKey.Value) is null).Should().Be(seedPersistent);
+            return;
+        }
+
+        outcome.Should().Be(StoreOutcome.Committed);
+        var written = Find(raw, key);
+        (await db.HashLengthAsync(written)).Should().BeGreaterThanOrEqualTo(fields.Count);
+        var left = await db.KeyTimeToLiveAsync(written);
+        if (writePersistent)
+        {
+            left.Should().BeNull();
+        }
+        else
+        {
+            left!.Value.Should().BeCloseTo(TimeSpan.FromHours(2), TimeSpan.FromMinutes(1));
+        }
+    }
+
+    // Each chunk of a merge checks the type in the step that writes it, by script or by a watched transaction. A string from the start is refused by the first chunk with nothing applied; one that appears between two chunks is refused by the second, which leaves it as it is, and the earlier chunk has landed, so the write is unknown.
+    [Theory]
+    [InlineData(true, "start")]
+    [InlineData(false, "start")]
+    [InlineData(true, "between")]
+    [InlineData(false, "between")]
+    public async Task A_string_met_by_a_chunked_merge_is_refused_with_its_contents_and_lifetime_untouched_and_the_outcome_says_whether_a_chunk_landed(bool scripts, string when)
+    {
+        using var harness = Harness(layered: false);
+        var cache = (global::UiPath.Caching.Redis.RedisHashCache)harness.Hashes();
+        cache.ChunkScriptsEnabled = scripts;
+        var migration = Migration(cache);
+        await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = raw.GetDatabase();
         var key = Key();
         await cache.SetAsync(key, new Dictionary<string, string?> { ["a"] = "x" }, Replace, null, Ct);
         var redisKey = Find(raw, key);
-        await raw.GetDatabase().KeyDeleteAsync(redisKey);
-        await raw.GetDatabase().StringSetAsync(redisKey, "not a hash", Life);
+        var chunks = new List<int>();
+        async Task MakeStringAsync()
+        {
+            await db.KeyDeleteAsync(redisKey);
+            await db.StringSetAsync(redisKey, "not a hash", Life);
+        }
 
-        (await migration.WriteAsync(key, new Dictionary<string, string?> { ["b"] = "y" }, Replace with { SetOption = HashCacheSetOption.HashReplace }, null, Ct)).Should().Be(StoreOutcome.Failed);
-        (await migration.RenewAsync<string>(key, Replace with { Metadata = new Dictionary<string, string?> { ["m"] = "v" } }, null, Ct)).Should().Be(StoreOutcome.Failed);
-        (await migration.RenewAsync<string>(key, Replace, null, Ct)).Should().Be(StoreOutcome.Failed);
-        ((string?)await raw.GetDatabase().StringGetAsync(redisKey)).Should().Be("not a hash");
+        if (when == "start")
+        {
+            await MakeStringAsync();
+        }
+
+        cache.OnChunk = async index =>
+        {
+            chunks.Add(index);
+            if (when == "between" && index == 1)
+            {
+                await MakeStringAsync();
+            }
+        };
+        var fields = Enumerable.Range(0, 1100).ToDictionary(i => $"f{i}", i => (string?)"y");
+
+        var outcome = await migration.WriteAsync(key, fields, Replace with { SetOption = HashCacheSetOption.HashReplace, TimeToLive = TimeSpan.FromHours(2) }, null, Ct);
+
+        outcome.Should().Be(when == "start" ? StoreOutcome.Failed : StoreOutcome.Unknown, when == "start" ? "the first chunk was refused and nothing was applied" : "the first chunk landed before the second was refused");
+        chunks.Should().Equal(when == "start" ? [0] : [0, 1], "no chunk is written after one was refused");
+        ((string?)await db.StringGetAsync(redisKey)).Should().Be("not a hash");
+        (await db.KeyTimeToLiveAsync(redisKey))!.Value.Should().BeCloseTo(Life, TimeSpan.FromSeconds(30), "the string does not take the expiry of the write");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_chunked_merge_into_an_absent_key_or_a_hash_lands_every_chunk_with_the_expiry_by_script_and_by_transaction(bool scripts)
+    {
+        using var harness = Harness(layered: false);
+        var cache = (global::UiPath.Caching.Redis.RedisHashCache)harness.Hashes();
+        cache.ChunkScriptsEnabled = scripts;
+        var migration = Migration(cache);
+        await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = raw.GetDatabase();
+        var (absent, held) = (Key(), Key());
+        await cache.SetAsync(held, new Dictionary<string, string?> { ["old"] = "x" }, Replace, null, Ct);
+        var fields = Enumerable.Range(0, 2100).ToDictionary(i => $"f{i}", i => (string?)"y");
+        var options = Replace with { SetOption = HashCacheSetOption.HashReplace, TimeToLive = TimeSpan.FromHours(2) };
+
+        (await migration.WriteAsync(absent, fields, options, null, Ct)).Should().Be(StoreOutcome.Committed);
+        (await migration.WriteAsync(held, fields, options, null, Ct)).Should().Be(StoreOutcome.Committed);
+
+        (await db.HashLengthAsync(Find(raw, absent))).Should().BeGreaterThanOrEqualTo(2100);
+        (await db.HashLengthAsync(Find(raw, held))).Should().BeGreaterThanOrEqualTo(2101);
+        (await db.KeyTimeToLiveAsync(Find(raw, held)))!.Value.Should().BeCloseTo(TimeSpan.FromHours(2), TimeSpan.FromMinutes(1));
+        (await db.KeyTimeToLiveAsync(Find(raw, absent)))!.Value.Should().BeCloseTo(TimeSpan.FromHours(2), TimeSpan.FromMinutes(1));
     }
 
     [Fact]
@@ -338,6 +564,8 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
 
     private static string Key() => $"hmc:{RunTag}:{Guid.NewGuid():N}";
 
+    private static bool Reached(TimeSpan? ttl, string expiry) => expiry == "persistent" ? ttl is null : ttl is { } left && left > TimeSpan.FromHours(1);
+
     private static IMigrationHashCache Migration(IHashCache cache) => (IMigrationHashCache)cache;
 
     private static RedisKey Find(ConnectionMultiplexer raw, string key) => raw.GetServer(raw.GetEndPoints()[0]).Keys(pattern: $"*{key}*").Single();
@@ -347,6 +575,20 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
 
     private static async Task<Dictionary<string, string>> StoredAsync(ConnectionMultiplexer raw, string key) =>
         (await raw.GetDatabase().HashGetAllAsync(Find(raw, key))).ToDictionary(e => ((string?)e.Name)!, e => ((string?)e.Value)!);
+
+    // The library's own overload, which fires and forgets by default: the effect is waited for, and the renewed hash is the same as the one it left.
+    private static async Task AssertLibraryOverloadAgreesAsync(IHashCache cache, IDatabase db, string byLibrary, (RedisKey Library, RedisKey Renewed) keys, DateTimeOffset deadline, string expiry)
+    {
+        await cache.RefreshAsync<string>(byLibrary, deadline, null, Ct);
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < until && !Reached(await db.KeyTimeToLiveAsync(keys.Library), expiry))
+        {
+            await Task.Delay(50, Ct);
+        }
+
+        (await FieldsAsync(db, keys.Renewed)).Should().BeEquivalentTo(await FieldsAsync(db, keys.Library), "the same fields, the metadata included");
+        (await db.KeyTimeToLiveAsync(keys.Library) is null).Should().Be(expiry == "persistent");
+    }
 
     private MigrateOnReadHarness Harness(bool layered, bool cacheNulls = false)
     {

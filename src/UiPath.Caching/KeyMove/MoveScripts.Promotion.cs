@@ -116,6 +116,21 @@ internal sealed partial class MoveScripts
         return 1
         """;
 
+    // As FillHashScript, with an absolute expiry in Unix milliseconds: past the server's own clock the fill changes nothing and answers -7.
+    private const string FillHashUntilScript = """
+        if redis.call('HGET', KEYS[3], 'id') ~= ARGV[1] then return -1 end
+        if redis.call('EXISTS', KEYS[1]) == 0 then return 3 end
+        if redis.call('EXISTS', KEYS[2]) == 1 then return 2 end
+        if ARGV[2] ~= '-1' then
+          local t = redis.call('TIME')
+          if t[1] * 1000 + math.floor(t[2] / 1000) >= tonumber(ARGV[2]) then return -7 end
+        end
+        redis.call('RENAME', KEYS[1], KEYS[2])
+        if ARGV[2] == '-1' then redis.call('PERSIST', KEYS[2]) else redis.call('PEXPIREAT', KEYS[2], ARGV[2]) end
+        if #KEYS == 4 then redis.call('SET', KEYS[4], ARGV[3], 'PX', ARGV[4]) end
+        return 1
+        """;
+
     /// <summary>CAP: takes the fence token in force (creating it from <paramref name="nonce"/> when absent) and the capture time of the Dst server.</summary>
     /// <param name="markerField">The marker field of the key's in-place copy: a marker bound to the record's binding value answers <see cref="LiveSupersession"/> with its value, before any token. Null for a direction that has none.</param>
     public async Task<Capture> CaptureAsync(FencedKeys keys, string id, string cid, string nonce, long fenceTtlMilliseconds, string? markerField = null, Func<bool>? owned = null)
@@ -332,8 +347,22 @@ internal sealed partial class MoveScripts
     public async Task<long> FillHashAsync(RedisKey data, RedisKey control, RedisKey staging, string id, long px, FenceBump? fence)
     {
         CheckLife(px, nameof(px));
-        var result = await FillHashCoreAsync(data, control, staging, id, px, fence).ConfigureAwait(false);
+        var result = await FillHashCoreAsync(data, control, staging, id, px, fence, absolute: false).ConfigureAwait(false);
         if (result == DestinationExists)
+        {
+            await _db.KeyDeleteAsync(staging, Master).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    /// <summary>FILLH with an absolute expiry: the deadline is kept to the publication, which a fill whose deadline has passed on the server's clock refuses with <see cref="Late"/> and changes nothing (the staging key is then deleted). A server without scripts cannot compare the clocks, so the expiry is set as an absolute time and a deadline that has passed removes the key in the same transaction.</summary>
+    /// <param name="expireAtMilliseconds">The absolute expiry in Unix milliseconds, or <see cref="NoExpiry"/>.</param>
+    /// <returns>-1, <see cref="Late"/>, 3 when staging is missing, 2 when the destination exists, 1.</returns>
+    public async Task<long> FillHashUntilAsync(RedisKey data, RedisKey control, RedisKey staging, string id, long expireAtMilliseconds, FenceBump? fence)
+    {
+        var result = await FillHashCoreAsync(data, control, staging, id, expireAtMilliseconds, fence, absolute: true).ConfigureAwait(false);
+        if (result is DestinationExists or Late)
         {
             await _db.KeyDeleteAsync(staging, Master).ConfigureAwait(false);
         }
@@ -476,50 +505,52 @@ internal sealed partial class MoveScripts
         return await HoldsIdentityAsync(keys.Control, id).ConfigureAwait(false) ? null : IdentityMismatch;
     }
 
-    private async Task<long> FillHashCoreAsync(RedisKey data, RedisKey control, RedisKey staging, string id, long px, FenceBump? fence)
+    private async Task<long> FillHashCoreAsync(RedisKey data, RedisKey control, RedisKey staging, string id, long px, FenceBump? fence, bool absolute)
     {
         RedisKey[] keys = fence is { } f ? [staging, data, control, f.Fence] : [staging, data, control];
-        var reply = await EvaluateAsync(FillHashScript, keys, [id, Ttl(px), fence?.Nonce ?? string.Empty, fence?.TtlMilliseconds ?? 0]).ConfigureAwait(false);
+        var reply = await EvaluateAsync(absolute ? FillHashUntilScript : FillHashScript, keys, [id, Ttl(px), fence?.Nonce ?? string.Empty, fence?.TtlMilliseconds ?? 0]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
         }
 
-        return await WatchedAsync(async () =>
+        return await WatchedAsync(() => TryFillHashAsync(data, control, staging, id, px, fence, absolute)).ConfigureAwait(false);
+    }
+
+    private async Task<long?> TryFillHashAsync(RedisKey data, RedisKey control, RedisKey staging, string id, long px, FenceBump? fence, bool absolute)
+    {
+        var transaction = _db.CreateTransaction();
+        var queued = new List<Task>();
+        transaction.AddCondition(Condition.HashEqual(control, "id", id));
+        transaction.AddCondition(Condition.KeyNotExists(data));
+        transaction.AddCondition(Condition.KeyExists(staging));
+        queued.Add(transaction.KeyRenameAsync(staging, data, When.Always, Master));
+        if (px == NoExpiry)
         {
-            var transaction = _db.CreateTransaction();
-            var queued = new List<Task>();
-            transaction.AddCondition(Condition.HashEqual(control, "id", id));
-            transaction.AddCondition(Condition.KeyNotExists(data));
-            transaction.AddCondition(Condition.KeyExists(staging));
-            queued.Add(transaction.KeyRenameAsync(staging, data, When.Always, Master));
-            if (px == NoExpiry)
-            {
-                queued.Add(transaction.KeyPersistAsync(data, Master));
-            }
-            else
-            {
-                queued.Add(transaction.KeyExpireAsync(data, TimeSpan.FromMilliseconds(px), Master));
-            }
+            queued.Add(transaction.KeyPersistAsync(data, Master));
+        }
+        else
+        {
+            queued.Add(absolute ? transaction.KeyExpireAsync(data, At(px), Master) : transaction.KeyExpireAsync(data, TimeSpan.FromMilliseconds(px), Master));
+        }
 
-            BumpIn(transaction, queued, fence);
-            if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
-            {
-                return Published;
-            }
+        BumpIn(transaction, queued, fence);
+        if (await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
+        {
+            return Published;
+        }
 
-            if (!await HoldsIdentityAsync(control, id).ConfigureAwait(false))
-            {
-                return IdentityMismatch;
-            }
+        if (!await HoldsIdentityAsync(control, id).ConfigureAwait(false))
+        {
+            return IdentityMismatch;
+        }
 
-            if (!await _db.KeyExistsAsync(staging, Master).ConfigureAwait(false))
-            {
-                return StagingMissing;
-            }
+        if (!await _db.KeyExistsAsync(staging, Master).ConfigureAwait(false))
+        {
+            return StagingMissing;
+        }
 
-            return await _db.KeyExistsAsync(data, Master).ConfigureAwait(false) ? DestinationExists : null;
-        }).ConfigureAwait(false);
+        return await _db.KeyExistsAsync(data, Master).ConfigureAwait(false) ? DestinationExists : null;
     }
 
     // The script keeps pk in the same step; a transaction cannot compute a maximum, so the peak is raised right after, by a compare-and-set that retries while another writer moves it.

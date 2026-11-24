@@ -9,16 +9,18 @@ internal sealed class LibraryKeyMoveHashCodec<T>(IByteHashCodecCache cache, int 
 {
     public bool CachesNulls => cache.CachesNulls;
 
+    public bool CarriesMetadata => systemFields;
+
     public IReadOnlyList<KeyValuePair<string, byte[]>> EncodeFields(IDictionary<string, T?> fields, IDictionary<string, string?>? metadata) =>
         systemFields ? cache.EncodeFields(fields, metadata, null) : cache.EncodeUserFields(fields, null);
 
-    public DecodedHash<T> DecodeFields(IReadOnlyCollection<KeyValuePair<string, byte[]>> stored)
+    public DecodedHash<T> DecodeFields(IReadOnlyCollection<KeyValuePair<string, byte[]>> stored, bool capped = true)
     {
         ArgumentNullException.ThrowIfNull(stored);
         var length = stored.Count;
 
         // Above the cap by the field count alone, which is all the inventory knows: the hash is not read, so a hash that cannot be read is dropped like one that can.
-        if (KeyMoveHashSize.Of(length, maxHashFields) == DecodeClass.TooLarge)
+        if (capped && KeyMoveHashSize.Of(length, maxHashFields) == DecodeClass.TooLarge)
         {
             return DecodedHash<T>.Of(DecodeClass.TooLarge, length);
         }
@@ -31,7 +33,7 @@ internal sealed class LibraryKeyMoveHashCodec<T>(IByteHashCodecCache cache, int 
             return decoded.Outcome switch
             {
                 SnapshotOutcome.Found when decoded.Values.Count == 0 => DecodedHash<T>.Of(DecodeClass.Null, length, bytes),
-                SnapshotOutcome.Found => new DecodedHash<T>(KeyMoveHashSize.ExceedsBytes(bytes, maxValueBytes) ? DecodeClass.TooLarge : DecodeClass.Ok, decoded.Values, decoded.Metadata, decoded.Version, length, bytes),
+                SnapshotOutcome.Found => new DecodedHash<T>(capped && KeyMoveHashSize.ExceedsBytes(bytes, maxValueBytes) ? DecodeClass.TooLarge : DecodeClass.Ok, decoded.Values, decoded.Metadata, decoded.Version, length, bytes),
                 SnapshotOutcome.Absent => DecodedHash<T>.Of(DecodeClass.Null, length, bytes),
                 _ => DecodedHash<T>.Of(DecodeClass.Unreadable, length, bytes),
             };

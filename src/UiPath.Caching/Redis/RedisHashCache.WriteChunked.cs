@@ -73,7 +73,10 @@ internal sealed partial class RedisHashCache
         var pending = new List<Task>((entries.Length / _fieldBatchSize) + 1);
         try
         {
-            QueueChunks(target, entries, setOption, expiration, pending);
+            if (!await WriteChunkSetAsync(target, entries, setOption, expiration, report, trace, pending).ConfigureAwait(false))
+            {
+                return false;
+            }
 
             await ObserveAllAsync(pending).ConfigureAwait(false);
             if (report is not null)
@@ -84,35 +87,7 @@ internal sealed partial class RedisHashCache
 
             if (setOption == HashCacheSetOption.KeyReplace)
             {
-                if (OnStaged is { } staged)
-                {
-                    await staged(Database, staging).ConfigureAwait(false);
-                }
-
-                try
-                {
-                    if (report?.OnlyIfAbsent == true)
-                    {
-                        if (!await RenameIfAbsentAsync(staging, redisKey, expiration).ConfigureAwait(false))
-                        {
-                            report.Existed = true;
-                            DropStaging(staging);
-                            trace?.MarkAnswered(false);
-                            return false;
-                        }
-                    }
-                    else
-                    {
-                        await RenameOverAsync(staging, redisKey, expiration).ConfigureAwait(false);
-                    }
-                }
-                catch (Exception renameFailed) when (expiration < Clock.GetUtcNow())
-                {
-                    // A fill of an absent key must not delete what is held, so its expired replacement is only dropped.
-                    var deleted = report?.OnlyIfAbsent != true && await DeleteExpiredReplacementAsync(redisKey, renameFailed).ConfigureAwait(false);
-                    trace?.MarkAnswered(deleted);
-                    return deleted;
-                }
+                return await PublishStagedAsync(redisKey, staging, expiration, report, trace).ConfigureAwait(false);
             }
 
             trace?.MarkAnswered(true);
@@ -125,6 +100,81 @@ internal sealed partial class RedisHashCache
             DropReplacementStaging(staging, setOption);
             throw;
         }
+    }
+
+    /// <summary>Renames the staging key over the key; true when the replacement is the key's value now.</summary>
+    private async ValueTask<bool> PublishStagedAsync(RedisKey redisKey, RedisKey staging, DateTimeOffset expiration, WriteReport? report, SendTrace? trace)
+    {
+        if (OnStaged is { } staged)
+        {
+            await staged(Database, staging).ConfigureAwait(false);
+        }
+
+        try
+        {
+            if (report?.OnlyIfAbsent == true)
+            {
+                if (!await RenameIfAbsentAsync(staging, redisKey, expiration).ConfigureAwait(false))
+                {
+                    report.Existed = true;
+                    DropStaging(staging);
+                    trace?.MarkAnswered(false);
+                    return false;
+                }
+            }
+            else
+            {
+                await RenameOverAsync(staging, redisKey, expiration).ConfigureAwait(false);
+            }
+        }
+        catch (Exception renameFailed) when (expiration < Clock.GetUtcNow())
+        {
+            // A fill of an absent key must not delete what is held, so its expired replacement is only dropped.
+            var deleted = report?.OnlyIfAbsent != true && await DeleteExpiredReplacementAsync(redisKey, renameFailed).ConfigureAwait(false);
+
+            // A cleanup that finds nothing to delete proves nothing: the rename may have applied and its replacement expired since, so the write stays unanswered, and unknown, unless the cleanup itself removed the key.
+            if (deleted)
+            {
+                trace?.MarkAnswered(true);
+            }
+
+            return deleted;
+        }
+
+        trace?.MarkAnswered(true);
+        return true;
+    }
+
+    private async ValueTask<bool> WriteChunkSetAsync(RedisKey target, HashEntry[] entries, HashCacheSetOption setOption, DateTimeOffset expiration, WriteReport? report, SendTrace? trace, List<Task> pending)
+    {
+        if (trace is null || setOption != HashCacheSetOption.HashReplace || report?.OnlyIfAbsent == true)
+        {
+            QueueChunks(target, entries, setOption, expiration, pending);
+            return true;
+        }
+
+        // A traced merge acts on an absent key or a hash only, which each chunk checks in the step that writes it; one after the other, so that a refusal says whether an earlier chunk landed.
+        var index = 0;
+        for (var start = 0; start < entries.Length; start += _fieldBatchSize, index++)
+        {
+            if (OnChunk is { } hook)
+            {
+                await hook(index).ConfigureAwait(false);
+            }
+
+            try
+            {
+                await WriteGuardedChunkAsync(target, entries.AsSpan(start, Math.Min(_fieldBatchSize, entries.Length - start)).ToArray(), expiration).ConfigureAwait(false);
+            }
+            catch (HashTypeRefusedException) when (index == 0)
+            {
+                // The first chunk was refused, so nothing was applied.
+                trace.MarkAnswered(false);
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void QueueChunks(in RedisKey target, HashEntry[] entries, HashCacheSetOption setOption, DateTimeOffset expiration, List<Task> pending)

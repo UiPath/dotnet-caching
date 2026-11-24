@@ -86,7 +86,7 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
     private async Task FlushAsync(string group, MoveSide side, long now, long? t3, AttemptTotals totals, List<(string Key, string Cache)> batch)
     {
         var lives = await Task.WhenAll(batch.Select(b => database.KeyTimeToLiveAsync(connectorPrefix + b.Key, CommandFlags.DemandMaster))).ConfigureAwait(false);
-        var lengths = values is null ? null : await Task.WhenAll(batch.Select(b => LengthOfAsync(connectorPrefix + b.Key))).ConfigureAwait(false);
+        var lengths = values is null ? null : await Task.WhenAll(batch.Select(b => LengthOfAsync(connectorPrefix + b.Key, space.KindOf(group, b.Cache)))).ConfigureAwait(false);
         for (var n = 0; n < batch.Count; n++)
         {
             var (key, cache) = batch[n];
@@ -117,12 +117,14 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
         batch.Clear();
     }
 
-    // Only the stored length is asked for, so a batch never holds a value; a key of another type, or one that cannot be asked, is judged as movable.
-    private async Task<long?> LengthOfAsync(string key)
+    // Only the stored length is asked for (a hash's is its field count), so a batch never holds a value; a key of another type, or one that cannot be asked, is judged as movable.
+    private async Task<long?> LengthOfAsync(string key, KeyMoveKind kind)
     {
         try
         {
-            return await database.StringLengthAsync(key, CommandFlags.DemandMaster).ConfigureAwait(false);
+            return kind == KeyMoveKind.Hash
+                ? await database.HashLengthAsync(key, CommandFlags.DemandMaster).ConfigureAwait(false)
+                : await database.StringLengthAsync(key, CommandFlags.DemandMaster).ConfigureAwait(false);
         }
         catch (RedisServerException)
         {

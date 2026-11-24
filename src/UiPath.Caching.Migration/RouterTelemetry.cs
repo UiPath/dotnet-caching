@@ -66,6 +66,16 @@ internal static class RouterTelemetry
         }
     }
 
+    /// <summary>A key move counter that also says why, as <c>merge_blocked</c> does: <c>changing</c>, <c>too_large</c>, <c>unreadable</c> or <c>src_residue</c>.</summary>
+    public static void CountMove(string counter, string cache, string group, string reason)
+    {
+        var made = MoveCounters.GetOrAdd(counter, name => RouterMeter.CreateCounter<long>("move_" + name));
+        if (made.Enabled)
+        {
+            made.Add(1, new TagList { { "cache", cache }, { "group", group }, { "reason", reason } });
+        }
+    }
+
     /// <summary>A counter of the supersession marker, named <c>cache.keymove.</c> and the counter: <c>unmark_dropped</c>, <c>superseded_helped</c>, <c>pending_write</c>, <c>marker_capacity</c>.</summary>
     public static void CountMarker(string counter, string cache, string group)
     {

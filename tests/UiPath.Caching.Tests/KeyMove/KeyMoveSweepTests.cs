@@ -401,6 +401,8 @@ public sealed class KeyMoveSweepTests(RedisContainerFixture fixture)
 
         public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) => inner.IsMovable(group, side, cacheId, key, timeToLive);
 
+        public KeyMoveKind KindOf(string group, string cacheId) => inner.KindOf(group, cacheId);
+
         public TimeSpan? MaxSourceTtl(string group, string cacheId) => inner.MaxSourceTtl(group, cacheId);
 
         public bool HasHashCache(string group) => inner.HasHashCache(group);

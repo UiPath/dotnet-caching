@@ -3,7 +3,8 @@ using UiPath.Caching.KeyMove;
 namespace UiPath.Caching.Migration;
 
 /// <summary>Binds each registered key move cache to a codec per side.</summary>
-internal sealed class KeyMoveBinder(IByteCodecCache inPlace, IByteCodecCache native, IReadOnlyList<KeyMoveCache> caches, KeyMoveOptions? options = null, KeyMoveValueClasses? classes = null, IByteHashCodecCache? inPlaceHash = null, IByteHashCodecCache? nativeHash = null)
+/// <param name="inPlaceKeepsSystemFields">Whether the hashes of the in-place side keep the system fields of the library's format (the metadata, the write count and the empty marker). False where the in-place side is the older client's format, which reads none of them.</param>
+internal sealed class KeyMoveBinder(IByteCodecCache inPlace, IByteCodecCache native, IReadOnlyList<KeyMoveCache> caches, KeyMoveOptions? options = null, KeyMoveValueClasses? classes = null, IByteHashCodecCache? inPlaceHash = null, IByteHashCodecCache? nativeHash = null, bool inPlaceKeepsSystemFields = false)
 {
     private readonly KeyMoveOptions _options = options ?? new();
 
@@ -43,16 +44,23 @@ internal sealed class KeyMoveBinder(IByteCodecCache inPlace, IByteCodecCache nat
             throw new ArgumentOutOfRangeException(nameof(maxHashFields), fields, "A hash that may be promoted has at least one field.");
         }
 
-        return new KeyMoveHashBinding<T>(
-            new LibraryKeyMoveHashCodec<T>(inPlaceHash, _options.MaxValueBytes, fields, systemFields: false),
+        var binding = new KeyMoveHashBinding<T>(
+            // The in-place side is the older client's format when the router was given an envelope: its readers know no system fields, so none is written to L. Only a move between library formats carries them.
+            new LibraryKeyMoveHashCodec<T>(inPlaceHash, _options.MaxValueBytes, fields, systemFields: inPlaceKeepsSystemFields),
             new LibraryKeyMoveHashCodec<T>(nativeHash, _options.MaxValueBytes, fields, systemFields: true),
             cache.FormatInPlace,
             cache.FormatNative,
             cache.NoOrigin,
             fields) { Options = _options };
+        RegisterHash(name, binding);
+        return binding;
     }
 
     /// <summary>Tells the inventory how to judge the values of a cache, for a binding that did not come from <see cref="Bind{T}"/> too.</summary>
     public void Register<T>(string name, KeyMoveBinding<T> binding)
         where T : class => classes?.Add(name, binding);
+
+    /// <summary>Tells the inventory how to judge the hashes of a cache, for a binding that did not come from <see cref="BindHash{T}"/> too.</summary>
+    public void RegisterHash<T>(string name, KeyMoveHashBinding<T> binding)
+        where T : class => classes?.AddHash(name, binding);
 }

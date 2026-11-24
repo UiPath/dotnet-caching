@@ -30,7 +30,20 @@ internal sealed partial class RedisHashCache
             return false;
         }
 
-        trace?.MarkAnswered(executed && await SucceededAsync(commands).ConfigureAwait(false));
+        if (trace is null)
+        {
+            return executed;
+        }
+
+        if (executed && !await SucceededAsync(commands).ConfigureAwait(false))
+        {
+            trace.MarkRanWithFault();
+        }
+        else
+        {
+            trace.MarkAnswered(executed);
+        }
+
         return executed;
     }
 
@@ -50,7 +63,7 @@ internal sealed partial class RedisHashCache
     private ValueTask<bool> CommitTracedAsync(ITransaction transaction, SendTrace? trace, List<Task> commands, CancellationToken token) =>
         _write.ExecuteAsync(static (s, token) => ExecuteTracedAsync(s.Transaction, s.Trace, s.Commands, token), (Transaction: transaction, Trace: trace, Commands: commands), default, token);
 
-    private async ValueTask<bool> RefreshWithOptionsAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, ICacheValueSerializer? writer, CancellationToken token, SendTrace? trace = null, bool requireKey = false)
+    private async ValueTask<bool> RefreshWithOptionsAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, ICacheValueSerializer? writer, CancellationToken token, SendTrace? trace = null, bool requireKey = false, bool expiryOnly = false)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
@@ -74,7 +87,7 @@ internal sealed partial class RedisHashCache
             }
             else
             {
-                ret = await RefreshInTransactionAsync<T>(cacheKey, redisKey, options, expiration, now, writer, trace, requireKey, token).ConfigureAwait(false);
+                ret = await RefreshInTransactionAsync<T>(cacheKey, redisKey, options, expiration, now, writer, trace, requireKey, expiryOnly, token).ConfigureAwait(false);
                 if (!ret)
                 {
                     LogRedisTransactionFailed();
@@ -101,7 +114,7 @@ internal sealed partial class RedisHashCache
         return ret;
     }
 
-    private async ValueTask<bool> RefreshInTransactionAsync<T>(CacheKey cacheKey, RedisKey redisKey, HashCacheEntryOptions options, DateTimeOffset expiration, DateTimeOffset now, ICacheValueSerializer? writer, SendTrace? trace, bool requireKey, CancellationToken token)
+    private async ValueTask<bool> RefreshInTransactionAsync<T>(CacheKey cacheKey, RedisKey redisKey, HashCacheEntryOptions options, DateTimeOffset expiration, DateTimeOffset now, ICacheValueSerializer? writer, SendTrace? trace, bool requireKey, bool expiryOnly, CancellationToken token)
     {
         await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
         var transaction = Database.CreateTransaction();
@@ -120,7 +133,7 @@ internal sealed partial class RedisHashCache
             return await CommitTracedAsync(transaction, trace, commands, token).ConfigureAwait(false);
         }
 
-        using (QueueMetadataWrite(transaction, Logged(cacheKey, redisKey, typeof(T)), redisKey, options.Metadata, writer, commands))
+        using (expiryOnly ? default : QueueMetadataWrite(transaction, Logged(cacheKey, redisKey, typeof(T)), redisKey, options.Metadata, writer, commands))
         {
             QueueExpirationUpdate(transaction, redisKey, expiration, trace is null ? null : commands);
             return await CommitTracedAsync(transaction, trace, commands, token).ConfigureAwait(false);

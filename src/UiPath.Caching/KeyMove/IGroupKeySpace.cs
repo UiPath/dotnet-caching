@@ -27,6 +27,9 @@ internal interface IGroupKeySpace
     /// <summary>K2 or K2N: the caller key that the cache reads from <paramref name="key"/> on <paramref name="side"/>; null when the cache does not read it.</summary>
     string? CallerKeyOf(string group, MoveSide side, string cacheId, string key);
 
+    /// <summary>What the cache stores under each key, so the inventory asks for the right length without guessing from an error.</summary>
+    KeyMoveKind KindOf(string group, string cacheId);
+
     /// <summary>The longest <c>MaxSourceTtl</c> of the cache, for the canary; null when unknown.</summary>
     TimeSpan? MaxSourceTtl(string group, string cacheId);
 

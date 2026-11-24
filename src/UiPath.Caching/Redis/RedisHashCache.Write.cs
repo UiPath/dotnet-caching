@@ -218,10 +218,46 @@ internal sealed partial class RedisHashCache
             default,
             token);
 
+    /// <summary>A traced merge acts on an absent key or on a hash and on nothing else: a string would take the expiry of the write although its fields are refused. The type is read and held by a condition of the same transaction, so a key that changes type in between aborts it and the type is read again.</summary>
     private async ValueTask<bool> WriteInTransactionAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, WriteReport? report, bool dropMetadata, CancellationToken token, SendTrace? trace = null)
+    {
+        if (trace is null || setOption != HashCacheSetOption.HashReplace || report?.OnlyIfAbsent == true)
+        {
+            return await WriteInTransactionOnceAsync(redisKey, hashEntries, setOption, expiration, report, dropMetadata, trace, held: null, token: token).ConfigureAwait(false);
+        }
+
+        var attempt = 0;
+        while (true)
+        {
+            await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
+            var type = await Database.KeyTypeAsync(redisKey, CommandFlags.DemandMaster).ConfigureAwait(false);
+            if (type is not (RedisType.None or RedisType.Hash))
+            {
+                // Nothing was queued: the key is as it was.
+                trace.MarkSent();
+                trace.MarkAnswered(false);
+                return false;
+            }
+
+            var committed = await WriteInTransactionOnceAsync(redisKey, hashEntries, setOption, expiration, report, dropMetadata, trace, held: type, token: token).ConfigureAwait(false);
+            if (committed || attempt >= 2)
+            {
+                return committed;
+            }
+
+            attempt++;
+        }
+    }
+
+    private async ValueTask<bool> WriteInTransactionOnceAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, WriteReport? report, bool dropMetadata, SendTrace? trace, RedisType? held, CancellationToken token)
     {
         await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
         var transaction = Database.CreateTransaction();
+        if (held is { } type)
+        {
+            transaction.AddCondition(type == RedisType.Hash ? Condition.HashLengthGreaterThan(redisKey, 0) : Condition.KeyNotExists(redisKey));
+        }
+
         if (report?.OnlyIfAbsent == true)
         {
             transaction.AddCondition(Condition.KeyNotExists(redisKey));
@@ -261,6 +297,12 @@ internal sealed partial class RedisHashCache
         }
 
         var committed = await CommitTracedAsync(transaction, trace, commands, token).ConfigureAwait(false);
+        await RecordCommitAsync(committed, report, counted).ConfigureAwait(false);
+        return committed;
+    }
+
+    private async ValueTask RecordCommitAsync(bool committed, WriteReport? report, Task<long>? counted)
+    {
         if (!committed && report?.OnlyIfAbsent == true)
         {
             // Its condition failed: the key is held.
@@ -274,8 +316,6 @@ internal sealed partial class RedisHashCache
         {
             report!.Version = await VersionOrUncountedAsync(counted).ConfigureAwait(false);
         }
-
-        return committed;
     }
 
     /// <summary>Zero when the key is gone: counting would make a key of the count alone, with no lifetime. Zero too when the count cannot be made: the chunks it follows have landed.</summary>
