@@ -98,7 +98,7 @@ public sealed class KeyMoveRestoreTests(RedisFixture fixture)
         await host.SeedAsync("late-legacy-value", [9]);
         await host.SetStageAsync(5);
 
-        await host.ExpectAlertAsync("close_pending");
+        await host.ExpectAlertAsync("close_pending", KeyMoveGateIds.CloseInventory);
         (await host.LegacyKeysAsync()).Should().Equal(host.Legacy("late-legacy-value"));
         await host.AssertValueAsync("kept", [1]);
         await host.WriteAsync("late-legacy-value", [10]);
@@ -256,9 +256,9 @@ public sealed class KeyMoveRestoreTests(RedisFixture fixture)
         }
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var writes = ApplyWritesAsync(host, ledger, revision: 2, acceptsWrites, stop.Token);
         try
         {
-            var writes = ApplyWritesAsync(host, ledger, revision: 2, acceptsWrites, stop.Token);
             await host.SetStageAsync(requestedStage - 1);
             var step = await host.StepAsync();
             step!.Plan.Kind.Should().Be(StepKind.Abandon);
@@ -281,7 +281,7 @@ public sealed class KeyMoveRestoreTests(RedisFixture fixture)
         }
         finally
         {
-            await stop.CancelAsync();
+            await Task.WhenAll(stop.CancelAsync(), writes).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         }
     }
 }
