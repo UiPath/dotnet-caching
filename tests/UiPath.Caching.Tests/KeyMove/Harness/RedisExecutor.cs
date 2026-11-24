@@ -74,18 +74,29 @@ internal sealed class RedisExecutor(MoveTestEnvironment env, long now)
                 return string.Empty;
             case ScriptCallKind.Cap:
             {
-                var r = await scripts.CaptureAsync(Fenced, c.Id, c.Cid, c.Nonce, c.FenceTtl).ConfigureAwait(false);
-                return $"{r.Code}|{r.Token}|{r.DestinationExists}|{r.Gate}";
+                var r = await scripts.CaptureAsync(Fenced, c.Id, c.Cid, c.Nonce, c.FenceTtl, c.MarkerField.Length == 0 ? null : c.MarkerField).ConfigureAwait(false);
+                return $"{r.Code}|{r.Token}|{r.DestinationExists}|{r.Gate}|{r.Marker}";
             }
 
             case ScriptCallKind.Pub:
                 return Text(await scripts.PublishAsync(Fenced, c.Id, c.Value, new Publication(c.Token, c.Gate, c.Cid, c.Nonce, c.FenceTtl, c.Px, c.AtOffset is null ? -1 : At(c), c.Mode == "nx")).ConfigureAwait(false));
             case ScriptCallKind.PubHash:
                 return Text(await scripts.PublishHashAsync(Fenced, stg, c.Id, new Publication(c.Token, c.Gate, c.Cid, c.Nonce, c.FenceTtl, c.Px, At(c), c.Mode == "nx")).ConfigureAwait(false));
+            case ScriptCallKind.Bump when c.Op == "setm":
+            {
+                var r = await scripts.BumpMarkedAsync(Fenced, c.Id, c.Nonce, c.FenceTtl, c.Value, c.Px, c.MarkerField, c.First, c.AtOffset is null ? 0 : At(c)).ConfigureAwait(false);
+                return $"{r.Code}|{r.Length}|{r.Marker}";
+            }
+
             case ScriptCallKind.Bump:
             {
-                var op = c.Op == "set" ? BumpOperation.Set : c.Op == "del" ? BumpOperation.Delete : BumpOperation.None;
-                return Text(await scripts.BumpAsync(Fenced, c.Id, c.Nonce, c.FenceTtl, op, c.Value, c.Px).ConfigureAwait(false));
+                var op = c.Op switch
+                {
+                    "set" => BumpOperation.Set,
+                    "del" => BumpOperation.Delete,
+                    _ => BumpOperation.None,
+                };
+                return Text(await scripts.BumpAsync(Fenced, c.Id, c.Nonce, c.FenceTtl, op, c.Value, c.Px, c.MarkerField).ConfigureAwait(false));
             }
 
             case ScriptCallKind.Fill:
@@ -103,7 +114,7 @@ internal sealed class RedisExecutor(MoveTestEnvironment env, long now)
             case ScriptCallKind.CmpDelHash:
                 return Text(await scripts.CompareDeleteHashAsync(src, ctl, c.Id, entries).ConfigureAwait(false));
             case ScriptCallKind.CtlSync:
-                return Text(await scripts.ControlSyncAsync(ctl, new ControlRecord(c.Ep, c.Id, "S1", "fwd", "n", "S0", "none", "n0", "0", "id0", [(c.Cid, c.Nonce)])).ConfigureAwait(false));
+                return Text(await scripts.ControlSyncAsync(ctl, new ControlRecord(c.Ep, c.Id, "S1", "fwd", "n", "S0", "none", "n0", "0", "id0", [(c.Cid, c.Nonce)]) { Limit = c.Limit, BindingField = c.BindingField, ForwardGeneration = c.Fg, RetiringGeneration = c.Rg }).ConfigureAwait(false));
             case ScriptCallKind.CtlCommit:
                 return Text(await scripts.ControlCommitAsync(ctl, c.Ep, c.Id).ConfigureAwait(false));
             case ScriptCallKind.Gate:
@@ -116,6 +127,23 @@ internal sealed class RedisExecutor(MoveTestEnvironment env, long now)
 
             case ScriptCallKind.HDelC:
                 return Text(await scripts.HashDeleteFieldsAsync(src, ctl, c.Id, [.. entries.Select(e => e.Name)], c.VersionField, c.VersionSeed, fence).ConfigureAwait(false));
+            case ScriptCallKind.PutField:
+                await db.HashSetAsync(key, c.MarkerField, c.Value).ConfigureAwait(false);
+                return string.Empty;
+            case ScriptCallKind.Unmark:
+                return Text(await scripts.UnmarkAsync(ctl, c.MarkerField, c.Value).ConfigureAwait(false));
+            case ScriptCallKind.UnmarkMany:
+                return Text(await scripts.UnmarkManyAsync(ctl, [.. ModelExecutor.Pairs(c.Fields).Select(p => (p.Key, p.Value))]).ConfigureAwait(false));
+            case ScriptCallKind.Smgc:
+                return Text(await scripts.SupersessionGcAsync(ctl, c.MarkerField, c.Value).ConfigureAwait(false));
+            case ScriptCallKind.SmgcMany:
+                return string.Join(',', (await scripts.SupersessionGcManyAsync(ctl, [.. ModelExecutor.Pairs(c.Fields).Select(p => (p.Key, p.Value))]).ConfigureAwait(false)).Select(Text));
+            case ScriptCallKind.SrcDelG:
+                return Text(await scripts.SourceDeleteGuardedAsync(src, ctl, c.Id, c.Binding).ConfigureAwait(false));
+            case ScriptCallKind.LimSet:
+                return Text(await scripts.LimitSetAsync(ctl, c.Id, c.Limit ?? 0).ConfigureAwait(false));
+            case ScriptCallKind.Compact:
+                return Text(await scripts.CompactControlAsync(ctl, c.Id).ConfigureAwait(false));
             default:
                 return Text(await scripts.HashExpireAsync(src, ctl, c.Id, c.AtOffset is null ? -1 : At(c), fence).ConfigureAwait(false));
         }

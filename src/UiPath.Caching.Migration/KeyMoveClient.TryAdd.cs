@@ -147,7 +147,20 @@ internal sealed partial class KeyMoveClient<T>
                 throw Unavailable();
             }
 
+            // A live marker is helped away and the create runs again from the union check, a few times, then it is unavailable.
+            var helps = 0;
             var result = await TryAddOnceAsync(key, value, px, plan, cancellationToken).ConfigureAwait(false);
+            while (result.Kind == TryAddKind.Helped)
+            {
+                if (++helps > _options.MaxMarkerHelps)
+                {
+                    RouterTelemetry.CountMarker("pending_write", _p.CacheId, _p.Group);
+                    throw Unavailable();
+                }
+
+                result = await TryAddOnceAsync(key, value, px, plan, cancellationToken).ConfigureAwait(false);
+            }
+
             if (result.Kind != TryAddKind.Rerun)
             {
                 return result;
@@ -197,6 +210,7 @@ internal sealed partial class KeyMoveClient<T>
         MoveScripts.IdentityMismatch when unit.Readmit() => TryAddResult<T>.Rerun,
         MoveScripts.Published => TryAddResult<T>.Created,
         MoveScripts.DestinationExists => TryAddResult<T>.Exists(null),
+        MoveScripts.LiveSupersession => TryAddResult<T>.Helped,
         _ => TryAddResult<T>.Failed(WriteOutcome.NotSent),
     };
 
@@ -289,10 +303,21 @@ internal sealed partial class KeyMoveClient<T>
         for (var attempt = 0; attempt <= _options.MaxFenceRetries; attempt++)
         {
             await At(SchedulePointStep.Capture).ConfigureAwait(false);
-            var capture = await data.Scripts.CaptureAsync(keys, unit.Id, _p.CacheId, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false);
+            var capture = await data.Scripts.CaptureAsync(keys, unit.Id, _p.CacheId, MoveScripts.NewNonce(), FenceTtlMs, MarkerFieldOf(data, key)).ConfigureAwait(false);
             if (capture.Code == MoveScripts.IdentityMismatch)
             {
                 return MoveScripts.IdentityMismatch;
+            }
+
+            if (capture.Code == MoveScripts.LiveSupersession)
+            {
+                // The older copy is helped away, and the create runs again from the union check.
+                return await _helper.OnSupersededAsync(new SupersededKey(_p.Group, _p.CacheId, key, capture.Marker, unit.Id), cancellationToken).ConfigureAwait(false) switch
+                {
+                    SupersessionAction.Retry => MoveScripts.LiveSupersession,
+                    SupersessionAction.Rerun => MoveScripts.IdentityMismatch,
+                    _ => MoveScripts.GateRefused,
+                };
             }
 
             if (!capture.Captured)

@@ -23,4 +23,12 @@ internal enum ScriptCallKind
     HSetC,
     HDelC,
     HExpC,
+    PutField,
+    Unmark,
+    UnmarkMany,
+    Smgc,
+    SmgcMany,
+    SrcDelG,
+    LimSet,
+    Compact,
 }

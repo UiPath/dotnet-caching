@@ -8,4 +8,7 @@ internal enum TryAddKind
 
     /// <summary>The identity changed under the call: it runs again under the new one.</summary>
     Rerun,
+
+    /// <summary>A live supersession marker was helped away: the create runs again from the union check.</summary>
+    Helped,
 }

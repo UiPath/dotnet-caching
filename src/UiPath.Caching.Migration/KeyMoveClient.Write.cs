@@ -1,3 +1,4 @@
+using System.Text;
 using StackExchange.Redis;
 using UiPath.Caching.KeyMove;
 
@@ -42,7 +43,7 @@ internal sealed partial class KeyMoveClient<T>
     {
         WriteStep.SrcSet => SchedulePointStep.SourceSet,
         WriteStep.SrcDel => SchedulePointStep.SourceDelete,
-        WriteStep.BumpSet or WriteStep.BumpDel => SchedulePointStep.Bump,
+        WriteStep.BumpSet or WriteStep.BumpSetMarked or WriteStep.BumpDel => SchedulePointStep.Bump,
         _ => SchedulePointStep.NativeWrite,
     };
 
@@ -53,7 +54,7 @@ internal sealed partial class KeyMoveClient<T>
     private static InvalidOperationException MissingWriteValue() => new("A set step requires an encoded value.");
 
     private static bool ExpiredSet(WriteStep step, long px, bool boundedRetry) =>
-        boundedRetry && px < 1 && step is WriteStep.SrcSet or WriteStep.BumpSet or WriteStep.NativeSet;
+        boundedRetry && px < 1 && step is WriteStep.SrcSet or WriteStep.BumpSet or WriteStep.BumpSetMarked or WriteStep.NativeSet;
 
     private WriteStep[] DualWriteSteps(bool delete)
     {
@@ -62,17 +63,31 @@ internal sealed partial class KeyMoveClient<T>
             return [WriteStep.SrcDel, WriteStep.BumpDel];
         }
 
-        // NoOrigin writes N first to avoid a miss between the steps.
-        return _p.NoOrigin ? [WriteStep.BumpSet, WriteStep.SrcDel] : [WriteStep.SrcDel, WriteStep.BumpSet];
+        // NoOrigin writes N first to avoid a miss between the steps, and the marker marks the older copy as superseded.
+        return _p.NoOrigin ? [WriteStep.BumpSetMarked, WriteStep.SrcDel] : [WriteStep.SrcDel, WriteStep.BumpSet];
     }
 
     private async ValueTask<WriteResult> WriteManagedAsync(string key, T? value, DateTimeOffset? deadline, KeyMovePlan plan, CancellationToken cancellationToken)
+    {
+        var lease = new WritePermitLease(_node.Permits, _options.SkewBound, _options.FallbackPermitHold);
+        try
+        {
+            return await WriteRunsAsync(key, value, deadline, plan, lease, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lease.Settle();
+        }
+    }
+
+    private async ValueTask<WriteResult> WriteRunsAsync(string key, T? value, DateTimeOffset? deadline, KeyMovePlan plan, WritePermitLease lease, CancellationToken cancellationToken)
     {
         _retries.Supersede(key);
         var (delete, px) = WriteLifetime(value, deadline);
         var absolute = delete ? null : deadline;
         var writeValue = delete ? null : value;
 
+        var history = new WriteHistory();
         var run = 0;
         while (true)
         {
@@ -84,7 +99,7 @@ internal sealed partial class KeyMoveClient<T>
 
             if (StepsFor(plan, delete) is not { } steps)
             {
-                throw Unavailable();
+                return ClosedOrUnknown(history.Applied);
             }
 
             if (!TryEncodeWrite(writeValue, steps, out var inPlace, out var native))
@@ -92,20 +107,39 @@ internal sealed partial class KeyMoveClient<T>
                 return WriteOutcome.NotSent;
             }
 
+            if (await PrepareMarkedAsync(key, steps, history.Applied, lease, cancellationToken).ConfigureAwait(false) is { } refused)
+            {
+                return refused;
+            }
+
             var (admitted, replan) = await AdmitAsync(promotion: false, plan.Act?.Id, cancellationToken).ConfigureAwait(false);
             if (replan)
             {
                 // The steps above were built under an older state: the whole operation is built again under the one in force.
-                CheckAdmissionRerun(run++);
+                if (AdmissionRerunRefusal(run++, history.Applied) is { } exhausted)
+                {
+                    return exhausted;
+                }
+
                 await Task.Delay(_options.AdmissionPoll, _p.Clock, cancellationToken).ConfigureAwait(false);
                 plan = PlanFor(write: true);
                 continue;
             }
 
-            using var unit = admitted ?? throw Unavailable();
-            var form = new Form(key, steps, inPlace, native, px, unit.Id, MoveScripts.NewNonce(), absolute);
+            if (admitted is null)
+            {
+                return ClosedOrUnknown(history.Applied);
+            }
+
+            using var unit = admitted;
+            var form = new Form(key, steps, inPlace, native, px, unit.Id, MoveScripts.NewNonce(), absolute) { First = !history.Attempted, Prior = history.Applied, Lease = lease };
             var ran = await RunStepsAsync(form, 0, unit, cancellationToken).ConfigureAwait(false);
-            if (WriteFinished(ran, run++) is { } result)
+            if (ran.Rerun)
+            {
+                history.Record(form.MarkerValue is not null);
+            }
+
+            if (WriteFinished(ran, run++, history.Applied) is { } result)
             {
                 return result;
             }
@@ -117,7 +151,7 @@ internal sealed partial class KeyMoveClient<T>
     private ValueTask<WriteResult> WritePlain(string key, T? value, DateTimeOffset? deadline, CancellationToken cancellationToken) =>
         value is null ? _p.Plain.RemoveAsync(key, cancellationToken) : _p.Plain.SetAsync(key, value, deadline, cancellationToken);
 
-    private WriteResult? WriteFinished((WriteResult Result, bool Rerun) ran, int run)
+    private WriteResult? WriteFinished((WriteResult Result, bool Rerun) ran, int run, bool applied)
     {
         if (!ran.Rerun)
         {
@@ -125,7 +159,32 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         Count(IdentityRerun);
-        return run >= _options.MaxReruns ? WriteOutcome.NotSent : null;
+        return run >= _options.MaxReruns ? Unsent(applied) : null;
+    }
+
+    // After an applied attempt the write is uncertain, never refused: the call settles as Unknown.
+    private WriteResult ClosedOrUnknown(bool applied) => applied ? Typed(WriteOutcome.Unknown) : throw Unavailable();
+
+    private WriteResult FirstStepFailed(Form form, WriteOutcome failed) => Typed(form.Prior ? WriteOutcome.Unknown : failed);
+
+    private WriteResult Unsent(bool applied) => applied ? Typed(WriteOutcome.Unknown) : WriteOutcome.NotSent;
+
+    // A key whose field would be too long fails closed before any step; the permit is taken before the unit is admitted, so a wait for one never holds up a transition.
+    private async ValueTask<WriteResult?> PrepareMarkedAsync(string key, WriteStep[] steps, bool applied, WritePermitLease lease, CancellationToken cancellationToken)
+    {
+        if (steps[0] != WriteStep.BumpSetMarked)
+        {
+            return null;
+        }
+
+        if (Encoding.UTF8.GetByteCount(_p.InPlaceKey(key)) > _options.MarkerKeyMax)
+        {
+            RouterTelemetry.CountMarker("marker_key_too_long", _p.CacheId, _p.Group);
+            return Unsent(applied);
+        }
+
+        await lease.EnsureAsync(cancellationToken).ConfigureAwait(false);
+        return null;
     }
 
     private (bool Delete, long Px) WriteLifetime(T? value, DateTimeOffset? deadline)
@@ -148,7 +207,7 @@ internal sealed partial class KeyMoveClient<T>
             if (value is not null)
             {
                 inPlace = steps.Contains(WriteStep.SrcSet) ? Source.Codec.Encode(value) : null;
-                native = steps.Contains(WriteStep.BumpSet) || steps.Contains(WriteStep.NativeSet) ? _p.Native.Encode(value) : null;
+                native = steps.Contains(WriteStep.BumpSet) || steps.Contains(WriteStep.BumpSetMarked) || steps.Contains(WriteStep.NativeSet) ? _p.Native.Encode(value) : null;
             }
 
             return true;
@@ -169,14 +228,26 @@ internal sealed partial class KeyMoveClient<T>
         }
     }
 
+    private WriteResult? AdmissionRerunRefusal(int run, bool applied) => run < _options.MaxReruns ? null : ClosedOrUnknown(applied);
+
     private async ValueTask<(WriteResult Result, bool Rerun)> RunStepsAsync(Form form, int from, AdmittedUnit unit, CancellationToken cancellationToken)
     {
         for (var i = from; i < form.Steps.Length; i++)
         {
             var sent = await SendAsync(form, form.Steps[i], cancellationToken).ConfigureAwait(false);
+            if (sent.Marker is not null)
+            {
+                form.MarkerValue = sent.Marker;
+            }
+
             if (sent.Failed is { } failed)
             {
-                return (i == 0 ? Typed(failed) : Pending(form, i), false);
+                return (i == 0 ? FirstStepFailed(form, failed) : Pending(form, i), false);
+            }
+
+            if (MarkedSetRefused(form.Steps[i], sent))
+            {
+                return (Unsent(form.Prior), false);
             }
 
             if (sent.Code == MoveScripts.IdentityMismatch)
@@ -187,11 +258,57 @@ internal sealed partial class KeyMoveClient<T>
                     return (default, true);
                 }
 
-                return (i == 0 ? WriteOutcome.NotSent : Pending(form, i), false);
+                return (i == 0 ? Unsent(form.Prior) : Pending(form, i), false);
             }
         }
 
+        await FinishMarkAsync(form).ConfigureAwait(false);
         return (WriteOutcome.Committed, false);
+    }
+
+    // The script changed nothing: a first attempt at the limit, a late command, or a record with no binding value. An earlier attempt of this write may have applied.
+    private bool MarkedSetRefused(WriteStep step, StepSent sent)
+    {
+        if (step != WriteStep.BumpSetMarked || sent.Code is not (MoveScripts.RecordFull or MoveScripts.Late or MoveScripts.NoBinding))
+        {
+            return false;
+        }
+
+        var refusal = sent.Code switch
+        {
+            MoveScripts.RecordFull => "marker_capacity",
+            MoveScripts.Late => "marker_late",
+            _ => "marker_no_binding",
+        };
+        RouterTelemetry.CountMarker(refusal, _p.CacheId, _p.Group);
+        return true;
+    }
+
+    // After the delete of L: the marker is removed later, in a batch, or before the caller is acknowledged while the node's queue is saturated.
+    private async ValueTask FinishMarkAsync(Form form)
+    {
+        if (form.Steps[0] != WriteStep.BumpSetMarked || form.MarkerValue is not { } value || Data is not { } data)
+        {
+            return;
+        }
+
+        var control = ControlOf(data, Native(form.CallerKey));
+        var field = data.Names.MarkerField(_p.InPlaceKey(form.CallerKey));
+        if (Unmarks.Saturated)
+        {
+            try
+            {
+                _ = await data.Scripts.UnmarkAsync(control, field, value).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
+            {
+                // The queue gets it; a marker that stays is an orphan.
+                _ = ex;
+            }
+        }
+
+        Unmarks.Enqueue(control, field, value, _p.CacheId, _p.Group);
     }
 
     private WriteResult Typed(WriteOutcome failed) => failed == WriteOutcome.Unknown ? WriteResult.UnknownWithin(_p.SettleWithin()) : failed;
@@ -222,6 +339,7 @@ internal sealed partial class KeyMoveClient<T>
                     }
                 }
 
+                await FinishMarkAsync(form).ConfigureAwait(false);
                 return true;
             });
         return WriteResult.UnknownWithin(_p.SettleWithin());
@@ -247,6 +365,11 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         var n = Native(form.CallerKey);
+        if (step == WriteStep.BumpSetMarked)
+        {
+            return await SendMarkedAsync(data, form, n, px, cancellationToken).ConfigureAwait(false);
+        }
+
         try
         {
             var code = step switch
@@ -254,9 +377,9 @@ internal sealed partial class KeyMoveClient<T>
                 WriteStep.SrcDel => await Source.DeleteAsync(form.CallerKey, form.Id).ConfigureAwait(false),
                 WriteStep.SrcSet => await Source.SetAsync(form.CallerKey, form.Id, form.SourceBytes ?? throw MissingWriteValue(), px, false).ConfigureAwait(false),
                 WriteStep.BumpSet when retry => await data.Scripts.BumpIfFenceAsync(Fenced(data, n), form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Set, form.NativeBytes ?? throw MissingWriteValue(), px).ConfigureAwait(false),
-                WriteStep.BumpDel when retry => await data.Scripts.BumpIfFenceAsync(Fenced(data, n), form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Delete).ConfigureAwait(false),
+                WriteStep.BumpDel when retry => await data.Scripts.BumpIfFenceAsync(Fenced(data, n), form.Id, form.Nonce, form.Observed, FenceTtlMs, BumpOperation.Delete, markerField: MarkerFieldOf(data, form.CallerKey)).ConfigureAwait(false),
                 WriteStep.BumpSet => await data.Scripts.BumpAsync(Fenced(data, n), form.Id, form.Nonce, FenceTtlMs, BumpOperation.Set, form.NativeBytes ?? throw MissingWriteValue(), px).ConfigureAwait(false),
-                WriteStep.BumpDel => await data.Scripts.BumpAsync(Fenced(data, n), form.Id, form.Nonce, FenceTtlMs, BumpOperation.Delete).ConfigureAwait(false),
+                WriteStep.BumpDel => await data.Scripts.BumpAsync(Fenced(data, n), form.Id, form.Nonce, FenceTtlMs, BumpOperation.Delete, markerField: MarkerFieldOf(data, form.CallerKey)).ConfigureAwait(false),
                 WriteStep.NativeSet => BooleanCode(await data.Db.StringSetAsync(Key(n), form.NativeBytes ?? throw MissingWriteValue(), Expiry(px), When.Always, Master).ConfigureAwait(false)),
                 _ => BooleanCode(await data.Db.KeyDeleteAsync(Key(n), Master).ConfigureAwait(false)),
             };
@@ -267,6 +390,25 @@ internal sealed partial class KeyMoveClient<T>
             return StepSent.Unknown;
         }
     }
+
+    // A marked set with no reply may still apply; its permit is kept until it cannot.
+    private async ValueTask<StepSent> SendMarkedAsync(KeyMoveData data, Form form, string n, long px, CancellationToken cancellationToken)
+    {
+        var now = _p.Clock.GetUtcNow();
+        var deadline = now + _options.CommandTimeout;
+        try
+        {
+            var reply = await data.Scripts.BumpMarkedAsync(Fenced(data, n), form.Id, form.Nonce, FenceTtlMs, form.NativeBytes ?? throw MissingWriteValue(), px, data.Names.MarkerField(_p.InPlaceKey(form.CallerKey)), form.First, deadline.ToUnixTimeMilliseconds()).ConfigureAwait(false);
+            return new StepSent(reply.Committed ? 1 : reply.Code, null, reply.Marker);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            form.Lease?.Unanswered(deadline, now, data);
+            return StepSent.Unknown;
+        }
+    }
+
+    private string? MarkerFieldOf(KeyMoveData data, string key) => _p.NoOrigin ? data.Names.MarkerField(_p.InPlaceKey(key)) : null;
 
     // A retry keeps the original deadline.
     private long RetryLifetime(Form form, bool retry) =>
@@ -297,7 +439,7 @@ internal sealed partial class KeyMoveClient<T>
     // The first attempt of a fence step that has an earlier step may be retried, so the token in force just before it is kept: the retry may apply over it or over the nonce this attempt sets.
     private async Task ObserveFenceAsync(Form form)
     {
-        if (form.Steps[0] is WriteStep.BumpSet or WriteStep.BumpDel || form.Looked || Data is not { } data || !data.IsConnected())
+        if (form.Steps[0] is WriteStep.BumpSet or WriteStep.BumpSetMarked or WriteStep.BumpDel || form.Looked || Data is not { } data || !data.IsConnected())
         {
             return;
         }
@@ -319,6 +461,31 @@ internal sealed partial class KeyMoveClient<T>
     {
         public string? Observed { get; set; }
 
+        /// <summary>True only while no attempt of this logical write has been sent.</summary>
+        public bool First { get; init; }
+
+        /// <summary>An earlier attempt of this logical write applied its marked set.</summary>
+        public bool Prior { get; init; }
+
+        public WritePermitLease? Lease { get; init; }
+
+        /// <summary>The marker this attempt's marked set wrote, as the script answered it.</summary>
+        public string? MarkerValue { get; set; }
+
         public bool Looked { get; set; }
+    }
+
+    // The history of the logical write across its reruns: once an attempt has been sent, a rerun is never refused for the marker limit.
+    private sealed class WriteHistory
+    {
+        public bool Attempted { get; private set; }
+
+        public bool Applied { get; private set; }
+
+        public void Record(bool applied)
+        {
+            Attempted = true;
+            Applied |= applied;
+        }
     }
 }

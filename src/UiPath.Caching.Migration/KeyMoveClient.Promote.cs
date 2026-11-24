@@ -83,13 +83,16 @@ internal sealed partial class KeyMoveClient<T>
         var events = data.ConnectionEvents();
         var started = _p.Clock.GetTimestamp();
         await At(SchedulePointStep.Capture).ConfigureAwait(false);
-        var capture = await data.Scripts.CaptureAsync(keys, unit.Id, _p.CacheId, MoveScripts.NewNonce(), (long)_options.FenceTtl.TotalMilliseconds).ConfigureAwait(false);
+        var capture = await data.Scripts.CaptureAsync(keys, unit.Id, _p.CacheId, MoveScripts.NewNonce(), (long)_options.FenceTtl.TotalMilliseconds, MarkerFieldOf(data, key)).ConfigureAwait(false);
         switch (capture)
         {
             case { Code: MoveScripts.IdentityMismatch } when unit.Readmit():
                 return ReadStep<T>.Again;
             case { Code: MoveScripts.IdentityMismatch }:
                 return await UnpromotedAsync(key, cancellationToken).ConfigureAwait(false);
+            case { Code: MoveScripts.LiveSupersession }:
+                // The copy of L is older than the newest write of N: delete it, remove the marker and serve N.
+                return await HelpAsync(key, n, capture.Marker, unit, identity, cancellationToken).ConfigureAwait(false);
             case { Captured: false }:
                 // A clear may have closed the gate. Leave the miss hint alone.
                 Count("gate_closed");
@@ -259,6 +262,19 @@ internal sealed partial class KeyMoveClient<T>
             px,
             tcap,
             true);
+
+    private async ValueTask<ReadStep<T>> HelpAsync(string key, string n, RedisValue marker, AdmittedUnit unit, string identity, CancellationToken cancellationToken)
+    {
+        switch (await _helper.OnSupersededAsync(new SupersededKey(_p.Group, _p.CacheId, key, marker, unit.Id), cancellationToken).ConfigureAwait(false))
+        {
+            case SupersessionAction.Retry:
+                return ReadStep<T>.Of(await MissAsync(key, n, identity, cancellationToken).ConfigureAwait(false));
+            case SupersessionAction.Rerun:
+                return unit.Readmit() ? ReadStep<T>.Again : await UnpromotedAsync(key, cancellationToken).ConfigureAwait(false);
+            default:
+                return ReadStep<T>.Of(ReadOutcome.Unavailable);
+        }
+    }
 
     // The non-promoting union read, N first and L, then N on the master again; what it finds is served and not kept locally, as an abandoned promotion's value is.
     private async ValueTask<ReadStep<T>> UnpromotedAsync(string key, CancellationToken cancellationToken)

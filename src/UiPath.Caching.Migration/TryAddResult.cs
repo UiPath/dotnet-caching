@@ -8,6 +8,8 @@ internal readonly record struct TryAddResult<T>(TryAddKind Kind, T? Existing, Wr
 
     public static TryAddResult<T> Rerun => new(TryAddKind.Rerun, null, default);
 
+    public static TryAddResult<T> Helped => new(TryAddKind.Helped, null, default);
+
     public static TryAddResult<T> Exists(T? existing) => new(TryAddKind.Exists, existing, default);
 
     public static TryAddResult<T> Failed(WriteResult failure) => new(TryAddKind.Failed, null, failure);

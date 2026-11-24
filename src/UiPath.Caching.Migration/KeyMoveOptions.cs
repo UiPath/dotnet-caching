@@ -30,4 +30,31 @@ internal sealed record KeyMoveOptions
     public TimeSpan RetryLife { get; init; } = TimeSpan.FromSeconds(60);
 
     public TimeSpan AdmissionPoll { get; init; } = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>The longest a marked set may wait before the script refuses it: its deadline on the server's clock, counted from the client's.</summary>
+    public TimeSpan CommandTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>The bound on the difference of the clocks of client and server; a permit outlives a deadline by it.</summary>
+    public TimeSpan SkewBound { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>The longest a permit is kept for a transaction with no reply when its connection has not changed.</summary>
+    public TimeSpan FallbackPermitHold { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>The longest in-place key a marked write takes; a longer one fails closed before any step.</summary>
+    public int MarkerKeyMax { get; init; } = 256;
+
+    /// <summary>The forward marked writes a node has outstanding; more wait for a permit.</summary>
+    public int NoOriginWriteInflightMax { get; init; } = 256;
+
+    /// <summary>The unmarks a node holds; one more is dropped and counted.</summary>
+    public int UnmarkQueueMax { get; init; } = 10_000;
+
+    public int UnmarkBatch { get; init; } = 500;
+
+    public int UnmarkAttempts { get; init; } = 5;
+
+    public TimeSpan UnmarkFlushInterval { get; init; } = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>How often a read or create that meets a live marker helps and runs again before it gives up as unavailable.</summary>
+    public int MaxMarkerHelps { get; init; } = 3;
 }

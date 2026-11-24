@@ -9,6 +9,9 @@ internal sealed partial class MoveScripts
     public const long AlreadyWrittenOrOlder = 0;
     public const long ExpectationFailed = 0;
 
+    // ARGV 1 ep, 2 id, 3 state, 4 direction, 5 np, 6 to 10 the previous state, 11 cl (the sorted cache ids joined by '+', which no cache id holds), 12 lim (empty leaves the record's own),
+    // 13 bf, 14 fg, 15 rg (set as given, removed when empty), then pairs of cache id and nonce.
+    // The gates of the previous transition are the ids in cl, so the cost does not grow with the markers of the record; a record that has no cl is scanned.
     private const string CtlSyncScript = """
         local cur = redis.call('HGET', KEYS[1], 'ep')
         if cur then
@@ -23,12 +26,23 @@ internal sealed partial class MoveScripts
             return -5
           end
         end
-        redis.call('HSET', KEYS[1], 'ep', ARGV[1], 'id', ARGV[2], 'st', ARGV[3], 'dir', ARGV[4], 'np', ARGV[5], 'dur', '0',
-          'pst', ARGV[6], 'pdir', ARGV[7], 'pnp', ARGV[8], 'pep', ARGV[9], 'pid', ARGV[10])
-        for _, f in ipairs(redis.call('HKEYS', KEYS[1])) do
-          if string.sub(f, 1, 2) == 'c:' then redis.call('HDEL', KEYS[1], f) end
+        local cl = redis.call('HGET', KEYS[1], 'cl')
+        local old = {}
+        if cl then
+          for f in string.gmatch(cl, '[^+]+') do old[#old + 1] = 'c:' .. f end
+        else
+          for _, f in ipairs(redis.call('HKEYS', KEYS[1])) do
+            if string.sub(f, 1, 2) == 'c:' then old[#old + 1] = f end
+          end
         end
-        for i = 11, #ARGV, 2 do redis.call('HSET', KEYS[1], 'c:' .. ARGV[i], 'OPEN:' .. ARGV[i + 1]) end
+        redis.call('HSET', KEYS[1], 'ep', ARGV[1], 'id', ARGV[2], 'st', ARGV[3], 'dir', ARGV[4], 'np', ARGV[5], 'dur', '0',
+          'pst', ARGV[6], 'pdir', ARGV[7], 'pnp', ARGV[8], 'pep', ARGV[9], 'pid', ARGV[10], 'cl', ARGV[11])
+        for _, f in ipairs(old) do redis.call('HDEL', KEYS[1], f) end
+        if ARGV[12] ~= '' then redis.call('HSET', KEYS[1], 'lim', ARGV[12]) end
+        for k, f in ipairs({'bf', 'fg', 'rg'}) do
+          if ARGV[12 + k] ~= '' then redis.call('HSET', KEYS[1], f, ARGV[12 + k]) else redis.call('HDEL', KEYS[1], f) end
+        end
+        for i = 16, #ARGV, 2 do redis.call('HSET', KEYS[1], 'c:' .. ARGV[i], 'OPEN:' .. ARGV[i + 1]) end
         return 1
         """;
 
@@ -130,10 +144,11 @@ internal sealed partial class MoveScripts
             MoveKeyNames.ValidateName(cid, nameof(record));
         }
 
-        var args = new List<RedisValue>(10 + (record.Gates.Count * 2))
+        var args = new List<RedisValue>(15 + (record.Gates.Count * 2))
         {
             record.Ep, record.Id, record.State, record.Direction, record.NPop,
-            record.PreviousState, record.PreviousDirection, record.PreviousNPop, record.PreviousEp, record.PreviousId,
+            record.PreviousState, record.PreviousDirection, record.PreviousNPop, record.PreviousEp, record.PreviousId, GateList(record),
+            record.Limit?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, record.BindingField, record.ForwardGeneration, record.RetiringGeneration,
         };
         foreach (var (cid, nonce) in record.Gates)
         {
@@ -144,29 +159,53 @@ internal sealed partial class MoveScripts
         return [.. args];
     }
 
+    private static string GateList(ControlRecord record) => string.Join('+', record.Gates.Select(g => g.Cid).Order(StringComparer.Ordinal));
+
     private static void AddIdentityConditions(ITransaction transaction, RedisKey control, RedisValue ep, RedisValue id)
     {
         transaction.AddCondition(ep.IsNull ? Condition.HashNotExists(control, "ep") : Condition.HashEqual(control, "ep", ep));
         transaction.AddCondition(id.IsNull ? Condition.HashNotExists(control, "id") : Condition.HashEqual(control, "id", id));
     }
 
-    private static void QueueControlSync(ITransaction transaction, RedisKey control, ControlRecord record, RedisValue ep, RedisValue heldId, int heldLength, Dictionary<string, RedisValue> fields, List<Task> queued)
+    private static void QueueControlSync(ITransaction transaction, RedisKey control, ControlRecord record, HeldControl held, List<Task> queued)
     {
-        AddIdentityConditions(transaction, control, ep, heldId);
+        AddIdentityConditions(transaction, control, held.Ep, held.Id);
 
-        // A new gate changes the hash length and aborts this transaction rather than escaping deletion.
-        transaction.AddCondition(Condition.HashLengthEqual(control, heldLength));
+        // The gates to drop are the listed ones; a gate added since the read changes the list, or the length of a record with none, so the delete below never misses one.
+        // Markers come and go in a record that has a list, so its length is not a condition there.
+        if (held.GateIds.IsNull)
+        {
+            transaction.AddCondition(Condition.HashNotExists(control, "cl"));
+            transaction.AddCondition(Condition.HashLengthEqual(control, held.Length));
+        }
+        else
+        {
+            transaction.AddCondition(Condition.HashEqual(control, "cl", held.GateIds));
+        }
+
         queued.Add(transaction.HashSetAsync(
             control,
             [
                 new("ep", record.Ep), new("id", record.Id), new("st", record.State), new("dir", record.Direction), new("np", record.NPop), new("dur", "0"),
-                new("pst", record.PreviousState), new("pdir", record.PreviousDirection), new("pnp", record.PreviousNPop), new("pep", record.PreviousEp), new("pid", record.PreviousId),
+                new("pst", record.PreviousState), new("pdir", record.PreviousDirection), new("pnp", record.PreviousNPop), new("pep", record.PreviousEp), new("pid", record.PreviousId), new("cl", GateList(record)),
             ],
             Master));
-        var gates = fields.Keys.Where(f => f.StartsWith("c:", StringComparison.Ordinal)).Select(f => (RedisValue)f).ToArray();
+        var gates = (held.GateIds.IsNull
+            ? held.Fields.Keys.Where(f => f.StartsWith("c:", StringComparison.Ordinal))
+            : held.GateIds.ToString().Split('+', StringSplitOptions.RemoveEmptyEntries).Select(id => "c:" + id)).Select(f => (RedisValue)f).ToArray();
         if (gates.Length > 0)
         {
             queued.Add(transaction.HashDeleteAsync(control, gates, Master));
+        }
+
+        if (record.Limit is { } limit)
+        {
+            queued.Add(transaction.HashSetAsync(control, "lim", limit, When.Always, Master));
+        }
+
+        foreach (var (field, value) in new[] { (MarkerBinding.BindingFieldName, record.BindingField), ("fg", record.ForwardGeneration), (MarkerBinding.RetiringField, record.RetiringGeneration) })
+        {
+            queued.Add(value.Length > 0 ? transaction.HashSetAsync(control, field, value, When.Always, Master) : transaction.HashDeleteAsync(control, field, Master));
         }
 
         if (record.Gates.Count > 0)
@@ -177,10 +216,11 @@ internal sealed partial class MoveScripts
 
     private async Task<FallbackPlan> PlanControlSyncAsync(RedisKey control, ControlRecord record)
     {
-        var held = await _db.HashGetAllAsync(control, Master).ConfigureAwait(false);
-        var fields = held.ToDictionary(e => e.Name.ToString(), e => e.Value);
-        fields.TryGetValue("ep", out var ep);
-        fields.TryGetValue("id", out var heldId);
+        // The three fields are read directly; a record with no list is the only one that is enumerated, so the cost does not grow with the markers of a record that has one.
+        var head = await _db.HashGetAsync(control, ["ep", "id", "cl"], Master).ConfigureAwait(false);
+        var (ep, heldId, gateList) = (head[0], head[1], head[2]);
+        var all = gateList.IsNull ? await _db.HashGetAllAsync(control, Master).ConfigureAwait(false) : [];
+        var held = new HeldControl(ep, heldId, gateList, all.Length, all.ToDictionary(e => e.Name.ToString(), e => e.Value));
         if (!ep.IsNull)
         {
             var current = long.Parse(ep.ToString(), CultureInfo.InvariantCulture);
@@ -204,6 +244,9 @@ internal sealed partial class MoveScripts
             }
         }
 
-        return new FallbackPlan(Written, (transaction, queued) => QueueControlSync(transaction, control, record, ep, heldId, held.Length, fields, queued));
+        return new FallbackPlan(Written, (transaction, queued) => QueueControlSync(transaction, control, record, held, queued));
     }
+
+    /// <summary>What the fallback read from a control record: its identity, its gate list, and its fields when it has no list.</summary>
+    private sealed record HeldControl(RedisValue Ep, RedisValue Id, RedisValue GateIds, int Length, Dictionary<string, RedisValue> Fields);
 }

@@ -1,3 +1,3 @@
 namespace UiPath.Caching.Tests.KeyMove.Harness;
 
-internal readonly record struct CapResult(long Code, string? Token, bool DestinationExists, string? Gate, long Tcap);
+internal readonly record struct CapResult(long Code, string? Token, bool DestinationExists, string? Gate, long Tcap, string? Marker = null);

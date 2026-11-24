@@ -12,6 +12,9 @@ internal enum WriteStep
     /// <summary>BUMP(G, N, set).</summary>
     BumpSet,
 
+    /// <summary>BUMP(G, N, setm): the set and the supersession marker of L in one script.</summary>
+    BumpSetMarked,
+
     /// <summary>BUMP(G, N, del).</summary>
     BumpDel,
 

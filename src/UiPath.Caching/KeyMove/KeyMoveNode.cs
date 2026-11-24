@@ -206,6 +206,7 @@ internal sealed class KeyMoveNode
             new GroupDataOps(scanner, _setup.KeySpace, store, stateScripts, controlScripts, names, alert: _ambiguity.Raise),
             new KeyInventory(scanner, _setup.KeySpace, store, database, prefix, _time, _ambiguity.Raise),
             new StuckGateReopener(records, controlScripts, database, names, state, _time),
+            new MarkerSweeper(control, controlScripts, names, state, _time),
             new StateRecovery(store, store, records, sequence, _time),
             new ClearCoordinator(store, stateScripts, controlScripts, records, names, state, _time),
             new KeyMoveSweep(scanner, _setup.KeySpace, control, names),
@@ -408,6 +409,12 @@ internal sealed class KeyMoveNode
             {
                 _setup.Alert?.Invoke(new KeyMoveAlert(group, "gate_reopened", cache));
             }
+
+            var swept = await wiring.Sweeper.SweepAsync(group, state, cancellationToken).ConfigureAwait(false);
+            if (swept.DidWork)
+            {
+                _setup.Alert?.Invoke(new KeyMoveAlert(group, "marker_sweep", $"obsolete={swept.Obsolete};helped={swept.Helped};orphans={swept.Orphans}"));
+            }
         }
     }
 
@@ -424,6 +431,7 @@ internal sealed class KeyMoveNode
         GroupDataOps Data,
         KeyInventory Inventory,
         StuckGateReopener Stuck,
+        MarkerSweeper Sweeper,
         StateRecovery Recovery,
         ClearCoordinator Clear,
         KeyMoveSweep Sweep,

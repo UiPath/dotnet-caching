@@ -17,6 +17,14 @@ public class ModelConformanceTests(RedisContainerFixture fixture)
         "CAP with no gate for the cache",
         "CAP with a closed gate",
         "CAP with no record",
+        "CAP answers a current marker before it takes a token",
+        "CAP reads the binding from the field the record names",
+    ];
+
+    // A transaction reads no server clock, so the fallback cannot refuse a late command.
+    private static readonly HashSet<string> ScriptsOnly =
+    [
+        "BUMP setm refuses a late command and changes nothing",
     ];
 
     public static TheoryData<string, bool> Cases
@@ -27,7 +35,10 @@ public class ModelConformanceTests(RedisContainerFixture fixture)
             foreach (var name in ConformanceScenarios.All.Keys)
             {
                 cases.Add(name, true);
-                cases.Add(name, false);
+                if (!ScriptsOnly.Contains(name))
+                {
+                    cases.Add(name, false);
+                }
             }
 
             return cases;
