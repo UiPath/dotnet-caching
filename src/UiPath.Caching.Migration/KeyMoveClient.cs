@@ -20,6 +20,7 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
     private readonly MarkerNode _node;
     private readonly SupersessionHelper _helper;
     private readonly KeyPromotion<T> _promotion;
+    private readonly KeyPromotion<T> _reversePromotion;
 
     public KeyMoveClient(KeyMoveClientParts<T> parts)
     {
@@ -31,6 +32,10 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
         _node = MarkerNode.For(parts.Plane, parts.Clock, _options, parts.RunRetriesInBackground);
         _helper = new SupersessionHelper(() => _p.Plane.Data, parts.InPlaceKey, parts.NativeKey, parts.Group, parts.CacheId);
         _promotion = new KeyPromotion<T>(parts, _source, _helper);
+
+        // The same side class reaches N with the native key and codec, the source of a reverse promotion.
+        var native = new InPlaceMoveSide<T>(parts.Plane, parts.Group, parts.NativeKey, parts.Native, parts.Mappable, parts.Clock);
+        _reversePromotion = new KeyPromotion<T>(parts, native, reverse: true);
     }
 
     public TimeSpan? SettleWithin => _p.SettleWithin();

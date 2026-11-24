@@ -11,6 +11,8 @@ internal sealed partial class KeyMoveClient<T>
         return plan.Mode == KeyMoveMode.Plain ? _p.Plain.FillAsync(key, value, deadline, stored, cancellationToken) : FillManagedAsync(key, value, deadline, stored, plan, cancellationToken);
     }
 
+    private static bool FillsInPlace(KeyMoveMode mode) => mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4;
+
     private static long CreatedCode(bool created) => created ? MoveScripts.Published : MoveScripts.DestinationExists;
 
     private static FillBox<T>? BoxForWinner(long code, FillBox<T>? box) => code == MoveScripts.DestinationExists ? box : null;
@@ -99,6 +101,7 @@ internal sealed partial class KeyMoveClient<T>
     private async ValueTask<(WriteResult Result, bool Rerun)> FillOnceAsync(string key, T value, long px, KeyMoveMode mode, AdmittedUnit unit, FillBox<T>? box, CancellationToken cancellationToken)
     {
         var source = mode is KeyMoveMode.S1 or KeyMoveMode.S2;
+        var onL = FillsInPlace(mode);
         if (cancellationToken.IsCancellationRequested || Data is not { } data || !data.IsConnected() || SourceUnavailable(source))
         {
             return (WriteOutcome.NotSent, false);
@@ -118,6 +121,9 @@ internal sealed partial class KeyMoveClient<T>
             {
                 KeyMoveMode.S1 or KeyMoveMode.S2 => await Source.SetAsync(key, unit.Id, bytes, px, true).ConfigureAwait(false),
                 KeyMoveMode.S5 => CreatedCode(await data.Db.StringSetAsync(Key(n), bytes, Expiry(px), When.NotExists, Master).ConfigureAwait(false)),
+                KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4 => await data.Scripts.FillAsync(ReverseFenced(data, key), unit.Id, bytes, px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
+
+                // S3 and S4, and S1(rev), whose Src is N: forward promoters on lagging nodes are refused by G.
                 _ => await data.Scripts.FillAsync(Fenced(data, n), unit.Id, bytes, px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
             };
         }
@@ -129,7 +135,7 @@ internal sealed partial class KeyMoveClient<T>
         if (BoxForWinner(code, box) is { } winner)
         {
             // The losing fill returns the winner's value under the original fill mark.
-            var held = source
+            var held = onL
                 ? Interpret(await SourceSnapAsync(key, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false), Source.Codec)
                 : Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
             KeepFillWinner(winner, held);
@@ -138,13 +144,14 @@ internal sealed partial class KeyMoveClient<T>
         return WriteFillOutcome(code, unit);
     }
 
-    private bool CreateIsClosed(KeyMoveMode mode) => mode is KeyMoveMode.Closed or KeyMoveMode.Union || KeyMovePlanning.IsReverseWrite(mode) || (mode == KeyMoveMode.S2 && _p.NoOrigin);
+    private bool CreateIsClosed(KeyMoveMode mode) => mode is KeyMoveMode.Closed or KeyMoveMode.Union ||
+        (_p.NoOrigin && (mode == KeyMoveMode.S2 || KeyMovePlanning.IsReverseWrite(mode)));
 
     private byte[]? EncodeFill(T value, KeyMoveMode mode)
     {
         try
         {
-            return mode is KeyMoveMode.S1 or KeyMoveMode.S2 ? Source.Codec.Encode(value) : _p.Native.Encode(value);
+            return FillsInPlace(mode) ? Source.Codec.Encode(value) : _p.Native.Encode(value);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException && ex is not OperationCanceledException)
         {

@@ -3,8 +3,8 @@ using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>The per-key promotion (CAP, the snapshot of L through the source side, decode, encode, PUB, EXISTS, CMPDEL, and the capture-to-snapshot bound), shared by the read-through and the mover.</summary>
-/// <remarks>A run with no <see cref="MoverFlavor"/> is the read-through and behaves exactly as the client always did. L is reached only through <see cref="IMoveSide{T}"/>.</remarks>
+/// <summary>The per-key promotion (CAP, the snapshot of the source side, decode, encode, PUB, EXISTS, CMPDEL, and the capture-to-snapshot bound), shared by the read-through and the mover.</summary>
+/// <remarks>A run with no <see cref="MoverFlavor"/> is the read-through. Forward, the source is L and the target N under G with an <c>nx</c> publish; reverse, the source is N and the target L under GL with a <c>set</c> publish, since N is the authority.</remarks>
 internal sealed class KeyPromotion<T>
     where T : class
 {
@@ -14,14 +14,19 @@ internal sealed class KeyPromotion<T>
     private readonly IMoveSide<T> _source;
     private readonly KeyMoveOptions _options;
     private readonly ISupersessionHandler? _readThrough;
+    private readonly bool _reverse;
+    private readonly IKeyMoveCodec<T> _target;
 
     /// <param name="readThrough">Told when a read-through's capture meets a live supersession marker; the mover's handler comes with its <see cref="MoverFlavor"/>.</param>
-    public KeyPromotion(KeyMoveClientParts<T> parts, IMoveSide<T> source, ISupersessionHandler? readThrough = null)
+    /// <param name="reverse">The source is N, reached through <paramref name="source"/>, and the target is L.</param>
+    public KeyPromotion(KeyMoveClientParts<T> parts, IMoveSide<T> source, ISupersessionHandler? readThrough = null, bool reverse = false)
     {
         _p = parts ?? throw new ArgumentNullException(nameof(parts));
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _options = parts.Options;
         _readThrough = readThrough;
+        _reverse = reverse;
+        _target = reverse ? parts.InPlace : parts.Native;
     }
 
     private long FenceTtlMs => (long)_options.FenceTtl.TotalMilliseconds;
@@ -109,8 +114,9 @@ internal sealed class KeyPromotion<T>
     /// <param name="ownership">Asked before CAP, PUB and the compare-delete, the steps that write; the read-through passes <see cref="AlwaysOwned.Instance"/>.</param>
     public async ValueTask<PromotionResult<T>> RunAsync(string key, MoverFlavor? mover, AdmittedUnit unit, KeyMoveData data, int attempt, IMoveOwnership ownership, CancellationToken cancellationToken)
     {
-        var n = _p.NativeKey(key);
-        var run = new PromotionRun(key, n, new FencedKeys(data.Names.ForwardFence(n), n, data.Names.ControlFor(_p.Group, n)), mover, unit, data, attempt, ownership);
+        var target = _reverse ? _p.InPlaceKey(key) : _p.NativeKey(key);
+        var fence = _reverse ? data.Names.ReverseFence(target) : data.Names.ForwardFence(target);
+        var run = new PromotionRun(key, target, new FencedKeys(fence, target, data.Names.ControlFor(_p.Group, target)), mover, unit, data, attempt, ownership);
 
         // The capture comes before the snapshot of L, never in parallel. The bound counts from before CAP is sent, so a delayed CAP reply counts.
         var events = data.ConnectionEvents();
@@ -138,7 +144,7 @@ internal sealed class KeyPromotion<T>
         byte[] encoded;
         try
         {
-            encoded = served.Value is null ? _p.Native.EncodeNull()! : _p.Native.Encode(served.Value);
+            encoded = served.Value is null ? _target.EncodeNull()! : _target.Encode(served.Value);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -255,9 +261,10 @@ internal sealed class KeyPromotion<T>
         }
 
         // A read-through serves the N that is there. The mover goes on, so that the L copy drains: its publish answers 2 and its compare-delete runs.
-        if (capture.DestinationExists && run.Mover is null)
+        // In reverse an L that exists is an older copy, which the publish replaces.
+        if (capture.DestinationExists && run.Mover is null && !_reverse)
         {
-            return PromotionResult<T>.Of(PromotionKind.NativeExists, await ReadNativeAsync(run.N, cancellationToken).ConfigureAwait(false));
+            return PromotionResult<T>.Of(PromotionKind.NativeExists, await ReadNativeAsync(run.Target, cancellationToken).ConfigureAwait(false));
         }
 
         return null;
@@ -283,7 +290,8 @@ internal sealed class KeyPromotion<T>
         }
 
         var decoded = Decode(_source.Codec, snap);
-        if (decoded.Class == DecodeClass.Unreadable || (decoded.Class is not (DecodeClass.Expired or DecodeClass.Null) && decoded.Value is null))
+        if (decoded.Class == DecodeClass.Unreadable ||
+            decoded is { Class: not (DecodeClass.Expired or DecodeClass.Null), Value: null })
         {
             return (default, await UnreadableSourceAsync(run, snap, cancellationToken).ConfigureAwait(false));
         }
@@ -293,17 +301,15 @@ internal sealed class KeyPromotion<T>
             return (default, PromotionResult<T>.Of(PromotionKind.Expired, ReadOutcome.Absent));
         }
 
-        // A read-through drops a value the codec refuses for good (a null the other side does not cache, one too large for a cache with an origin) by a compare-delete, and the next read reloads it; the mover leaves it where it is.
+        // Only forward read-through can drop an oversized value or a null the target cannot store.
         var isNull = decoded.Class == DecodeClass.Null;
-        var droppable = run.Mover is null && KeyMoveValueClasses.Droppable(decoded.Class, _p.NoOrigin, _p.Native.EncodeNull() is not null);
-        if (isNull && droppable)
+        var canPublishNull = isNull && _target.EncodeNull() is not null;
+        var droppable = !_reverse && run.Mover is null && KeyMoveValueClasses.Droppable(decoded.Class, _p.NoOrigin, canPublishNull);
+        if (isNull && !canPublishNull)
         {
-            return (default, await DroppedAsync(run, snap, PromotionResult<T>.Of(PromotionKind.SourceAbsent), cancellationToken).ConfigureAwait(false));
-        }
-
-        if (isNull && run.Mover is not null && _p.Native.EncodeNull() is null)
-        {
-            return (default, PromotionResult<T>.Of(PromotionKind.NullNotCached));
+            return (default, droppable
+                ? await DroppedAsync(run, snap, PromotionResult<T>.Of(PromotionKind.SourceAbsent), cancellationToken).ConfigureAwait(false)
+                : PromotionResult<T>.Of(PromotionKind.NullNotCached));
         }
 
         var expiration = snap.TtlMs < 0 ? (DateTimeOffset?)null : snap.At.AddMilliseconds(snap.TtlMs);
@@ -341,8 +347,8 @@ internal sealed class KeyPromotion<T>
 
         var unreadable = PromotionResult<T>.Of(PromotionKind.Unreadable, ReadOutcome.Unreadable);
 
-        // The same drop as for a readable value above the cap: the inventory judges by length alone, so a value it calls droppable must go here too.
-        return run.Mover is null && (snap.Bytes?.Length ?? 0) > _options.MaxValueBytes && KeyMoveValueClasses.Droppable(DecodeClass.TooLarge, _p.NoOrigin, false)
+        // Forward read-through follows the inventory's length rule even when decoding fails.
+        return !_reverse && run.Mover is null && (snap.Bytes?.Length ?? 0) > _options.MaxValueBytes && KeyMoveValueClasses.Droppable(DecodeClass.TooLarge, _p.NoOrigin, false)
             ? await DroppedAsync(run, snap, unreadable, cancellationToken).ConfigureAwait(false)
             : unreadable;
     }
@@ -395,7 +401,7 @@ internal sealed class KeyPromotion<T>
     private async ValueTask<(bool Drained, PromotionResult<T>? Stopped)> PublishAsync(PromotionRun run, Capture capture, byte[] encoded, long ttlMs, PathRead<T> uncached, CancellationToken cancellationToken)
     {
         var px = ttlMs < 0 ? MoveScripts.NoExpiry : ttlMs;
-        var publication = new Publication(capture.Token ?? throw new InvalidOperationException("A captured fence requires a token."), capture.Gate ?? throw new InvalidOperationException("A captured fence requires a gate."), _p.CacheId, MoveScripts.NewNonce(), FenceTtlMs, px, px == MoveScripts.NoExpiry ? MoveScripts.NoExpiry : capture.Tcap, true);
+        var publication = new Publication(capture.Token ?? throw new InvalidOperationException("A captured fence requires a token."), capture.Gate ?? throw new InvalidOperationException("A captured fence requires a gate."), _p.CacheId, MoveScripts.NewNonce(), FenceTtlMs, px, px == MoveScripts.NoExpiry ? MoveScripts.NoExpiry : capture.Tcap, !_reverse);
         await At(SchedulePointStep.Publish).ConfigureAwait(false);
         if (!await run.Ownership.HoldsAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -424,7 +430,7 @@ internal sealed class KeyPromotion<T>
             case MoveScripts.Published:
                 return (false, null);
             case MoveScripts.DestinationExists when run.Mover is null:
-                var found = await ReadNativeAsync(run.N, cancellationToken).ConfigureAwait(false);
+                var found = await ReadNativeAsync(run.Target, cancellationToken).ConfigureAwait(false);
                 return (false, PromotionResult<T>.Of(PromotionKind.PublishFoundNative, found.Kind == ReadOutcome.Found || found.Stops ? found : uncached));
             case MoveScripts.DestinationExists:
                 // The duplicate runs its compare-delete anyway, so L drains.
@@ -445,10 +451,10 @@ internal sealed class KeyPromotion<T>
         }
     }
 
-    // L stays as the copy unless N is there; the delete is a compare against the exact bytes read. Null unless ownership was lost.
+    // The source stays as the copy unless the target is there; the delete is a compare against the exact bytes read. Null unless ownership was lost.
     private async ValueTask<PromotionResult<T>?> DeleteSourceAsync(PromotionRun run, KeyMoveSnap snap, CancellationToken cancellationToken)
     {
-        if (await ExistsAsync(run.N, SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false) != true)
+        if (await ExistsAsync(run.Target, SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false) != true)
         {
             return null;
         }
@@ -519,11 +525,12 @@ internal sealed class KeyPromotion<T>
         return await _source.SnapshotAsync(key, cancellationToken).ConfigureAwait(false);
     }
 
-    private string? MarkerField(KeyMoveData data, string key) => _p.NoOrigin ? data.Names.MarkerField(_p.InPlaceKey(key)) : null;
+    // The supersession markers belong to the forward NoOrigin writes.
+    private string? MarkerField(KeyMoveData data, string key) => _p.NoOrigin && !_reverse ? data.Names.MarkerField(_p.InPlaceKey(key)) : null;
 
     private ValueTask At(SchedulePointStep step) => _p.Schedule.AtAsync(step);
 
     private void Count(string counter) => RouterTelemetry.CountMove(counter, _p.CacheId, _p.Group);
 
-    private readonly record struct PromotionRun(string Key, string N, FencedKeys Keys, MoverFlavor? Mover, AdmittedUnit Unit, KeyMoveData Data, int Attempt, IMoveOwnership Ownership, bool Quiet = false);
+    private readonly record struct PromotionRun(string Key, string Target, FencedKeys Keys, MoverFlavor? Mover, AdmittedUnit Unit, KeyMoveData Data, int Attempt, IMoveOwnership Ownership, bool Quiet = false);
 }

@@ -1,4 +1,3 @@
-using System.Text;
 using UiPath.Caching.KeyMove;
 using UiPath.Caching.Migration.Tests.Support;
 
@@ -187,25 +186,6 @@ public sealed class KeyMoveReverseWriteTests(RedisFixture fixture)
     }
 
     [Theory]
-    [InlineData("S1")]
-    [InlineData("S3")]
-    [InlineData("S4")]
-    public async Task A_fill_and_a_create_stay_closed_in_a_reverse_state(string state)
-    {
-        await using var kit = await CreateAsync(scripts: true);
-        await kit.PrepareAsync("k");
-        await kit.SetStateAsync(state, direction: "rev");
-
-        var fill = async () => await kit.Client.FillAsync("k", new Item("v1"), null, null, Ct);
-        var create = async () => await kit.Client.TryAddAsync("k", new Item("v1"), null, Ct);
-
-        await fill.Should().ThrowAsync<CacheUnavailableException>();
-        await create.Should().ThrowAsync<CacheUnavailableException>();
-        (await kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
-        (await kit.ExistsAsync(kit.L("k"))).Should().BeFalse();
-    }
-
-    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task A_failed_reverse_bump_is_retried_under_the_reverse_fence_it_observed(bool scripts)
@@ -271,7 +251,7 @@ public sealed class KeyMoveReverseWriteTests(RedisFixture fixture)
         await kit.SetStateAsync("S3", direction: "rev");
         await kit.Db.StringSetAsync(kit.N("k"), "n:v0");
 
-        (await kit.Client.SetAsync("k", new Item(TaggedCodec.Unencodable), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
+        (await kit.Client.SetAsync("k", new Item(TaggedItemCodec.Unencodable), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
 
         kit.Schedule.Steps.Should().BeEmpty();
         (await kit.GetAsync(kit.N("k"))).Should().Be("n:v0");
@@ -302,18 +282,5 @@ public sealed class KeyMoveReverseWriteTests(RedisFixture fixture)
     private static DateTimeOffset In(TimeSpan span) => DateTimeOffset.UtcNow + span;
 
     private Task<KeyMoveKit> CreateAsync(bool scripts, bool noOrigin = false) =>
-        KeyMoveKit.CreateAsync(fixture, scripts, noOrigin, inPlace: new TaggedCodec("l:"), native: new TaggedCodec("n:"));
-
-    // Each side's bytes carry its own tag, so a test sees which format a step wrote; the in-place side cannot hold one value.
-    private sealed class TaggedCodec(string tag) : IKeyMoveCodec<Item>
-    {
-        public const string Unencodable = "too-wide";
-
-        public byte[] Encode(Item value) =>
-            tag == "l:" && value.Name == Unencodable ? throw new InvalidOperationException("The in-place format cannot hold this value.") : Encoding.UTF8.GetBytes(tag + value.Name);
-
-        public byte[]? EncodeNull() => null;
-
-        public Decoded<Item> Decode(byte[] bytes) => Decoded<Item>.Of(new Item(Encoding.UTF8.GetString(bytes)[tag.Length..]));
-    }
+        KeyMoveKit.CreateAsync(fixture, scripts, noOrigin, inPlace: new TaggedItemCodec("l:"), native: new TaggedItemCodec("n:"));
 }

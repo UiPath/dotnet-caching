@@ -127,7 +127,7 @@ internal sealed partial class KeyMoveClient<T>
                 return await PlainCreateAsync(key, value, px, cancellationToken).ConfigureAwait(false);
             }
 
-            // S2 closes NoOrigin and AtMostOnce caches, and a reverse state closes every create.
+            // Union and closed modes refuse creates. S2 and the reverse write modes also refuse creates for NoOrigin caches.
             if (CreateIsClosed(plan.Mode))
             {
                 throw Unavailable();
@@ -284,7 +284,7 @@ internal sealed partial class KeyMoveClient<T>
         try
         {
             var mode = plan.Mode;
-            if (mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.S4 or KeyMoveMode.S5)
+            if (mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.S4 or KeyMoveMode.S5 or KeyMoveMode.ReverseS1 or KeyMoveMode.ReverseS4)
             {
                 await At(FillPoint(mode)).ConfigureAwait(false);
             }
@@ -294,6 +294,9 @@ internal sealed partial class KeyMoveClient<T>
                 KeyMoveMode.S1 or KeyMoveMode.S2 => await Source.SetAsync(key, unit.Id, Source.Codec.Encode(value), px, true).ConfigureAwait(false),
                 KeyMoveMode.S5 => CreatedCode(await data.Db.StringSetAsync(Key(n), _p.Native.Encode(value), Expiry(px), When.NotExists, Master).ConfigureAwait(false)),
                 KeyMoveMode.S4 => await data.Scripts.FillAsync(Fenced(data, n), unit.Id, _p.Native.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
+                KeyMoveMode.ReverseS1 => await CreateOnNativeAsync(data, n, key, value, px, unit).ConfigureAwait(false),
+                KeyMoveMode.ReverseS4 => await data.Scripts.FillAsync(ReverseFenced(data, key), unit.Id, Source.Codec.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
+                KeyMoveMode.ReverseS3 => await CaptureAndPublishAsync(data, Source.Key(key), key, value, px, unit, cancellationToken, reverse: true).ConfigureAwait(false),
                 _ => await CaptureAndPublishAsync(data, n, key, value, px, unit, cancellationToken).ConfigureAwait(false),
             };
             return CreateOutcome(code, unit);
@@ -319,44 +322,52 @@ internal sealed partial class KeyMoveClient<T>
             _ => MoveScripts.GateRefused,
         };
 
-    // In S3, capture the destination fence, check for an existing key on both masters, and recheck N after probing L. Then publish with NX and a relative TTL (tcap -1, no deadline, no -3).
-    private async ValueTask<long> CaptureAndPublishAsync(KeyMoveData data, string n, string key, T value, long px, AdmittedUnit unit, CancellationToken cancellationToken)
+    // S1(rev): the create is a fill of N under G, then L is deleted under GL only if it created. The claim is made once the fill created it, so a refused trailing step neither reruns nor undoes it.
+    private async ValueTask<long> CreateOnNativeAsync(KeyMoveData data, string n, string key, T value, long px, AdmittedUnit unit)
     {
-        var keys = Fenced(data, n);
+        var created = await data.Scripts.FillAsync(Fenced(data, n), unit.Id, _p.Native.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false);
+        if (created != MoveScripts.Published)
+        {
+            return created;
+        }
+
+        try
+        {
+            await At(SchedulePointStep.Bump).ConfigureAwait(false);
+            _ = await data.Scripts.BumpAsync(ReverseFenced(data, key), unit.Id, MoveScripts.NewNonce(), FenceTtlMs, BumpOperation.Delete).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException && ex is not OperationCanceledException)
+        {
+            // The native fill already committed the claim, so a trailing delete failure preserves that result.
+            _ = ex;
+        }
+
+        return MoveScripts.Published;
+    }
+
+    // In S3, capture the target fence, check for an existing key on both masters, and recheck the target after probing the source. Then publish with NX and a relative TTL (tcap -1, no deadline, no -3).
+    // Forward the target is N under G; reverse it is L under GL, and N is the source.
+    private async ValueTask<long> CaptureAndPublishAsync(KeyMoveData data, string target, string key, T value, long px, AdmittedUnit unit, CancellationToken cancellationToken, bool reverse = false)
+    {
+        var keys = reverse ? ReverseFenced(data, key) : Fenced(data, target);
         for (var attempt = 0; attempt <= _options.MaxFenceRetries; attempt++)
         {
             await At(SchedulePointStep.Capture).ConfigureAwait(false);
-            var capture = await data.Scripts.CaptureAsync(keys, unit.Id, _p.CacheId, MoveScripts.NewNonce(), FenceTtlMs, MarkerFieldOf(data, key)).ConfigureAwait(false);
-            if (capture.Code == MoveScripts.IdentityMismatch)
+            var capture = await data.Scripts.CaptureAsync(keys, unit.Id, _p.CacheId, MoveScripts.NewNonce(), FenceTtlMs, reverse ? null : MarkerFieldOf(data, key)).ConfigureAwait(false);
+            if (await CaptureRefusalAsync(capture, key, unit, cancellationToken).ConfigureAwait(false) is { } refused)
             {
-                return MoveScripts.IdentityMismatch;
+                return refused;
             }
 
-            if (capture.Code == MoveScripts.LiveSupersession)
-            {
-                return await HelpSupersededAsync(key, capture, unit, cancellationToken).ConfigureAwait(false);
-            }
-
-            if (!capture.Captured)
-            {
-                Count("gate_closed");
-                throw Unavailable();
-            }
-
-            if (capture.DestinationExists || await SourceExistsAsync(key, SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false) != false)
-            {
-                // Something exists now: the claim is not ours. A value still in Src is promoted by the next read.
-                return MoveScripts.DestinationExists;
-            }
-
-            if (await ExistsAsync(n, SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false) != false)
+            // Something exists now: the claim is not ours. A value still in Src is promoted by the next read.
+            if (capture.DestinationExists || await AnyExistsAsync(target, key, reverse, cancellationToken).ConfigureAwait(false))
             {
                 return MoveScripts.DestinationExists;
             }
 
             var publication = PublicationFor(capture, px, MoveScripts.NoExpiry);
             await At(SchedulePointStep.Publish).ConfigureAwait(false);
-            var code = await data.Scripts.PublishAsync(keys, unit.Id, _p.Native.Encode(value), publication).ConfigureAwait(false);
+            var code = await data.Scripts.PublishAsync(keys, unit.Id, (reverse ? Source.Codec : _p.Native).Encode(value), publication).ConfigureAwait(false);
             if (code != MoveScripts.FenceMoved)
             {
                 return code;
@@ -368,4 +379,34 @@ internal sealed partial class KeyMoveClient<T>
         return MoveScripts.FenceMoved;
     }
 
+    // The code a refused capture ends the create with; null when the fence was captured. A closed cache gate makes the create unavailable.
+    private async ValueTask<long?> CaptureRefusalAsync(Capture capture, string key, AdmittedUnit unit, CancellationToken cancellationToken)
+    {
+        if (capture.Code == MoveScripts.IdentityMismatch)
+        {
+            return MoveScripts.IdentityMismatch;
+        }
+
+        if (capture.Code == MoveScripts.LiveSupersession)
+        {
+            return await HelpSupersededAsync(key, capture, unit, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!capture.Captured)
+        {
+            Count("gate_closed");
+            throw Unavailable();
+        }
+
+        return null;
+    }
+
+    // The source on its master, then the target again; a probe that cannot be made counts as a key that exists.
+    private async ValueTask<bool> AnyExistsAsync(string target, string key, bool reverse, CancellationToken cancellationToken)
+    {
+        var source = reverse
+            ? await ExistsAsync(Native(key), SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false)
+            : await SourceExistsAsync(key, SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false);
+        return source != false || await ExistsAsync(target, SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false) != false;
+    }
 }

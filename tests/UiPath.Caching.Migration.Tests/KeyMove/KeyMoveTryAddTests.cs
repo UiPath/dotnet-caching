@@ -147,11 +147,11 @@ public sealed class KeyMoveTryAddTests(RedisFixture fixture)
     }
 
     [Fact]
-    public async Task A_reverse_state_closes_every_create()
+    public async Task A_reverse_state_with_no_write_form_closes_every_create()
     {
         await using var kit = await KeyMoveKit.CreateAsync(fixture);
         await kit.PrepareAsync("k");
-        await kit.SetStateAsync("S1", direction: "rev");
+        await kit.SetStateAsync("S2", direction: "rev");
 
         var create = async () => await kit.Client.TryAddAsync("k", new Item("a"), null, Ct);
 
