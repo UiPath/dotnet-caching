@@ -90,26 +90,12 @@ internal sealed partial class KeyMoveClient<T>
         {
             foreach (var onSource in ExpirySides())
             {
-                if (onSource)
+                var (found, expiration) = onSource
+                    ? await ExpiryOnSourceAsync(key, cancellationToken).ConfigureAwait(false)
+                    : await ExpiryOnNativeAsync(data, key).ConfigureAwait(false);
+                if (found)
                 {
-                    var snap = await Source.SnapshotAsync(key, cancellationToken).ConfigureAwait(false);
-                    if (snap.Kind == ReadOutcome.Found)
-                    {
-                        return snap.TtlMs < 0 ? null : ExpirationAfter(snap.TtlMs);
-                    }
-
-                    continue;
-                }
-
-                var life = await data.Db.KeyTimeToLiveAsync(Key(Native(key)), Master).ConfigureAwait(false);
-                if (life is { } span)
-                {
-                    return ExpirationAfter((long)Math.Ceiling(span.TotalMilliseconds));
-                }
-
-                if (await data.Db.KeyExistsAsync(Key(Native(key)), Master).ConfigureAwait(false))
-                {
-                    return null;
+                    return expiration;
                 }
             }
 
@@ -148,19 +134,7 @@ internal sealed partial class KeyMoveClient<T>
             }
 
             // A live marker is helped away and the create runs again from the union check, a few times, then it is unavailable.
-            var helps = 0;
-            var result = await TryAddOnceAsync(key, value, px, plan, cancellationToken).ConfigureAwait(false);
-            while (result.Kind == TryAddKind.Helped)
-            {
-                if (++helps > _options.MaxMarkerHelps)
-                {
-                    RouterTelemetry.CountMarker("pending_write", _p.CacheId, _p.Group);
-                    throw Unavailable();
-                }
-
-                result = await TryAddOnceAsync(key, value, px, plan, cancellationToken).ConfigureAwait(false);
-            }
-
+            var result = await TryAddHelpingAsync(key, value, px, plan, cancellationToken).ConfigureAwait(false);
             if (result.Kind != TryAddKind.Rerun)
             {
                 return result;
@@ -213,6 +187,46 @@ internal sealed partial class KeyMoveClient<T>
         MoveScripts.LiveSupersession => TryAddResult<T>.Helped,
         _ => TryAddResult<T>.Failed(WriteOutcome.NotSent),
     };
+
+    private async ValueTask<(bool Found, DateTimeOffset? Expiration)> ExpiryOnSourceAsync(string key, CancellationToken cancellationToken)
+    {
+        var snap = await Source.SnapshotAsync(key, cancellationToken).ConfigureAwait(false);
+        if (snap.Kind != ReadOutcome.Found)
+        {
+            return (false, null);
+        }
+
+        return (true, snap.TtlMs < 0 ? null : ExpirationAfter(snap.TtlMs));
+    }
+
+    private async ValueTask<(bool Found, DateTimeOffset? Expiration)> ExpiryOnNativeAsync(KeyMoveData data, string key)
+    {
+        var life = await data.Db.KeyTimeToLiveAsync(Key(Native(key)), Master).ConfigureAwait(false);
+        if (life is { } span)
+        {
+            return (true, ExpirationAfter((long)Math.Ceiling(span.TotalMilliseconds)));
+        }
+
+        return (await data.Db.KeyExistsAsync(Key(Native(key)), Master).ConfigureAwait(false), null);
+    }
+
+    private async ValueTask<TryAddResult<T>> TryAddHelpingAsync(string key, T value, long px, KeyMovePlan plan, CancellationToken cancellationToken)
+    {
+        var helps = 0;
+        var result = await TryAddOnceAsync(key, value, px, plan, cancellationToken).ConfigureAwait(false);
+        while (result.Kind == TryAddKind.Helped)
+        {
+            if (++helps > _options.MaxMarkerHelps)
+            {
+                RouterTelemetry.CountMarker("pending_write", _p.CacheId, _p.Group);
+                throw Unavailable();
+            }
+
+            result = await TryAddOnceAsync(key, value, px, plan, cancellationToken).ConfigureAwait(false);
+        }
+
+        return result;
+    }
 
     private DateTimeOffset? ExpirationAfter(long milliseconds) =>
         milliseconds < 0 ? null : _p.Clock.GetUtcNow().AddMilliseconds(milliseconds);
@@ -296,6 +310,15 @@ internal sealed partial class KeyMoveClient<T>
         return plan.Mode == KeyMoveMode.Plain ? _p.Plain.ReadAsync(key, cancellationToken) : ReadManagedAsync(key, plan, cancellationToken);
     }
 
+    // The older copy is helped away, and the create runs again from the union check.
+    private async ValueTask<long> HelpSupersededAsync(string key, Capture capture, AdmittedUnit unit, CancellationToken cancellationToken) =>
+        await _helper.OnSupersededAsync(new SupersededKey(_p.Group, _p.CacheId, key, capture.Marker, unit.Id), cancellationToken).ConfigureAwait(false) switch
+        {
+            SupersessionAction.Retry => MoveScripts.LiveSupersession,
+            SupersessionAction.Rerun => MoveScripts.IdentityMismatch,
+            _ => MoveScripts.GateRefused,
+        };
+
     // In S3, capture the destination fence, check for an existing key on both masters, and recheck N after probing L. Then publish with NX and a relative TTL (tcap -1, no deadline, no -3).
     private async ValueTask<long> CaptureAndPublishAsync(KeyMoveData data, string n, string key, T value, long px, AdmittedUnit unit, CancellationToken cancellationToken)
     {
@@ -311,13 +334,7 @@ internal sealed partial class KeyMoveClient<T>
 
             if (capture.Code == MoveScripts.LiveSupersession)
             {
-                // The older copy is helped away, and the create runs again from the union check.
-                return await _helper.OnSupersededAsync(new SupersededKey(_p.Group, _p.CacheId, key, capture.Marker, unit.Id), cancellationToken).ConfigureAwait(false) switch
-                {
-                    SupersessionAction.Retry => MoveScripts.LiveSupersession,
-                    SupersessionAction.Rerun => MoveScripts.IdentityMismatch,
-                    _ => MoveScripts.GateRefused,
-                };
+                return await HelpSupersededAsync(key, capture, unit, cancellationToken).ConfigureAwait(false);
             }
 
             if (!capture.Captured)

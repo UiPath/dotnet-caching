@@ -283,64 +283,11 @@ internal sealed partial class MoveScripts
                 return new MarkedBump((long)reply);
             }
 
-            var parts = (RedisResult[])reply!;
+            var parts = ((RedisResult[]?)reply)!;
             return new MarkedBump((long)parts[0], (long)parts[1], (string?)parts[2]);
         }
 
-        return await WatchedMarkedAsync(async () =>
-        {
-            if (!await HoldsIdentityAsync(keys.Control, id).ConfigureAwait(false))
-            {
-                return new MarkedBump(IdentityMismatch);
-            }
-
-            // The fallback reads no server clock, so the deadline is not enforced here.
-            var field = await _db.HashGetAsync(keys.Control, MarkerBinding.BindingFieldName, Master).ConfigureAwait(false);
-            var limit = await _db.HashGetAsync(keys.Control, "lim", Master).ConfigureAwait(false);
-            var present = await _db.HashExistsAsync(keys.Control, markerField, Master).ConfigureAwait(false);
-            var length = await _db.HashLengthAsync(keys.Control, Master).ConfigureAwait(false);
-            var bindingField = field.IsNull ? MarkerBinding.IdentityField : (string)field!;
-            var binding = await _db.HashGetAsync(keys.Control, bindingField, Master).ConfigureAwait(false);
-            if (binding.IsNull || binding == string.Empty)
-            {
-                return new MarkedBump(NoBinding);
-            }
-
-            var ceiling = limit.IsNull ? 0 : (long)limit;
-            if (first && !present && length >= ceiling)
-            {
-                return new MarkedBump(RecordFull);
-            }
-
-            var marker = $"{binding}|{nonce}";
-            var transaction = _db.CreateTransaction();
-            var queued = new List<Task>();
-            transaction.AddCondition(Condition.HashEqual(keys.Control, "id", id));
-            transaction.AddCondition(field.IsNull ? Condition.HashNotExists(keys.Control, MarkerBinding.BindingFieldName) : Condition.HashEqual(keys.Control, MarkerBinding.BindingFieldName, field));
-            transaction.AddCondition(Condition.HashEqual(keys.Control, bindingField, binding));
-
-            // What the admission rested on is checked when the transaction runs: the limit, whether the key has its field, and for a new field the room that was seen.
-            transaction.AddCondition(limit.IsNull ? Condition.HashNotExists(keys.Control, "lim") : Condition.HashEqual(keys.Control, "lim", limit));
-            transaction.AddCondition(present ? Condition.HashExists(keys.Control, markerField) : Condition.HashNotExists(keys.Control, markerField));
-            if (first && !present)
-            {
-                transaction.AddCondition(Condition.HashLengthLessThan(keys.Control, ceiling));
-            }
-
-            queued.Add(transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master));
-            queued.Add(transaction.StringSetAsync(keys.Data, value, px == NoExpiry ? null : TimeSpan.FromMilliseconds(px), When.Always, Master));
-            queued.Add(transaction.HashSetAsync(keys.Control, markerField, marker, When.Always, Master));
-            var count = transaction.HashLengthAsync(keys.Control, Master);
-            queued.Add(count);
-            if (!await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
-            {
-                return null;
-            }
-
-            var written = await count.ConfigureAwait(false);
-            await RaisePeakAsync(keys.Control, written).ConfigureAwait(false);
-            return new MarkedBump(1, written, marker);
-        }).ConfigureAwait(false);
+        return await WatchedMarkedAsync(() => TryBumpMarkedAsync(keys, id, nonce, fenceTtlMilliseconds, value, px, markerField, first)).ConfigureAwait(false);
     }
 
     /// <summary>FILL: creates the destination when absent and replaces the fence, so a captured promoter cannot overwrite the fill.</summary>
@@ -437,6 +384,61 @@ internal sealed partial class MoveScripts
         }
 
         return refusal;
+    }
+
+    private async Task<MarkedBump?> TryBumpMarkedAsync(FencedKeys keys, string id, string nonce, long fenceTtlMilliseconds, RedisValue value, long px, string markerField, bool first)
+    {
+        if (!await HoldsIdentityAsync(keys.Control, id).ConfigureAwait(false))
+        {
+            return new MarkedBump(IdentityMismatch);
+        }
+
+        // The fallback reads no server clock, so the deadline is not enforced here.
+        var field = await _db.HashGetAsync(keys.Control, MarkerBinding.BindingFieldName, Master).ConfigureAwait(false);
+        var limit = await _db.HashGetAsync(keys.Control, "lim", Master).ConfigureAwait(false);
+        var present = await _db.HashExistsAsync(keys.Control, markerField, Master).ConfigureAwait(false);
+        var length = await _db.HashLengthAsync(keys.Control, Master).ConfigureAwait(false);
+        var bindingField = field.IsNull ? MarkerBinding.IdentityField : field.ToString();
+        var binding = await _db.HashGetAsync(keys.Control, bindingField, Master).ConfigureAwait(false);
+        if (binding.IsNull || binding == string.Empty)
+        {
+            return new MarkedBump(NoBinding);
+        }
+
+        var ceiling = limit.IsNull ? 0 : (long)limit;
+        if (first && !present && length >= ceiling)
+        {
+            return new MarkedBump(RecordFull);
+        }
+
+        var marker = $"{binding}|{nonce}";
+        var transaction = _db.CreateTransaction();
+        var queued = new List<Task>();
+        transaction.AddCondition(Condition.HashEqual(keys.Control, "id", id));
+        transaction.AddCondition(field.IsNull ? Condition.HashNotExists(keys.Control, MarkerBinding.BindingFieldName) : Condition.HashEqual(keys.Control, MarkerBinding.BindingFieldName, field));
+        transaction.AddCondition(Condition.HashEqual(keys.Control, bindingField, binding));
+
+        // What the admission rested on is checked when the transaction runs: the limit, whether the key has its field, and for a new field the room that was seen.
+        transaction.AddCondition(limit.IsNull ? Condition.HashNotExists(keys.Control, "lim") : Condition.HashEqual(keys.Control, "lim", limit));
+        transaction.AddCondition(present ? Condition.HashExists(keys.Control, markerField) : Condition.HashNotExists(keys.Control, markerField));
+        if (first && !present)
+        {
+            transaction.AddCondition(Condition.HashLengthLessThan(keys.Control, ceiling));
+        }
+
+        queued.Add(transaction.StringSetAsync(keys.Fence, nonce, TimeSpan.FromMilliseconds(fenceTtlMilliseconds), When.Always, Master));
+        queued.Add(transaction.StringSetAsync(keys.Data, value, px == NoExpiry ? null : TimeSpan.FromMilliseconds(px), When.Always, Master));
+        queued.Add(transaction.HashSetAsync(keys.Control, markerField, marker, When.Always, Master));
+        var count = transaction.HashLengthAsync(keys.Control, Master);
+        queued.Add(count);
+        if (!await ExecuteAllAsync(transaction, queued).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        var written = await count.ConfigureAwait(false);
+        await RaisePeakAsync(keys.Control, written).ConfigureAwait(false);
+        return new MarkedBump(1, written, marker);
     }
 
     private async Task<long?> TryBumpAsync(FencedKeys keys, string id, string nonce, long fenceTtlMilliseconds, BumpOperation operation, RedisValue value, long px, string field)
@@ -568,18 +570,10 @@ internal sealed partial class MoveScripts
             return new Capture(GateRefused, null, false, null, 0);
         }
 
-        if (held is not null && field is not null && currentId is not null)
+        var live = await LiveSupersessionAsync(keys, held, field, currentId).ConfigureAwait(false);
+        if (live is not null)
         {
-            await Task.WhenAll(held, field, currentId).ConfigureAwait(false);
-            if (!held.Result.IsNull)
-            {
-                // The binding value of the record, read after the marker; a record that names another field is read once more.
-                var binding = field.Result.IsNull ? currentId.Result : await _db.HashGetAsync(keys.Control, (string)field.Result!, Master).ConfigureAwait(false);
-                if (!binding.IsNull && MarkerBinding.IsCurrent(held.Result!, binding!))
-                {
-                    return new Capture(LiveSupersession, null, false, null, 0, held.Result);
-                }
-            }
+            return live;
         }
 
         if (token.Result.IsNull)
@@ -589,6 +583,24 @@ internal sealed partial class MoveScripts
 
         var tcap = await ServerTimeAsync(keys.Data).ConfigureAwait(false);
         return new Capture(0, token.Result, exists.Result, gate.Result, tcap);
+    }
+
+    private async Task<Capture?> LiveSupersessionAsync(FencedKeys keys, Task<RedisValue>? held, Task<RedisValue>? field, Task<RedisValue>? currentId)
+    {
+        if (held is null || field is null || currentId is null)
+        {
+            return null;
+        }
+
+        await Task.WhenAll(held, field, currentId).ConfigureAwait(false);
+        if (held.Result.IsNull)
+        {
+            return null;
+        }
+
+        // The binding value of the record, read after the marker; a record that names another field is read once more.
+        var binding = field.Result.IsNull ? currentId.Result : await _db.HashGetAsync(keys.Control, field.Result.ToString(), Master).ConfigureAwait(false);
+        return !binding.IsNull && MarkerBinding.IsCurrent(held.Result!, binding!) ? new Capture(LiveSupersession, null, false, null, 0, held.Result) : null;
     }
 
     // The predicates in the script's order after an aborted EXEC; null when all still hold, which was a WATCH abort.
