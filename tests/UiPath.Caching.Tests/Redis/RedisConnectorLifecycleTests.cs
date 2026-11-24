@@ -1,5 +1,7 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
 using StackExchange.Redis.Availability;
@@ -648,6 +650,48 @@ public class RedisConnectorLifecycleTests
         multiplexer.Received(1).Dispose();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dispose_ObservesAnAbandonedPendingConnect(bool canCancel)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var testToken = TestContext.Current.CancellationToken;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<IConnectionMultiplexer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new SignallingFactory(started, release.Task);
+
+        using var connector = NewConnector(factory);
+        var (pending, faulted) = StartAbandonedConnect(connector, canCancel ? cancellation.Token : CancellationToken.None);
+        var unobserved = 0;
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            if (ReferenceEquals(sender, pending.Target) &&
+                e.Exception.InnerExceptions.OfType<ObjectDisposedException>().Any(ex => ex.ObjectName == nameof(RedisConnector)))
+            {
+                Interlocked.Increment(ref unobserved);
+                e.SetObserved();
+            }
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10), testToken);
+            connector.Dispose();
+            release.SetResult(Substitute.For<IConnectionMultiplexer>());
+            (await faulted.WaitAsync(TimeSpan.FromSeconds(10), testToken)).Should().BeTrue();
+            await CollectAbandonedConnectAsync(pending, testToken);
+
+            pending.IsAlive.Should().BeFalse("the abandoned task must be collected before checking for its exception");
+            Volatile.Read(ref unobserved).Should().Be(0);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+    }
+
     [Fact]
     public async Task ConnectAsync_Throws_AfterDispose()
     {
@@ -847,6 +891,25 @@ public class RedisConnectorLifecycleTests
         connector.Dispose();
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference Pending, Task<bool> Faulted) StartAbandonedConnect(RedisConnector connector, CancellationToken cancellationToken)
+    {
+        var pending = connector.ConnectAsync(cancellationToken).AsTask();
+        var faulted = pending.ContinueWith(static task => task.IsFaulted, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return (new WeakReference(pending, trackResurrection: true), faulted);
+    }
+
+    [SuppressMessage("SonarAnalyzer.CSharp", "S1215", Justification = "An unobserved task exception is published during finalization.")]
+    private static async Task CollectAbandonedConnectAsync(WeakReference pending, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 20 && pending.IsAlive; attempt++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            await Task.Delay(TimeSpan.FromMilliseconds(10), TimeProvider.System, cancellationToken);
+        }
+    }
+
     private static IServer StubServer(bool isReplica, bool isConnected)
     {
         var server = Substitute.For<IServer>();
@@ -971,6 +1034,15 @@ public class RedisConnectorLifecycleTests
         {
             CreateCount++;
             return new ValueTask<IConnectionMultiplexer>(_multiplexers.Dequeue());
+        }
+    }
+
+    private sealed class SignallingFactory(TaskCompletionSource started, Task<IConnectionMultiplexer> release) : IConnectionMultiplexerFactory
+    {
+        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+        {
+            started.TrySetResult();
+            return new ValueTask<IConnectionMultiplexer>(release);
         }
     }
 

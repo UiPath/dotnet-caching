@@ -186,9 +186,15 @@ public sealed partial class RedisConnector : IRedisConnector
     {
         // Every command passes through here, so a connected connector must cost nothing.
         var lazy = _lazyCacheConnectionMultiplexer;
-        return !_disposed && lazy.IsValueCreated && lazy.Value.IsCompletedSuccessfully
-            ? ValueTask.CompletedTask
-            : WaitForConnectionAsync(cancellationToken);
+        if (!_disposed && lazy.IsValueCreated && lazy.Value.IsCompletedSuccessfully)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        var wait = WaitForConnectionAsync(cancellationToken);
+        // A caller may drop its wait while the shared connection is still pending.
+        wait.Observe();
+        return new ValueTask(wait);
     }
 
     public void Dispose()
@@ -465,10 +471,10 @@ public sealed partial class RedisConnector : IRedisConnector
         return multiplexer;
     }
 
-    private async ValueTask WaitForConnectionAsync(CancellationToken cancellationToken)
+    private async Task WaitForConnectionAsync(CancellationToken cancellationToken)
     {
         var task = GetConnectionTask();
-        _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        task.Observe();
         await task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
