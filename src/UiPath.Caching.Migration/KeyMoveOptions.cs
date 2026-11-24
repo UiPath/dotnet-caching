@@ -5,6 +5,9 @@ internal sealed record KeyMoveOptions
     /// <summary>The largest stored value that is promoted; a larger one is served from where it is, and dropped for a cache that has an origin.</summary>
     public int MaxValueBytes { get; init; } = 4 * 1024 * 1024;
 
+    /// <summary>The most fields a hash may have to be promoted; a larger one is served from where it is, and dropped for a cache that has an origin. Each hash registration may set its own.</summary>
+    public int MaxHashFields { get; init; } = 4096;
+
     /// <summary>How long a promotion holds work.</summary>
     public TimeSpan PromotionBudget { get; init; } = TimeSpan.FromSeconds(20);
 

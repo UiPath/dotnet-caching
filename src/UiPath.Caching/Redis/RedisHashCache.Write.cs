@@ -10,13 +10,13 @@ internal sealed partial class RedisHashCache
         }
     }
 
-    private ValueTask<bool> SetCountingAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, WriteReport? report, CancellationToken token)
+    private ValueTask<bool> SetCountingAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, WriteReport? report, CancellationToken token, SendTrace? trace = null)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         HashFields.ValidateForWrite(values);
         var redisKey = ToRedisKey(cacheKey, token);
         var writer = FormatFor(policy, forWrite: true).Writer;
-        var requested = values.Count > 0 || _cacheNullValues ? options.Metadata : null;
+        var requested = MetadataRequested(values.Count, options.Metadata);
         var metadata = MetadataToWrite(requested, writer);
         var expiration = GetExpiration(options, policy);
         var setOption = values.Count == 0 && _cacheNullValues ? HashCacheSetOption.KeyReplace : options.SetOption;
@@ -27,11 +27,11 @@ internal sealed partial class RedisHashCache
         {
             // A replacement too large for one transaction drops the stale metadata field after its chunks, since it is not atomic anyway.
             return entries.Length > _fieldBatchSize
-                ? DropMetadataAfterAsync(redisKey, SetInnerAsync<T>(cacheKey, redisKey, entries, payloads, setOption, expiration, token, report), token)
-                : SetInnerAsync<T>(cacheKey, redisKey, entries, payloads, setOption, expiration, token, report, dropMetadata: true);
+                ? DropMetadataAfterAsync(redisKey, SetInnerAsync<T>(cacheKey, redisKey, entries, payloads, setOption, expiration, token, report, trace: trace), token)
+                : SetInnerAsync<T>(cacheKey, redisKey, entries, payloads, setOption, expiration, token, report, dropMetadata: true, trace: trace);
         }
 
-        return SetInnerAsync<T>(cacheKey, redisKey, entries, payloads, setOption, expiration, token, report);
+        return SetInnerAsync<T>(cacheKey, redisKey, entries, payloads, setOption, expiration, token, report, trace: trace);
     }
 
     private ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset effective, CachePolicy? policy, CancellationToken token)
@@ -97,7 +97,7 @@ internal sealed partial class RedisHashCache
     }
 
     /// <summary>Owns <paramref name="payloads"/>: they go back to the pool on every exit, including one before the command starts.</summary>
-    private async ValueTask<bool> SetInnerAsync<T>(CacheKey cacheKey, RedisKey redisKey, HashEntry[] hashEntries, SerializedPayload[] payloads, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token, WriteReport? report = null, bool dropMetadata = false)
+    private async ValueTask<bool> SetInnerAsync<T>(CacheKey cacheKey, RedisKey redisKey, HashEntry[] hashEntries, SerializedPayload[] payloads, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token, WriteReport? report = null, bool dropMetadata = false, SendTrace? trace = null)
     {
         try
         {
@@ -116,7 +116,7 @@ internal sealed partial class RedisHashCache
 
             if (hashEntries.Length == 0 && expiration >= now && _cacheNullValues)
             {
-                hashEntries = [new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString)];
+                hashEntries = EmptyMarkerEntries();
                 setOption = HashCacheSetOption.KeyReplace;
             }
 
@@ -130,7 +130,7 @@ internal sealed partial class RedisHashCache
             var operation = StartOperation<T>(nameof(SetAsync));
             try
             {
-                ret = await WriteAsync(redisKey, hashEntries, setOption, expiration, now, report, dropMetadata, token).ConfigureAwait(false);
+                ret = await WriteAsync(redisKey, hashEntries, setOption, expiration, now, report, dropMetadata, token, trace).ConfigureAwait(false);
                 operation.Stop();
             }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -184,13 +184,13 @@ internal sealed partial class RedisHashCache
         return SameSlot(redisKey, staging, _logger);
     }
 
-    private async ValueTask<bool> WriteAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, DateTimeOffset now, WriteReport? report, bool dropMetadata, CancellationToken token)
+    private async ValueTask<bool> WriteAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, DateTimeOffset now, WriteReport? report, bool dropMetadata, CancellationToken token, SendTrace? trace = null)
     {
         var absent = report?.OnlyIfAbsent == true;
         if (expiration < now || hashEntries.Length == 0)
         {
             // A fill of an absent key mutates nothing it did not find absent: a hash a peer stored while its generator ran stays.
-            return !absent && await DeleteKeyAsync(redisKey, token).ConfigureAwait(false);
+            return !absent && await DeleteKeyAsync(redisKey, token, trace).ConfigureAwait(false);
         }
 
         // Written to a staging key and renamed under the key, so a hash that appeared meanwhile is never merged into.
@@ -198,24 +198,27 @@ internal sealed partial class RedisHashCache
         if (hashEntries.Length > _fieldBatchSize && TryChunkedWriteKeys(redisKey, chunkOption, out var staging))
         {
             await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
-            return await _write.ExecuteAsync(static (s, token) => s.Self.WriteInChunksAsync(s.Key, s.Staging, s.Entries, s.Option, s.Expiration, s.Report, token), (Self: this, Key: redisKey, Staging: staging, Entries: hashEntries, Option: chunkOption, Expiration: expiration, Report: report), default, token).ConfigureAwait(false);
+            return await _write.ExecuteAsync(static (s, token) => s.Self.WriteInChunksAsync(s.Key, s.Staging, s.Entries, s.Option, s.Expiration, s.Report, token, s.Trace), (Self: this, Key: redisKey, Staging: staging, Entries: hashEntries, Option: chunkOption, Expiration: expiration, Report: report, Trace: trace), default, token).ConfigureAwait(false);
         }
 
-        return await WriteInTransactionAsync(redisKey, hashEntries, setOption, expiration, report, dropMetadata, token).ConfigureAwait(false);
+        return await WriteInTransactionAsync(redisKey, hashEntries, setOption, expiration, report, dropMetadata, token, trace).ConfigureAwait(false);
     }
 
-    private ValueTask<bool> DeleteKeyAsync(RedisKey redisKey, CancellationToken token) =>
+    private ValueTask<bool> DeleteKeyAsync(RedisKey redisKey, CancellationToken token, SendTrace? trace = null) =>
         _write.ExecuteAsync(
-            static (s, token) =>
+            static async (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).AsValueTask();
+                s.Trace?.MarkSent();
+                var deleted = await s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).ConfigureAwait(false);
+                s.Trace?.MarkAnswered(true);
+                return deleted;
             },
-            (Self: this, Key: redisKey),
+            (Self: this, Key: redisKey, Trace: trace),
             default,
             token);
 
-    private async ValueTask<bool> WriteInTransactionAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, WriteReport? report, bool dropMetadata, CancellationToken token)
+    private async ValueTask<bool> WriteInTransactionAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, WriteReport? report, bool dropMetadata, CancellationToken token, SendTrace? trace = null)
     {
         await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
         var transaction = Database.CreateTransaction();
@@ -224,16 +227,23 @@ internal sealed partial class RedisHashCache
             transaction.AddCondition(Condition.KeyNotExists(redisKey));
         }
 
+        var commands = new List<Task>(3);
         if (setOption == HashCacheSetOption.KeyReplace)
         {
-            transaction.KeyDeleteAsync(redisKey).Forget();
+            var replaced = transaction.KeyDeleteAsync(redisKey);
+            replaced.Forget();
+            commands.Add(replaced);
         }
 
-        transaction.HashSetAsync(redisKey, hashEntries, CommandFlags.DemandMaster).Forget();
+        var stored = transaction.HashSetAsync(redisKey, hashEntries, CommandFlags.DemandMaster);
+        stored.Forget();
+        commands.Add(stored);
         if (dropMetadata && setOption == HashCacheSetOption.HashReplace)
         {
             // In the write's own transaction, where a concurrent writer's newer metadata cannot be hit.
-            transaction.HashDeleteAsync(redisKey, KnownFieldNames.MetadataKey, CommandFlags.DemandMaster).Forget();
+            var dropped = transaction.HashDeleteAsync(redisKey, KnownFieldNames.MetadataKey, CommandFlags.DemandMaster);
+            dropped.Forget();
+            commands.Add(dropped);
         }
 
         Task<long>? counted = null;
@@ -244,25 +254,13 @@ internal sealed partial class RedisHashCache
             counted.Forget();
         }
 
-        if (expiration != DateTimeOffset.MaxValue)
+        if (expiration != DateTimeOffset.MaxValue || setOption == HashCacheSetOption.HashReplace)
         {
-            await transaction.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
-        }
-        else if (setOption == HashCacheSetOption.HashReplace)
-        {
-            // The key survives a HashReplace, and so would a TTL an earlier write gave it.
-            transaction.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget).Forget();
+            // A HashReplace keeps the key, and so would a TTL an earlier write gave it: it persists. A traced write is answered by its expiry command too.
+            QueueExpirationUpdate(transaction, redisKey, expiration, trace is null ? null : commands);
         }
 
-        var committed = await _write.ExecuteAsync(
-            static (s, token) =>
-            {
-                token.ThrowIfCancellationRequested();
-                return s.ExecuteAsync(CommandFlags.DemandMaster).AsValueTask();
-            },
-            transaction,
-            default,
-            token).ConfigureAwait(false);
+        var committed = await CommitTracedAsync(transaction, trace, commands, token).ConfigureAwait(false);
         if (!committed && report?.OnlyIfAbsent == true)
         {
             // Its condition failed: the key is held.

@@ -145,7 +145,7 @@ internal sealed partial class RedisHashCache
     }
 
     /// <summary>Returns the metadata's payload, which the caller disposes once the transaction has executed.</summary>
-    private SerializedPayload QueueMetadataWrite(ITransaction transaction, LoggedKey logged, RedisKey redisKey, IDictionary<string, string?>? metadata, ICacheValueSerializer? writer)
+    private SerializedPayload QueueMetadataWrite(ITransaction transaction, LoggedKey logged, RedisKey redisKey, IDictionary<string, string?>? metadata, ICacheValueSerializer? writer, List<Task>? commands = null)
     {
         metadata = MetadataToWrite(metadata, writer);
         if (metadata != null)
@@ -163,7 +163,9 @@ internal sealed partial class RedisHashCache
             try
             {
                 var hashEntries = new[] { new HashEntry(KnownFieldNames.MetadataKey, value) };
-                transaction.HashSetAsync(redisKey, hashEntries, CommandFlags.DemandMaster).Forget();
+                var set = transaction.HashSetAsync(redisKey, hashEntries, CommandFlags.DemandMaster);
+                set.Forget();
+                commands?.Add(set);
             }
             catch
             {
@@ -175,13 +177,20 @@ internal sealed partial class RedisHashCache
         if (_cacheNullValues)
         {
             transaction.AddCondition(Condition.KeyExists(redisKey));
-            var entries = new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) };
-            transaction.HashSetAsync(redisKey, entries, CommandFlags.DemandMaster).Forget();
+            var marker = transaction.HashSetAsync(redisKey, EmptyMarkerEntries(), CommandFlags.DemandMaster);
+            marker.Forget();
+            commands?.Add(marker);
             return default;
         }
-        transaction.HashDeleteAsync(redisKey, new RedisValue(KnownFieldNames.MetadataKey), CommandFlags.DemandMaster).Forget();
+        var drop = transaction.HashDeleteAsync(redisKey, new RedisValue(KnownFieldNames.MetadataKey), CommandFlags.DemandMaster);
+        drop.Forget();
+        commands?.Add(drop);
         return default;
     }
+
+    /// <summary>The metadata a write asks to store: none for an empty hash unless nulls are cached, which keeps the empty hash as its metadata.</summary>
+    private IDictionary<string, string?>? MetadataRequested(int valueCount, IDictionary<string, string?>? metadata) =>
+        valueCount > 0 || _cacheNullValues ? metadata : null;
 
     /// <summary>With a non-JSON serializer the metadata field is left out when it is empty and nulls are not cached, so the hash reads back with none; the JSON default keeps writing it as it always has.</summary>
     private IDictionary<string, string?>? MetadataToWrite(IDictionary<string, string?>? metadata, ICacheValueSerializer? writer) =>

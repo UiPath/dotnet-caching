@@ -77,75 +77,9 @@ internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
         _retries.Dispose();
     }
 
-    internal KeyMovePlan PlanFor(bool write)
-    {
-        var rules = _p.Plane.RulesFor(_p.Group);
-        if (!rules.Relevant || !rules.IsManaged(_p.CacheId))
-        {
-            return new KeyMovePlan(KeyMoveMode.Plain, rules);
-        }
-
-        return new KeyMovePlan(write ? WriteMode(rules) : ReadMode(rules), rules);
-    }
-
-    private static KeyMoveMode WriteMode(GroupRules rules)
-    {
-        if (rules.Writes != WriteRule.Follow)
-        {
-            return rules.Writes == WriteRule.WaitThenFailClosed ? KeyMoveMode.Wait : KeyMoveMode.Closed;
-        }
-
-        return rules.Acting switch
-        {
-            null or { State: "S0" } => KeyMoveMode.Plain,
-            { Direction: "rev" } => KeyMoveMode.Closed,
-            { State: var state } => ModeOf(state, KeyMoveMode.Closed),
-        };
-    }
-
-    private static KeyMoveMode ModeOf(string state, KeyMoveMode otherwise) => state switch
-    {
-        "S1" => KeyMoveMode.S1,
-        "S2" => KeyMoveMode.S2,
-        "S3" => KeyMoveMode.S3,
-        "S4" => KeyMoveMode.S4,
-        "S5" => KeyMoveMode.S5,
-        _ => otherwise,
-    };
+    internal KeyMovePlan PlanFor(bool write) => KeyMovePlanning.PlanFor(_p.Plane, _p.Group, _p.CacheId, write);
 
     private static RedisKey Key(string text) => text;
-
-    private KeyMoveMode ReadMode(GroupRules rules)
-    {
-        if (rules.Reads == ReadRule.UnionNativeFirst)
-        {
-            return KeyMoveMode.Union;
-        }
-
-        if (rules.Acting is null or { State: "S0" })
-        {
-            return KeyMoveMode.Plain;
-        }
-
-        var act = rules.Acting;
-        if (act.Direction == "rev")
-        {
-            return KeyMoveMode.Union;
-        }
-
-        var mode = ModeOf(act.State, KeyMoveMode.Union);
-        if (mode is KeyMoveMode.S1 or KeyMoveMode.S2 && act.NPop != 0)
-        {
-            return KeyMoveMode.Union;
-        }
-
-        if (mode == KeyMoveMode.S4)
-        {
-            return _p.Plane.KeepsSourceFallback(_p.Group, _p.CacheId) ? KeyMoveMode.Union : KeyMoveMode.S5;
-        }
-
-        return mode;
-    }
 
     private string Native(string key) => _p.NativeKey(key);
 

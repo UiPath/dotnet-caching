@@ -135,6 +135,32 @@ public class MoveScriptsClusterTests
     }
 
     [Theory]
+    [MemberData(nameof(Cases))]
+    public async Task The_hash_forms_of_the_key_move_hold_in_the_slot_of_the_in_place_key(bool useScripts, string library, string prefix)
+    {
+        await using var cluster = await ClusterAsync(prefix, library, useScripts);
+
+        foreach (var key in InPlaceKeys().Take(30))
+        {
+            var ctl = cluster.Control(key);
+            await cluster.Scripts.ControlSyncAsync(ctl, MoveTestEnvironment.Record(1, Id, (Cid, "n1")));
+            (await cluster.Scripts.LimitSetAsync(ctl, Id, 1_000)).Should().Be(1, key);
+            var data = cluster.Track(key);
+            var fence = new FenceBump(cluster.Track(cluster.Names.ReverseFence(key)), "n1", 30_000);
+            var staging = cluster.Track(cluster.Names.ReverseStaging(key, MoveScripts.NewNonce()));
+            await cluster.Db.HashSetAsync(staging, [new HashEntry("a", "1")]);
+
+            (await cluster.Scripts.FillHashAsync(data, ctl, staging, Id, 30_000, fence: null)).Should().Be(1, key);
+            var replaced = await cluster.Scripts.HashWriteMarkedAsync(data, ctl, Id, new ControlledHashWrite([new HashEntry("b", "2")], HashCacheSetOption.KeyReplace, -1), fence, "sm:" + key, first: true, deadline: 0);
+            replaced.Code.Should().Be(1, key);
+            (await cluster.Db.HashGetAsync(ctl, "sm:" + key)).Should().Be(replaced.Marker);
+            (await cluster.Scripts.HashWriteAsync(data, ctl, Id, new ControlledHashWrite([new HashEntry("c", "3")], HashCacheSetOption.HashReplace, -1), fence, new FenceRetry(null))).Should().Be(1, key);
+            (await cluster.Scripts.HashDeleteFieldsAsync(data, ctl, Id, ["b"], fence: fence, retry: new FenceRetry(null))).Should().Be(1, key);
+            (await cluster.Db.HashGetAllAsync(data)).Select(e => ((string?)e.Name)!).Should().Equal("c");
+        }
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task A_tagged_prefix_puts_every_control_record_on_one_slot(bool useScripts)
