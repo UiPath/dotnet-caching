@@ -21,7 +21,8 @@ internal sealed record LibraryParts(
     IKeyMovePlane? KeyMove = null,
     ICache? Cache = null,
     bool CacheNullValues = false,
-    KeyMoveBinder? Binder = null)
+    KeyMoveBinder? Binder = null,
+    MoveTargets? Movers = null)
 {
     public IReadOnlyList<IHostedService> Started { get; } = Started ?? [];
 

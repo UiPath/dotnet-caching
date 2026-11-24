@@ -61,6 +61,8 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         var entry = await EntryAsync(router, provider);
 
         router.KeyMove.Should().BeNull();
+        provider.GetService<IMoveRate>().Should().BeNull();
+        router.Library!.Started.Should().NotContain(s => s is MoverHostedService);
         entry.Tokens.Should().NotContain(t => t == "km" || t.StartsWith("kmg=", StringComparison.Ordinal) || t.StartsWith("snap=", StringComparison.Ordinal) || t.StartsWith("fl=", StringComparison.Ordinal));
         (await Db.KeyExistsAsync($"{Library}mg:{{{Group}}}:lead")).Should().BeFalse();
     }

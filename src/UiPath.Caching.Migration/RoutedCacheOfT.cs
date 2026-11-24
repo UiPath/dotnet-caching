@@ -253,7 +253,12 @@ internal sealed partial class RoutedCache<T> : IRouterParticipant, IRouterClear,
         // The inventory judges the cache's values by the binding in force, whichever way it came.
         library.Binder?.Register(_registration.Name, binding);
 
-        return new KeyMoveClient<T>(new KeyMoveClientParts<T>(_registration.Group, _registration.Name, binding.NoOrigin, binding.InPlaceKey, binding.NativeKey, binding.InPlace, binding.Native, plain, plane, _core.Clock, library.LibrarySettleWithin) { Options = binding.Options });
+        var parts = new KeyMoveClientParts<T>(_registration.Group, _registration.Name, binding.NoOrigin, binding.InPlaceKey, binding.NativeKey, binding.InPlace, binding.Native, plain, plane, _core.Clock, library.LibrarySettleWithin) { Options = binding.Options };
+        var client = new KeyMoveClient<T>(parts);
+
+        // The mover helps a marked key the way the client does.
+        library.Movers?.Add(_registration.Group, new KeyMover<T>(parts, client.Supersession));
+        return client;
     }
 
     private async ValueTask<bool> TryPublishAsync(Func<ValueTask<bool>> publish)

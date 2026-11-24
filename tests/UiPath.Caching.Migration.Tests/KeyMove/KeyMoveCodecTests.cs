@@ -335,6 +335,31 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UseKeyMove_runs_the_mover_after_the_key_move_node_on_the_one_rate_of_the_process()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var (provider, _, _) = await HostAsync(InPlace.Envelope);
+        var started = ((Router)provider.GetRequiredService<IRouter>()).Library!.Started.ToList();
+
+        started.OfType<MoverHostedService>().Should().ContainSingle();
+        started.FindIndex(s => s is MoverHostedService).Should().BeGreaterThan(started.FindIndex(s => s is KeyMoveHostedService), "the router stops what it started in reverse, so the movers stop before the node");
+        provider.GetServices<IMoveRate>().Should().ContainSingle().Which.Should().BeOfType<AimdMoveRate>();
+        provider.GetRequiredService<IScanUnits>().Should().BeOfType<MultiplexerScanUnits>();
+        provider.GetServices<IValidateOptions<KeyMoveMoverOptions>>().Should().ContainSingle(v => v is KeyMoveMoverOptionsValidator);
+    }
+
+    [Fact]
+    public async Task A_bound_cache_gives_the_mover_its_target_with_the_supersession_handler_of_its_client()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var (provider, _, client) = await HostAsync(InPlace.Envelope);
+        var movers = ((Router)provider.GetRequiredService<IRouter>()).Library!.Movers!;
+
+        var target = movers.Of(Group).Should().ContainKey("items").WhoseValue.Should().BeOfType<KeyMover<Item>>().Subject;
+        target.Supersession.Should().BeSameAs(client.Supersession);
+    }
+
+    [Fact]
     public async Task UseKeyMove_binds_every_registered_cache_and_a_binding_a_registration_carries_wins()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");

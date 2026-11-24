@@ -63,6 +63,9 @@ internal sealed partial class RouterCore
 
     public bool LibraryStarted => Volatile.Read(ref _libraryDown) == 0;
 
+    /// <summary>The parts of the library start in force; null while none is.</summary>
+    internal LibraryParts? StartedParts => Volatile.Read(ref _started);
+
     private bool WantBypass => Volatile.Read(ref _requested) == 1 || Volatile.Read(ref _flagSeen) == 1 || !LibraryStarted;
 
     /// <summary>Admits one operation and decides its path, or throws before anything is sent when the router is stopped.</summary>
