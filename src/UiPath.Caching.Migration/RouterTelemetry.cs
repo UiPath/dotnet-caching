@@ -15,6 +15,9 @@ internal static class RouterTelemetry
     private static readonly Counter<long> MoverSkipped = RouterMeter.CreateCounter<long>("move_skipped");
     private static readonly UpDownCounter<long> MoverUnits = RouterMeter.CreateUpDownCounter<long>("move_units_active");
     private static readonly Counter<long> MoverTakeovers = RouterMeter.CreateCounter<long>("move_lease_takeovers");
+    private static readonly Counter<long> MoverPaused = RouterMeter.CreateCounter<long>("move_paused");
+    private static readonly Counter<long> MoverRateChange = RouterMeter.CreateCounter<long>("move_rate_changes");
+    private static readonly Counter<long> MoverHealth = RouterMeter.CreateCounter<long>("move_health");
     private static readonly Counter<long> LocalHit = RouterMeter.CreateCounter<long>("local_hit");
     private static readonly Counter<long> RedisHit = RouterMeter.CreateCounter<long>("redis_hit");
     private static readonly Counter<long> Miss = RouterMeter.CreateCounter<long>("miss");
@@ -90,6 +93,33 @@ internal static class RouterTelemetry
 
     /// <summary>A runner took over a unit with a cursor a lapsed lease left behind: <c>move_lease_takeovers</c>.</summary>
     public static void CountMoverLeaseTakeover(string group) => MoverTakeovers.Add(1, new TagList { { "group", group } });
+
+    /// <summary>The mover paused: <c>move_paused</c> with a <c>reason</c> tag from the bounded set <c>red</c>, <c>memory_ceiling</c>, <c>memory_growth</c>, <c>evicted</c>, <c>oom_backoff</c>, <c>schedule</c>, <c>noeviction</c>, <c>pacing</c> (a unit waiting out its rate for more than a few polls).</summary>
+    public static void CountMoverPaused(string reason)
+    {
+        if (MoverPaused.Enabled)
+        {
+            MoverPaused.Add(1, new TagList { { "reason", reason } });
+        }
+    }
+
+    /// <summary>A unit's rate went <c>up</c> or <c>down</c>: <c>move_rate_changes</c> with a <c>direction</c> tag. (The router has no gauges, so the rate shows as its changes.)</summary>
+    public static void CountMoverRateChange(string direction)
+    {
+        if (MoverRateChange.Enabled)
+        {
+            MoverRateChange.Add(1, new TagList { { "direction", direction } });
+        }
+    }
+
+    /// <summary>One reading of the mover's health: <c>move_health</c> with a <c>state</c> tag (<c>green</c>, <c>amber</c> or <c>red</c>).</summary>
+    public static void CountMoverHealth(string state)
+    {
+        if (MoverHealth.Enabled)
+        {
+            MoverHealth.Add(1, new TagList { { "state", state } });
+        }
+    }
 
     public static void CountLibraryStartFailed() => LibraryStartFailed.Add(1);
 

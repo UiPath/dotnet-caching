@@ -150,7 +150,7 @@ internal sealed class KeyPromotion<T>
         }
 
         var lost = await DeleteSourceAsync(run, snap, cancellationToken).ConfigureAwait(false);
-        return lost ?? PromotionResult<T>.Of(drained ? PromotionKind.Drained : PromotionKind.Promoted, served);
+        return lost ?? new PromotionResult<T>(drained ? PromotionKind.Drained : PromotionKind.Promoted, served, Bytes: encoded.Length);
     }
 
     // Null for an always-owned caller, so the read-through's operations run exactly as they did.
@@ -323,6 +323,8 @@ internal sealed class KeyPromotion<T>
             return (false, PromotionResult<T>.Of(PromotionKind.OwnershipLost));
         }
 
+        // The bytes went over the wire: they are recorded now, with no wait, and the runner pays them before the next key. A retry or an out-of-memory second try of the same key records nothing more.
+        run.Ownership.Published(encoded.Length);
         return await PublishOutcomeAsync(run, published, uncached, cancellationToken).ConfigureAwait(false);
     }
 

@@ -9,10 +9,16 @@ namespace UiPath.Caching.Migration;
 /// <summary>Processes one scan unit under its lease and saves its cursor after each batch.</summary>
 internal sealed class MoverUnitRunner
 {
+    private const long EndBatch = -2;
+    private const long RetryOom = -1;
     private const CommandFlags Master = CommandFlags.DemandMaster;
+    private const string Unmappable = "unmappable";
+
+    // A pace that has lasted more than this many polls is shown as a pause, so a unit that waits for minutes is not silent.
+    private const int PacingReportedAfterSlices = 3;
 
     // The classes a pass accepts: a key in one of them is a settled answer, not a failure to move it.
-    private static readonly HashSet<string> Accepted = ["expired", "too_large", "unreadable", "unmappable", "short_ttl", "duplicate", "ambiguous"];
+    private static readonly HashSet<string> Accepted = ["expired", "too_large", "unreadable", Unmappable, "short_ttl", "duplicate", "ambiguous"];
 
     private readonly string _group;
     private readonly ScanUnit _unit;
@@ -146,6 +152,12 @@ internal sealed class MoverUnitRunner
                 return null;
             }
 
+            // Paused (health, memory, schedule): nothing is scanned or published, and the lease is kept alive meanwhile.
+            if (!await WaitWhilePausedAsync(pass, cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
+
             var scan = await ScanAsync(data, cursor, patterns, cancellationToken).ConfigureAwait(false);
             if (scan is null)
             {
@@ -169,7 +181,6 @@ internal sealed class MoverUnitRunner
                 return wait;
             }
 
-            await _rate.WaitAsync(keys.Count, cancellationToken).ConfigureAwait(false);
             await Task.Delay(_options.MinScanInterval, _time, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -211,29 +222,115 @@ internal sealed class MoverUnitRunner
     }
 
     // Moves the keys of one batch. False when the pass must stop: the lease or the state was lost, or a key ended the batch.
-    private async Task<bool> MoveBatchAsync(PassKeys pass, List<string> keys, Tally tally, IMoveOwnership ownership, CancellationToken cancellationToken)
+    // The rate is charged before a key is captured: its key, and the bytes of the value published before it, which the promotion recorded after its publish.
+    // Nothing waits while a fence or a marker is held, and the wait stays out of the mover's own timing.
+    private async Task<bool> MoveBatchAsync(PassKeys pass, List<string> keys, Tally tally, PassOwnership ownership, CancellationToken cancellationToken)
     {
-        var sinceRenewal = 0;
+        var renewal = new RenewalCount();
         foreach (var key in keys)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            // Ownership is judged before every key: a lease that lapsed while this runner was paused, or a state that left forward S3, schedules nothing more.
-            if (!HoldsLease() || !ForwardS3())
+            if (!await PayAsync(pass, 1, cancellationToken).ConfigureAwait(false))
             {
                 return false;
             }
 
-            if (RenewalDue(++sinceRenewal))
+            ownership.NewKey();
+            if (await MoveWithRetryAsync(pass, key, tally, ownership, renewal, cancellationToken).ConfigureAwait(false) == EndBatch)
             {
-                sinceRenewal = 0;
-                if (!await RenewAsync(pass.Data, pass.Lease, pass.LeaseMs).ConfigureAwait(false) || !await _stillAllowed(cancellationToken).ConfigureAwait(false))
-                {
-                    return false;
-                }
+                return false;
+            }
+        }
+
+        // The last value of the batch is paid before the cursor moves on.
+        return await PayAsync(pass, 0, cancellationToken).ConfigureAwait(false);
+    }
+
+    // A key the server refused for memory is tried once more when the backoff has ended, through the same checks; the retry runs CAP again, which asks the ownership first.
+    // The second refusal is counted and left for the next pass.
+    private async Task<long> MoveWithRetryAsync(PassKeys pass, string key, Tally tally, PassOwnership ownership, RenewalCount renewal, CancellationToken cancellationToken)
+    {
+        var retryOnOom = true;
+        while (true)
+        {
+            if (!await MayMoveAsync(pass, renewal, cancellationToken).ConfigureAwait(false))
+            {
+                return EndBatch;
             }
 
-            if (!await MoveKeyAsync(key, tally, ownership, cancellationToken).ConfigureAwait(false))
+            var moved = await MoveKeyAsync(key, tally, ownership, retryOnOom, cancellationToken).ConfigureAwait(false);
+            if (moved != RetryOom)
+            {
+                return moved;
+            }
+
+            retryOnOom = false;
+        }
+    }
+
+    // The pause comes first, and ownership is judged after it, so a key is never scheduled on an ownership or identity that was lost while paused.
+    private async Task<bool> MayMoveAsync(PassKeys pass, RenewalCount renewal, CancellationToken cancellationToken)
+    {
+        if (!await WaitWhilePausedAsync(pass, cancellationToken).ConfigureAwait(false) || !HoldsLease() || !ForwardS3())
+        {
+            return false;
+        }
+
+        if (!RenewalDue(++renewal.Keys))
+        {
+            return true;
+        }
+
+        renewal.Keys = 0;
+        return await RenewAsync(pass.Data, pass.Lease, pass.LeaseMs).ConfigureAwait(false) && await _stillAllowed(cancellationToken).ConfigureAwait(false);
+    }
+
+    // Reserves the keys and the bytes the promotions have recorded since the last payment, and waits them out.
+    private async Task<bool> PayAsync(PassKeys pass, int keys, CancellationToken cancellationToken)
+    {
+        var bytes = _rate.TakeDebt(_unit.Id);
+        if (keys == 0 && bytes == 0)
+        {
+            return true;
+        }
+
+        return await PaceAsync(pass, _rate.Reserve(_unit.Id, keys, bytes), cancellationToken).ConfigureAwait(false);
+    }
+
+    // Waits out a reservation in poll-sized slices, renewing the lease and watching the state between them, so a long pace never outlives the lease; false when the unit must stop.
+    // What is left is asked of the rate on each slice, so a reload that raises the rate shortens the wait, and a pause that begins during it is honoured.
+    private async Task<bool> PaceAsync(PassKeys pass, TimeSpan delay, CancellationToken cancellationToken)
+    {
+        var slices = 0;
+        while (delay > TimeSpan.Zero)
+        {
+            var slice = delay < _options.PollInterval ? delay : _options.PollInterval;
+            await Task.Delay(slice, _time, cancellationToken).ConfigureAwait(false);
+            delay = _rate.Remaining(_unit.Id) ?? delay - slice;
+            if (++slices == PacingReportedAfterSlices + 1)
+            {
+                RouterTelemetry.CountMoverPaused("pacing");
+            }
+
+            // The state is judged after every slice, the last one too, and the lease is renewed while the wait goes on or when a third of its life is spent.
+            if (!await _stillAllowed(cancellationToken).ConfigureAwait(false)
+                || ((delay > TimeSpan.Zero || _time.GetElapsedTime(_renewedAt) >= _options.LeaseTtl / 3) && !await RenewAsync(pass.Data, pass.Lease, pass.LeaseMs).ConfigureAwait(false))
+                || !await WaitWhilePausedAsync(pass, cancellationToken).ConfigureAwait(false))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Holds while the rate says pause, renewing the lease and watching the state; false when the unit must stop (the state moved on or the lease is no longer this runner's).
+    private async Task<bool> WaitWhilePausedAsync(PassKeys pass, CancellationToken cancellationToken)
+    {
+        while (await _rate.PauseReasonAsync(_unit.Id, cancellationToken).ConfigureAwait(false) is not null)
+        {
+            await Task.Delay(_options.PollInterval, _time, cancellationToken).ConfigureAwait(false);
+            if (!await _stillAllowed(cancellationToken).ConfigureAwait(false) || !await RenewAsync(pass.Data, pass.Lease, pass.LeaseMs).ConfigureAwait(false))
             {
                 return false;
             }
@@ -360,14 +457,14 @@ internal sealed class MoverUnitRunner
     private Task<RedisResult> ExecuteScanAsync(IServer server, KeyMoveData data, ScanCursor at, IReadOnlyList<string> patterns, CancellationToken cancellationToken) =>
         server.ExecuteAsync(data.Db.Database, "SCAN", [at.Cursor, "MATCH", MasterScanner.EscapeGlob(_connectorPrefix) + patterns[at.Pattern], "COUNT", _options.ScanCount, "TYPE", "string"]).WaitAsync(cancellationToken);
 
-    // Check ownership and key mapping before promotion. False ends the batch.
-    private async Task<bool> MoveKeyAsync(string key, Tally tally, IMoveOwnership ownership, CancellationToken cancellationToken)
+    // Check ownership and key mapping before promotion. EndBatch ends the batch, RetryOom asks for one more try of the key, and anything else is the bytes published.
+    private async Task<long> MoveKeyAsync(string key, Tally tally, IMoveOwnership ownership, bool retryOnOom, CancellationToken cancellationToken)
     {
         var owners = _space.OwnersOf(_group, MoveSide.Legacy, key);
         if (owners.Count == 0)
         {
             // Another group's key, an unmanaged cache's, a direct cache's, or none: not the mover's, and not counted.
-            return true;
+            return 0;
         }
 
         if (owners.Count > 1)
@@ -379,35 +476,42 @@ internal sealed class MoverUnitRunner
                 _plane.Alert(_group, "ambiguous_ownership", $"{string.Join(" and ", owners)} own '{key}', which the mover leaves alone");
             }
 
-            return true;
+            return 0;
         }
 
         var cacheId = owners[0];
         if (!_plane.RulesFor(_group).IsManaged(cacheId))
         {
-            return true;
+            return 0;
         }
 
         if (!_targets.TryGetValue(cacheId, out var target))
         {
             _alerts.Raise(new KeyMoveAlert(_group, "mover_no_target", cacheId));
-            return true;
+            return 0;
         }
 
         if (!_space.IsMovable(_group, MoveSide.Legacy, cacheId, key, null))
         {
-            tally.Skip(cacheId, "unmappable");
-            return true;
+            tally.Skip(cacheId, Unmappable);
+            return 0;
         }
 
         // The promotion works on the caller's key, which the cache's own map reads from the in-place key.
         if (_space.CallerKeyOf(_group, MoveSide.Legacy, cacheId, key) is not { } caller)
         {
-            tally.Skip(cacheId, "unmappable");
-            return true;
+            tally.Skip(cacheId, Unmappable);
+            return 0;
         }
 
+        var started = _time.GetTimestamp();
         var result = await target.MoveAsync(caller, _space.MoveMinTtl(_group, cacheId), _identity, ownership, cancellationToken).ConfigureAwait(false);
+        _rate.Observed(_unit.Id, result, _time.GetElapsedTime(started));
+        if (retryOnOom && string.Equals(result.SkipReason, "oom", StringComparison.Ordinal))
+        {
+            return RetryOom;
+        }
+
         if (result.Moved)
         {
             tally.Moved(cacheId);
@@ -415,7 +519,7 @@ internal sealed class MoverUnitRunner
         else if (result.SkipReason == MoveResult.OwnershipLost)
         {
             // Not this runner's key any more: nothing is counted, and the batch ends so the next owner takes it.
-            return false;
+            return EndBatch;
         }
         else if (result.SkipReason is { } reason)
         {
@@ -424,11 +528,11 @@ internal sealed class MoverUnitRunner
             // A unit admitted under another identity means the state moved on: nothing more of this batch is promoted.
             if (reason == "identity")
             {
-                return false;
+                return EndBatch;
             }
         }
 
-        return true;
+        return result.Bytes;
     }
 
     private async Task FlushAsync(KeyMoveData data, Tally tally)
@@ -455,6 +559,8 @@ internal sealed class MoverUnitRunner
     // The lease as one key's promotion sees it: valid locally and in the state it started under, and renewed when a third of its life is spent.
     private sealed class PassOwnership(MoverUnitRunner runner, KeyMoveData data, RedisKey lease, long leaseMs) : IMoveOwnership
     {
+        private bool _recorded;
+
         public bool StillHeld => runner.HoldsLease() && runner.ForwardS3();
 
         public async ValueTask<bool> HoldsAsync(CancellationToken cancellationToken)
@@ -476,6 +582,18 @@ internal sealed class MoverUnitRunner
             }
 
             return await runner._stillAllowed(cancellationToken).ConfigureAwait(false) && runner.HoldsLease() && runner.ForwardS3();
+        }
+
+        /// <summary>A new key begins: its publish may be recorded again.</summary>
+        public void NewKey() => _recorded = false;
+
+        public void Published(long bytes)
+        {
+            if (!_recorded)
+            {
+                _recorded = true;
+                runner._rate.Owe(runner._unit.Id, bytes);
+            }
         }
     }
 
@@ -503,6 +621,12 @@ internal sealed class MoverUnitRunner
         }
 
         private void Add(string field) => Counts[field] = Counts.GetValueOrDefault(field) + 1;
+    }
+
+    // The keys of a batch moved since the lease was last renewed.
+    private sealed class RenewalCount
+    {
+        public int Keys { get; set; }
     }
 
     // The keys one pass of the unit writes, on the connection it runs on.

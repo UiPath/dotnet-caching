@@ -1,3 +1,4 @@
+using StackExchange.Redis;
 using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Migration;
@@ -54,8 +55,8 @@ internal sealed class KeyMover<T> : IMoveTarget
 
     private static MoveResult ResultOf(PromotionResult<T> result) => result.Kind switch
     {
-        PromotionKind.Promoted => MoveResult.Done,
-        PromotionKind.Drained => MoveResult.Drain,
+        PromotionKind.Promoted => MoveResult.Done with { Bytes = result.Bytes },
+        PromotionKind.Drained => MoveResult.Drain with { Bytes = result.Bytes },
         PromotionKind.OwnershipLost => MoveResult.Skip(MoveResult.OwnershipLost),
 
         // The unit was moved to the identity now in force, which is not the runner's: the key and the batch end here.
@@ -105,6 +106,15 @@ internal sealed class KeyMover<T> : IMoveTarget
         try
         {
             return (await _promotion.RunAsync(key, flavor, unit, data, attempt, ownership, cancellationToken).ConfigureAwait(false), null);
+        }
+        catch (RedisServerException ex) when (ex.Message.Contains("OOM ", StringComparison.Ordinal))
+        {
+            // The server refused the write for memory: the mover backs off for minutes.
+            return (default, MoveResult.Skip("oom"));
+        }
+        catch (TimeoutException)
+        {
+            return (default, MoveResult.Skip("timeout"));
         }
         catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
         {

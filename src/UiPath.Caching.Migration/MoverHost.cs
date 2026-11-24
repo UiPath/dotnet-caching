@@ -2,7 +2,7 @@ using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>The mover of one group on this node: it runs a unit runner per scan unit while the stored state is a durable forward S3 whose identity every node acknowledged and this node acts under.</summary>
+/// <summary>Runs and stops the leased scan units for one group on this node.</summary>
 internal sealed class MoverHost
 {
 #if NET9_0_OR_GREATER
@@ -28,7 +28,8 @@ internal sealed class MoverHost
     private (long MoveId, string Identity)? _runningKey;
 
     /// <param name="readState">The stored state of the group, as the node's state store reads it.</param>
-    public MoverHost(string group, IKeyMovePlane plane, IGroupKeySpace space, IEnumerable<IMoveTarget> targets, IScanUnits units, Func<CancellationToken, Task<StateRecord?>> readState, string connectorPrefix, TimeProvider time, MoverOptions? options = null, IMoveRate? rate = null)
+    /// <param name="rate">The one rate of the process (a singleton), which every host takes, so that the node's cap holds across groups.</param>
+    public MoverHost(string group, IKeyMovePlane plane, IGroupKeySpace space, IEnumerable<IMoveTarget> targets, IScanUnits units, Func<CancellationToken, Task<StateRecord?>> readState, string connectorPrefix, TimeProvider time, IMoveRate rate, MoverOptions? options = null)
     {
         _group = group;
         _plane = plane ?? throw new ArgumentNullException(nameof(plane));
@@ -39,7 +40,7 @@ internal sealed class MoverHost
         _connectorPrefix = connectorPrefix ?? throw new ArgumentNullException(nameof(connectorPrefix));
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _options = options ?? new MoverOptions();
-        _rate = rate ?? new FixedMoveRate(FixedMoveRate.DefaultKeysPerSecond, time);
+        _rate = rate ?? throw new ArgumentNullException(nameof(rate));
         _alerts = new ThrottledAlerts(a => _plane.Alert(a.Group, a.Code, a.Detail), time, _options.AlertEvery);
     }
 
