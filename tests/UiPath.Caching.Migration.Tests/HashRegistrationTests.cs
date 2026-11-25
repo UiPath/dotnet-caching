@@ -12,6 +12,34 @@ public sealed class HashRegistrationTests : RouterTestBase
     private const int Cap = 9;
 
     [Fact]
+    public void GetHash_requires_an_implementation()
+    {
+        typeof(IRouter).GetMethod(nameof(IRouter.GetHash))!.IsAbstract.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_hash_cannot_use_an_excluded_name()
+    {
+        var builder = new RouterBuilder().Exclude("items", "Managed by the source");
+        var add = () => builder.AddHash(Hash("items"));
+
+        add.Should().Throw<ArgumentException>().WithMessage("*items*excluded*");
+        builder.Registrations.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void A_nonpositive_default_hash_lifetime_is_refused(int seconds)
+    {
+        var builder = new RouterBuilder();
+        var add = () => builder.AddHash(Hash("items", defaultExpiry: TimeSpan.FromSeconds(seconds)));
+
+        add.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("registration");
+        builder.AddHash(Hash("items", defaultExpiry: TimeSpan.FromSeconds(1))).Registrations.Should().ContainSingle();
+    }
+
+    [Fact]
     public void A_registration_with_a_missing_part_or_a_window_out_of_range_is_refused()
     {
         var builder = new RouterBuilder();
@@ -217,7 +245,7 @@ public sealed class HashRegistrationTests : RouterTestBase
         return new ServiceCollection().AddKeyedSingleton(RouterServiceCollectionExtensions.StackName, factory).BuildServiceProvider();
     }
 
-    private static RouterHashCacheRegistration<Item> Hash(string name, string group = "g", TimeSpan? window = null, TimeSpan? localCap = null, int? maxFields = null) => new()
+    private static RouterHashCacheRegistration<Item> Hash(string name, string group = "g", TimeSpan? window = null, TimeSpan? localCap = null, int? maxFields = null, TimeSpan? defaultExpiry = null) => new()
     {
         Name = name,
         Group = group,
@@ -226,6 +254,7 @@ public sealed class HashRegistrationTests : RouterTestBase
         PendingWindow = window ?? TimeSpan.FromSeconds(30),
         LocalCap = localCap ?? TimeSpan.Zero,
         MaxHashFields = maxFields,
+        DefaultExpiry = defaultExpiry,
     };
 
     private static RouterCacheRegistration<string> Text(string name, string group = "g") => new() { Name = name, Group = group, Source = new TextSource(), RedisKey = key => $"l:{name}:{key}" };

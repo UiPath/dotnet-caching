@@ -12,6 +12,41 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task A_managed_merge_refuses_an_elapsed_deadline_without_deleting_the_hash(bool scripts, bool expiresWhileQueued)
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, scripts, clock: clock);
+        await kit.Kit.PrepareAsync("key");
+        await kit.Kit.SetStateAsync("S1", nPop: 0);
+        await kit.SetAsync(kit.L("key"), Original);
+        var deadline = clock.GetUtcNow().AddMinutes(1);
+        if (expiresWhileQueued)
+        {
+            kit.Kit.Schedule.Hook = (step, _) =>
+            {
+                if (step == SchedulePointStep.SourceSet)
+                {
+                    clock.Advance(TimeSpan.FromMinutes(2));
+                }
+
+                return Task.CompletedTask;
+            };
+        }
+        else
+        {
+            clock.Advance(TimeSpan.FromMinutes(2));
+        }
+
+        var options = new HashWriteOptions(HashCacheSetOption.HashReplace, deadline);
+        (await kit.Client.SetAsync("key", KeyMoveHashKit.Items(("late", "4")), options, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
+        (await kit.FieldsAsync(kit.L("key"))).Should().BeEquivalentTo(Original);
+    }
+
     // A key with no retry answers the one sentinel the string path uses, from the key-move client and from a client that keeps no retries.
     [Fact]
     public async Task A_key_with_no_retry_answers_the_shared_no_retry_sentinel()
@@ -40,7 +75,7 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
         var until = kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10));
         (await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(until), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.FieldsAsync(kit.L("k"))).Should().BeEquivalentTo(new Dictionary<string, string> { ["x"] = "9" });
-        (await kit.Db.KeyTimeToLiveAsync(kit.L("k")))!.Value.Should().BeGreaterThan(TimeSpan.FromMinutes(9));
+        (await kit.Db.KeyExpireTimeAsync(kit.L("k"))).Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(until.ToUnixTimeMilliseconds()).UtcDateTime);
         (await kit.AllFieldsAsync(kit.L("k"))).Should().NotContainKey("_version_", "the in-place side keeps no system field");
 
         (await kit.Client.RemoveFieldsAsync("k", ["x"], Ct)).Outcome.Should().Be(WriteOutcome.Committed);
@@ -102,7 +137,8 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
             }
         };
 
-        var written = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(5))), Ct);
+        var deadline = kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(5));
+        var written = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(deadline), Ct);
 
         written.Outcome.Should().Be(WriteOutcome.Committed);
         lAtDestination.Should().BeFalse("the source goes first, so a crash between the steps leaves a miss and never an older hash");
@@ -110,7 +146,7 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
         var stored = await kit.AllFieldsAsync(kit.N("k"));
         stored.Keys.Should().BeEquivalentTo("x", "_version_");
         (await kit.Kit.FenceAsync("k")).Should().NotBe(before);
-        (await kit.Db.KeyTimeToLiveAsync(kit.N("k")))!.Value.Should().BeGreaterThan(TimeSpan.FromMinutes(4));
+        (await kit.Db.KeyExpireTimeAsync(kit.N("k"))).Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(deadline.ToUnixTimeMilliseconds()).UtcDateTime);
     }
 
     [Theory]
@@ -193,12 +229,13 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
         await kit.Kit.SetStateAsync("S3");
         await kit.SetAsync(kit.L("k"), Original, TimeSpan.FromMinutes(5));
 
-        var merged = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("d", "4"), ("a", "11")), Merge(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(7))), Ct);
+        var deadline = kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(7));
+        var merged = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("d", "4"), ("a", "11")), Merge(deadline), Ct);
 
         merged.Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.FieldsAsync(kit.N("k"))).Should().BeEquivalentTo(new Dictionary<string, string> { ["a"] = "11", ["b"] = "2", ["c"] = "3", ["d"] = "4" });
         (await kit.Kit.ExistsAsync(kit.L("k"))).Should().BeFalse();
-        (await kit.Db.KeyTimeToLiveAsync(kit.N("k")))!.Value.Should().BeGreaterThan(TimeSpan.FromMinutes(6));
+        (await kit.Db.KeyExpireTimeAsync(kit.N("k"))).Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(deadline.ToUnixTimeMilliseconds()).UtcDateTime);
         kit.Kit.Schedule.Steps.Should().ContainInOrder(SchedulePointStep.ProbeSource, SchedulePointStep.Capture, SchedulePointStep.Publish, SchedulePointStep.CompareDelete, SchedulePointStep.HashWrite);
     }
 

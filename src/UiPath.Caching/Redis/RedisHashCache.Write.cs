@@ -186,6 +186,11 @@ internal sealed partial class RedisHashCache
 
     private async ValueTask<bool> WriteAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, DateTimeOffset now, WriteReport? report, bool dropMetadata, CancellationToken token, SendTrace? trace = null)
     {
+        if (trace is not null && setOption == HashCacheSetOption.HashReplace && expiration <= now)
+        {
+            return false;
+        }
+
         var absent = report?.OnlyIfAbsent == true;
         if (expiration < now || hashEntries.Length == 0)
         {
@@ -231,6 +236,11 @@ internal sealed partial class RedisHashCache
         {
             await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
             var type = await Database.KeyTypeAsync(redisKey, CommandFlags.DemandMaster).ConfigureAwait(false);
+            if (expiration <= Clock.GetUtcNow())
+            {
+                return false;
+            }
+
             if (type is not (RedisType.None or RedisType.Hash))
             {
                 // Nothing was queued: the key is as it was.

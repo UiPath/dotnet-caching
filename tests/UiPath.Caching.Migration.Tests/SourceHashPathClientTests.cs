@@ -82,7 +82,7 @@ public sealed class SourceHashPathClientTests : RouterTestBase
         await client.SetAsync("k", fields, new HashWriteOptions(HashCacheSetOption.HashReplace, deadline), Ct);
         source.LastOptions.Should().Be(new HashWriteOptions(HashCacheSetOption.HashReplace, deadline));
         await client.SetAsync("k", fields, new HashWriteOptions(HashCacheSetOption.KeyReplace, null), Ct);
-        source.LastOptions.Should().Be(new HashWriteOptions(HashCacheSetOption.KeyReplace, null));
+        source.LastOptions.Should().Be(new HashWriteOptions(HashCacheSetOption.KeyReplace, DateTimeOffset.MaxValue));
         await client.FillAsync("fill", fields, new HashWriteOptions(HashCacheSetOption.HashReplace, deadline), new HashFillBox<Item>(), Ct);
         source.LastOptions.Should().Be(new HashWriteOptions(HashCacheSetOption.KeyReplace, deadline));
         await client.RemoveFieldsAsync("k", ["a"], Ct);

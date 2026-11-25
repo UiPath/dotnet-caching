@@ -118,6 +118,51 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
     }
 
     [Fact]
+    public async Task An_expired_merge_does_not_send_a_delete()
+    {
+        var sut = Create();
+        Stub();
+        var expired = new HashCacheEntryOptions(ExpireTime: _time.GetUtcNow().AddMinutes(1), SetOption: HashCacheSetOption.HashReplace);
+        _time.Advance(TimeSpan.FromMinutes(2));
+
+        (await sut.WriteAsync("key", Fields, expired, null, Token)).Should().Be(StoreOutcome.NotSent);
+        await _database.DidNotReceiveWithAnyArgs().KeyDeleteAsync(default(RedisKey), default);
+    }
+
+    [Fact]
+    public async Task A_merge_that_expires_during_the_type_check_never_starts_a_transaction()
+    {
+        var sut = Create();
+        Stub();
+        _database.KeyTypeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(_ =>
+        {
+            _time.Advance(TimeSpan.FromMinutes(10));
+            return RedisType.Hash;
+        });
+
+        var merge = Replace with { SetOption = HashCacheSetOption.HashReplace };
+        (await sut.WriteAsync("key", Fields, merge, null, Token)).Should().Be(StoreOutcome.NotSent);
+        await _transaction.DidNotReceiveWithAnyArgs().ExecuteAsync(default);
+    }
+
+    [Fact]
+    public async Task A_chunked_merge_that_expires_before_its_first_chunk_sends_no_fields()
+    {
+        var sut = Create(fieldBatch: 1, version: new Version(7, 0));
+        Stub();
+        sut.OnChunk = _ =>
+        {
+            _time.Advance(TimeSpan.FromMinutes(10));
+            return Task.CompletedTask;
+        };
+
+        var fields = new Dictionary<string, string?> { ["a"] = "1", ["b"] = "2" };
+        var merge = Replace with { SetOption = HashCacheSetOption.HashReplace };
+        (await sut.WriteAsync("key", fields, merge, null, Token)).Should().Be(StoreOutcome.Failed);
+        await _database.DidNotReceiveWithAnyArgs().ScriptEvaluateAsync(default(string)!, default, default, default);
+    }
+
+    [Fact]
     public async Task A_delete_is_committed_when_answered_unknown_when_not_and_not_sent_when_refused()
     {
         var sut = Create();

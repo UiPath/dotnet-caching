@@ -149,6 +149,16 @@ public sealed class RouterBuilder
             throw new ArgumentOutOfRangeException(nameof(registration), registration.MaxHashFields, $"The hash cache '{registration.Name}' needs MaxHashFields of at least one, or none.");
         }
 
+        if (registration.DefaultExpiry <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(registration), registration.DefaultExpiry, "The default hash lifetime must be positive.");
+        }
+
+        if (_excluded.ContainsKey(registration.Name))
+        {
+            throw new ArgumentException($"Cache '{registration.Name}' is listed as excluded, so it cannot also be registered.", nameof(registration));
+        }
+
         if (!_names.Add(registration.Name))
         {
             throw new ArgumentException($"A cache named '{registration.Name}' is already registered.", nameof(registration));

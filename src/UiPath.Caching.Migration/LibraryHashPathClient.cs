@@ -19,6 +19,8 @@ internal sealed class LibraryHashPathClient<T>(IMigrationHashCache store, IConne
     /// <summary>The shared tier of the library hash cache, which has the write that creates a hash only when it is absent.</summary>
     public ISharedHashTier? Tier { get; init; }
 
+    public Func<WriteLease>? WritePolicy { get; init; }
+
     public bool KeepsStoredOnFill => true;
 
     public async ValueTask<HashRead<T>> ReadAsync(string key, string[]? fields, CancellationToken cancellationToken)
@@ -90,7 +92,15 @@ internal sealed class LibraryHashPathClient<T>(IMigrationHashCache store, IConne
     }
 
     public ValueTask<WriteResult> SetAsync(string key, IDictionary<string, T?> fields, HashWriteOptions options, CancellationToken cancellationToken) =>
-        WriteAsync(key, (cacheKey, token) => store.WriteAsync(cacheKey, fields, new HashCacheEntryOptions(options.Deadline ?? DateTimeOffset.MaxValue, null, options.Metadata, options.Mode), null, token), cancellationToken);
+        WriteAsync(
+            key,
+            async (cacheKey, token) =>
+            {
+                using var lease = WritePolicy?.Invoke();
+                var entry = new HashCacheEntryOptions(options.Deadline ?? DateTimeOffset.MaxValue, null, options.Metadata, options.Mode);
+                return await store.WriteAsync(cacheKey, fields, entry, lease?.Policy, token).ConfigureAwait(false);
+            },
+            cancellationToken);
 
     public ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken) =>
         WriteAsync(key, (cacheKey, token) => store.DeleteAsync<T>(cacheKey, token), cancellationToken);
@@ -102,7 +112,14 @@ internal sealed class LibraryHashPathClient<T>(IMigrationHashCache store, IConne
         WriteAsync(key, (cacheKey, token) => store.RenewExpiryAsync<T>(cacheKey, new HashCacheEntryOptions(expiry.Deadline, expiry.Relative), null, token), cancellationToken);
 
     public ValueTask<WriteResult> RefreshAsync(string key, CacheExpiry expiry, IDictionary<string, string?>? metadata, CancellationToken cancellationToken) =>
-        WriteAsync(key, (cacheKey, token) => store.RenewAsync<T>(cacheKey, new HashCacheEntryOptions(expiry.Deadline, expiry.Relative, metadata), null, token), cancellationToken);
+        WriteAsync(
+            key,
+            async (cacheKey, token) =>
+            {
+                using var lease = WritePolicy?.Invoke();
+                return await store.RenewAsync<T>(cacheKey, new HashCacheEntryOptions(expiry.Deadline, expiry.Relative, metadata), lease?.Policy, token).ConfigureAwait(false);
+            },
+            cancellationToken);
 
     /// <summary>A miss fill is the library's own fill, which writes only when absent; a lost one leaves the winner's hash and expiration in the box.</summary>
     public async ValueTask<WriteResult> FillAsync(string key, IDictionary<string, T?> fields, HashWriteOptions options, HashFillBox<T>? stored, CancellationToken cancellationToken)
@@ -117,7 +134,8 @@ internal sealed class LibraryHashPathClient<T>(IMigrationHashCache store, IConne
         var bound = settleWithin();
         try
         {
-            var written = await tier.FillVersionedAsync(cacheKey, fields, new HashCacheEntryOptions(options.Deadline ?? DateTimeOffset.MaxValue, null, options.Metadata, HashCacheSetOption.KeyReplace), null, new PeerFieldLimits(0, 0), cancellationToken).ConfigureAwait(false);
+            using var lease = WritePolicy?.Invoke();
+            var written = await tier.FillVersionedAsync(cacheKey, fields, new HashCacheEntryOptions(options.Deadline ?? DateTimeOffset.MaxValue, null, options.Metadata, HashCacheSetOption.KeyReplace), lease?.Policy, new PeerFieldLimits(0, 0), cancellationToken).ConfigureAwait(false);
             if (written.Written)
             {
                 return WriteOutcome.Committed;
@@ -156,7 +174,8 @@ internal sealed class LibraryHashPathClient<T>(IMigrationHashCache store, IConne
         }
 
         var selected = await cache.GetAsync<T>(CacheKey.Verbatim(redisKey(key)), fields, null, cancellationToken).ConfigureAwait(false);
-        return selected.Count > 0 ? new HashRead<T>(ReadOutcome.Found, selected, null) : HashRead<T>.Of(ReadOutcome.Unreadable);
+        // The public read also returns null fields when the selected values cannot be read.
+        return selected.Values.Any(value => value is not null) ? new HashRead<T>(ReadOutcome.Found, selected, null) : HashRead<T>.Of(ReadOutcome.Unreadable);
     }
 
     private async ValueTask<WriteResult> WriteAsync(string key, Func<CacheKey, CancellationToken, ValueTask<StoreOutcome>> command, CancellationToken cancellationToken)

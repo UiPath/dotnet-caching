@@ -178,7 +178,11 @@ internal sealed class LegacyHashSource(IConnectionMultiplexer redis, string cach
         }
 
         await database.HashSetAsync(RedisKey(key), [.. fields.Select(f => new HashEntry(f.Key, f.Value is null ? RedisValue.EmptyString : LegacyEnvelope.Write(f.Value)))]).ConfigureAwait(false);
-        if (expiry.Deadline is { } deadline)
+        if (expiry.Deadline == DateTimeOffset.MaxValue)
+        {
+            await database.KeyPersistAsync(RedisKey(key)).ConfigureAwait(false);
+        }
+        else if (expiry.Deadline is { } deadline)
         {
             await database.KeyExpireAsync(RedisKey(key), deadline.UtcDateTime).ConfigureAwait(false);
         }

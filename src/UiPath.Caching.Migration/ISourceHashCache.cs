@@ -8,7 +8,7 @@ public interface ISourceHashCache<T>
     ValueTask<SourceRead<IDictionary<string, T?>>> GetAsync(string key, string[]? fields, CancellationToken cancellationToken);
 
     /// <param name="mode">Replace the whole key, or merge the fields into the hash it holds.</param>
-    /// <param name="expiry">A deadline, or <see cref="CacheExpiry.Default"/> for none: a merge changes the key's lifetime only when one is given.</param>
+    /// <param name="expiry">An absolute deadline from the router; <see cref="DateTimeOffset.MaxValue"/> means to store the hash without an expiry, including on a merge.</param>
     ValueTask<WriteResult> SetAsync(string key, IDictionary<string, T?> fields, HashCacheSetOption mode, CacheExpiry expiry, CancellationToken cancellationToken);
 
     ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken);

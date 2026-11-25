@@ -164,6 +164,16 @@ internal sealed partial class RedisHashCache
 
             try
             {
+                if (expiration <= Clock.GetUtcNow())
+                {
+                    if (index == 0)
+                    {
+                        trace.MarkAnswered(false);
+                    }
+
+                    return false;
+                }
+
                 await WriteGuardedChunkAsync(target, entries.AsSpan(start, Math.Min(_fieldBatchSize, entries.Length - start)).ToArray(), expiration).ConfigureAwait(false);
             }
             catch (HashTypeRefusedException) when (index == 0)

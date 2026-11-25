@@ -5,11 +5,11 @@ internal sealed partial class RoutedHashCache<T>
 {
     private static readonly Func<Func<CancellationToken, Task<IDictionary<string, T?>>>, CancellationToken, Task<IDictionary<string, T?>>> Plain = static (generator, token) => generator(token);
 
-    ValueTask<IDictionary<string, T?>> IHashCache<T>.GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token) => GetOrAddAsync(KeyOf(cacheKey), generator, Plain, default, token);
+    ValueTask<IDictionary<string, T?>> IHashCache<T>.GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token) => GetOrAddAsync(KeyOf(cacheKey), generator, default, token);
 
-    ValueTask<IDictionary<string, T?>> IHashCache<T>.GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CancellationToken token) => GetOrAddAsync(KeyOf(cacheKey), generator, Plain, Rel(expiration), token);
+    ValueTask<IDictionary<string, T?>> IHashCache<T>.GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CancellationToken token) => GetOrAddAsync(KeyOf(cacheKey), generator, Rel(expiration), token);
 
-    ValueTask<IDictionary<string, T?>> IHashCache<T>.GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CancellationToken token) => GetOrAddAsync(KeyOf(cacheKey), generator, Plain, Abs(expiration), token);
+    ValueTask<IDictionary<string, T?>> IHashCache<T>.GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CancellationToken token) => GetOrAddAsync(KeyOf(cacheKey), generator, Abs(expiration), token);
 
     ValueTask<IDictionary<string, T?>> IHashCache<T>.GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token) => GetOrAddAsync(KeyOf(cacheKey), state, generator, default, token);
 
@@ -27,6 +27,12 @@ internal sealed partial class RoutedHashCache<T>
         }
 
         return box.Stored ?? (box.CachedEmpty ? Empty() : null);
+    }
+
+    private ValueTask<IDictionary<string, T?>> GetOrAddAsync(string key, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CacheExpiry expiry, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddAsync(key, generator, Plain, expiry, token);
     }
 
     private async ValueTask<IDictionary<string, T?>> GetOrAddAsync<TArg>(string key, TArg argument, Func<TArg, CancellationToken, Task<IDictionary<string, T?>>> generator, CacheExpiry expiry, CancellationToken cancellationToken)
@@ -55,10 +61,10 @@ internal sealed partial class RoutedHashCache<T>
 
             try
             {
-                var value = await LoadAsync(key, route, Factory, expiry, cancellationToken).ConfigureAwait(false);
+                var value = Copy(await LoadAsync(key, route, Factory, expiry, cancellationToken).ConfigureAwait(false));
                 _flights.TryRemove(new KeyValuePair<string, Flight>(key, mine));
-                load.SetResult(Copy(value));
-                return value;
+                load.SetResult(value);
+                return Copy(value);
             }
             catch (Exception ex)
             {

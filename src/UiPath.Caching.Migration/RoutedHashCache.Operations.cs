@@ -4,6 +4,9 @@ internal sealed partial class RoutedHashCache<T>
 {
     private delegate ValueTask<WriteResult> Command(IHashPathClient<T> client, CancellationToken token);
 
+    private static Loaded Unanswered(HashRead<T> read, string[]? fields, Route route) =>
+        new(fields is null ? HashRead<T>.Of(ReadOutcome.Absent) : read, route);
+
     /// <summary>The hash as the active path reads it, falling back as the string path does; throws when the call has no answer and must not run a generator.</summary>
     private async Task<Loaded> ReadAsync(string key, string[]? fields, Route route, CancellationToken cancellationToken)
     {
@@ -24,19 +27,19 @@ internal sealed partial class RoutedHashCache<T>
             RouterTelemetry.CountUnavailable(name, group, route.Path, route.Reason);
             if (route.Path == RoutePath.Source)
             {
-                return new Loaded(HashRead<T>.Of(ReadOutcome.Absent), route);
+                return Unanswered(first, fields, route);
             }
         }
 
         // In bypass the library is not asked, whatever the source said.
         if (route.Bypass)
         {
-            return new Loaded(HashRead<T>.Of(ReadOutcome.Absent), route);
+            return Unanswered(first, fields, route);
         }
 
         if (route.NoFallback || Client(route).NoFallback || !MayFallBack(route))
         {
-            return first.Kind == ReadOutcome.Unavailable ? throw new CacheUnavailableException($"The library cannot answer for the pinned group of cache '{name}'.") : new Loaded(HashRead<T>.Of(ReadOutcome.Absent), route);
+            return first.Kind == ReadOutcome.Unavailable ? throw new CacheUnavailableException($"The library cannot answer for the pinned group of cache '{name}'.") : Unanswered(first, fields, route);
         }
 
         return await ReadOtherAsync(key, fields, route, first.Kind == ReadOutcome.Unavailable, cancellationToken).ConfigureAwait(false);
@@ -48,6 +51,11 @@ internal sealed partial class RoutedHashCache<T>
         if (second.Kind == ReadOutcome.Found)
         {
             RouterTelemetry.CountRedisHit(_registration.Name, _registration.Group, route.Other, Route.OtherClientRead);
+            return new Loaded(second, route);
+        }
+
+        if (second.Stops)
+        {
             return new Loaded(second, route);
         }
 
@@ -68,7 +76,7 @@ internal sealed partial class RoutedHashCache<T>
 
         // The library just failed, so what the generator makes goes to the source first; the library stays the fallback when the source refuses to send.
         var write = firstUnavailable && route.Path == RoutePath.Library && MayFallBack(route) ? new Route(RoutePath.Source, Route.OtherClientRead) : route;
-        return new Loaded(HashRead<T>.Of(ReadOutcome.Absent), write);
+        return Unanswered(second, fields, write);
     }
 
     private Loaded Answered(HashRead<T> read, Route route)
@@ -117,17 +125,20 @@ internal sealed partial class RoutedHashCache<T>
     private async ValueTask<WriteOutcome> SendAsync(string key, Route captured, Command command, KeyState state, Func<bool>? lostFill, CancellationToken cancellationToken)
     {
         var route = _core.Revalidate(_pin, captured);
-        var result = await CommandAsync(Client(route), key, route, command, state, cancellationToken).ConfigureAwait(false);
+        var client = Client(route);
+        var result = await CommandAsync(client, key, route, command, state, cancellationToken).ConfigureAwait(false);
 
         // A fill that lost to a stored hash was sent and answered: the other client must not write over the winner.
-        if (result.Outcome == WriteOutcome.NotSent && !route.Bypass && !route.NoFallback && !Client(route).NoFallback && lostFill?.Invoke() != true && MayFallBack(route))
+        if (result.Outcome == WriteOutcome.NotSent && !route.Bypass && !route.NoFallback && !client.NoFallback && lostFill?.Invoke() != true && MayFallBack(route))
         {
             // A token cancelled before the library sent anything must not reach the other client: that command would be sent already cancelled.
             cancellationToken.ThrowIfCancellationRequested();
-            result = await CommandAsync(Client(route.Other), key, route, command, state, cancellationToken).ConfigureAwait(false);
+            client = Client(route.Other);
+            route = route with { Path = route.Other };
+            result = await CommandAsync(client, key, route, command, state, cancellationToken).ConfigureAwait(false);
         }
 
-        Settle(key, result, route, state);
+        Settle(key, result, route, client, state);
         return result.Outcome;
     }
 
@@ -140,13 +151,13 @@ internal sealed partial class RoutedHashCache<T>
         catch (OperationCanceledException)
         {
             // Cancelled in flight: the command may still land, for as long as its client says.
-            Settle(key, client.SettleWithin is { } within ? WriteResult.UnknownWithin(within) : WriteOutcome.Unknown, route, state);
+            Settle(key, client.SettleWithin is { } within ? WriteResult.UnknownWithin(within) : WriteOutcome.Unknown, route, client, state);
             throw;
         }
     }
 
     /// <summary>A write of unknown outcome keeps the key pending until it can no longer land; any write that was sent ends the loads that began before it.</summary>
-    private void Settle(string key, WriteResult result, Route route, KeyState state)
+    private void Settle(string key, WriteResult result, Route route, IHashPathClient<T> client, KeyState state)
     {
         if (result.Outcome == WriteOutcome.NotSent)
         {
@@ -156,7 +167,7 @@ internal sealed partial class RoutedHashCache<T>
         if (result.Outcome == WriteOutcome.Unknown)
         {
             var window = result.SettleWithin is { } settle && settle > _registration.PendingWindow ? settle : _registration.PendingWindow;
-            var held = Client(route).SettledAsync(key);
+            var held = client.SettledAsync(key);
 
             // The sentinel is told by reference: no real task, even a completed one, stands for it.
             _pending.Begin(key, window, ReferenceEquals(held, PathClientTasks.NoPendingRetry) ? null : held);
