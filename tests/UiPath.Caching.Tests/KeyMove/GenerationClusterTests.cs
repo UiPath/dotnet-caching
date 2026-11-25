@@ -91,7 +91,7 @@ public class GenerationClusterTests
             await kit.ControlDb.HashSetAsync(kit.Names.Control(kit.Group, slot), [.. Enumerable.Range(0, 1200).Select(n => new HashEntry($"sm:old-{n}", "an-older-generation|n"))]);
         }
 
-        var gate = new RetireGate(database, kit.Names, new KeyMoveStateOptions { RetireDiscoveryBudget = TimeSpan.Zero }, TimeProvider.System);
+        var gate = new RetireGate(database, kit.Names, new KeyMoveStateOptions { RetireDiscoveryBudget = TimeSpan.Zero }, kit.Time);
         var state = new StateRecord("S1", "rev", 9, "reverse-start-id", true, 1, string.Empty, null, "a", "cs", string.Empty, string.Empty, string.Empty, string.Empty, Values: new Dictionary<string, string> { [StateFields.Rg] = "gen-c" });
 
         var attempts = 0;

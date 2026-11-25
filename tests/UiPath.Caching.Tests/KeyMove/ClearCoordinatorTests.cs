@@ -238,6 +238,7 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
         var record = kit.Names.Control(kit.Group, 0);
         (await control.GateAsync(record, state.Id, "a", "CLOSED:crashed")).Should().Be(MoveScripts.Written);
         var lockKey = kit.Names.ClearLock(kit.Group, "a");
+        await using var expiry = await RedisSignals.ObserveExpiryAsync(kit.Mux, lockKey);
         await kit.Db.StringSetAsync(lockKey, "dead-owner", TimeSpan.FromMilliseconds(300));
         var reopener = new StuckGateReopener(kit.Records, control, kit.Db, kit.Names, kit.Options, kit.Time);
 
@@ -245,7 +246,7 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
         reopened.Should().BeEmpty("the owner's lock is still live");
         (await Gate(kit, "a")).Should().Be("CLOSED:crashed");
 
-        await TimeSteps.UntilAsync(() => !kit.Db.KeyExists(lockKey));
+        await expiry.Expired.WaitAsync(Ct);
         var (reopenedAfterExpiry, _) = await reopener.CheckAsync(kit.Group, state, Ct);
 
         reopenedAfterExpiry.Should().Equal("a");
@@ -292,7 +293,9 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
     {
         await TimeSteps.DelayArmedAfterAsync(kit.Time, timersBefore);
         kit.Time.Advance(kit.Options.ClearLockRenewInterval);
-        await TimeSteps.UntilAsync(() => sweepToken.IsCancellationRequested);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = sweepToken.Register(() => cancelled.TrySetResult());
+        await cancelled.Task.WaitAsync(Ct);
         sweepToken.ThrowIfCancellationRequested();
     }
 

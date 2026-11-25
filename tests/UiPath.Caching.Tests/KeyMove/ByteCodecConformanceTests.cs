@@ -18,8 +18,11 @@ public sealed class ByteCodecConformanceTests(RedisContainerFixture fixture) : I
     private readonly string _app = $"bc{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _providers = [];
     private ConnectionMultiplexer? _raw;
+    private ManualTimeProvider? _time;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private ManualTimeProvider Time => _time ??= new(new DateTimeOffset(DateTime.SpecifyKind(Db.Multiplexer.GetServer(Db.Multiplexer.GetEndPoints()[0]).Time(), DateTimeKind.Utc)));
 
     private IDatabase Db => (_raw ??= ConnectionMultiplexer.Connect(fixture.ConnectionString)).GetDatabase();
 
@@ -43,7 +46,7 @@ public sealed class ByteCodecConformanceTests(RedisContainerFixture fixture) : I
         var written = Key("w");
         var set = Key("s");
 
-        (await cache.AsMigrationCache().WriteAsync(written, value, DateTimeOffset.UtcNow + Life, policy, Ct)).Should().Be(StoreOutcome.Committed);
+        (await cache.AsMigrationCache().WriteAsync(written, value, Time.ToDateTimeOffset(Life), policy, Ct)).Should().Be(StoreOutcome.Committed);
         (await cache.SetAsync(set, value, Life, policy, Ct)).Should().BeTrue();
 
         var stored = (byte[]?)await Db.StringGetAsync(Find(written)) ?? throw new InvalidOperationException(format);
@@ -57,7 +60,7 @@ public sealed class ByteCodecConformanceTests(RedisContainerFixture fixture) : I
         viaLibrary.Outcome.Should().Be(SnapshotOutcome.Found);
         viaCodec.Should().Be((SnapshotOutcome.Found, value));
         viaLibrary.Entry!.Value.Should().Be(value);
-        viaLibrary.Entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Life, TimeSpan.FromSeconds(15), "the lifetime is the key's, and the bytes carry none");
+        viaLibrary.Entry.Expiration.Should().BeCloseTo(Time.ToDateTimeOffset(Life), TimeSpan.FromSeconds(15), "the lifetime is the key's, and the bytes carry none");
         (await Db.KeyTimeToLiveAsync(Find(written)))!.Value.Should().BeCloseTo(Life, TimeSpan.FromSeconds(15));
     }
 
@@ -206,6 +209,7 @@ public sealed class ByteCodecConformanceTests(RedisContainerFixture fixture) : I
     private ICache Open(bool defaultIsMessagePack, bool cacheNulls = false, bool compress = true)
     {
         var provider = new ServiceCollection()
+            .AddSingleton<TimeProvider>(Time)
             .AddCaching(
                 b =>
                 {

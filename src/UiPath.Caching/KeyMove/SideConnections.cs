@@ -81,6 +81,19 @@ internal sealed class SideConnections : IAsyncDisposable
         }
     }
 
+    internal static async Task DisposeLateAsync<T>(Task<T> connect)
+        where T : class, IConnectionMultiplexer
+    {
+        try
+        {
+            await (await connect.ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The connect failed or the dispose did: there is no connection left to own, and nobody waits for this task.
+        }
+    }
+
     // A connect can finish after cancellation, so dispose it when that happens.
     private static async Task<IConnectionMultiplexer> ConnectAsync(IRedisConnector connector, KeyMoveStateOptions options, CancellationToken cancellationToken)
     {
@@ -92,19 +105,6 @@ internal sealed class SideConnections : IAsyncDisposable
         configuration.AsyncTimeout = Math.Max(configuration.AsyncTimeout, milliseconds);
         configuration.SyncTimeout = Math.Max(configuration.SyncTimeout, milliseconds);
         return await AwaitAsync(ConnectionMultiplexer.ConnectAsync(configuration), cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task DisposeLateAsync<T>(Task<T> connect)
-        where T : class, IConnectionMultiplexer
-    {
-        try
-        {
-            await (await connect.ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            // The connect failed or the dispose did: there is no connection left to own, and nobody waits for this task.
-        }
     }
 
     private sealed class Owned(IConnectionMultiplexer first, IConnectionMultiplexer second) : IAsyncDisposable

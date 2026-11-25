@@ -154,14 +154,8 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
         await Db.HashSetAsync(_key, "rt:a", $"pend|{T1}|rt|");
         try
         {
-            var events = 0;
-            await admin.GetSubscriber().SubscribeAsync(RedisChannel.Literal($"__keyspace@0__:{_key}"), (_, message) =>
-            {
-                if (message == "hset")
-                {
-                    Interlocked.Increment(ref events);
-                }
-            });
+            var channel = RedisChannel.Literal($"__keyspace@0__:{_key}");
+            var notifications = await admin.GetSubscriber().SubscribeAsync(channel);
 
             // The master answers ROLE with one replica and WAIT with 0, so every attempt repeats the step against the real server.
             var real = _mux!.GetServer(Db.IdentifyEndpoint(_key)!);
@@ -177,14 +171,23 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
             var result = await new ClaimStore(db, _key, scripts, fixture.ServerVersion) { BarrierRetries = 2 }.OpenAsync("rt:a", T1, "rt", restore: false);
 
             result.Should().Be(new ClaimResult(1, ClaimDurability.NotConfirmed));
-            var until = DateTime.UtcNow.AddSeconds(5);
-            while (Volatile.Read(ref events) < 3 && DateTime.UtcNow < until)
+            await Db.PublishAsync(channel, "done");
+            var events = 0;
+            while (true)
             {
-                await Task.Delay(20, TestContext.Current.CancellationToken);
+                var message = (await notifications.ReadAsync(TestContext.Current.CancellationToken)).Message;
+                if (message == "done")
+                {
+                    break;
+                }
+
+                if (message == "hset")
+                {
+                    events++;
+                }
             }
 
-            await Task.Delay(200, TestContext.Current.CancellationToken);
-            Volatile.Read(ref events).Should().Be(3, "the step writes once and each of the 2 repeats rewrites the field");
+            events.Should().Be(3, "the step writes once and each of the 2 repeats rewrites the field");
         }
         finally
         {

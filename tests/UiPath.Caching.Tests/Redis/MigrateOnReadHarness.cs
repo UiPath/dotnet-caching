@@ -48,11 +48,17 @@ internal sealed class MigrateOnReadHarness : IDisposable
         Action<ICachingBuilder>? configure = null,
         ICacheValueSerializer? other = null,
         ICacheValueSerializer? fast = null,
-        int hashBatch = 1000)
+        int hashBatch = 1000,
+        TimeProvider? clock = null)
     {
         var telemetry = new RecordingTelemetryProvider();
         fast ??= new PassthroughValueSerializer(0x10);
         var services = new ServiceCollection().AddLogging().AddSingleton<ICachingTelemetryProvider>(telemetry);
+        if (clock is not null)
+        {
+            services.AddSingleton(clock);
+        }
+
         FormatNegotiator? negotiator = null;
         if (mode == FormatNegotiationMode.Auto)
         {

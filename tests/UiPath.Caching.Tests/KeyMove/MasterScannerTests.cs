@@ -108,7 +108,7 @@ public class MasterScannerTests(RedisContainerFixture fixture)
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, true);
         var alerts = new List<KeyMoveAlert>();
-        var scanner = new MasterScanner(() => kit.Kit.Mux.GetServers(), kit.Kit.Topology, 0, string.Empty, TimeProvider.System, TimeSpan.Zero, maxDeduplicated: 2, alert: alerts.Add);
+        var scanner = new MasterScanner(() => kit.Kit.Mux.GetServers(), kit.Kit.Topology, 0, string.Empty, kit.Kit.Time, TimeSpan.Zero, maxDeduplicated: 2, alert: alerts.Add);
         var a1 = await kit.SetAsync(MoveSide.Native, "a", "k1");
         await kit.SetAsync(MoveSide.Native, "a", "k2");
         await kit.SetAsync(MoveSide.Native, "a", "k3");

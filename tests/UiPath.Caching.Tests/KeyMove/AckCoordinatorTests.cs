@@ -105,7 +105,8 @@ public class AckCoordinatorTests
         using var stop = new CancellationTokenSource();
         var loop = _acks.RunAsync([Group], stop.Token);
 
-        await TimeSteps.UntilAsync(() => _monitor.AckedFor(Group) is not null);
+        await TimeSteps.ArmedAsync(_time);
+        _monitor.AckedFor(Group).Should().NotBeNull();
         await stop.CancelAsync();
 
         await loop;

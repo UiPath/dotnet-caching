@@ -39,7 +39,7 @@ public sealed class TwoServerStateReaderTests(TwoServerFixture fixture)
         var names = kit.Placement.Names(RecordSide.Dst);
         var topology = new MultiplexerTopology(kit.DstMux, string.Empty, true, kit.DstCaps.Version);
         var sampler = new ControlSampler(dstDown, names, topology);
-        var store = new StateStore(dstDown, names, new MoveScripts(kit.RawDst, true, kit.DstCaps.Version), sampler, TimeProvider.System);
+        var store = new StateStore(dstDown, names, new MoveScripts(kit.RawDst, true, kit.DstCaps.Version), sampler, kit.Time);
         var reader = new TwoServerStateReader(store, sampler, new SrcRecordReader(kit.RawSrc, kit.Placement.Names(RecordSide.Src)));
         var monitor = new GroupStateMonitor(reader, kit.Options, time);
         monitor.Register([new GroupRegistration(kit.Group, false, true, InstanceMove: true)]);
@@ -76,7 +76,7 @@ public sealed class TwoServerStateReaderTests(TwoServerFixture fixture)
         var dstDown = InterceptingProxy.Wrap(kit.RawDst, (_, _) => down ? throw Down() : InterceptingProxy.Proceed);
         var names = kit.Placement.Names(RecordSide.Dst);
         var sampler = new ControlSampler(dstDown, names, new MultiplexerTopology(kit.DstMux, string.Empty, true, kit.DstCaps.Version));
-        var store = new StateStore(dstDown, names, new MoveScripts(kit.RawDst, true, kit.DstCaps.Version), sampler, TimeProvider.System);
+        var store = new StateStore(dstDown, names, new MoveScripts(kit.RawDst, true, kit.DstCaps.Version), sampler, kit.Time);
         var monitor = new GroupStateMonitor(new TwoServerStateReader(store, sampler, new SrcRecordReader(kit.RawSrc, kit.Placement.Names(RecordSide.Src))), kit.Options, time);
         monitor.Register([new GroupRegistration(kit.Group, false, true, InstanceMove: true)]);
         var seeded = await kit.SeedAsync();

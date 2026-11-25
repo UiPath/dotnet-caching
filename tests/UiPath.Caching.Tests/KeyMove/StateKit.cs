@@ -21,11 +21,11 @@ internal sealed class StateKit : IAsyncDisposable
         Real = new MultiplexerTopology(mux, prefix, useScripts, version, options.ExpectedReplicasPerMaster, barrierWait: options.BarrierWait);
         Topology = new HookedTopology(Real);
         Sampler = new ControlSampler(ControlDb, names, Topology);
-        Store = new StateStore(database, names, Scripts, Sampler, TimeProvider.System);
-        Sequence = new TransitionSequence(Topology, names, options, (kind, detail) => Reports.Add((kind, detail)));
+        Store = new StateStore(database, names, Scripts, Sampler, Time);
+        Sequence = new TransitionSequence(Topology, names, options, Report, Time);
         Records = new ControlRecordReader(ControlDb, names);
-        Recovery = new StateRecovery(Store, Store, Records, Sequence, TimeProvider.System);
-        Upkeep = new ControlUpkeep(Records, Sequence, Store, options, Time, (kind, detail) => Reports.Add((kind, detail)));
+        Recovery = new StateRecovery(Store, Store, Records, Sequence, Time);
+        Upkeep = new ControlUpkeep(Records, Sequence, Store, options, Time, Report);
         Preflight = new PreflightChecker(Topology, options);
         Ledger = new BarrierLedger(options, Time);
     }
@@ -67,6 +67,8 @@ internal sealed class StateKit : IAsyncDisposable
     public TransitionSequence Sequence { get; }
 
     public List<(string Kind, string Detail)> Reports { get; } = [];
+
+    public Action<string, string>? OnReport { get; set; }
 
     public RedisKey StateKey => Names.State(Group);
 
@@ -116,4 +118,10 @@ internal sealed class StateKit : IAsyncDisposable
             await Mux.DisposeAsync();
         }
     }
+    private void Report(string kind, string detail)
+    {
+        Reports.Add((kind, detail));
+        OnReport?.Invoke(kind, detail);
+    }
+
 }

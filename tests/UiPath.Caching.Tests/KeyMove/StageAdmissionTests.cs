@@ -17,10 +17,10 @@ public class StageAdmissionTests(RedisContainerFixture fixture)
         await using var kit = await StateKit.StandaloneAsync(fixture, useScripts);
         var s0 = await kit.InitAsync("a");
         await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(s0), StateKit.TargetFrom(s0, "S1", "fwd", 0), null, CancellationToken.None);
-        var monitor = new GroupStateMonitor(kit.Store, new KeyMoveStateOptions(), TimeProvider.System);
+        var monitor = new GroupStateMonitor(kit.Store, new KeyMoveStateOptions(), kit.Time);
         monitor.Register([new GroupRegistration(kit.Group, false, true)]);
         var gate = new EpochGate();
-        var acks = new AckCoordinator(monitor, gate, new StageDriverOptions(), TimeProvider.System);
+        var acks = new AckCoordinator(monitor, gate, new StageDriverOptions(), kit.Time);
         await monitor.StepAsync(kit.Group, CancellationToken.None);
         acks.Tick(kit.Group).Should().BeTrue();
         var e1 = monitor.RulesFor(kit.Group).Acting!;
@@ -57,10 +57,10 @@ public class StageAdmissionTests(RedisContainerFixture fixture)
         await using var kit = await StateKit.StandaloneAsync(fixture, true);
         var s0 = await kit.InitAsync("a");
         await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(s0), StateKit.TargetFrom(s0, "S1", "fwd", 0), null, CancellationToken.None);
-        var monitor = new GroupStateMonitor(kit.Store, new KeyMoveStateOptions(), TimeProvider.System);
+        var monitor = new GroupStateMonitor(kit.Store, new KeyMoveStateOptions(), kit.Time);
         monitor.Register([new GroupRegistration(kit.Group, false, true)]);
         var gate = new EpochGate();
-        var acks = new AckCoordinator(monitor, gate, new StageDriverOptions(), TimeProvider.System);
+        var acks = new AckCoordinator(monitor, gate, new StageDriverOptions(), kit.Time);
         await monitor.StepAsync(kit.Group, CancellationToken.None);
         acks.Tick(kit.Group);
         using var stuck = gate.Enter(kit.Group)!;

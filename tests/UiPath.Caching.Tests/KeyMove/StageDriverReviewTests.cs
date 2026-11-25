@@ -294,21 +294,18 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
         kit.Driver.Start([kit.Group], CancellationToken.None);
         try
         {
-            await TimeSteps.UntilAsync(() => kit.Alerts.Contains(("step_failed", "the node hash is unreadable")));
+            await TimeSteps.ArmedAsync(kit.Kit.Time);
+            kit.Alerts.Should().Contain(("step_failed", "the node hash is unreadable"));
             kit.Fleet.Fail = null;
 
-            await TimeSteps.UntilAsync(() => kit.Kit.Store.ReadAsync(kit.Group, CancellationToken.None).GetAwaiter().GetResult()!.State == "S1" || Advance(kit));
+            kit.Kit.Time.Advance(TimeSpan.FromSeconds(2));
+            await TimeSteps.ArmedAsync(kit.Kit.Time);
+            (await kit.StateAsync()).State.Should().Be("S1");
         }
         finally
         {
             await kit.Driver.StopAsync();
         }
-    }
-
-    private static bool Advance(DriverKit kit)
-    {
-        kit.Kit.Time.Advance(TimeSpan.FromSeconds(2));
-        return false;
     }
 
     private static async Task<(LeaderLease Lease, RedisKey Key)> LeaseAsync(DriverKit kit)

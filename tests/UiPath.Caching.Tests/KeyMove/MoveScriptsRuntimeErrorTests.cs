@@ -14,7 +14,7 @@ public sealed class MoveScriptsRuntimeErrorTests
         database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>()).Returns(Task.FromException<RedisResult>(inside));
         var scripts = new MoveScripts(database, useScripts: true, new Version(7, 0));
 
-        var act = async () => await scripts.HashExpireAsync("k", "c", "id", DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeMilliseconds(), null, HashMetadataClear.Remove);
+        var act = async () => await scripts.HashExpireAsync("k", "c", "id", new ManualTimeProvider(DateTimeOffset.UnixEpoch).ToDateTimeOffset(TimeSpan.FromHours(1)).ToUnixTimeMilliseconds(), null, HashMetadataClear.Remove);
 
         await act.Should().ThrowAsync<RedisServerException>();
         scripts.UsesScripts.Should().BeTrue();
@@ -30,7 +30,7 @@ public sealed class MoveScriptsRuntimeErrorTests
         database.CreateTransaction(Arg.Any<object?>()).Returns(Substitute.For<ITransaction>());
         var scripts = new MoveScripts(database, useScripts: true, new Version(7, 0));
 
-        _ = await Record.ExceptionAsync(async () => await scripts.HashExpireAsync("k", "c", "id", DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeMilliseconds()));
+        _ = await Record.ExceptionAsync(async () => await scripts.HashExpireAsync("k", "c", "id", new ManualTimeProvider(DateTimeOffset.UnixEpoch).ToDateTimeOffset(TimeSpan.FromHours(1)).ToUnixTimeMilliseconds()));
 
         scripts.UsesScripts.Should().BeFalse();
         database.ReceivedWithAnyArgs().CreateTransaction(default);

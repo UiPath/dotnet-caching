@@ -52,6 +52,8 @@ internal sealed class TwoServerKit : IAsyncDisposable
         Lost,
     }
 
+    public ManualTimeProvider Time { get; } = new(DateTimeOffset.UnixEpoch);
+
     public KitOptions Kit { get; }
 
     public ConnectionMultiplexer SrcMux => _srcMux;
@@ -220,7 +222,7 @@ internal sealed class TwoServerKit : IAsyncDisposable
 
     private ServerRecordWriter Writer(IDatabase db, RedisKey owner, SideCaps caps, bool replicaFree, Func<LeaseFence, Task<bool>>? holdsFence) =>
         new(
-            new ServerBarrier(db, owner, TimeProvider.System, replicaFree) { Retries = Kit.BarrierRetries, Timeout = TimeSpan.FromSeconds(2) },
+            new ServerBarrier(db, owner, Time, replicaFree) { Retries = Kit.BarrierRetries, Timeout = TimeSpan.FromSeconds(2) },
             caps,
             key => db.HashGetAllAsync(key, CommandFlags.DemandMaster),
             holdsFence);

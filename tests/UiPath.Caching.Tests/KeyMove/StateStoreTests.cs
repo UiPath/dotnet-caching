@@ -183,7 +183,7 @@ public class StateStoreTests(RedisContainerFixture fixture)
 
     private static GroupStateMonitor Monitor(StateKit kit, bool listed)
     {
-        var monitor = new GroupStateMonitor(kit.Store, kit.Options, TimeProvider.System);
+        var monitor = new GroupStateMonitor(kit.Store, kit.Options, kit.Time);
         monitor.Register([new GroupRegistration(kit.Group, false, listed)]);
         return monitor;
     }

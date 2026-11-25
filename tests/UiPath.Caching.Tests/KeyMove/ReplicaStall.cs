@@ -2,32 +2,20 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.Tests.KeyMove;
 
-// Stops a replica from processing anything for a while, and says so only once it is inside the sleep: a PING that stays pending proves it.
-internal sealed class ReplicaStall
+internal sealed class ReplicaStall(IServer server) : IAsyncDisposable
 {
-    private readonly Task _sleep;
-
-    private ReplicaStall(Task sleep) => _sleep = sleep;
-
     public static async Task<ReplicaStall> StartAsync(ConnectionMultiplexer replica, int seconds)
     {
-        var sleep = Task.Run(() => replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", seconds));
-        for (var i = 0; i < 60; i++)
-        {
-            var ping = replica.GetDatabase().PingAsync();
-            if (await Task.WhenAny(ping, Task.Delay(150)) != ping)
-            {
-                return new ReplicaStall(sleep);
-            }
-        }
-
-        throw new TimeoutException("The replica never stopped answering.");
+        var server = replica.GetServer(replica.GetEndPoints()[0]);
+        await server.ExecuteAsync("CLIENT", "PAUSE", Math.Max(seconds, 60) * 1000, "WRITE");
+        return new ReplicaStall(server);
     }
 
-    // The sleep has ended and the replica has caught up with the primary again.
     public async Task FinishedAsync()
     {
-        await _sleep;
-        await Task.Delay(1200);
+        await server.ExecuteAsync("CLIENT", "UNPAUSE");
+        await server.PingAsync();
     }
+
+    public ValueTask DisposeAsync() => new(FinishedAsync());
 }

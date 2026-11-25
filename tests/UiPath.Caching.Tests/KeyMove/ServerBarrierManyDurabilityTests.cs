@@ -21,7 +21,7 @@ public sealed class ServerBarrierManyDurabilityTests
         var keys = Enumerable.Range(0, 5).Select(i => (RedisKey)$"sidetest:{{{Guid.NewGuid():N}}}:k{i}").ToArray();
         try
         {
-            var barrier = new ServerBarrier(mux.GetDatabase(), keys[0], TimeProvider.System, replicaFree: false);
+            var barrier = new ServerBarrier(mux.GetDatabase(), keys[0], new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree: false);
 
             var outcome = await barrier.WriteManyAndWaitAsync([.. keys.Select<RedisKey, Action<ITransaction>>(k => t => _ = t.StringSetAsync(k, "v"))], wayBack: false);
 
@@ -51,12 +51,12 @@ public sealed class ServerBarrierManyDurabilityTests
 
         // The first WAIT runs only after its connection was killed and replaced: on the new connection it would count a vacuous offset.
         var server = InterceptingProxy.Wrap(real, (method, args) =>
-            method.Name == nameof(IServer.ExecuteAsync) && args[0] is "WAIT" && Interlocked.Increment(ref waits) == 1 ? KillThenWaitAsync(real, admin, (object[])args[1]!) : InterceptingProxy.Proceed);
+            method.Name == nameof(IServer.ExecuteAsync) && args[0] is "WAIT" && Interlocked.Increment(ref waits) == 1 ? KillThenWaitAsync(barrierMux, real, admin, (object[])args[1]!) : InterceptingProxy.Proceed);
         var mux = InterceptingProxy.Wrap<IConnectionMultiplexer>(barrierMux, (method, _) => method.Name == nameof(IConnectionMultiplexer.GetServer) ? server : InterceptingProxy.Proceed);
         var db = InterceptingProxy.Wrap(barrierMux.GetDatabase(), (method, _) => method.Name == "get_Multiplexer" ? mux : InterceptingProxy.Proceed);
         try
         {
-            var barrier = new ServerBarrier(db, keys[0], TimeProvider.System, replicaFree: false);
+            var barrier = new ServerBarrier(db, keys[0], new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree: false);
 
             var outcome = await barrier.WriteManyAndWaitAsync(
                 [.. keys.Select<RedisKey, Action<ITransaction>>(k => t =>
@@ -84,19 +84,9 @@ public sealed class ServerBarrierManyDurabilityTests
         }
     }
 
-    private static async Task<RedisResult> KillThenWaitAsync(IServer real, ConnectionMultiplexer admin, object[] args)
+    private static async Task<RedisResult> KillThenWaitAsync(IConnectionMultiplexer connection, IServer real, ConnectionMultiplexer admin, object[] args)
     {
-        var id = (long)await real.ExecuteAsync("CLIENT", "ID");
-        await admin.GetServer(admin.GetEndPoints()[0]).ExecuteAsync("CLIENT", "KILL", "ID", id);
-        await Task.Run(
-            async () =>
-            {
-                while ((long)await real.ExecuteAsync("CLIENT", "ID") == id)
-                {
-                    await Task.Delay(20, TestContext.Current.CancellationToken);
-                }
-            },
-            TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await RedisSignals.ReplaceConnectionAsync(connection, admin, real);
         return await real.ExecuteAsync("WAIT", args);
     }
 }

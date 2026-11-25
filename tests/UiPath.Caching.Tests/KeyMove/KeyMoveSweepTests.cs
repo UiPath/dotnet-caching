@@ -346,7 +346,7 @@ public sealed class KeyMoveSweepTests(RedisContainerFixture fixture)
     }
 
     private static KeyMoveSweep SweepOver(StateKit kit, IGroupKeySpace space, string connectorPrefix, int batch = 512) =>
-        new(new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, connectorPrefix, TimeProvider.System, TimeSpan.Zero), space, kit.ControlDb, kit.Names, batch);
+        new(new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, connectorPrefix, kit.Time, TimeSpan.Zero), space, kit.ControlDb, kit.Names, batch);
 
     private static string Format(IRedisKeyStrategy strategy, string name) => strategy.GetRedisKey(new CacheKey(name)).ToString();
 

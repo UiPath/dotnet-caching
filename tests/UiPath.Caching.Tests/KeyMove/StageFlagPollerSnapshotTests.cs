@@ -16,13 +16,12 @@ public class StageFlagPollerSnapshotTests
 
         poller.Start(groups, CancellationToken.None);
         groups.Items.Add("g2");
-        await TimeSteps.UntilAsync(() => poller.ViewOf("g1") is not null);
-        for (var tries = 0; source.Reads("g1") < 2; tries++)
-        {
-            tries.Should().BeLessThan(2000, "the poll loop never read again");
-            _time.Advance(TimeSpan.FromSeconds(2));
-            await Task.Delay(5, TestContext.Current.CancellationToken);
-        }
+        await _time.WaitForTimersAsync(() => _time.TimersCreated >= 2 && _time.TimerCount == 1);
+        poller.ViewOf("g1").Should().Be(3);
+        var created = _time.TimersCreated;
+        _time.Advance(TimeSpan.FromSeconds(2));
+        await _time.WaitForTimersAsync(() => _time.TimersCreated >= created + 2 && _time.TimerCount == 1);
+        source.Reads("g1").Should().Be(2);
 
         await poller.StopAsync();
 

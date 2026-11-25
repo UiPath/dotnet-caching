@@ -34,10 +34,12 @@ public sealed class ClearSweepTests(RedisContainerFixture fixture)
                 kit.Db.StringSet(lockKey, "thief");
                 control.GateAsync(kit.Names.Control(kit.Group, 0), state.Id, "a", "CLOSED:thief").GetAwaiter().GetResult();
                 kit.Time.Advance(kit.Options.ClearLockRenewInterval);
-                SpinWait.SpinUntil(() => sweepToken.IsCancellationRequested, TimeSpan.FromSeconds(10)).Should().BeTrue("the renewal failed and cancelled the sweep");
+                var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = sweepToken.Register(() => cancelled.TrySetResult());
+                cancelled.Task.GetAwaiter().GetResult();
             }
         };
-        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, string.Empty, TimeProvider.System, TimeSpan.Zero);
+        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, string.Empty, kit.Time, TimeSpan.Zero);
         var sweep = new KeyMoveSweep(scanner, space, kit.ControlDb, kit.Names, 1);
         var created = kit.Time.TimersCreated;
         var hooks = new ClearHooks(
@@ -94,7 +96,7 @@ public sealed class ClearSweepTests(RedisContainerFixture fixture)
                 control.GateAsync(kit.Names.Control(kit.Group, 0), state.Id, "a", "CLOSED:thief").GetAwaiter().GetResult();
             }
         };
-        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, string.Empty, TimeProvider.System, TimeSpan.Zero);
+        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, string.Empty, kit.Time, TimeSpan.Zero);
         var sweep = new KeyMoveSweep(scanner, space, kit.ControlDb, kit.Names, 1);
         var cancelledWhenStopped = true;
         var hooks = new ClearHooks(_ => Task.CompletedTask, _ => Task.CompletedTask, _ => Task.CompletedTask)

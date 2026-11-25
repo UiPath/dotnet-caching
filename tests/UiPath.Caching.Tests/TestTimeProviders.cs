@@ -25,6 +25,7 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     private readonly List<ManualTimer> _timers = [];
     private TimeSpan _elapsed;
     private int _created;
+    private TaskCompletionSource _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
@@ -74,8 +75,12 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         var timer = new ManualTimer(this, callback, state);
-        Interlocked.Increment(ref _created);
-        timer.Change(dueTime, period);
+        lock (_gate)
+        {
+            Interlocked.Increment(ref _created);
+            timer.Change(dueTime, period);
+        }
+
         return timer;
     }
 
@@ -98,6 +103,32 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         }
     }
 
+    public async Task WaitForTimersAsync(Func<bool> condition)
+    {
+        while (true)
+        {
+            Task changed;
+            lock (_gate)
+            {
+                if (condition())
+                {
+                    return;
+                }
+
+                changed = _changed.Task;
+            }
+
+            await changed.WaitAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    private void Changed()
+    {
+        var previous = _changed;
+        _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        previous.TrySetResult();
+    }
+
     private sealed class ManualTimer(ManualTimeProvider owner, TimerCallback callback, object? state) : ITimer
     {
         private TimeSpan _period;
@@ -113,11 +144,13 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
                 if (dueTime == Timeout.InfiniteTimeSpan)
                 {
                     Due = TimeSpan.MaxValue;
+                    owner.Changed();
                     return true;
                 }
 
                 Due = owner._elapsed + dueTime;
                 owner._timers.Add(this);
+                owner.Changed();
                 return true;
             }
         }
@@ -144,6 +177,7 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
             lock (owner._gate)
             {
                 owner._timers.Remove(this);
+                owner.Changed();
             }
         }
 

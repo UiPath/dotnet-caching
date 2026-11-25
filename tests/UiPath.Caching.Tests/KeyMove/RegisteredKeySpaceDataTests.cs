@@ -186,7 +186,7 @@ public class RegisteredKeySpaceDataTests(RedisContainerFixture fixture)
     {
         var init = await kit.InitAsync("a", "b");
         (await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None)).Outcome.Should().Be(TransitionOutcome.Completed);
-        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, string.Empty, TimeProvider.System, TimeSpan.Zero);
+        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, string.Empty, kit.Time, TimeSpan.Zero);
         var scripts = new MoveScripts(kit.ControlDb, true, kit.Mux.GetServers().Min(s => s.Version)!);
         foreach (var key in keys)
         {
@@ -202,7 +202,7 @@ public class RegisteredKeySpaceDataTests(RedisContainerFixture fixture)
         var space = new RegisteredKeySpace([Cache(tag, "a", kit.Group), Cache(tag, "b", kit.Group), Cache(tag, "c", kit.Group)], tag + ":n:");
         var init = await kit.InitAsync("a", "b");
         (await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None)).Outcome.Should().Be(TransitionOutcome.Completed);
-        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, prefix, TimeProvider.System, TimeSpan.Zero);
+        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, prefix, kit.Time, TimeSpan.Zero);
         var scripts = new MoveScripts(kit.ControlDb, true, kit.Mux.GetServers().Min(s => s.Version)!);
         var data = new GroupDataOps(scanner, space, kit.Store, kit.Scripts, scripts, kit.Names);
         var inventory = new KeyInventory(scanner, space, kit.Store, kit.Db, prefix, kit.Time);
