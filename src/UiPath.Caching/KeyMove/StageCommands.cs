@@ -24,6 +24,11 @@ internal sealed class StageCommands(StateStore store, MoveScripts scripts, MoveK
             throw new ArgumentException($"The override of the unchanged-view hold needs exactly this text: \"{options.UpgradeHoldOverrideText}\".", nameof(confirm));
         }
 
+        if (ApprovalKinds.ConfirmTexts.TryGetValue(kind, out var text) && confirm != text)
+        {
+            throw new ArgumentException($"The {kind} approval goes past a check, so it needs exactly this text: \"{text}\".", nameof(confirm));
+        }
+
         if (await store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is not { } state)
         {
             return ApproveResult.NoState;

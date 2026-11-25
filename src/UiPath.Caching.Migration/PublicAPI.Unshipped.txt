@@ -239,3 +239,101 @@ UiPath.Caching.Migration.RouterHashCacheRegistration<T>.RedisKey.init -> void
 UiPath.Caching.Migration.RouterHashCacheRegistration<T>.RouterHashCacheRegistration() -> void
 UiPath.Caching.Migration.RouterHashCacheRegistration<T>.Source.get -> UiPath.Caching.Migration.ISourceHashCache<T!>!
 UiPath.Caching.Migration.RouterHashCacheRegistration<T>.Source.init -> void
+UiPath.Caching.Migration.IKeyMoveOperations
+UiPath.Caching.Migration.IKeyMoveOperations.ApproveAsync(string! group, string! kind, string! confirm, string! operatorId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Migration.KeyMoveApproval>!
+UiPath.Caching.Migration.IKeyMoveOperations.GetStatusAsync(string! group, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Migration.KeyMoveStatus?>!
+UiPath.Caching.Migration.IKeyMoveOperations.HoldAsync(string! group, string! reason, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+UiPath.Caching.Migration.IKeyMoveOperations.InitializeAsync(string! group, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+UiPath.Caching.Migration.IKeyMoveOperations.ResumeAsync(string! group, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+UiPath.Caching.Migration.IKeyMoveOperations.RunDryRunAsync(string! group, bool reverse = false, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Migration.KeyMoveDryRun!>!
+UiPath.Caching.Migration.KeyMoveApproval
+UiPath.Caching.Migration.KeyMoveApproval.NoState = 1 -> UiPath.Caching.Migration.KeyMoveApproval
+UiPath.Caching.Migration.KeyMoveApproval.NotApplicable = 3 -> UiPath.Caching.Migration.KeyMoveApproval
+UiPath.Caching.Migration.KeyMoveApproval.StateMoved = 2 -> UiPath.Caching.Migration.KeyMoveApproval
+UiPath.Caching.Migration.KeyMoveApproval.Stored = 0 -> UiPath.Caching.Migration.KeyMoveApproval
+UiPath.Caching.Migration.KeyMoveApproval.UnknownKind = 4 -> UiPath.Caching.Migration.KeyMoveApproval
+UiPath.Caching.Migration.KeyMoveApprovalKinds
+UiPath.Caching.Migration.KeyMoveDryRun
+UiPath.Caching.Migration.KeyMoveDryRun.<Clone>$() -> UiPath.Caching.Migration.KeyMoveDryRun!
+UiPath.Caching.Migration.KeyMoveDryRun.Caches.get -> System.Collections.Generic.IReadOnlyDictionary<string!, UiPath.Caching.Migration.KeyMoveDryRunCache!>!
+UiPath.Caching.Migration.KeyMoveDryRun.Caches.init -> void
+UiPath.Caching.Migration.KeyMoveDryRun.Deconstruct(out long Scanned, out long EstimatedNativeBytes, out System.TimeSpan EstimatedDuration, out System.Collections.Generic.IReadOnlyDictionary<string!, UiPath.Caching.Migration.KeyMoveDryRunCache!>! Caches) -> void
+UiPath.Caching.Migration.KeyMoveDryRun.Equals(UiPath.Caching.Migration.KeyMoveDryRun? other) -> bool
+UiPath.Caching.Migration.KeyMoveDryRun.EstimatedDuration.get -> System.TimeSpan
+UiPath.Caching.Migration.KeyMoveDryRun.EstimatedDuration.init -> void
+UiPath.Caching.Migration.KeyMoveDryRun.EstimatedNativeBytes.get -> long
+UiPath.Caching.Migration.KeyMoveDryRun.EstimatedNativeBytes.init -> void
+UiPath.Caching.Migration.KeyMoveDryRun.KeyMoveDryRun(long Scanned, long EstimatedNativeBytes, System.TimeSpan EstimatedDuration, System.Collections.Generic.IReadOnlyDictionary<string!, UiPath.Caching.Migration.KeyMoveDryRunCache!>! Caches) -> void
+UiPath.Caching.Migration.KeyMoveDryRun.Scanned.get -> long
+UiPath.Caching.Migration.KeyMoveDryRun.Scanned.init -> void
+UiPath.Caching.Migration.KeyMoveDryRunCache
+UiPath.Caching.Migration.KeyMoveDryRunCache.<Clone>$() -> UiPath.Caching.Migration.KeyMoveDryRunCache!
+UiPath.Caching.Migration.KeyMoveDryRunCache.Counts.get -> System.Collections.Generic.IReadOnlyDictionary<string!, long>!
+UiPath.Caching.Migration.KeyMoveDryRunCache.Counts.init -> void
+UiPath.Caching.Migration.KeyMoveDryRunCache.Deconstruct(out System.Collections.Generic.IReadOnlyDictionary<string!, long>! Counts, out System.Collections.Generic.IReadOnlyList<long>! SizeBuckets) -> void
+UiPath.Caching.Migration.KeyMoveDryRunCache.Equals(UiPath.Caching.Migration.KeyMoveDryRunCache? other) -> bool
+UiPath.Caching.Migration.KeyMoveDryRunCache.KeyMoveDryRunCache(System.Collections.Generic.IReadOnlyDictionary<string!, long>! Counts, System.Collections.Generic.IReadOnlyList<long>! SizeBuckets) -> void
+UiPath.Caching.Migration.KeyMoveDryRunCache.SizeBuckets.get -> System.Collections.Generic.IReadOnlyList<long>!
+UiPath.Caching.Migration.KeyMoveDryRunCache.SizeBuckets.init -> void
+UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Barrier = 2 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Closed = 5 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Drained = 4 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Moving = 3 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.NotStarted = 0 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Ready = 1 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStatus
+UiPath.Caching.Migration.KeyMoveStatus.<Clone>$() -> UiPath.Caching.Migration.KeyMoveStatus!
+UiPath.Caching.Migration.KeyMoveStatus.Approvals.get -> System.Collections.Generic.IReadOnlyList<string!>!
+UiPath.Caching.Migration.KeyMoveStatus.Approvals.init -> void
+UiPath.Caching.Migration.KeyMoveStatus.AutomaticHold.get -> string?
+UiPath.Caching.Migration.KeyMoveStatus.AutomaticHold.init -> void
+UiPath.Caching.Migration.KeyMoveStatus.BlockedSince.get -> System.DateTimeOffset?
+UiPath.Caching.Migration.KeyMoveStatus.BlockedSince.init -> void
+UiPath.Caching.Migration.KeyMoveStatus.BlockingGates.get -> System.Collections.Generic.IReadOnlyList<string!>!
+UiPath.Caching.Migration.KeyMoveStatus.BlockingGates.init -> void
+UiPath.Caching.Migration.KeyMoveStatus.Deconstruct(out string! Group, out UiPath.Caching.Migration.KeyMoveStage Stage, out bool Reverse, out bool Durable, out string? OperatorHold, out string? AutomaticHold, out System.Collections.Generic.IReadOnlyList<string!>! Approvals, out System.Collections.Generic.IReadOnlyDictionary<string!, long>! Residue, out System.Collections.Generic.IReadOnlyList<string!>! BlockingGates, out System.DateTimeOffset? BlockedSince) -> void
+UiPath.Caching.Migration.KeyMoveStatus.Durable.get -> bool
+UiPath.Caching.Migration.KeyMoveStatus.Durable.init -> void
+UiPath.Caching.Migration.KeyMoveStatus.Equals(UiPath.Caching.Migration.KeyMoveStatus? other) -> bool
+UiPath.Caching.Migration.KeyMoveStatus.Group.get -> string!
+UiPath.Caching.Migration.KeyMoveStatus.Group.init -> void
+UiPath.Caching.Migration.KeyMoveStatus.KeyMoveStatus(string! Group, UiPath.Caching.Migration.KeyMoveStage Stage, bool Reverse, bool Durable, string? OperatorHold, string? AutomaticHold, System.Collections.Generic.IReadOnlyList<string!>! Approvals, System.Collections.Generic.IReadOnlyDictionary<string!, long>! Residue, System.Collections.Generic.IReadOnlyList<string!>! BlockingGates, System.DateTimeOffset? BlockedSince) -> void
+UiPath.Caching.Migration.KeyMoveStatus.OperatorHold.get -> string?
+UiPath.Caching.Migration.KeyMoveStatus.OperatorHold.init -> void
+UiPath.Caching.Migration.KeyMoveStatus.Residue.get -> System.Collections.Generic.IReadOnlyDictionary<string!, long>!
+UiPath.Caching.Migration.KeyMoveStatus.Residue.init -> void
+UiPath.Caching.Migration.KeyMoveStatus.Reverse.get -> bool
+UiPath.Caching.Migration.KeyMoveStatus.Reverse.init -> void
+UiPath.Caching.Migration.KeyMoveStatus.Stage.get -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStatus.Stage.init -> void
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.Abandon = "abandon" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.Close = "close" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.CloseForce = "close_force" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.ControlRecordsEvictable = "control_records_evictable" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.ForceReverse = "force_reverse" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.Release = "release" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.RetireMarkers = "retire_markers" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.SkipBarrier = "skip_barrier" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.SkipSweptWait = "skip_lswept_wait" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.Start = "start" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.StartMemory = "start_memory" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.StartNoDryRun = "start_no_dry_run" -> string!
+const UiPath.Caching.Migration.KeyMoveApprovalKinds.StartUnsettled = "start_unsettled" -> string!
+override UiPath.Caching.Migration.KeyMoveDryRun.Equals(object? obj) -> bool
+override UiPath.Caching.Migration.KeyMoveDryRun.GetHashCode() -> int
+override UiPath.Caching.Migration.KeyMoveDryRun.ToString() -> string!
+override UiPath.Caching.Migration.KeyMoveDryRunCache.Equals(object? obj) -> bool
+override UiPath.Caching.Migration.KeyMoveDryRunCache.GetHashCode() -> int
+override UiPath.Caching.Migration.KeyMoveDryRunCache.ToString() -> string!
+override UiPath.Caching.Migration.KeyMoveStatus.Equals(object? obj) -> bool
+override UiPath.Caching.Migration.KeyMoveStatus.GetHashCode() -> int
+override UiPath.Caching.Migration.KeyMoveStatus.ToString() -> string!
+static UiPath.Caching.Migration.KeyMoveApprovalKinds.ConfirmTextOf(string! kind) -> string?
+static UiPath.Caching.Migration.KeyMoveDryRun.operator !=(UiPath.Caching.Migration.KeyMoveDryRun? left, UiPath.Caching.Migration.KeyMoveDryRun? right) -> bool
+static UiPath.Caching.Migration.KeyMoveDryRun.operator ==(UiPath.Caching.Migration.KeyMoveDryRun? left, UiPath.Caching.Migration.KeyMoveDryRun? right) -> bool
+static UiPath.Caching.Migration.KeyMoveDryRunCache.SizeBucketLimits.get -> System.Collections.Generic.IReadOnlyList<long>!
+static UiPath.Caching.Migration.KeyMoveDryRunCache.operator !=(UiPath.Caching.Migration.KeyMoveDryRunCache? left, UiPath.Caching.Migration.KeyMoveDryRunCache? right) -> bool
+static UiPath.Caching.Migration.KeyMoveDryRunCache.operator ==(UiPath.Caching.Migration.KeyMoveDryRunCache? left, UiPath.Caching.Migration.KeyMoveDryRunCache? right) -> bool
+static UiPath.Caching.Migration.KeyMoveStatus.operator !=(UiPath.Caching.Migration.KeyMoveStatus? left, UiPath.Caching.Migration.KeyMoveStatus? right) -> bool
+static UiPath.Caching.Migration.KeyMoveStatus.operator ==(UiPath.Caching.Migration.KeyMoveStatus? left, UiPath.Caching.Migration.KeyMoveStatus? right) -> bool

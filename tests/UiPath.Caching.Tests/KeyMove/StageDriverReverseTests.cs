@@ -50,7 +50,7 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
 
         (await kit.StateAsync()).State.Should().Be("S4");
         kit.Alerts.Should().Contain(("reverse_blocked", "start.km_support:n2,start.node_list:node_list_incomplete"));
-        (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.ForceReverse, "n2 is gone", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
+        (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.ForceReverse, ApprovalKinds.ConfirmTexts[ApprovalKinds.ForceReverse], "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
 
         await kit.StepUntilAsync("S1", "rev", advance: Ten);
         kit.Alerts.Should().Contain(("gate_override", ApprovalKinds.ForceReverse));

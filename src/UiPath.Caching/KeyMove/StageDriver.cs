@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Globalization;
+using StackExchange.Redis;
 
 namespace UiPath.Caching.KeyMove;
 
@@ -75,6 +77,7 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
         var input = await InputAsync(group, state, memory, cancellationToken).ConfigureAwait(false);
         var plan = await StepPlanner.DecideAsync(input, options).ConfigureAwait(false);
         RaiseAlerts(group, memory, plan.AlertList);
+        await RecordBlockedAsync(group, state, plan).ConfigureAwait(false);
         var result = await ExecuteAsync(group, state, input, plan, memory, cancellationToken).ConfigureAwait(false);
         return new StepOutcome(plan, result);
     }
@@ -176,6 +179,29 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
 
         _notified[key] = now;
         services.Alert?.Invoke(new KeyMoveAlert(group, code, detail));
+    }
+
+    // The reasons a step that takes no step waits for, stored for any node to read, and cleared by the step that is taken. Written only when they change.
+    private async Task RecordBlockedAsync(string group, StateRecord state, StepPlan plan)
+    {
+        var reasons = plan.Kind == StepKind.None ? string.Join('\n', plan.AlertList.Select(a => $"{a.Code}:{a.Detail}").Distinct(StringComparer.Ordinal)) : string.Empty;
+        if (reasons == state.Field(StateFields.Blocked))
+        {
+            return;
+        }
+
+        try
+        {
+            var key = services.Names.State(group);
+            _ = reasons.Length == 0
+                ? await services.Scripts.FieldsAsync(key, state.Id, [], [StateFields.Blocked, StateFields.BlockedAt], Fence(group)).ConfigureAwait(false)
+                : await services.Scripts.FieldsAsync(key, state.Id, [(StateFields.Blocked, reasons), (StateFields.BlockedAt, time.GetUtcNow().ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture))], [], Fence(group)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is RedisException or TimeoutException)
+        {
+            // Only the operator's view of the wait is late; the next step writes it again.
+            _ = ex;
+        }
     }
 
     private void RaiseAlerts(string group, GroupMemory memory, IReadOnlyList<StageAlert> alerts)

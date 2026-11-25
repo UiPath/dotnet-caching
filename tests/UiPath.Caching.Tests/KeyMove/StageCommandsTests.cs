@@ -58,13 +58,31 @@ public class StageCommandsTests(RedisContainerFixture fixture)
         (await commands.ApproveAsync(kit.Group, "invented", "x", "op", CancellationToken.None)).Should().Be(ApproveResult.UnknownKind);
         (await commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "x", "op", CancellationToken.None)).Should().Be(ApproveResult.NotApplicable, "nothing to close in S0");
         (await commands.ApproveAsync(kit.Group, ApprovalKinds.Release, "x", "op", CancellationToken.None)).Should().Be(ApproveResult.NotApplicable);
-        (await commands.AbandonAsync(kit.Group, "x", "op", CancellationToken.None)).Should().Be(ApproveResult.NotApplicable, "only a closed group is abandoned");
-        (await commands.SkipBarrierAsync(kit.Group, "x", "op", CancellationToken.None)).Should().Be(ApproveResult.NotApplicable, "no transition waits");
+        (await commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None)).Should().Be(ApproveResult.NotApplicable, "only a closed group is abandoned");
+        (await commands.SkipBarrierAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.SkipBarrier], "op", CancellationToken.None)).Should().Be(ApproveResult.NotApplicable, "no transition waits");
         var wrong = () => commands.ApproveAsync(kit.Group, ApprovalKinds.StartUnsettled, "close enough", "op", CancellationToken.None);
         await wrong.Should().ThrowAsync<ArgumentException>();
         (await commands.ApproveAsync(kit.Group, ApprovalKinds.StartUnsettled, Options.UpgradeHoldOverrideText, "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
         var blank = () => commands.ApproveAsync(kit.Group, ApprovalKinds.Start, " ", "op", CancellationToken.None);
         await blank.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Theory]
+    [InlineData(ApprovalKinds.CloseForce)]
+    [InlineData(ApprovalKinds.ForceReverse)]
+    [InlineData(ApprovalKinds.SkipBarrier)]
+    [InlineData(ApprovalKinds.Abandon)]
+    public async Task An_approval_that_goes_past_a_check_needs_its_exact_text_before_anything_else_is_checked(string kind)
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, true);
+        var commands = new StageCommands(kit.Store, kit.Scripts, kit.Names, Options);
+        await kit.InitAsync("a");
+        var text = ApprovalKinds.ConfirmTexts[kind];
+
+        var loose = () => commands.ApproveAsync(kit.Group, kind, text.ToUpperInvariant(), "op", CancellationToken.None);
+
+        (await loose.Should().ThrowAsync<ArgumentException>()).WithMessage($"*\"{text}\"*");
+        (await commands.ApproveAsync(kit.Group, kind, text, "op", CancellationToken.None)).Should().Be(ApproveResult.NotApplicable, "the exact text passes, and S0 has nothing to go past");
     }
 
     [Fact]
@@ -114,10 +132,10 @@ public class StageCommandsTests(RedisContainerFixture fixture)
         var s0 = await kit.InitAsync("a");
         await kit.Scripts.TransitAsync(kit.StateKey, StateKit.Expecting(s0), StateKit.TargetFrom(s0, "S1", "fwd", 0));
 
-        (await commands.SkipBarrierAsync(kit.Group, "the replica is gone", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
+        (await commands.SkipBarrierAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.SkipBarrier], "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
         var stuck = (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!;
         Approval.ValidFor(stuck, ApprovalKinds.SkipBarrier).Should().NotBeNull();
-        (await commands.AbandonAsync(kit.Group, "x", "op", CancellationToken.None)).Should().Be(ApproveResult.NotApplicable);
+        (await commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None)).Should().Be(ApproveResult.NotApplicable);
     }
 
     [Fact]

@@ -221,7 +221,7 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "residue acknowledged", "op", CancellationToken.None);
         var closed = await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
         closed.ForwardGeneration.Should().NotBeEmpty();
-        await kit.Commands.AbandonAsync(kit.Group, "cold start accepted", "op", CancellationToken.None);
+        await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
 
         var flipped = await kit.StepUntilAsync("S0", "none");
 

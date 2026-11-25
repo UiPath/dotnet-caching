@@ -148,7 +148,7 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         var closed = await ToClosedAsync(kit);
         kit.Claim.Calls.Clear();
 
-        (await kit.Commands.AbandonAsync(kit.Group, "every pod was recycled; a cold start is accepted", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
+        (await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
         var flipped = await kit.StepUntilAsync("S0", "none");
         flipped.Should().Match<StateRecord>(s => s.NPop == 0 && s.Ep > closed.Ep && s.Field(StateFields.ColdStart) == closed.Claim);
 
@@ -180,7 +180,7 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         var closed = await ToClosedAsync(kit);
         await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, closed.Id, [(StateFields.Swept, closed.Id)], []);
         kit.Claim.Calls.Clear();
-        await kit.Commands.AbandonAsync(kit.Group, "cold start accepted", "op", CancellationToken.None);
+        await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
 
         await kit.StepUntilAsync("S0", "none");
 
@@ -196,7 +196,7 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         var closed = await ToClosedAsync(kit);
         await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, closed.Id, [(StateFields.Swept, closed.Id)], []);
         kit.Claim.Reopen = ClaimOutcome.Refused;
-        await kit.Commands.AbandonAsync(kit.Group, "cold start accepted", "op", CancellationToken.None);
+        await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
 
         await kit.StepAsync();
 
@@ -209,7 +209,7 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         var closed = await ToClosedAsync(kit);
-        await kit.Commands.AbandonAsync(kit.Group, "cold start accepted", "op", CancellationToken.None);
+        await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
 
         for (var n = 0; n < 3; n++)
         {

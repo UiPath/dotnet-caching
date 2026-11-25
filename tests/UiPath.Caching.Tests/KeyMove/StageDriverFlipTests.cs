@@ -88,7 +88,7 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
         using var overrides = new KeyMoveMeterRecorder("cache.keymove.gate_overrides", kit.Group);
         var drained = await ToDrainedAsync(kit);
         kit.Mover.Report = FakeMoverStatus.Drained(1, ("a", 0));
-        await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.CloseForce, "residue acknowledged", "op", CancellationToken.None);
+        await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.CloseForce, ApprovalKinds.ConfirmTexts[ApprovalKinds.CloseForce], "op", CancellationToken.None);
         for (var n = 0; n < 4; n++)
         {
             await kit.StepAsync(TimeSpan.FromSeconds(30));
@@ -122,7 +122,7 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
         var retried = await kit.StepAsync(TimeSpan.FromSeconds(10));
         retried!.Result!.Outcome.Should().Be(TransitionOutcome.BarrierStuck, "the leader retries and the barrier still fails");
 
-        (await kit.Commands.SkipBarrierAsync(kit.Group, "the replica is gone for good", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
+        (await kit.Commands.SkipBarrierAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.SkipBarrier], "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
         var skipped = await kit.StepAsync();
 
         skipped!.Result.Should().Be(new TransitionResult(TransitionOutcome.Completed, WaitSkipped: true));
