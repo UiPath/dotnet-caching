@@ -138,7 +138,7 @@ internal sealed partial class KeyMoveClient<T>
         return WriteFillOutcome(code, unit);
     }
 
-    private bool CreateIsClosed(KeyMoveMode mode) => mode is KeyMoveMode.Closed or KeyMoveMode.Union || (mode == KeyMoveMode.S2 && _p.NoOrigin);
+    private bool CreateIsClosed(KeyMoveMode mode) => mode is KeyMoveMode.Closed or KeyMoveMode.Union || KeyMovePlanning.IsReverseWrite(mode) || (mode == KeyMoveMode.S2 && _p.NoOrigin);
 
     private byte[]? EncodeFill(T value, KeyMoveMode mode)
     {

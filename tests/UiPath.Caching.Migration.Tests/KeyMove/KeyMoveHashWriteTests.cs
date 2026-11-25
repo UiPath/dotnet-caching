@@ -523,9 +523,11 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
 
         var write = async () => await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(), Ct);
         var fields = async () => await kit.Client.RemoveFieldsAsync("k", ["a"], Ct);
+        var refresh = async () => await kit.Client.RefreshAsync("k", CacheExpiry.After(TimeSpan.FromMinutes(5)), Ct);
 
         await write.Should().ThrowAsync<CacheUnavailableException>();
         await fields.Should().ThrowAsync<CacheUnavailableException>();
+        await refresh.Should().ThrowAsync<CacheUnavailableException>();
         (await kit.Client.ReadAsync("k", null, Ct)).Fields!.Count.Should().Be(3);
         (await kit.FieldsAsync(kit.L("k"))).Should().BeEquivalentTo(Original);
     }

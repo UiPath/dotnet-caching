@@ -1,18 +1,19 @@
 using System.Collections.Concurrent;
+using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>"L is absent for K", kept for a few seconds per state identity and side; a hint made under one identity is never read under another, and a local event or a gap drops it.</summary>
+/// <summary>"The source side is absent for K", kept for a few seconds per state identity and side; a hint made under one identity or side is never read under another, and a local event or a gap drops it.</summary>
 internal sealed class NegativeHints(TimeProvider clock, TimeSpan lifetime, int capacity)
 {
-    private readonly ConcurrentDictionary<string, (string Identity, long Until)> _hints = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (string Identity, MoveSide Side, long Until)> _hints = new(StringComparer.Ordinal);
 
     public int Count => _hints.Count;
 
-    public bool Has(string key, string identity) =>
-        _hints.TryGetValue(key, out var hint) && hint.Identity == identity && clock.GetTimestamp() < hint.Until;
+    public bool Has(string key, string identity, MoveSide side) =>
+        _hints.TryGetValue(key, out var hint) && hint.Identity == identity && hint.Side == side && clock.GetTimestamp() < hint.Until;
 
-    public void Set(string key, string identity)
+    public void Set(string key, string identity, MoveSide side)
     {
         if (_hints.Count >= capacity)
         {
@@ -28,7 +29,7 @@ internal sealed class NegativeHints(TimeProvider clock, TimeSpan lifetime, int c
             }
         }
 
-        _hints[key] = (identity, clock.GetTimestamp() + (long)(lifetime.TotalSeconds * clock.TimestampFrequency));
+        _hints[key] = (identity, side, clock.GetTimestamp() + (long)(lifetime.TotalSeconds * clock.TimestampFrequency));
     }
 
     public void Drop(string key) => _hints.TryRemove(key, out _);

@@ -70,7 +70,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
                 return Done(master);
             }
 
-            if (hints.Has(key, identity))
+            if (hints.Has(key, identity, MoveSide.Legacy))
             {
                 return Done(ReadOutcome.Absent);
             }
@@ -492,7 +492,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         var again = reads.InterpretRead(await reads.SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true);
         if (again.FallsThrough)
         {
-            hints.Set(key, identity);
+            hints.Set(key, identity, MoveSide.Legacy);
         }
 
         return again;

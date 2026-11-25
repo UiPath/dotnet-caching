@@ -58,7 +58,7 @@ internal sealed partial class KeyMoveClient<T>
                 return ReadStep<T>.Of(master);
             }
 
-            if (_hints.Has(key, identity))
+            if (_hints.Has(key, identity, MoveSide.Legacy))
             {
                 return ReadStep<T>.Of(ReadOutcome.Absent);
             }
@@ -123,7 +123,7 @@ internal sealed partial class KeyMoveClient<T>
         var again = Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
         if (again.FallsThrough)
         {
-            _hints.Set(key, identity);
+            _hints.Set(key, identity, MoveSide.Legacy);
         }
 
         return again;

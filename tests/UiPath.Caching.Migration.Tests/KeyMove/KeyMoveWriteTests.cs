@@ -33,6 +33,25 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
     }
 
     [Theory]
+    [InlineData("S1", false)]
+    [InlineData("S5", true)]
+    public async Task Forward_writes_without_a_fence_commit_with_untagged_native_keys(string state, bool swept)
+    {
+        await using var kit = await KeyMoveKit.CreateAsync(
+            fixture,
+            source: k => new InPlaceMoveSide<Item>(k.SidePlane, k.Group, k.L, ItemCodec.Instance, null, k.Clock));
+        await kit.PrepareAsync("k");
+        await kit.SetStateAsync(state, swept: swept);
+        kit.Plane.Data = kit.SideData with { Names = new MoveKeyNames("prefix:", kit.Names.LibraryPrefix, cluster: true) };
+        var writtenKey = swept ? kit.N("k") : kit.L("k");
+
+        (await kit.Client.SetAsync("k", new Item("v1"), null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.GetAsync(writtenKey)).Should().Be("v1");
+        (await kit.Client.RemoveAsync("k", Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.ExistsAsync(writtenKey)).Should().BeFalse();
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task S2_is_closed_for_a_NoOrigin_cache_for_writes_and_deletes_and_nothing_is_written(bool scripts)
@@ -174,12 +193,13 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
     [Theory]
     [InlineData("fail")]
     [InlineData("reverse")]
-    public async Task A_group_that_fails_closed_and_a_reverse_state_make_a_write_unavailable_and_never_origin(string how)
+    public async Task A_failed_group_or_a_reverse_barrier_makes_a_write_unavailable_without_fallback(string how)
     {
-        await using var kit = await KeyMoveKit.CreateAsync(fixture);
+        var reverse = how == "reverse";
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: reverse);
         await kit.PrepareAsync("k");
-        await kit.SetStateAsync("S3", direction: how == "reverse" ? "rev" : "fwd");
-        if (how == "fail")
+        await kit.SetStateAsync(reverse ? "S1" : "S3", direction: reverse ? "rev" : "fwd");
+        if (!reverse)
         {
             kit.Plane.Rules = kit.Plane.Rules with { Writes = WriteRule.FailClosed };
         }
@@ -188,6 +208,7 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
 
         await write.Should().ThrowAsync<CacheUnavailableException>();
         kit.Plain.Sets.Should().Be(0);
+        kit.Schedule.Steps.Should().BeEmpty();
         kit.Client.NoFallback.Should().BeTrue();
     }
 

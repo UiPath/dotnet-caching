@@ -79,10 +79,10 @@ internal sealed partial class KeyMoveHashClient<T>
         return (long)Math.Ceiling((at - _p.Clock.GetUtcNow()).TotalMilliseconds) < 1 ? null : at.ToUnixTimeMilliseconds();
     }
 
-    // No state in which a managed write can run: closed, a union read, or a cache with no origin before its keys move.
+    // No state in which a managed write can run: closed, a union read, a reverse state, or a cache with no origin before its keys move.
     private void ThrowIfNoManagedWrite(KeyMovePlan plan)
     {
-        if (plan.Mode is KeyMoveMode.Closed or KeyMoveMode.Union || (plan.Mode == KeyMoveMode.S2 && _p.NoOrigin))
+        if (plan.Mode is KeyMoveMode.Closed or KeyMoveMode.Union || KeyMovePlanning.IsReverseWrite(plan.Mode) || (plan.Mode == KeyMoveMode.S2 && _p.NoOrigin))
         {
             throw Unavailable();
         }

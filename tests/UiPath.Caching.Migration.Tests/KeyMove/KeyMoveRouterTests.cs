@@ -227,19 +227,26 @@ public sealed class KeyMoveRouterTests(RedisFixture fixture)
         node.SourceBackend.Clears.Should().Be(1);
     }
 
-    [Fact]
-    public async Task A_managed_cache_in_key_move_never_falls_back_to_the_source_for_a_write_that_the_state_closes()
+    [Theory]
+    [InlineData("S1")]
+    [InlineData("S3")]
+    [InlineData("S4")]
+    public async Task A_closed_reverse_write_never_falls_back_to_the_source(string state)
     {
         var clock = NewClock();
-        await using var kit = await KeyMoveKit.CreateAsync(fixture, clock: clock);
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: true, clock: clock);
         var backend = new Dictionary<string, Item>();
         await using var node = TestNode.Create(new FakeBus(), clock, backend, "kmr" + kit.Unique, library: kit.Client);
         await kit.PrepareAsync("k");
-        await kit.SetStateAsync("S3", direction: "rev");
+        await kit.SetStateAsync(state, direction: "rev");
 
         var write = async () => await node.Cache.SetAsync("k", new Item("v"), default, Ct);
+        var delete = async () => await node.Cache.RemoveAsync("k", Ct);
 
         await write.Should().ThrowAsync<CacheUnavailableException>();
+        await delete.Should().ThrowAsync<CacheUnavailableException>();
+        node.SourceBackend.Writes.Should().Be(0);
+        node.SourceBackend.Removes.Should().Be(0);
         backend.Should().BeEmpty();
     }
 
