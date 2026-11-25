@@ -22,12 +22,17 @@ public sealed class LocalHitAllocationTests : RouterTestBase
     {
         var node = NewNode(localCap: TimeSpan.FromMinutes(1));
         ICache<Item> cache = node.Cache;
-        await cache.SetAsync("k", new Item("1"), Life, Ct);
+        var seeded = new Item("1");
+        await cache.SetAsync("k", seeded, Life, Ct);
         await cache.GetAsync("k", Ct);
         for (var i = 0; i < 2000; i++)
         {
             await cache.GetOrAddAsync("k", 7, NullGenerator, Ct);
         }
+
+        var hit = cache.GetOrAddAsync("k", 7, NullGenerator, Ct);
+        hit.IsCompletedSuccessfully.Should().BeTrue();
+        (await hit).Should().Be(seeded);
 
         var perCall = long.MaxValue;
         for (var run = 0; run < 7; run++)
