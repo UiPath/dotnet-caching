@@ -45,6 +45,32 @@ public sealed class KeyMoveStartupTests
         act.Should().NotThrow();
     }
 
+    [Theory]
+    [InlineData(App.InMemoryDefaultWithRedis)]
+    [InlineData(App.NoKeyMove)]
+    public async Task The_format_switch_hold_and_alert_are_wired_to_the_nodes_key_move_groups(App app)
+    {
+        await using var provider = Provider(app, router => router
+            .UsePinWhen(_ => true)
+            .UseValueSerializers(stack => stack.AddValueSerializer("messagepack", [TestFormatSerializer.Id], _ => new TestFormatSerializer()))
+            .UseWriteFormatWhen(_ => "messagepack"));
+        var core = ((Router)provider.GetRequiredService<IRouter>()).Core;
+        var formats = core.WriteFormats!;
+
+        if (app == App.NoKeyMove)
+        {
+            formats.MoveHold.Should().BeNull();
+            formats.Alert.Should().BeNull();
+            core.Pins!.SwitchHold.Should().BeNull();
+            return;
+        }
+
+        formats.Alert.Should().NotBeNull();
+        formats.MoveHold!("g").Should().BeTrue();
+        formats.MoveHold("other").Should().BeFalse();
+        core.Pins!.SwitchHold.Should().BeSameAs(formats.MoveHold);
+    }
+
     // A key move with no cache has nothing to move, and the registration refuses it before any host starts.
     [Fact]
     public void UseKeyMove_with_a_group_and_no_cache_is_refused_at_registration()
@@ -70,7 +96,7 @@ public sealed class KeyMoveStartupTests
         both.Should().NotThrow();
     }
 
-    private static ServiceProvider Provider(App app)
+    private static ServiceProvider Provider(App app, Action<RouterBuilder>? configure = null)
     {
         var settings = new Dictionary<string, string?>
         {
@@ -91,7 +117,14 @@ public sealed class KeyMoveStartupTests
             services.AddSingleton<ICacheProvider>(new NullRedisProvider());
         }
 
-        services.AddCachingRouter(configuration, router => ConfigureRouter(router, app), "RouterCaching");
+        services.AddCachingRouter(
+            configuration,
+            router =>
+            {
+                ConfigureRouter(router, app);
+                configure?.Invoke(router);
+            },
+            "RouterCaching");
         return services.BuildServiceProvider();
     }
 
@@ -125,7 +158,7 @@ public sealed class KeyMoveStartupTests
 
         router.UseKeyMove(new Stage(), moves =>
         {
-            moves.UseLibraryKeyPrefix("kmstart:").AddGroup("g");
+            moves.UseLibraryKeyPrefix("kmstart:").AddGroup("g").OnAlert(_ => { });
             if (app != App.ZeroCaches)
             {
                 moves.AddCache(ItemsRegistration());

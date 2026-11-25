@@ -58,14 +58,17 @@ public sealed class WriteFormatMoveHoldTests
     public void The_hold_is_counted_per_write_alerted_once_and_ends_with_the_move_so_the_next_write_asks_without_a_restart()
     {
         var rules = Acting("S3", "fwd");
-        var (selector, pin, alerts) = Build(_ => rules);
+        var group = $"hold-{Guid.NewGuid():N}";
+        var (selector, pin, alerts) = Build(_ => rules, group);
+        var (other, otherPin, _) = Build(_ => rules);
         var held = new List<(string Group, string Pending)>();
-        using var listener = Listen(held);
+        using var listener = Listen(held, group);
 
         selector.Select(pin).Dispose();
+        other.Select(otherPin).Dispose();
         selector.Select(pin).Dispose();
 
-        held.Should().Equal(("g", "messagepack"), ("g", "messagepack"));
+        held.Should().Equal((group, "messagepack"), (group, "messagepack"));
         alerts.Should().ContainSingle("a held group is alerted once");
         pin.Wanted.Should().BeFalse();
 
@@ -79,6 +82,34 @@ public sealed class WriteFormatMoveHoldTests
         selector.Select(pin).Dispose();
 
         alerts.Should().HaveCount(2, "a new move holds the group again and alerts again");
+    }
+
+    [Theory]
+    [InlineData("json", false)]
+    [InlineData(null, false)]
+    [InlineData("unknown", false)]
+    [InlineData(null, true)]
+    public void A_later_move_alerts_again_after_a_write_stops_asking_for_messagepack(string? answer, bool throws)
+    {
+        var rules = Acting("S3", "fwd");
+        string? format = "messagepack";
+        var unavailable = false;
+        var (selector, pin, alerts) = Build(_ => rules, format: () => unavailable ? throw new InvalidOperationException("setting unavailable") : format);
+
+        selector.Select(pin).Dispose();
+        alerts.Should().ContainSingle();
+
+        rules = Acting("S0", "fwd");
+        format = answer;
+        unavailable = throws;
+        selector.Select(pin).Dispose();
+
+        rules = Acting("S3", "fwd");
+        format = "messagepack";
+        unavailable = false;
+        selector.Select(pin).Dispose();
+
+        alerts.Should().HaveCount(2);
     }
 
     [Fact]
@@ -135,18 +166,18 @@ public sealed class WriteFormatMoveHoldTests
         monitor.HasRead("other").Should().BeFalse("the monitor does not track it");
     }
 
-    private static (WriteFormatSelector Selector, GroupPin Pin, List<KeyMoveAlert> Alerts) Build(Func<string, GroupRules> rules)
+    private static (WriteFormatSelector Selector, GroupPin Pin, List<KeyMoveAlert> Alerts) Build(Func<string, GroupRules> rules, string group = "g", Func<string?>? format = null)
     {
         var alerts = new List<KeyMoveAlert>();
         var pins = new PinCoordinator(new RouterCore(Clock, _ => true, NullLogger.Instance), _ => true, new FakePinStore(), null, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance);
-        var selector = new WriteFormatSelector(_ => "messagepack", pins, NullLogger.Instance) { MoveHold = g => WriteFormatSelector.Moving(rules(g)), Alert = alerts.Add };
-        return (selector, pins.GroupFor("g"), alerts);
+        var selector = new WriteFormatSelector(_ => format is null ? "messagepack" : format(), pins, NullLogger.Instance) { MoveHold = g => WriteFormatSelector.Moving(rules(g)), Alert = alerts.Add };
+        return (selector, pins.GroupFor(group), alerts);
     }
 
     private static GroupRules Acting(string state, string direction) =>
         new(true, ReadRule.Follow, WriteRule.Follow, new ActedState(state, direction, 1, "id1", 1, false), null, false, true, []);
 
-    private static MeterListener Listen(List<(string Group, string Pending)> held)
+    private static MeterListener Listen(List<(string Group, string Pending)> held, string group)
     {
         var listener = new MeterListener
         {
@@ -160,17 +191,20 @@ public sealed class WriteFormatMoveHoldTests
         };
         listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
         {
-            string? group = null;
+            string? measuredGroup = null;
             string? pending = null;
             foreach (var tag in tags)
             {
-                group = tag.Key == "group" ? (string?)tag.Value : group;
+                measuredGroup = tag.Key == "group" ? (string?)tag.Value : measuredGroup;
                 pending = tag.Key == "pending" ? (string?)tag.Value : pending;
             }
 
-            lock (held)
+            if (measuredGroup == group)
             {
-                held.Add((group!, pending!));
+                lock (held)
+                {
+                    held.Add((group, pending!));
+                }
             }
         });
         listener.Start();

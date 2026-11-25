@@ -57,7 +57,6 @@ internal static class RouterTelemetry
         }
     }
 
-    /// <summary>A counter of the key move data path: <c>capture_slow</c>, <c>fence_refused</c>, <c>gate_closed</c>, <c>promotion_expiring</c>, <c>identity_rerun</c>, <c>retry_exhausted</c>, <c>unreadable_source</c>.</summary>
     /// <summary>A write that stayed on the group's current format because the group's keys are moving; <paramref name="pending"/> is the format it asked for.</summary>
     public static void CountFormatSwitchHeld(string group, string pending)
     {
@@ -67,6 +66,7 @@ internal static class RouterTelemetry
         }
     }
 
+    /// <summary>A counter of the key move data path: <c>capture_slow</c>, <c>fence_refused</c>, <c>gate_closed</c>, <c>promotion_expiring</c>, <c>identity_rerun</c>, <c>retry_exhausted</c>, <c>unreadable_source</c>.</summary>
     public static void CountMove(string counter, string cache, string group)
     {
         var made = MoveCounters.GetOrAdd(counter, name => RouterMeter.CreateCounter<long>("move_" + name));
