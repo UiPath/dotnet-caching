@@ -143,6 +143,14 @@ internal sealed class Router : IRouter, IAsyncDisposable
         await _cleaned!.Task.ConfigureAwait(false);
     }
 
+    /// <summary>Runs the dry run of a key move group (<c>fwd</c> or <c>rev</c>) and stores its report.</summary>
+    internal async Task<DryRunReport> DryRunAsync(string group, string direction = "fwd", CancellationToken cancellationToken = default)
+    {
+        var service = _core.StartedParts?.DryRuns ?? throw new InvalidOperationException("The library is not started or no key move group is set.");
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _core.StopToken);
+        return await service.RunAsync(group, direction, linked.Token).ConfigureAwait(false);
+    }
+
     internal RoutedCache<T>? Find<T>(string cacheName)
         where T : class =>
         _caches.TryGetValue(cacheName, out var entry) ? entry.Cache as RoutedCache<T> : null;

@@ -167,22 +167,24 @@ internal sealed class KeyPromotion<T>
         var snap = await SourceSnapAsync(key, cancellationToken).ConfigureAwait(false);
         if (snap.Kind != ReadOutcome.Found)
         {
-            return new DryRunProbe(UnfoundClass(snap.Kind), 0, null);
+            return new DryRunProbe(UnfoundClass(snap.Kind), null, null);
         }
 
-        var bytes = snap.Bytes?.Length ?? 0;
+        var probe = decode
+            ? await ProbeDecodedAsync(key, mover, snap, cancellationToken).ConfigureAwait(false)
+            : ProbeStored(key, mover, snap);
+        if (probe.Class != DryRunClasses.Movable)
+        {
+            return probe;
+        }
+
         var exists = await ExistsAsync(_p.NativeKey(key), SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false);
-        if (exists != false)
+        return exists switch
         {
-            return new DryRunProbe(exists is null ? DryRunClasses.Unavailable : DryRunClasses.Duplicate, bytes, null);
-        }
-
-        if (!decode)
-        {
-            return new DryRunProbe(IsShort(snap, mover) ? DryRunClasses.ShortTtl : DryRunClasses.Movable, bytes, null);
-        }
-
-        return await ProbeDecodedAsync(key, mover, snap, cancellationToken).ConfigureAwait(false);
+            true => probe with { Class = DryRunClasses.Duplicate, EncodedBytes = null },
+            null => probe with { Class = DryRunClasses.Unavailable, EncodedBytes = null },
+            false => probe,
+        };
     }
 
     // Null for an always-owned caller, so the read-through's operations run exactly as they did.
@@ -219,6 +221,20 @@ internal sealed class KeyPromotion<T>
         PromotionKind.ShortTtl => DryRunClasses.ShortTtl,
         _ => DryRunClasses.Unavailable,
     };
+
+    private DryRunProbe ProbeStored(string key, MoverFlavor mover, KeyMoveSnap snap)
+    {
+        var bytes = snap.Bytes?.Length ?? 0;
+        var classification = bytes switch
+        {
+            var length when length > _options.MaxValueBytes => DryRunClasses.TooLarge,
+            _ when !_source.Maps(key) => DryRunClasses.Unmappable,
+            _ when IsShort(snap, mover) => DryRunClasses.ShortTtl,
+            _ => DryRunClasses.Movable,
+        };
+
+        return new DryRunProbe(classification, bytes, null);
+    }
 
     private async ValueTask<(Capture Capture, PromotionResult<T>? Refused)> CaptureAsync(PromotionRun run, CancellationToken cancellationToken)
     {
@@ -496,17 +512,17 @@ internal sealed class KeyPromotion<T>
         var (served, skipped) = await ReadSourceAsync(run, snap, cancellationToken).ConfigureAwait(false);
         if (skipped is { } stop)
         {
-            return new DryRunProbe(SkippedClass(stop.Kind), bytes, null);
+            return new DryRunProbe(SkippedClass(stop.Kind), bytes, null, Decoded: true);
         }
 
         try
         {
             var encoded = served.Value is null ? _p.Native.EncodeNull()! : _p.Native.Encode(served.Value);
-            return new DryRunProbe(DryRunClasses.Movable, bytes, encoded.Length);
+            return new DryRunProbe(DryRunClasses.Movable, bytes, encoded.Length, Decoded: true);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            return new DryRunProbe(DryRunClasses.Unreadable, bytes, null);
+            return new DryRunProbe(DryRunClasses.Unreadable, bytes, null, Decoded: true);
         }
     }
 

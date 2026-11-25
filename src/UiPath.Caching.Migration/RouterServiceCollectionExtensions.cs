@@ -380,7 +380,21 @@ public static class RouterServiceCollectionExtensions
         return [.. setup.Groups.Select(g => new MoverHost(g.Name, plane, setup.KeySpace, movers.Of(g.Name), units, ct => node.ReadStateAsync(g.Name, ct), prefix, time, rate, options))];
     }
 
-    private static LibraryParts CollectLibraryParts(IServiceProvider root, RouterBuilder builder, IRedisConnector connector, List<IHostedService> started, IKeyMovePlane? plane, MoveTargets? movers)
+    private static DryRunService DryRunServiceOf(IServiceProvider root, KeyMoveSetup setup, KeyMoveNode node, IKeyMovePlane plane, MoveTargets movers, MoverOptions? moverOptions)
+    {
+        var prefix = root.GetService<IOptions<RedisCacheOptions>>()?.Value.KeyPrefix ?? string.Empty;
+        var units = root.GetRequiredService<IScanUnits>();
+        var rate = root.GetRequiredService<IMoveRate>();
+        var time = root.GetRequiredService<TimeProvider>();
+        var rates = root.GetRequiredService<IOptionsMonitor<KeyMoveMoverOptions>>();
+        return new DryRunService(
+            setup,
+            node,
+            (group, side) => new DryRunner(group, plane, setup.KeySpace, movers.Of(group), units, prefix, rate, time, moverOptions, rates: rates.CurrentValue, side: side),
+            time);
+    }
+
+    private static LibraryParts CollectLibraryParts(IServiceProvider root, RouterBuilder builder, IRedisConnector connector, List<IHostedService> started, IKeyMovePlane? plane, MoveTargets? movers, DryRunService? dryRuns)
     {
         var options = root.GetRequiredKeyedService<IOptions<CacheOptions>>(StackName).Value;
         var source = options.SourceUri ?? CacheOptions.MachineUri;
@@ -406,7 +420,8 @@ public static class RouterServiceCollectionExtensions
             movers,
             hash.Store,
             hash.Cache,
-            hash.Tier);
+            hash.Tier,
+            dryRuns);
     }
 
     // The in-place side is the router's own library cache, so the codec cannot differ from what the library path writes, with or without an envelope; the native side is the application's Redis cache, with its serializers and effective format.
@@ -468,10 +483,12 @@ public static class RouterServiceCollectionExtensions
 
             IKeyMovePlane? plane = null;
             MoveTargets? movers = null;
+            DryRunService? dryRuns = null;
             if (keyMove is { HasGroups: true } && builder.KeyMove is { } moveSetup)
             {
                 plane = new NodePlane(keyMove, root.GetRequiredService<TimeProvider>(), moveSetup.Alert);
                 movers = new MoveTargets { Schedule = builder.MoverSchedule };
+                dryRuns = DryRunServiceOf(root, moveSetup, keyMove, plane, movers, builder.MoverOptions);
 
                 // After the node, so the router stops the movers first.
                 var mover = new MoverHostedService(MoverHosts(root, moveSetup, keyMove, plane, movers, builder.MoverOptions));
@@ -479,7 +496,7 @@ public static class RouterServiceCollectionExtensions
                 started.Add(mover);
             }
 
-            return CollectLibraryParts(root, builder, connector, started, plane, movers);
+            return CollectLibraryParts(root, builder, connector, started, plane, movers, dryRuns);
         }
         catch
         {

@@ -14,6 +14,6 @@ internal interface IMoveTarget
     ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken);
 
     /// <summary>Reads what the mover would find at <paramref name="key"/> and writes nothing: no fence, no publish, no delete, no counter.</summary>
-    /// <param name="decode">Decode the value to judge it and measure its encoding; false classifies by the remaining life alone.</param>
+    /// <param name="decode">Decode the value to judge it and measure its encoding; false classifies using the stored size, key mapping and remaining life without calling the codec.</param>
     ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken);
 }

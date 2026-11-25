@@ -8,7 +8,7 @@ internal sealed class CacheInventory
 
     private readonly Dictionary<string, long> _counts = new(StringComparer.Ordinal);
     private readonly long[] _sizes = new long[BucketLimits.Count + 1];
-    private long _probed;
+    private long _movableSourceBytes;
 
     public IReadOnlyDictionary<string, long> Counts => _counts;
 
@@ -17,6 +17,8 @@ internal sealed class CacheInventory
 
     public long SourceBytes { get; private set; }
 
+    public long Probed { get; private set; }
+
     public long Decoded { get; private set; }
 
     public long EncodedBytes { get; private set; }
@@ -24,24 +26,21 @@ internal sealed class CacheInventory
     /// <summary>The movable keys whose encoded length is in <see cref="EncodedBytes"/>.</summary>
     public long EncodedKeys { get; private set; }
 
-    /// <summary>Some key was classified without being decoded.</summary>
+    /// <summary>Some key was selected for classification without decoding.</summary>
     public bool Sampled { get; private set; }
 
     public long Movable => _counts.GetValueOrDefault(DryRunClasses.Movable);
 
-    /// <summary>The mean encoded length of the sample times the movable keys; zero when nothing was sampled.</summary>
-    public long EstimatedNativeBytes => EncodedKeys == 0 ? 0 : (long)((double)EncodedBytes / EncodedKeys * Movable);
+    /// <summary>The mean encoded length of the sample times the movable keys; the movable source bytes when there is no encoded sample.</summary>
+    public long EstimatedNativeBytes => EncodedKeys == 0 ? _movableSourceBytes : (long)((double)EncodedBytes / EncodedKeys * Movable);
 
     /// <summary>Whether the next probed key is decoded: every key up to the cap, then one in every <see cref="DryRunOptions.SampleEvery"/>.</summary>
-    public bool ShouldDecode(DryRunOptions options)
-    {
-        _probed++;
-        return _probed <= options.DecodeCap || (_probed - options.DecodeCap) % options.SampleEvery == 0;
-    }
+    public bool ShouldDecode(DryRunOptions options) =>
+        Probed < options.DecodeCap || (Probed + 1 - options.DecodeCap) % options.SampleEvery == 0;
 
     public CacheInventory Clone()
     {
-        var copy = new CacheInventory { SourceBytes = SourceBytes, Decoded = Decoded, EncodedBytes = EncodedBytes, EncodedKeys = EncodedKeys, Sampled = Sampled, _probed = _probed };
+        var copy = new CacheInventory { SourceBytes = SourceBytes, Decoded = Decoded, EncodedBytes = EncodedBytes, EncodedKeys = EncodedKeys, Sampled = Sampled, Probed = Probed, _movableSourceBytes = _movableSourceBytes };
         foreach (var (name, count) in _counts)
         {
             copy._counts[name] = count;
@@ -54,23 +53,25 @@ internal sealed class CacheInventory
     /// <summary>Counts a key that was never probed.</summary>
     public void Count(string name) => _counts[name] = _counts.GetValueOrDefault(name) + 1;
 
-    public void Add(DryRunProbe probe, bool decoded)
+    public void Add(DryRunProbe probe, bool decodeRequested)
     {
+        Probed++;
         Count(probe.Class);
-        if (probe.SourceBytes > 0)
+        if (probe.SourceBytes is { } bytes)
         {
-            SourceBytes += probe.SourceBytes;
-            _sizes[BucketOf(probe.SourceBytes)]++;
+            SourceBytes += bytes;
+            _sizes[BucketOf(bytes)]++;
+            if (probe.Class == DryRunClasses.Movable)
+            {
+                _movableSourceBytes += bytes;
+            }
         }
 
-        if (decoded)
+        if (probe.Decoded)
         {
             Decoded++;
         }
-        else
-        {
-            Sampled = true;
-        }
+        Sampled |= !decodeRequested;
 
         if (probe.EncodedBytes is { } encoded)
         {

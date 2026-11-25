@@ -13,30 +13,37 @@ public sealed class DryRunTests(RedisFixture fixture)
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact]
-    public async Task A_replica_scan_that_fails_runs_the_unit_again_on_its_primary_from_zero_and_counts_each_key_once()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_replica_disconnect_or_timeout_restarts_on_the_primary_without_keeping_partial_counts(bool timeout)
     {
         await using var kit = await MoverKit.CreateAsync(fixture);
         await SeedEveryClassAsync(kit);
         var expected = await Runner(kit).RunAsync(Ct);
         var replicas = new List<ScanRecordingServer>();
         var primaries = new List<ScanRecordingServer>();
+        var rate = new SlowRate(0, TimeSpan.Zero);
         var units = new ProxyUnits(kit.Units, u =>
         {
             var replica = ScanRecordingServer.Over(u.Primary, out var failing);
             failing.FailAfter = 1;
+            failing.DisconnectOnFailure = !timeout;
+            failing.ScanFailure = timeout ? new RedisTimeoutException(CommandFlags.None, "The replica timed out.", CommandStatus.Sent) : null;
+            failing.ScanReply = _ => Page("42", kit.Kit.L("ok"));
             replicas.Add(failing);
             var primary = ScanRecordingServer.Over(u.Primary, out var recorded);
             primaries.Add(recorded);
             return u with { Primary = primary, Replica = replica };
         });
 
-        var report = await Runner(kit, units: units, moverOptions: MoverKit.Quick with { ScanCount = 2 }).RunAsync(Ct);
+        var report = await Runner(kit, units: units, rate: rate).RunAsync(Ct);
 
-        Counts(report, kit.Kit.Cid).Should().BeEquivalentTo(Counts(expected, kit.Kit.Cid));
+        replicas.Should().ContainSingle().Which.Cursors.Should().Equal("0", "42");
+        primaries.Should().ContainSingle().Which.Cursors.Should().StartWith("0");
+        rate.Reserved.Should().HaveCount(9, "the replica probes one key before the primary probes all eight");
         report.Scanned.Should().Be(expected.Scanned);
-        replicas.Should().OnlyContain(r => r.Cursors.Count == 2, "the second scan of each replica fails");
-        primaries.Should().OnlyContain(p => p.Cursors.Count > 0 && p.Cursors[0] == "0", "the unit starts again on its primary from zero");
+        Counts(report, kit.Kit.Cid).Should().BeEquivalentTo(Counts(expected, kit.Kit.Cid));
     }
 
     [Fact]
@@ -116,6 +123,41 @@ public sealed class DryRunTests(RedisFixture fixture)
         Counts(report, kit.Kit.Cid + "b").Should().BeEquivalentTo(new Dictionary<string, long> { [DryRunClasses.NoTarget] = 1 });
         Counts(report, string.Empty).Should().BeEquivalentTo(new Dictionary<string, long> { [DryRunClasses.ExpectedUnmapped] = 1 });
         report.Scanned.Should().Be(5);
+        var unowned = report.Fields().Single(f => f.Key.EndsWith(":" + DryRunClasses.ExpectedUnmapped, StringComparison.Ordinal));
+        var cacheId = unowned.Key.Split(':')[0];
+        var validate = () => MoveKeyNames.ValidateName(cacheId, nameof(cacheId));
+        validate.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task A_key_matched_by_two_scan_patterns_is_counted_once()
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture);
+        await kit.SeedAsync("a1", "b1");
+        var cache = CacheOf(kit);
+        var overlapping = cache with { Name = "overlap", InPlacePattern = kit.Kit.L("a[12]"), OwnsInPlace = _ => false, OwnsNative = _ => false };
+        var space = new RegisteredKeySpace([cache, overlapping], kit.Kit.N(string.Empty));
+
+        var report = await Runner(kit, space: space).RunAsync(Ct);
+
+        report.Scanned.Should().Be(2);
+        report.Caches[kit.Kit.Cid].Movable.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_hash_cache_key_is_counted_without_probing_its_value()
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture);
+        var cache = CacheOf(kit) with { Hash = true, Kind = KeyMoveKind.Hash };
+        var space = new RegisteredKeySpace([cache], kit.Kit.N(string.Empty));
+        await kit.Db.HashSetAsync(kit.Kit.L("key"), "field", "value");
+        var rate = new SlowRate(0, TimeSpan.Zero);
+
+        var report = await Runner(kit, space: space, rate: rate).RunAsync(Ct);
+
+        report.Scanned.Should().Be(1);
+        Counts(report, kit.Kit.Cid).Should().ContainSingle().Which.Should().Be(KeyValuePair.Create("hash", 1L));
+        rate.Reserved.Should().BeEmpty();
     }
 
     [Fact]
@@ -185,7 +227,7 @@ public sealed class DryRunTests(RedisFixture fixture)
     }
 
     [Fact]
-    public async Task A_cache_with_no_movable_key_has_no_estimate()
+    public async Task The_keys_per_second_estimate_includes_probes_that_cannot_move()
     {
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedAsync(new Dictionary<string, (string, TimeSpan?)> { ["short"] = ("v", TimeSpan.FromMinutes(1)) });
@@ -193,7 +235,53 @@ public sealed class DryRunTests(RedisFixture fixture)
         var report = await Runner(kit).RunAsync(Ct);
 
         report.EstimatedNativeBytes.Should().Be(0);
-        report.EstimatedDuration.Should().Be(TimeSpan.Zero);
+        report.EstimatedDuration.Should().Be(TimeSpan.FromMilliseconds(10));
+    }
+
+    [Fact]
+    public async Task With_no_encoded_sample_the_estimate_uses_only_movable_source_bytes()
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture);
+        await kit.SeedAsync(new Dictionary<string, (string, TimeSpan?)>
+        {
+            ["movable"] = ("movable", null),
+            ["short"] = ("short", TimeSpan.FromMinutes(1)),
+        });
+
+        var report = await Runner(kit, options: new DryRunOptions { DecodeCap = 0, SampleEvery = 3 }).RunAsync(Ct);
+
+        report.Caches[kit.Kit.Cid].EncodedKeys.Should().Be(0);
+        report.EstimatedNativeBytes.Should().Be(7);
+    }
+
+    [Theory]
+    [InlineData(-1, 1, nameof(DryRunOptions.DecodeCap))]
+    [InlineData(0, 0, nameof(DryRunOptions.SampleEvery))]
+    public async Task Invalid_sampling_options_are_rejected_before_the_scan(int cap, int every, string option)
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture);
+        var construct = () => Runner(kit, options: new DryRunOptions { DecodeCap = cap, SampleEvery = every });
+
+        construct.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("options").WithMessage($"*{option}*");
+    }
+
+    [Fact]
+    public async Task Only_a_value_that_was_read_and_decoded_counts_and_an_empty_value_has_a_bucket()
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture);
+        await kit.Db.StringSetAsync(kit.Kit.L("empty"), "");
+        var units = new ProxyUnits(kit.Units, u =>
+        {
+            var server = ScanRecordingServer.Over(u.Primary, out var recorder);
+            recorder.ScanReply = _ => Page("0", kit.Kit.L("empty"), kit.Kit.L("gone"));
+            return u with { Primary = server, Replica = null };
+        });
+
+        var cache = (await Runner(kit, units: units).RunAsync(Ct)).Caches[kit.Kit.Cid];
+
+        cache.Counts.Should().ContainKey(DryRunClasses.Absent).WhoseValue.Should().Be(1);
+        cache.Decoded.Should().Be(1);
+        cache.Sizes.Should().Equal(1, 0, 0, 0, 0);
     }
 
     [Theory]
@@ -215,15 +303,89 @@ public sealed class DryRunTests(RedisFixture fixture)
     {
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedAsync("k1", "k2", "k3");
-        var rate = new SlowRate(pauses: 5, wait: TimeSpan.FromMilliseconds(50));
+        var unit = (await kit.Units.ListAsync(Ct)).Should().ContainSingle().Subject;
+        var server = ScanRecordingServer.Over(unit.Primary, out var recorder);
+        var units = new ProxyUnits(kit.Units, u => u with { Primary = server, Replica = null });
+        const int pauses = 5;
+        var rate = new SlowRate(pauses, wait: TimeSpan.FromMilliseconds(50));
         var started = TimeProvider.System.GetTimestamp();
 
-        var report = await Runner(kit, rate: rate).RunAsync(Ct);
+        var report = await Runner(kit, rate: rate, units: units).RunAsync(Ct);
 
         TimeProvider.System.GetElapsedTime(started).Should().BeGreaterThan(TimeSpan.FromMilliseconds(300));
         report.Caches[kit.Kit.Cid].Movable.Should().Be(3);
-        rate.PauseCalls.Should().Be(8);
+        rate.PauseCalls.Should().Be(pauses + recorder.Cursors.Count + 3);
         rate.Reserved.Should().Equal(4L, 4L, 4L);
+    }
+
+    [Fact]
+    public async Task A_paused_rate_holds_the_first_scan_and_pages_use_the_configured_interval()
+    {
+        var clock = new ManualTimeProvider(TimeProvider.System.GetUtcNow());
+        await using var kit = await MoverKit.CreateAsync(fixture, clock: clock);
+        var unit = (await kit.Units.ListAsync(Ct)).Should().ContainSingle().Subject;
+        var server = ScanRecordingServer.Over(unit.Primary, out var recorder);
+        recorder.ScanReply = cursor => Page(cursor == "0" ? "42" : "0");
+        var units = new ProxyUnits(kit.Units, u => u with { Primary = server, Replica = null });
+        var rate = new SlowRate(1, TimeSpan.Zero);
+        var interval = TimeSpan.FromSeconds(1);
+        var options = MoverKit.Quick with { MinScanInterval = interval };
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var run = Runner(kit, rate: rate, units: units, moverOptions: options).RunAsync(stop.Token);
+        try
+        {
+            await MoverKit.WaitAsync(() => Task.FromResult(clock.HasTimers || run.IsCompleted));
+            recorder.Cursors.Should().BeEmpty();
+            clock.Advance(options.PollInterval);
+
+            await MoverKit.WaitAsync(() => Task.FromResult(clock.HasTimers || run.IsCompleted));
+            recorder.Cursors.Should().Equal("0");
+            clock.Advance(interval - TimeSpan.FromMilliseconds(1));
+            recorder.Cursors.Should().Equal("0");
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+
+            (await run.WaitAsync(TimeSpan.FromSeconds(3), TimeProvider.System, Ct)).Scanned.Should().Be(0);
+            recorder.Cursors.Should().Equal("0", "42");
+        }
+        finally
+        {
+            await stop.CancelAsync();
+        }
+    }
+
+    [Fact]
+    public async Task A_dry_run_does_not_replace_the_movers_pending_reservation_for_the_unit()
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture);
+        await kit.SeedAsync("key");
+        var unit = (await kit.UnitIdsAsync()).Should().ContainSingle().Subject;
+        var clock = new ManualTimeProvider(TimeProvider.System.GetUtcNow());
+        var rate = new AimdMoveRate(new MoveRateTests.FakeHealth(), null, new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions()), clock);
+        var pending = rate.Reserve(unit, 50, 0);
+
+        await Runner(kit, rate: rate).RunAsync(Ct);
+
+        rate.Remaining(unit).Should().Be(pending);
+        rate.Remaining("dry:" + unit).Should().Be(TimeSpan.FromMilliseconds(10));
+    }
+
+    [Fact]
+    public async Task A_run_uses_the_data_view_whose_connection_it_checked()
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture);
+        var plane = kit.Kit.Plane;
+        plane.Data = plane.Held! with
+        {
+            IsConnected = () =>
+            {
+                plane.Data = null;
+                return true;
+            },
+        };
+
+        var report = await Runner(kit).RunAsync(Ct);
+
+        report.Scanned.Should().Be(0);
     }
 
     [Fact]
@@ -273,7 +435,7 @@ public sealed class DryRunTests(RedisFixture fixture)
 
         var probe = await kit.Target.ProbeAsync("weird:1", TimeSpan.Zero, true, Ct);
 
-        probe.Should().Be(new DryRunProbe(DryRunClasses.Unmappable, 2, null));
+        probe.Should().Be(new DryRunProbe(DryRunClasses.Unmappable, 2, null, Decoded: true));
     }
 
     [Theory]
@@ -287,7 +449,32 @@ public sealed class DryRunTests(RedisFixture fixture)
 
         var probe = await kit.Target.ProbeAsync("k", TimeSpan.Zero, decode, Ct);
 
-        probe.Should().Be(new DryRunProbe(DryRunClasses.Duplicate, 2, null));
+        probe.Should().Be(new DryRunProbe(DryRunClasses.Duplicate, 2, null, decode));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_short_lived_source_is_classified_before_a_duplicate_destination(bool decode)
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture);
+        await kit.Db.StringSetAsync(kit.Kit.L("key"), "value", TimeSpan.FromMinutes(1));
+        await kit.Db.StringSetAsync(kit.Kit.N("key"), "native");
+
+        var probe = await kit.Target.ProbeAsync("key", Hour, decode, Ct);
+
+        probe.Class.Should().Be(DryRunClasses.ShortTtl);
+    }
+
+    [Fact]
+    public async Task An_oversized_source_is_too_large_even_without_decoding()
+    {
+        await using var kit = await MoverKit.CreateAsync(fixture, moveOptions: new KeyMoveOptions { MaxValueBytes = 3 });
+        await kit.Db.StringSetAsync(kit.Kit.L("key"), "four");
+
+        var probe = await kit.Target.ProbeAsync("key", TimeSpan.Zero, decode: false, Ct);
+
+        probe.Class.Should().Be(DryRunClasses.TooLarge);
     }
 
     [Fact]
@@ -297,7 +484,7 @@ public sealed class DryRunTests(RedisFixture fixture)
 
         var probe = await kit.Target.ProbeAsync("none", TimeSpan.Zero, true, Ct);
 
-        probe.Should().Be(new DryRunProbe(DryRunClasses.Absent, 0, null));
+        probe.Should().Be(new DryRunProbe(DryRunClasses.Absent, null, null));
     }
 
     [Fact]
@@ -334,6 +521,28 @@ public sealed class DryRunTests(RedisFixture fixture)
         probe.Class.Should().Be(DryRunClasses.Movable);
     }
 
+    private static RedisResult Page(string cursor, params string[] keys) =>
+        RedisResult.Create([RedisResult.Create((RedisValue)cursor), RedisResult.Create(keys.Select(key => (RedisValue)key).ToArray())]);
+
+    private static KeyMoveCache CacheOf(MoverKit kit)
+    {
+        var legacy = kit.Kit.L(string.Empty);
+        var native = kit.Kit.N(string.Empty);
+        return new KeyMoveCache(
+            kit.Kit.Cid,
+            kit.Kit.Group,
+            false,
+            false,
+            false,
+            null,
+            legacy + "*",
+            kit.Kit.L,
+            key => key.StartsWith(legacy, StringComparison.Ordinal) ? key[legacy.Length..] : null,
+            native + "*",
+            kit.Kit.N,
+            key => key.StartsWith(native, StringComparison.Ordinal) ? key[native.Length..] : null);
+    }
+
     private static Dictionary<string, long> Counts(DryRunReport report, string cacheId) => report.Caches[cacheId].Counts.ToDictionary(c => c.Key, c => c.Value);
 
     private static async Task SeedEveryClassAsync(MoverKit kit)
@@ -366,11 +575,11 @@ public sealed class DryRunTests(RedisFixture fixture)
         return dump;
     }
 
-    private static DryRunner Runner(MoverKit kit, IMoveRate? rate = null, DryRunOptions? options = null, KeyMoveMoverOptions? rates = null, IScanUnits? units = null, MoverOptions? moverOptions = null) =>
+    private static DryRunner Runner(MoverKit kit, IMoveRate? rate = null, DryRunOptions? options = null, KeyMoveMoverOptions? rates = null, IScanUnits? units = null, MoverOptions? moverOptions = null, IGroupKeySpace? space = null) =>
         new(
             kit.Kit.Group,
             kit.Kit.Plane,
-            kit.Space,
+            space ?? kit.Space,
             new Dictionary<string, IMoveTarget> { [kit.Target.CacheId] = kit.Target },
             units ?? kit.Units,
             string.Empty,

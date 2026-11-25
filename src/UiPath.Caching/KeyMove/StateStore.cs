@@ -38,6 +38,10 @@ internal sealed class StateStore(IDatabase stateDatabase, MoveKeyNames names, Mo
         return await scripts.HoldSetAsync(names.State(group), HoldField(kind), reason, fence).ConfigureAwait(false) == MoveScripts.Written;
     }
 
+    /// <summary>Replaces the stored dry run report of one direction and, with a stamp, sets the <c>dry</c> field; false when the state no longer holds the expected id.</summary>
+    public async Task<bool> StoreDryRunAsync(string group, string direction, string id, DryRunStamp? stamp, IReadOnlyList<KeyValuePair<string, string>> fields, TimeSpan life) =>
+        await scripts.DryRunStoreAsync(names.State(group), names.DryRun(group, direction), id, stamp?.Encode(), fields, (long)life.TotalMilliseconds).ConfigureAwait(false) == MoveScripts.Written;
+
     /// <summary>Deletes the operator hold, the automatic hold, or both (<c>Resume</c>); false when the group has no hash.</summary>
     public async Task<bool> ClearHoldAsync(string group, params HoldKind[] kinds) =>
         await scripts.HoldClearAsync(names.State(group), null, [.. kinds.Select(HoldField)]).ConfigureAwait(false) == MoveScripts.Written;

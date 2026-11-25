@@ -99,6 +99,18 @@ internal sealed class MoveKeyNames
         return $"{LibraryPrefix}{Keyspace}:{{{group}}}:state";
     }
 
+    /// <summary>The stored dry run report of the group in one direction (<c>fwd</c> or <c>rev</c>), in the slot of its state hash.</summary>
+    public RedisKey DryRun(string group, string direction = "fwd")
+    {
+        ValidateName(group, nameof(group));
+        return direction switch
+        {
+            "fwd" => $"{LibraryPrefix}{Keyspace}:{{{group}}}:dry",
+            "rev" => $"{LibraryPrefix}{Keyspace}:{{{group}}}:dry:rev",
+            _ => throw new ArgumentException($"'{direction}' is not a direction: use fwd or rev.", nameof(direction)),
+        };
+    }
+
     /// <summary>The leader lease of the group, in the slot of its state hash.</summary>
     public RedisKey Lead(string group)
     {

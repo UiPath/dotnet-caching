@@ -3,6 +3,7 @@ namespace UiPath.Caching.Migration;
 /// <summary>The classes a dry run sorts keys into.</summary>
 internal static class DryRunClasses
 {
+    public const string Hash = "hash";
     public const string Movable = "movable";
     public const string Expired = "expired";
     public const string ShortTtl = "short_ttl";
