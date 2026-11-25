@@ -31,7 +31,17 @@ public class StateClusterTests
         slots.Count.Should().Be(prefix == "{shard}:" ? 1 : 16384);
         await AssertEveryRecordAsync(kit, slots, target, durable: true);
         (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Durable.Should().BeTrue();
-        kit.Reports.Count(r => r.Kind == "no_replica").Should().BeInRange(1, 3);
+
+        // A master with no replica is reported; a cluster that gives every master one has nothing to report.
+        var reported = kit.Reports.Count(r => r.Kind == "no_replica");
+        if (Environment.GetEnvironmentVariable("REDIS_CLUSTER_REPLICAS") == "1")
+        {
+            reported.Should().Be(0);
+        }
+        else
+        {
+            reported.Should().BeInRange(1, 3);
+        }
     }
 
     [Theory]
