@@ -114,6 +114,51 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         (await app.GetMetadataAsync<Item>(CacheKey.Verbatim(AppKey("k")), Ct))!["owner"].Should().Be("you");
     }
 
+    [Theory]
+    [InlineData("S1", false)]
+    [InlineData("S2", false)]
+    [InlineData("S3", false)]
+    [InlineData("S3", true)]
+    [InlineData("S4", false)]
+    [InlineData("S4", true)]
+    [InlineData("S5", true)]
+    public async Task Selected_hash_fields_are_read_independently_when_one_is_unreadable(string state, bool native)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 to run.");
+        var app = Hashes(true);
+        var (binding, nativePrefix) = await BindingAsync(app, true);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, noOrigin: true, inPlace: binding.InPlace, native: binding.Native, nativePrefix: nativePrefix);
+        await kit.Kit.PrepareAsync("k");
+        await kit.Kit.SetStateAsync(state, nPop: 0, swept: state == "S5");
+
+        var values = KeyMoveHashKit.Items(("first", "one"), ("last", "two"), ("unselected", "three"), ("empty", null));
+        var side = native ? kit.N("k") : kit.L("k");
+        var codec = native ? binding.Native : binding.InPlace;
+        await Db.HashSetAsync(side, CorruptHash(codec, values));
+        await Db.KeyExpireAsync(side, Life);
+        await Db.HashSetAsync(nativePrefix + "plain", CorruptHash(binding.Native, values));
+        var plainKey = CacheKey.Verbatim(AppKey("plain"));
+        var expected = new Dictionary<string, Item?>
+        {
+            ["first"] = await app.GetItemAsync<Item>(plainKey, "first", null, Ct),
+            ["last"] = await app.GetItemAsync<Item>(plainKey, "last", null, Ct),
+            ["empty"] = await app.GetItemAsync<Item>(plainKey, "empty", null, Ct),
+        };
+        expected["first"].Should().Be(new Item("one"));
+        expected["last"].Should().Be(new Item("two"));
+        (await app.GetItemAsync<Item>(plainKey, "broken", null, Ct)).Should().BeNull();
+
+        var read = await kit.Client.ReadAsync("k", ["first", "broken", "last", "empty", "missing"], Ct);
+
+        read.Kind.Should().Be(ReadOutcome.Found);
+        read.Fields.Should().BeEquivalentTo(expected);
+        read.Uncached.Should().BeTrue();
+        read.Expiration.Should().BeCloseTo(TimeProvider.System.GetUtcNow() + Life, TimeSpan.FromSeconds(30));
+        (await kit.Client.ReadAsync("k", ["broken", "missing"], Ct)).Kind.Should().Be(ReadOutcome.Unreadable);
+        (await kit.Client.ReadAsync("k", null, Ct)).Kind.Should().Be(ReadOutcome.Unreadable);
+        (await kit.Kit.ExistsAsync(kit.N("k"))).Should().Be(native, "a partially decoded hash is never promoted");
+    }
+
     [Fact]
     public async Task The_plain_library_path_reads_what_it_writes_and_what_the_cache_reads_and_a_fill_never_replaces_a_hash()
     {
@@ -426,6 +471,9 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         (await kit.Client.SetAsync("e", new Dictionary<string, Item?>(), replace, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.Kit.ExistsAsync(kit.L("e"))).Should().BeFalse("an empty replace is a delete, with no empty marker on L");
     }
+
+    private static HashEntry[] CorruptHash(IKeyMoveHashCodec<Item> codec, IDictionary<string, Item?> values) =>
+        [.. codec.EncodeFields(values, null).Select(field => new HashEntry(field.Key, field.Value)), new("broken", new byte[] { 0x1E, 1, 2, 3 })];
 
     private static string AppKeyOf(string unique, string key) => $"{unique}:{key}";
 
