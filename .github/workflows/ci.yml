@@ -12,6 +12,7 @@ on:
 jobs:
   # The oldest supported server: no ENTRIESREAD or max-deleted-entry-id, so the stream code takes its fallbacks.
   test-redis-6:
+    if: github.event_name != 'schedule'
     runs-on: uipath-ubuntu-latest
     services:
       redis:
@@ -53,6 +54,7 @@ jobs:
 
   # Slot-sensitive tests need a real cluster: three masters, each with a replica, as eng/keymove-kit.sh starts it.
   test-redis-cluster:
+    if: github.event_name != 'schedule'
     runs-on: uipath-ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -65,6 +67,7 @@ jobs:
 
       - name: Start Redis cluster and a primary with a replica
         run: |
+          set -o pipefail
           eng/keymove-kit.sh up cluster --base 7000 | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
           eng/keymove-kit.sh up replica --base 7010 | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
 
@@ -92,6 +95,12 @@ jobs:
             -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveHashClusterTests -class UiPath.Caching.Migration.Tests.KeyMove.MoverLeaseTests \
             -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveBatchClusterTests
 
+      - name: Stop Redis cluster and replica kit
+        if: always()
+        run: |
+          eng/keymove-kit.sh down --base 7000
+          eng/keymove-kit.sh down --base 7010
+
   # The fault tests (failover, restart, pause) run on main and nightly only: a failure there goes to the flaky list and blocks no pull request.
   test-chaos:
     if: github.event_name != 'pull_request'
@@ -107,6 +116,7 @@ jobs:
 
       - name: Start Redis cluster and a primary with a replica
         run: |
+          set -o pipefail
           eng/keymove-kit.sh up cluster --base 7000 | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
           eng/keymove-kit.sh up replica --base 7010 | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
 
@@ -119,7 +129,14 @@ jobs:
           RUN_REDIS_INTEGRATION_TESTS: '1'
         run: ./tests/UiPath.Caching.Migration.Tests/bin/Release/net10.0/UiPath.Caching.Migration.Tests -trait "Category=Chaos"
 
+      - name: Stop Redis cluster and replica kit
+        if: always()
+        run: |
+          eng/keymove-kit.sh down --base 7000
+          eng/keymove-kit.sh down --base 7010
+
   build-linux:
+    if: github.event_name != 'schedule'
     runs-on: uipath-ubuntu-latest
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -221,6 +238,7 @@ jobs:
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages
 
   build-windows:
+    if: github.event_name != 'schedule'
     runs-on: uipath-windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

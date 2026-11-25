@@ -5,8 +5,8 @@
 #   eng/keymove-kit.sh up replica [--base 17110]   a primary on base and its replica on base+1
 #   eng/keymove-kit.sh down [--base N]             removes the containers of that base
 #
-# Every container runs on the host network with restart=always, so a test restarts a server with SHUTDOWN NOSAVE and the container comes back
-# empty; DEBUG is enabled for the fault tests. "up" prints the variables the tests read, ready for eval.
+# Every container runs on the host network with restart=always, so SHUTDOWN NOSAVE starts a new Redis process.
+# DEBUG is enabled for the fault tests. "up" prints the variables the tests read, ready for eval.
 set -euo pipefail
 
 image=${KEYMOVE_KIT_IMAGE:-redis:7.4}
@@ -47,6 +47,22 @@ wait_ping() {
   done
 }
 
+cluster_settled() {
+  local port name info replication
+  for port in $(seq "$base" $((base + 5))); do
+    name="$(prefix "$base")-$port"
+    info=$(docker exec "$name" redis-cli -p "$port" cluster info) || return 1
+    [[ "$info" == *$'cluster_state:ok\r'* ]] || return 1
+
+    replication=$(docker exec "$name" redis-cli -p "$port" info replication) || return 1
+    if [[ "$replication" == *$'role:master\r'* ]]; then
+      [[ "$replication" =~ connected_slaves:[1-9][0-9]*$'\r' ]] || return 1
+    else
+      [[ "$replication" == *$'master_link_status:up\r'* && "$replication" == *$'master_sync_in_progress:0\r'* ]] || return 1
+    fi
+  done
+}
+
 up_cluster() {
   base=${base:-17100}
   local nodes=() port
@@ -61,10 +77,8 @@ up_cluster() {
 
   docker exec "$(prefix "$base")-$base" redis-cli --cluster create "${nodes[@]}" --cluster-replicas 1 --cluster-yes >/dev/null
 
-  # Every node must agree on ok and see three replicas linked before a test runs.
   local tries=0
-  until docker exec "$(prefix "$base")-$base" redis-cli -p "$base" cluster info | grep -q cluster_state:ok \
-    && [[ "$(docker exec "$(prefix "$base")-$base" redis-cli -p "$base" cluster nodes | grep -c slave)" -eq 3 ]]; do
+  until cluster_settled; do
     tries=$((tries + 1))
     if [[ "$tries" -gt 60 ]]; then
       echo "the cluster on $base did not settle" >&2
@@ -98,12 +112,13 @@ up_replica() {
 
   echo "export REDIS_CONNECTION_STRING='127.0.0.1:$base'"
   echo "export REDIS_REPLICA_CONNECTION_STRING='127.0.0.1:$((base + 1))'"
+  echo "export CLAIM_REPLICA_CONNECTION_STRING='127.0.0.1:$((base + 1))'"
 }
 
 down() {
-  local filter="name=keymove-kit-"
+  local filter="name=^keymove-kit-"
   if [[ -n "$base" ]]; then
-    filter="name=$(prefix "$base")-"
+    filter="name=^$(prefix "$base")-"
   fi
 
   local ids
