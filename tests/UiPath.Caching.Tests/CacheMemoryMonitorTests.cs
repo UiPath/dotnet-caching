@@ -37,6 +37,7 @@ public class CacheMemoryMonitorTests : IAsyncLifetime
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

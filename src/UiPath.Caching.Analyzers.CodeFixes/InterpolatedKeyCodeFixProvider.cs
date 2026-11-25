@@ -161,35 +161,9 @@ public sealed class InterpolatedKeyCodeFixProvider : CodeFixProvider
         ExpressionSyntax? joined = null;
         foreach (var content in key.Contents)
         {
-            ExpressionSyntax? operand = null;
-            if (content is InterpolatedStringTextSyntax text)
+            if (!TryOperand(model, content, raw, rebuilt, token, out var operand))
             {
-                var part = raw ? text.TextToken.ValueText : text.TextToken.ValueText.Replace("{{", "{").Replace("}}", "}");
-                rebuilt.Append(part);
-                operand = part.Length > 0 ? Literal(part) : null;
-            }
-            else if (content is InterpolationSyntax hole)
-            {
-                if (model.GetConstantValue(hole.Expression, token) is not { HasValue: true, Value: string part })
-                {
-                    return null;
-                }
-
-                rebuilt.Append(part);
-                // A nested constant interpolation is flattened too: left as it is, it would still be ambiguous.
-                if (hole.Expression is InterpolatedStringExpressionSyntax nested)
-                {
-                    operand = PlainString(model, nested, part, token) is { } flat ? Operand(flat) : null;
-                }
-                else
-                {
-                    operand = Operand(hole.Expression);
-                }
-
-                if (operand is null)
-                {
-                    return null;
-                }
+                return null;
             }
 
             if (operand is not null)
@@ -205,6 +179,42 @@ public sealed class InterpolatedKeyCodeFixProvider : CodeFixProvider
         }
 
         return (joined ?? Literal(value)).WithTriviaFrom(key).WithAdditionalAnnotations(Formatter.Annotation);
+    }
+
+    /// <summary>False when the content cannot be rebuilt as an operand; the operand is null for content that adds none.</summary>
+    private static bool TryOperand(SemanticModel model, InterpolatedStringContentSyntax content, bool raw, StringBuilder rebuilt, CancellationToken token, out ExpressionSyntax? operand)
+    {
+        operand = null;
+        if (content is InterpolatedStringTextSyntax text)
+        {
+            var part = raw ? text.TextToken.ValueText : text.TextToken.ValueText.Replace("{{", "{").Replace("}}", "}");
+            rebuilt.Append(part);
+            operand = part.Length > 0 ? Literal(part) : null;
+            return true;
+        }
+
+        if (content is not InterpolationSyntax hole)
+        {
+            return true;
+        }
+
+        if (model.GetConstantValue(hole.Expression, token) is not { HasValue: true, Value: string constant })
+        {
+            return false;
+        }
+
+        rebuilt.Append(constant);
+        // A nested constant interpolation is flattened too: left as it is, it would still be ambiguous.
+        if (hole.Expression is InterpolatedStringExpressionSyntax nested)
+        {
+            operand = PlainString(model, nested, constant, token) is { } flat ? Operand(flat) : null;
+        }
+        else
+        {
+            operand = Operand(hole.Expression);
+        }
+
+        return operand is not null;
     }
 
     private static ExpressionSyntax Operand(ExpressionSyntax hole) =>

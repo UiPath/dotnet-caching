@@ -299,6 +299,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

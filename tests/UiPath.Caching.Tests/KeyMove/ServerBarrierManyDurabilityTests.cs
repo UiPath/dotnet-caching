@@ -84,7 +84,7 @@ public sealed class ServerBarrierManyDurabilityTests
         }
     }
 
-    private static async Task<RedisResult> KillThenWaitAsync(IServer real, IConnectionMultiplexer admin, object[] args)
+    private static async Task<RedisResult> KillThenWaitAsync(IServer real, ConnectionMultiplexer admin, object[] args)
     {
         var id = (long)await real.ExecuteAsync("CLIENT", "ID");
         await admin.GetServer(admin.GetEndPoints()[0]).ExecuteAsync("CLIENT", "KILL", "ID", id);

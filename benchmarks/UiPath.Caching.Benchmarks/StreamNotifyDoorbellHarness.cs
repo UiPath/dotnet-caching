@@ -53,7 +53,9 @@ internal static class StreamNotifyDoorbellHarness
         };
 
         Console.WriteLine($"=== Cache-visibility latency: writer SetAsync → reader GetAsync sees new value ({durationSec}s @ {writeHz}Hz writes) ===");
+#pragma warning disable CA1303 // the header row is built from constants only; console output of a harness is not localized
         Console.WriteLine($"{"NotifyEnabled",14} | {"PollInterval",13} | {"Samples",8} | {"Mean (ms)",10} | {"P50 (ms)",10} | {"P95 (ms)",10} | {"P99 (ms)",10} | {"Max (ms)",10}");
+#pragma warning restore CA1303
         Console.WriteLine(new string('-', 110));
 
         foreach (var (notify, poll) in cells)

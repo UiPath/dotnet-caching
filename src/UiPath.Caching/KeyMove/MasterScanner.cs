@@ -61,7 +61,7 @@ internal sealed class MasterScanner(Func<IEnumerable<IServer>> servers, IStateTo
     // Every slot must have a master, and each master a connected server: a shard that is down is an unavailable owner, never an empty one.
     private IReadOnlyList<IServer> OwnersOf(ClusterLayout layout)
     {
-        var covered = layout.Masters.Sum(m => m.Slots.Sum(r => r.To - r.From + 1));
+        var covered = layout.Masters.SelectMany(static (MasterLayout m) => m.Slots).Sum(static (SlotRange r) => r.To - r.From + 1);
         if (covered != HashSlot.Count)
         {
             throw new RedisException($"The masters own {covered} of {HashSlot.Count} slots, so a scan of them would miss keys.");

@@ -1593,8 +1593,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     public async Task GetOrAdd_generator()
     {
         var expectedValue = _fixture.Create<string?>();
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult(expectedValue);
-        var actual = await Sut.GetOrAddAsync(_fixture.Create<string>(), generator, TimeSpan.FromSeconds(5), token: testContextAccessor.Current.CancellationToken);
+        Task<string?> Generator(CancellationToken _) => Task.FromResult(expectedValue);
+        var actual = await Sut.GetOrAddAsync(_fixture.Create<string>(), (Func<CancellationToken, Task<string?>>)Generator, TimeSpan.FromSeconds(5), token: testContextAccessor.Current.CancellationToken);
         actual.Should().Be(expectedValue);
     }
 
@@ -2160,13 +2160,13 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _isConnected = false;
         var expected = _fixture.Create<string>();
         var generatorCalled = false;
-        Func<CancellationToken, Task<string?>> generator = _ =>
+        Task<string?> Generator(CancellationToken _)
         {
             generatorCalled = true;
             return Task.FromResult<string?>(expected);
-        };
+        }
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, TimeSpan.FromSeconds(5), token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, TimeSpan.FromSeconds(5), token: testContextAccessor.Current.CancellationToken);
 
         actual.Should().Be(expected);
         generatorCalled.Should().BeTrue();
@@ -2329,13 +2329,13 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         // what bounds the call, so nothing here can hang.
         using var caller = new CancellationTokenSource();
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
-        Func<CancellationToken, Task<string?>> generator = async ct =>
+        async Task<string?> Generator(CancellationToken ct)
         {
             await Task.Delay(TimeSpan.FromSeconds(5), ct);
             return "never";
-        };
+        }
 
-        var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy: policy, token: caller.Token);
+        var act = async () => await Sut.GetOrAddAsync(_cacheKey, Generator, policy: policy, token: caller.Token);
 
         await act.Should().ThrowAsync<TimeoutException>();
     }
@@ -2962,6 +2962,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

@@ -22,8 +22,8 @@ public class ChangeTokenTests : IAsyncLifetime
     private ChangeToken<byte[]>? _sut = null;
     private ChangeToken<byte[]> Sut => _sut ??= new ChangeToken<byte[]>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
 
-    public static IEnumerable<object[]> InvalidEvents() => new TestCacheEvent[]
-    {
+    public static TheoryData<TestCacheEvent> InvalidEvents() =>
+    [
         new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
@@ -59,7 +59,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Source = new Uri("urn:machine"),
             Data = null,
         },
-    }.Select(cv => new object[] { cv });
+    ];
 
     [Fact]
     public void Verify_ActiveChangeCallbacks()
@@ -68,18 +68,18 @@ public class ChangeTokenTests : IAsyncLifetime
     }
 
     [Theory]
-    [MemberData(nameof(InvalidEvents))]
+    [MemberData(nameof(InvalidEvents), DisableDiscoveryEnumeration = true)]
     public void OnNext_NoChanges_wheniInvalid_event(TestCacheEvent cloudEvent)
     {
         object? actualState = null;
         var callbackCalled = false;
         var expectedState = _fixture.Create<object>();
-        Action<object?> callback = (state) =>
+        void Callback(object? state)
         {
             callbackCalled = true;
             actualState = state;
-        };
-        _ = Sut.RegisterChangeCallback(callback, expectedState);
+        }
+        _ = Sut.RegisterChangeCallback((Action<object?>)Callback, expectedState);
 
         Sut.OnNext(cloudEvent);
         Sut.HasChanged.Should().BeFalse();
@@ -100,13 +100,13 @@ public class ChangeTokenTests : IAsyncLifetime
         object? actualState = null;
         var callbackCalled = false;
         var expectedState = _fixture.Create<object>();
-        Action<object?> callback = (state) =>
+        void Callback(object? state)
         {
             callbackCalled = true;
             actualState = state;
-        };
+        }
 
-        _ = Sut.RegisterChangeCallback(callback, expectedState);
+        _ = Sut.RegisterChangeCallback((Action<object?>)Callback, expectedState);
         var cloudEVent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
@@ -146,13 +146,13 @@ public class ChangeTokenTests : IAsyncLifetime
         object? actualState = null;
         var callbackCalled = false;
         var expectedState = _fixture.Create<object>();
-        Action<object?> callback = (state) =>
+        void Callback(object? state)
         {
             callbackCalled = true;
             actualState = state;
-        };
+        }
 
-        _ = Sut.RegisterChangeCallback(callback, expectedState);
+        _ = Sut.RegisterChangeCallback((Action<object?>)Callback, expectedState);
         Sut.OnCompleted();
         Sut.HasChanged.Should().BeFalse();
         callbackCalled.Should().BeFalse();
@@ -164,13 +164,13 @@ public class ChangeTokenTests : IAsyncLifetime
         object? actualState = null;
         var callbackCalled = false;
         var expectedState = _fixture.Create<object>();
-        Action<object?> callback = (state) =>
+        void Callback(object? state)
         {
             callbackCalled = true;
             actualState = state;
-        };
+        }
 
-        _ = Sut.RegisterChangeCallback(callback, expectedState);
+        _ = Sut.RegisterChangeCallback((Action<object?>)Callback, expectedState);
         Sut.OnError(_fixture.Create<Exception>());
         Sut.HasChanged.Should().BeTrue();
         callbackCalled.Should().BeTrue();
@@ -669,6 +669,7 @@ public class ChangeTokenTests : IAsyncLifetime
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

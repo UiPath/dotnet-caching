@@ -207,6 +207,7 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

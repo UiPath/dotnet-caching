@@ -116,6 +116,7 @@ public class InMemoryCacheProviderTests(ITestContextAccessor testContextAccessor
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

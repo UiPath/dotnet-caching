@@ -704,7 +704,7 @@ public class NamedCachingTests
         act.Should().NotThrow();
     }
 
-    private static IServiceProvider Child(IServiceProvider root, string name = Name) =>
+    private static ServiceProvider Child(IServiceProvider root, string name = Name) =>
         NamedCachingContainer.Of(root, name).Provider;
 
     private static void Broadcast(ICachingBuilder b)

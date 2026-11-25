@@ -17,7 +17,7 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
         var order = new List<string>();
         var duringSweep = new List<string?>();
         var hooks = new ClearHooks(
-            _ => Task.Run(() => order.Add("first")),
+            _ => Task.Run(() => order.Add("first"), CancellationToken.None),
             async _ =>
             {
                 order.Add("sweep");
@@ -25,7 +25,7 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
                 duringSweep.Add(await Gate(kit, "b"));
                 duringSweep.Add(await kit.Db.StringGetAsync(kit.Names.ClearLock(kit.Group, "a")));
             },
-            _ => Task.Run(() => order.Add("second")));
+            _ => Task.Run(() => order.Add("second"), CancellationToken.None));
 
         (await Coordinator(kit).ClearAsync(kit.Group, "a", hooks, Ct)).Should().Be(ClearOutcome.Cleared);
 
@@ -50,7 +50,7 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
     {
         await using var kit = await StateKit.StandaloneAsync(fixture, true);
         var calls = new List<string>();
-        var hooks = new ClearHooks(_ => Task.Run(() => calls.Add("first")), _ => Task.Run(() => calls.Add("sweep")), _ => Task.Run(() => calls.Add("second")));
+        var hooks = new ClearHooks(_ => Task.Run(() => calls.Add("first"), CancellationToken.None), _ => Task.Run(() => calls.Add("sweep"), CancellationToken.None), _ => Task.Run(() => calls.Add("second"), CancellationToken.None));
 
         (await Coordinator(kit).ClearAsync(kit.Group, "a", hooks, Ct)).Should().Be(ClearOutcome.Cleared, "no state hash");
         await kit.InitAsync("a");
@@ -222,7 +222,7 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
         await using var kit = await StateKit.StandaloneAsync(fixture, true, new KeyMoveStateOptions { ExpectedReplicasPerMaster = 0, ClearLockRenewInterval = TimeSpan.FromHours(1) });
         var init = await kit.InitAsync("a", "b");
         (await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, Ct)).Outcome.Should().Be(TransitionOutcome.Completed);
-        var hooks = new ClearHooks(_ => Task.CompletedTask, _ => Task.Run(() => kit.Time.Advance(kit.Options.ClearLockTtl + TimeSpan.FromSeconds(1))), _ => Task.CompletedTask);
+        var hooks = new ClearHooks(_ => Task.CompletedTask, _ => Task.Run(() => kit.Time.Advance(kit.Options.ClearLockTtl + TimeSpan.FromSeconds(1)), CancellationToken.None), _ => Task.CompletedTask);
 
         (await Coordinator(kit).ClearAsync(kit.Group, "a", hooks, Ct)).Should().Be(ClearOutcome.Failed);
 
@@ -241,14 +241,14 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
         await kit.Db.StringSetAsync(lockKey, "dead-owner", TimeSpan.FromMilliseconds(300));
         var reopener = new StuckGateReopener(kit.Records, control, kit.Db, kit.Names, kit.Options, kit.Time);
 
-        var held = await reopener.CheckAsync(kit.Group, state, Ct);
-        held.Reopened.Should().BeEmpty("the owner's lock is still live");
+        var (reopened, _) = await reopener.CheckAsync(kit.Group, state, Ct);
+        reopened.Should().BeEmpty("the owner's lock is still live");
         (await Gate(kit, "a")).Should().Be("CLOSED:crashed");
 
         await TimeSteps.UntilAsync(() => !kit.Db.KeyExists(lockKey));
-        var expired = await reopener.CheckAsync(kit.Group, state, Ct);
+        var (reopenedAfterExpiry, _) = await reopener.CheckAsync(kit.Group, state, Ct);
 
-        expired.Reopened.Should().Equal("a");
+        reopenedAfterExpiry.Should().Equal("a");
         (await Gate(kit, "a")).Should().StartWith("OPEN:");
         (await Gate(kit, "b")).Should().StartWith("OPEN:");
     }
@@ -280,10 +280,10 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
 
         (await reopener.CheckAsync(kit.Group, state, Ct)).Stuck.Should().BeEmpty();
         kit.Time.Advance(kit.Options.GateStuckAfter + TimeSpan.FromSeconds(1));
-        var late = await reopener.CheckAsync(kit.Group, state, Ct);
+        var (reopened, stuck) = await reopener.CheckAsync(kit.Group, state, Ct);
 
-        late.Stuck.Should().Equal("a");
-        late.Reopened.Should().BeEmpty();
+        stuck.Should().Equal("a");
+        reopened.Should().BeEmpty();
         await kit.Db.KeyDeleteAsync(lockKey);
     }
 
@@ -296,7 +296,7 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
         sweepToken.ThrowIfCancellationRequested();
     }
 
-    private static ClearHooks Hooks(Action onSweep) => new(_ => Task.CompletedTask, _ => Task.Run(onSweep), _ => Task.CompletedTask);
+    private static ClearHooks Hooks(Action onSweep) => new(_ => Task.CompletedTask, _ => Task.Run(onSweep, CancellationToken.None), _ => Task.CompletedTask);
 
     private static async Task<string?> Gate(StateKit kit, string cid) => await kit.ControlDb.HashGetAsync(kit.Names.Control(kit.Group, 0), "c:" + cid);
 

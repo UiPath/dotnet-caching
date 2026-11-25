@@ -189,7 +189,7 @@ internal sealed class NamedCachingContainer : IDisposable
         }
     }
 
-    private static void RemoveKeyCasingSeeder(IServiceCollection services)
+    private static void RemoveKeyCasingSeeder(ServiceCollection services)
     {
         var seeder = services.FirstOrDefault(descriptor =>
             descriptor.ServiceType == typeof(IValidateOptions<CacheOptions>) && descriptor.ImplementationType == typeof(CacheKeyCasingSeeder));

@@ -52,7 +52,7 @@ public class EventDispatcherTests
         subject.ThrowCount.Should().Be(5, "every OnNext call must be attempted even when previous calls threw");
     }
 
-    private static ICacheEvent CreateEvent(string key) => new TestCacheEvent
+    private static TestCacheEvent CreateEvent(string key) => new TestCacheEvent
     {
         Id = Guid.NewGuid().ToString(),
         Source = new Uri("urn:test"),
@@ -70,7 +70,7 @@ public class EventDispatcherTests
             _throwAlways = throwAlways;
         }
 
-        public List<string?> Keys { get; } = new();
+        public List<string?> Keys { get; } = [];
         public int ThrowCount { get; private set; }
 
         public IDisposable Subscribe(IObserver<ICacheEvent> observer) => Disposable.Empty;

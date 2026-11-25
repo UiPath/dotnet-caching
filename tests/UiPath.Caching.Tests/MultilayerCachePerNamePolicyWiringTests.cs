@@ -29,12 +29,12 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var token = TestContext.Current.CancellationToken;
         var policyTtl = TimeSpan.FromMinutes(7);
         var policy = new CachePolicy { DistributedExpiration = policyTtl };
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy, token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy, token);
 
         await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
@@ -50,12 +50,12 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var token = TestContext.Current.CancellationToken;
         var callerTtl = TimeSpan.FromMinutes(2);
         var policy = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(7) };
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, callerTtl, policy, token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, callerTtl, policy, token);
 
         await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
@@ -75,12 +75,12 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, token: token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy: null, token: token);
 
         await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
@@ -98,12 +98,12 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, token: token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy: null, token: token);
 
         var optionsTtl = _options.DefaultExpiration!.Value;
         await _innerCache.Received(1).TryFillAsync<string>(
@@ -355,12 +355,12 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+        Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
 
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, token: TestContext.Current.CancellationToken);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy: null, token: TestContext.Current.CancellationToken);
 
         await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
@@ -550,7 +550,11 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
             Arg.Any<CancellationToken>());
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        GC.SuppressFinalize(this);
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask InitializeAsync()
     {

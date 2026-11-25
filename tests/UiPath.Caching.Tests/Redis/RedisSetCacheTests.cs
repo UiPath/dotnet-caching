@@ -639,7 +639,11 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         act.Should().NotThrow();
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        GC.SuppressFinalize(this);
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask InitializeAsync()
     {

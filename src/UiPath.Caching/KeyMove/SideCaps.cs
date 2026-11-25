@@ -30,9 +30,24 @@ internal sealed record SideCaps(
     public int? Replicas => Masters.Any(static m => m.Replicas is null) ? null : Masters.Min(static m => m.Replicas);
 
     /// <summary>The first policy that can evict control records; else null when any master did not tell; else the shared value.</summary>
-    public string? EvictionPolicy =>
-        Masters.FirstOrDefault(static m => m.EvictionSafe == false)?.EvictionPolicy
-        ?? (Masters.Any(static m => m.EvictionPolicy is null) ? null : Masters.FirstOrDefault()?.EvictionPolicy);
+    public string? EvictionPolicy
+    {
+        get
+        {
+            var evicting = Masters.FirstOrDefault(static m => m.EvictionSafe == false)?.EvictionPolicy;
+            if (evicting is not null)
+            {
+                return evicting;
+            }
+
+            if (Masters.Any(static m => m.EvictionPolicy is null) || Masters.Count == 0)
+            {
+                return null;
+            }
+
+            return Masters[0].EvictionPolicy;
+        }
+    }
 
     /// <summary>Reports preflight failures with the server side that failed.</summary>
     /// <remarks>WAIT is not required here; a side without it needs <c>Approve(barrier_unavailable_dst)</c>.</remarks>

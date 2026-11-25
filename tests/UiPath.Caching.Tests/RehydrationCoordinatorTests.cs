@@ -115,13 +115,7 @@ public class RehydrationCoordinatorTests
     [Fact]
     public async Task SpawnAsync_emits_deduped_when_lock_acquire_exceeds_factoryTimeout()
     {
-        var distributedLock = Substitute.For<IDistributedLock>();
-        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                var ct = call.Arg<CancellationToken>();
-                return new ValueTask<IAsyncDisposable?>(HangAsync(ct));
-            });
+        var distributedLock = new HangingLock();
 
         var telemetry = new RecordingTelemetryProvider();
         var sut = NewCoordinator(distributedLock, telemetry);
@@ -144,12 +138,6 @@ public class RehydrationCoordinatorTests
         timedOut!.Properties.Should().ContainKey("source").WhoseValue.Should().Be(
             "rehydrate-lock",
             "tagged with source=rehydrate-lock so it doesn't pollute foreground-factory dashboards");
-
-        static async Task<IAsyncDisposable?> HangAsync(CancellationToken ct)
-        {
-            await Task.Delay(TimeSpan.FromSeconds(30), ct);
-            return Substitute.For<IAsyncDisposable>();
-        }
     }
 
     [Fact]
@@ -633,6 +621,17 @@ public class RehydrationCoordinatorTests
             await Task.Delay(10);
         }
         throw new TimeoutException($"Event '{eventName}' was not emitted within {timeout}.");
+    }
+
+    private sealed class HangingLock : IDistributedLock
+    {
+        public ValueTask<IAsyncDisposable> AcquireAsync(string key, TimeSpan expiry, TimeSpan waitTimeout, CancellationToken token) => throw new NotSupportedException();
+
+        public async ValueTask<IAsyncDisposable?> TryAcquireAsync(string key, TimeSpan expiry, CancellationToken token)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30), token);
+            return Substitute.For<IAsyncDisposable>();
+        }
     }
 
     private sealed class CapturingLogger : ILogger

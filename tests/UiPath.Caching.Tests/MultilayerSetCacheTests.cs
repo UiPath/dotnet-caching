@@ -5,6 +5,8 @@ namespace UiPath.Caching.Tests;
 
 public class MultilayerSetCacheTests
 {
+    private static readonly string[] TwoItems = ["b", "c"];
+    private static readonly string[] ThreeItems = ["a", "b", "c"];
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -96,7 +98,7 @@ public class MultilayerSetCacheTests
         l2.AddAsync<string>(default, default!, default(DateTimeOffset), default, Ct).ReturnsForAnyArgs(_ => 2L);
 
         await sut.MembersAsync<string>("k", token: Ct);              // primes L1
-        await sut.AddAsync("k", (IEnumerable<string>)new[] { "b", "c" }, (CachePolicy?)null, Ct);
+        await sut.AddAsync("k", (IEnumerable<string>)TwoItems, (CachePolicy?)null, Ct);
         var members = await sut.MembersAsync<string>("k", token: Ct);
 
         members.Should().BeEquivalentTo("a", "b", "c");
@@ -122,7 +124,7 @@ public class MultilayerSetCacheTests
     {
         var (sut, l2) = CreateSut();
         SetupMembers(l2, "a", "b");
-        l2.PopAsync<string>(default, default(CachePolicy?), Ct).ReturnsForAnyArgs<string?>(_ => "a");
+        l2.PopAsync<string>(default, default, Ct).ReturnsForAnyArgs<string?>(_ => "a");
 
         await sut.MembersAsync<string>("k", token: Ct);              // primes L1
         var popped = await sut.PopAsync<string>("k", token: Ct);
@@ -174,7 +176,7 @@ public class MultilayerSetCacheTests
         (await sut.CountAsync<string>("k", Ct)).Should().Be(2);
         (await sut.ContainsAsync<string>("k", Ct)).Should().BeTrue();
 
-        await l2.DidNotReceiveWithAnyArgs().ContainsItemAsync<string>(default, default(string)!, Ct);
+        await l2.DidNotReceiveWithAnyArgs().ContainsItemAsync<string>(default, default!, Ct);
         await l2.DidNotReceiveWithAnyArgs().CountAsync<string>(default, Ct);
     }
 
@@ -205,15 +207,15 @@ public class MultilayerSetCacheTests
     public async Task Disconnected_pop_and_remove_with_local_only_operate_on_L1()
     {
         var (sut, l2) = CreateMonitoredSut(connected: false, useLocalOnlyWhenDisconnected: true);
-        await sut.AddAsync("k", (IEnumerable<string>)new[] { "a", "b", "c" }, (CachePolicy?)null, Ct);
+        await sut.AddAsync("k", (IEnumerable<string>)ThreeItems, (CachePolicy?)null, Ct);
 
         var popped = await sut.PopAsync<string>("k", token: Ct);
-        new[] { "a", "b", "c" }.Should().Contain(popped!);
-        (await sut.RemoveItemAsync("k", new[] { "a", "b", "c" }.First(v => v != popped), Ct)).Should().BeTrue();
+        ThreeItems.Should().Contain(popped!);
+        (await sut.RemoveItemAsync("k", ThreeItems.First(v => v != popped), Ct)).Should().BeTrue();
         (await sut.CountAsync<string>("k", Ct)).Should().Be(1);
 
-        await l2.DidNotReceiveWithAnyArgs().PopAsync<string>(default, default(CachePolicy?), Ct);
-        await l2.DidNotReceiveWithAnyArgs().RemoveItemAsync<string>(default, default(string)!, Ct);
+        await l2.DidNotReceiveWithAnyArgs().PopAsync<string>(default, default, Ct);
+        await l2.DidNotReceiveWithAnyArgs().RemoveItemAsync<string>(default, default!, Ct);
     }
 
     [Fact]

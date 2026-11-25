@@ -183,6 +183,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
 
         return ValueTask.CompletedTask;
     }

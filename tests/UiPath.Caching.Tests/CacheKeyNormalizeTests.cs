@@ -3,8 +3,8 @@ namespace UiPath.Caching.Tests;
 /// <summary>What key normalization writes: trimmed, and lowercased unless the casing is sensitive. A name that needs neither is copied as it is.</summary>
 public class CacheKeyNormalizeTests
 {
-    public static TheoryData<string> Names => new()
-    {
+    public static TheoryData<string> Names =>
+    [
         "user:42",
         "tenant:7f3a9c1e-22b4:user:42",
         "User:42",
@@ -20,7 +20,7 @@ public class CacheKeyNormalizeTests
         "ÀB",
         "a",
         " ",
-    };
+    ];
 
     public static TheoryData<string> Texts =>
     [

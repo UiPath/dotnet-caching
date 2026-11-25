@@ -131,7 +131,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ =>
         {
             decodeCalled.TrySetResult(true);
-            return default(ICacheEvent?);
+            return default;
         });
         SetupSingleBatch(entries);
 
@@ -2552,6 +2552,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         _cancellationTokenSource.Dispose();
         return ValueTask.CompletedTask;
     }

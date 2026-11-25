@@ -18,7 +18,7 @@ public class CacheKeyTest
         Assert.True(new CacheKey(value) == value.ToLowerInvariant());
         Assert.True(new CacheKey(value) != new CacheKey(value.ToLowerInvariant() + _fixture.Create<string>()));
         Assert.True(new CacheKey(value) != value.ToLowerInvariant() + _fixture.Create<string>());
-        Assert.True(new CacheKey(value).GetHashCode() != 0);
+        Assert.NotEqual(0, new CacheKey(value).GetHashCode());
         Assert.True(new CacheKey(value).GetHashCode() == new CacheKey(value.ToLowerInvariant()).GetHashCode());
     }
 
@@ -116,8 +116,8 @@ public class CacheKeyTest
         try
         {
             CultureInfo.CurrentCulture = custom;
-            (-42).ToString().Should().Be("~42");
-            (-42L).ToString().Should().Be("~42");
+            (-42).ToString(CultureInfo.CurrentCulture).Should().Be("~42");
+            (-42L).ToString(CultureInfo.CurrentCulture).Should().Be("~42");
 
             CacheKey intKey = -42;
             CacheKey longKey = -42L;

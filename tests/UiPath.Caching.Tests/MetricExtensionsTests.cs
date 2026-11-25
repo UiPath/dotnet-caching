@@ -1,3 +1,4 @@
+using System.Globalization;
 using StackExchange.Redis;
 using UiPath.Caching.Tests.Telemetry;
 namespace UiPath.Caching.Tests;
@@ -72,12 +73,12 @@ public class MetricExtensionsTests
             Math.Abs(m.Value - streamId.Timestamp) < 1e-9 &&
             m.Properties != null &&
             m.Properties[Metrics.TopicName] == topic &&
-            m.Properties[Metrics.SequenceNumber] == streamId.Sequence.ToString());
+            m.Properties[Metrics.SequenceNumber] == streamId.Sequence.ToString(CultureInfo.CurrentCulture));
         telemetry.Metrics.Should().ContainSingle(m =>
             m.Name == readTopicMetricName &&
             Math.Abs(m.Value - streamId.Timestamp) < 1e-9 &&
             m.Properties != null &&
             m.Properties[Metrics.TopicName] == topic &&
-            m.Properties[Metrics.SequenceNumber] == streamId.Sequence.ToString());
+            m.Properties[Metrics.SequenceNumber] == streamId.Sequence.ToString(CultureInfo.CurrentCulture));
     }
 }

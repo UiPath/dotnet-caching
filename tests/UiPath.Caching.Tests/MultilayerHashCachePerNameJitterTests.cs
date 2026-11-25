@@ -234,7 +234,11 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
             Arg.Any<CancellationToken>());
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        GC.SuppressFinalize(this);
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask InitializeAsync()
     {

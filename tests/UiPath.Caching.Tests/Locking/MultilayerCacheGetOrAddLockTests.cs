@@ -17,7 +17,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
     private ITopic<ICacheEvent> _topic = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;
-    private IMemoryCache _memoryCache = default!;
+    private MemoryCache _memoryCache = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
     private IMemoryCacheFactory _memoryCacheFactory = default!;
     private InMemoryRedisCacheOptions _options = default!;
@@ -416,6 +416,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         _memoryCache?.Dispose();
         return ValueTask.CompletedTask;
     }

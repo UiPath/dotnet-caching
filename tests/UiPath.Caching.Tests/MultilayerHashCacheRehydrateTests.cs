@@ -39,13 +39,13 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(fresh);
 
         var generatorCalls = 0;
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ =>
+        Task<IDictionary<string, string?>> Generator(CancellationToken _)
         {
             Interlocked.Increment(ref generatorCalls);
             return Task.FromResult(RefreshedDict);
-        };
+        }
 
-        var result = await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
+        var result = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
         result.Should().BeEquivalentTo(CachedDict);
         await Task.Delay(50, TestContext.Current.CancellationToken);
@@ -62,13 +62,13 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         var generatorTcs = new TaskCompletionSource<IDictionary<string, string?>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ => generatorTcs.Task;
+        Task<IDictionary<string, string?>> Generator(CancellationToken _) => generatorTcs.Task;
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(acquiredLock);
 
-        var result = await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
+        var result = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
         result.Should().BeEquivalentTo(CachedDict);
 
@@ -85,7 +85,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ => Task.FromResult(RefreshedDict);
+        Task<IDictionary<string, string?>> Generator(CancellationToken _) => Task.FromResult(RefreshedDict);
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
@@ -93,7 +93,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
         await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), TimeSpan.FromSeconds(5), token);
         await _innerCache.Received(1).SetAsync<string?>(
@@ -176,16 +176,16 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         var generatorCalls = 0;
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ =>
+        Task<IDictionary<string, string?>> Generator(CancellationToken _)
         {
             Interlocked.Increment(ref generatorCalls);
             return Task.FromResult(RefreshedDict);
-        };
+        }
 
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(default(IAsyncDisposable));
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
         await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
         await Task.Delay(50, TestContext.Current.CancellationToken);
@@ -201,13 +201,13 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ => throw new InvalidOperationException("boom");
+        Task<IDictionary<string, string?>> Generator(CancellationToken _) => throw new InvalidOperationException("boom");
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(acquiredLock);
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
         await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
         await Task.Delay(100, TestContext.Current.CancellationToken);
@@ -224,11 +224,11 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         var generatorCalls = 0;
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ =>
+        Task<IDictionary<string, string?>> Generator(CancellationToken _)
         {
             Interlocked.Increment(ref generatorCalls);
             return Task.FromResult(RefreshedDict);
-        };
+        }
 
         var policy = new CachePolicy
         {
@@ -237,7 +237,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
             Rehydrate = new RehydrateOptions { Threshold = 0.75 },
         };
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, policy, token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, policy, token);
 
         await Task.Delay(50, TestContext.Current.CancellationToken);
         generatorCalls.Should().Be(0);
@@ -283,7 +283,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ => Task.FromResult(RefreshedDict);
+        Task<IDictionary<string, string?>> Generator(CancellationToken _) => Task.FromResult(RefreshedDict);
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
@@ -291,7 +291,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
         await WaitForAsync(() => _topic.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ITopic<ICacheEvent>.PublishAsync)), TimeSpan.FromSeconds(5), token);
         await _topic.ReceivedWithAnyArgs(1).PublishAsync(default!, token);
@@ -311,13 +311,13 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         var generatorCalls = 0;
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ =>
+        Task<IDictionary<string, string?>> Generator(CancellationToken _)
         {
             Interlocked.Increment(ref generatorCalls);
             return Task.FromResult(RefreshedDict);
-        };
+        }
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
         await Task.Delay(50, TestContext.Current.CancellationToken);
         generatorCalls.Should().Be(0);
@@ -337,8 +337,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = originalDeadline };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator =
-            _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>());
+        Task<IDictionary<string, string?>> Generator(CancellationToken _) => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>());
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
@@ -346,7 +345,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
+        await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
         await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), TimeSpan.FromSeconds(5), token);
         await _innerCache.Received(1).SetAsync<string?>(
@@ -372,7 +371,11 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         await _innerCache.Received(1).SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        GC.SuppressFinalize(this);
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask InitializeAsync()
     {

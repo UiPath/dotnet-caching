@@ -114,6 +114,7 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         FetcherLazy = _oldFetcherLazy;
         return ValueTask.CompletedTask;
     }

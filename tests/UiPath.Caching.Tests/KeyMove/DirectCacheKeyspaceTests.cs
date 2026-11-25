@@ -114,9 +114,12 @@ public sealed class DirectCacheKeyspaceTests(RedisContainerFixture fixture) : ID
     {
         // The same strategies the library builds its keys with, for the keyspaces the direct caches use: the string and the hash cache of the app.
         var strategies = new DefaultRedisKeyStrategyFactory();
-        var options = new CacheOptions { AppShortName = _app };
+        var options = new CacheOptions
+        {
+            AppShortName = _app,
 #pragma warning disable CS0618 // The format switch under test.
-        options.ShardKeyEnabled = shardKeys;
+            ShardKeyEnabled = shardKeys,
+        };
 #pragma warning restore CS0618
         var hashKey = strategies.Create(options, RedisKeyspaces.Hash).GetRedisKey(new CacheKey("a-hash")).ToString();
         await kit.Db.StringSetAsync(hashKey, "hash-stand-in", Ttl);

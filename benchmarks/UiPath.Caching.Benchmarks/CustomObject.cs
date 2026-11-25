@@ -84,7 +84,7 @@ public class CustomObject
 
     private static List<Guid> GenerateRandomGuidList(int count)
     {
-        List<Guid> guidList = new List<Guid>();
+        List<Guid> guidList = [];
         for (int i = 0; i < count; i++)
         {
             guidList.Add(Guid.NewGuid());

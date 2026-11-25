@@ -58,6 +58,46 @@ function Restore-EnvironmentVariables {
     }
 }
 
+function Get-RedisContainerCandidate {
+    param(
+        [string]$ContainerId,
+        [string]$NamePrefix,
+        [int]$ContainerPort
+    )
+
+    $inspect = docker inspect $containerId | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $null -eq $inspect) {
+        return $null
+    }
+
+    $container = if ($inspect -is [array]) { $inspect[0] } else { $inspect }
+    $name = $container.Name.TrimStart('/')
+    if (-not $name.StartsWith($NamePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        return $null
+    }
+
+    $portKey = "$ContainerPort/tcp"
+    $portProperty = $container.NetworkSettings.Ports.PSObject.Properties[$portKey]
+    if ($null -eq $portProperty -or $null -eq $portProperty.Value -or $portProperty.Value.Count -eq 0) {
+        return $null
+    }
+
+    $password = ($container.Config.Env | Where-Object { $_.StartsWith('REDIS_PASSWORD=', [StringComparison]::Ordinal) } | Select-Object -First 1)
+    if (-not [string]::IsNullOrEmpty($password)) {
+        $password = $password.Substring('REDIS_PASSWORD='.Length)
+    }
+
+    return [pscustomobject]@{
+        Id = $containerId
+        Name = $name
+        Created = [datetime]$container.Created
+        HostName = if ([string]::IsNullOrWhiteSpace($portProperty.Value[0].HostIp) -or $portProperty.Value[0].HostIp -eq '0.0.0.0' -or $portProperty.Value[0].HostIp -eq '::') { '127.0.0.1' } else { $portProperty.Value[0].HostIp }
+        HostIp = $portProperty.Value[0].HostIp
+        HostPort = [int]$portProperty.Value[0].HostPort
+        Password = $password
+    }
+}
+
 function Get-DockerPublishedPort {
     param(
         [string]$NamePrefix,
@@ -80,36 +120,9 @@ function Get-DockerPublishedPort {
             continue
         }
 
-        $inspect = docker inspect $containerId | ConvertFrom-Json
-        if ($LASTEXITCODE -ne 0 -or $null -eq $inspect) {
-            continue
-        }
-
-        $container = if ($inspect -is [array]) { $inspect[0] } else { $inspect }
-        $name = $container.Name.TrimStart('/')
-        if (-not $name.StartsWith($NamePrefix, [StringComparison]::OrdinalIgnoreCase)) {
-            continue
-        }
-
-        $portKey = "$ContainerPort/tcp"
-        $portProperty = $container.NetworkSettings.Ports.PSObject.Properties[$portKey]
-        if ($null -eq $portProperty -or $null -eq $portProperty.Value -or $portProperty.Value.Count -eq 0) {
-            continue
-        }
-
-        $password = ($container.Config.Env | Where-Object { $_.StartsWith('REDIS_PASSWORD=', [StringComparison]::Ordinal) } | Select-Object -First 1)
-        if (-not [string]::IsNullOrEmpty($password)) {
-            $password = $password.Substring('REDIS_PASSWORD='.Length)
-        }
-
-        $candidates += [pscustomobject]@{
-            Id = $containerId
-            Name = $name
-            Created = [datetime]$container.Created
-            HostName = if ([string]::IsNullOrWhiteSpace($portProperty.Value[0].HostIp) -or $portProperty.Value[0].HostIp -eq '0.0.0.0' -or $portProperty.Value[0].HostIp -eq '::') { '127.0.0.1' } else { $portProperty.Value[0].HostIp }
-            HostIp = $portProperty.Value[0].HostIp
-            HostPort = [int]$portProperty.Value[0].HostPort
-            Password = $password
+        $candidate = Get-RedisContainerCandidate -ContainerId $containerId -NamePrefix $NamePrefix -ContainerPort $ContainerPort
+        if ($null -ne $candidate) {
+            $candidates += $candidate
         }
     }
 
@@ -187,6 +200,7 @@ function Test-RedisHostPing {
                 }
             }
             catch [IO.IOException] {
+                Write-Verbose "Read from Redis timed out or failed; retrying: $($_.Exception.Message)"
             }
 
             Start-Sleep -Milliseconds 100
@@ -202,7 +216,27 @@ function Test-RedisHostPing {
     }
 }
 
-function Wait-RedisContainer {
+function Test-RedisContainerPing {
+    param(
+        [pscustomobject]$Container,
+        [int]$ContainerPort
+    )
+
+    $redisCliArgs = @('exec', $Container.Id, 'redis-cli', '--no-auth-warning', '-p', $ContainerPort)
+    if (-not [string]::IsNullOrEmpty($Container.Password)) {
+        $redisCliArgs += @('-a', $Container.Password)
+    }
+
+    $redisCliArgs += 'ping'
+    $ping = docker @redisCliArgs 2>$null
+    if ($LASTEXITCODE -ne 0 -or ($ping -join "`n") -notmatch 'PONG') {
+        return $false
+    }
+
+    return Test-RedisHostPing -HostName $Container.HostName -Port $Container.HostPort -Password $Container.Password
+}
+
+function Show-RedisContainerWhenReady {
     param(
         [string]$NamePrefix,
         [int]$ContainerPort,
@@ -218,20 +252,9 @@ function Wait-RedisContainer {
         }
 
         $publishedPort = Get-DockerPublishedPort -NamePrefix $NamePrefix -ContainerPort $ContainerPort -ExcludedContainerIds $ExcludedContainerIds
-        if ($null -ne $publishedPort) {
-            $redisCliArgs = @('exec', $publishedPort.Id, 'redis-cli', '--no-auth-warning', '-p', $ContainerPort)
-            if (-not [string]::IsNullOrEmpty($publishedPort.Password)) {
-                $redisCliArgs += @('-a', $publishedPort.Password)
-            }
-
-            $redisCliArgs += 'ping'
-            $ping = docker @redisCliArgs 2>$null
-            if ($LASTEXITCODE -eq 0 -and ($ping -join "`n") -match 'PONG') {
-                if (Test-RedisHostPing -HostName $publishedPort.HostName -Port $publishedPort.HostPort -Password $publishedPort.Password) {
-                    Write-Host "Redis ready: $($publishedPort.Name) -> $($publishedPort.HostName):$($publishedPort.HostPort)"
-                    return $publishedPort
-                }
-            }
+        if ($null -ne $publishedPort -and (Test-RedisContainerPing -Container $publishedPort -ContainerPort $ContainerPort)) {
+            Write-Host "Redis ready: $($publishedPort.Name) -> $($publishedPort.HostName):$($publishedPort.HostPort)"
+            return $publishedPort
         }
 
         Start-Sleep -Seconds 1
@@ -295,12 +318,12 @@ try {
 
     if ($UseShardedRedis) {
         $redisEndpoints = @(
-            Wait-RedisContainer -NamePrefix 'redis-master1-' -ContainerPort 6379 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Wait-RedisContainer -NamePrefix 'redis-slave1-master1-' -ContainerPort 6380 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Wait-RedisContainer -NamePrefix 'redis-slave2-master1-' -ContainerPort 6381 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Wait-RedisContainer -NamePrefix 'redis-master2-' -ContainerPort 6382 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Wait-RedisContainer -NamePrefix 'redis-slave1-master2-' -ContainerPort 6383 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
-            Wait-RedisContainer -NamePrefix 'redis-slave2-master2-' -ContainerPort 6384 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Show-RedisContainerWhenReady -NamePrefix 'redis-master1-' -ContainerPort 6379 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Show-RedisContainerWhenReady -NamePrefix 'redis-slave1-master1-' -ContainerPort 6380 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Show-RedisContainerWhenReady -NamePrefix 'redis-slave2-master1-' -ContainerPort 6381 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Show-RedisContainerWhenReady -NamePrefix 'redis-master2-' -ContainerPort 6382 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Show-RedisContainerWhenReady -NamePrefix 'redis-slave1-master2-' -ContainerPort 6383 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+            Show-RedisContainerWhenReady -NamePrefix 'redis-slave2-master2-' -ContainerPort 6384 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
         ) | ForEach-Object { "$($_.HostName):$($_.HostPort)" }
 
         Set-ScopedEnvironmentVariable $originalEnvironment 'Caching__ShardKeyEnabled' 'true'
@@ -308,7 +331,7 @@ try {
         Set-ScopedEnvironmentVariable $originalEnvironment 'Caching__Connections__Redis__ConnectionStringExtraParams' 'allowAdmin=true,abortConnect=false,ssl=false,connectRetry=5,keepAlive=30,name=test,syncTimeout=10000,connectTimeout=10000'
     }
     else {
-        $redisEndpoint = Wait-RedisContainer -NamePrefix 'cache-' -ContainerPort 6380 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+        $redisEndpoint = Show-RedisContainerWhenReady -NamePrefix 'cache-' -ContainerPort 6380 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
         $redisConnectionString = "$($redisEndpoint.HostName):$($redisEndpoint.HostPort),abortConnect=false,ssl=false"
         if (-not [string]::IsNullOrEmpty($redisEndpoint.Password)) {
             $redisConnectionString = "$redisConnectionString,password=$($redisEndpoint.Password)"
@@ -359,7 +382,7 @@ finally {
     if ($null -ne $appHost -and -not $appHost.HasExited) {
         # Try graceful stop so Aspire can tear down its containers; fall back to -Force if it lingers.
         Stop-Process -Id $appHost.Id -ErrorAction SilentlyContinue
-        try { Wait-Process -Id $appHost.Id -Timeout 10 -ErrorAction Stop } catch {}
+        try { Wait-Process -Id $appHost.Id -Timeout 10 -ErrorAction Stop } catch { Write-Verbose "AppHost did not exit within 10 seconds; stopping it forcibly." }
         if (-not $appHost.HasExited) {
             Stop-Process -Id $appHost.Id -Force -ErrorAction SilentlyContinue
         }

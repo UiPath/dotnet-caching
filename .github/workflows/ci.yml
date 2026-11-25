@@ -130,6 +130,7 @@ jobs:
           /d:sonar.host.url="https://sonarcloud.io"
           /d:sonar.cs.vscoveragexml.reportsPaths="**/TestResults/**/*.xml"
           /d:sonar.cs.vstest.reportsPaths="**/*.trx"
+          /d:sonar.coverage.exclusions="eng/**,benchmarks/**,**/*.ps1"
           /d:sonar.cpd.exclusions="src/UiPath.Caching.Abstractions/ICache.cs,src/UiPath.Caching.Abstractions/ICacheOfT.cs,src/UiPath.Caching.Abstractions/IHashCache.cs,src/UiPath.Caching.Abstractions/IHashCacheOfT.cs"
 
       # The key move tests need more servers than the service: a replica of it, two independent servers for an

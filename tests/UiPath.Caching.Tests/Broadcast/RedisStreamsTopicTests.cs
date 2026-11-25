@@ -847,6 +847,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
     public ValueTask DisposeAsync()
     {
+        GC.SuppressFinalize(this);
         _sut?.Dispose();
         _cancellationTokenSource?.Dispose();
         return ValueTask.CompletedTask;

@@ -25,13 +25,13 @@ public class MultilayerHashCachePerNameFactoryTimeoutTests(ITestContextAccessor 
     public async Task GetOrAdd_with_null_FactoryTimeout_runs_generator_to_completion()
     {
         var token = testContextAccessor.Current.CancellationToken;
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = async ct =>
+        async Task<IDictionary<string, string?>> Generator(CancellationToken ct)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(50), ct);
             return new Dictionary<string, string?> { ["f"] = "v" };
-        };
+        }
 
-        var result = await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, token: token);
+        var result = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, policy: null, token: token);
 
         result["f"].Should().Be("v");
     }
@@ -45,13 +45,13 @@ public class MultilayerHashCachePerNameFactoryTimeoutTests(ITestContextAccessor 
         // what bounds the call, so nothing here can hang.
         using var caller = new CancellationTokenSource();
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = async ct =>
+        async Task<IDictionary<string, string?>> Generator(CancellationToken ct)
         {
             await Task.Delay(TimeSpan.FromSeconds(10), ct);
             return new Dictionary<string, string?> { ["f"] = "v" };
-        };
+        }
 
-        var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy, caller.Token);
+        var act = async () => await Sut.GetOrAddAsync(_cacheKey, Generator, policy, caller.Token);
 
         await act.Should().ThrowAsync<TimeoutException>();
     }
@@ -60,10 +60,10 @@ public class MultilayerHashCachePerNameFactoryTimeoutTests(ITestContextAccessor 
     public async Task GetOrAdd_with_FactoryTimeout_completes_when_generator_finishes_within_budget()
     {
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromSeconds(5) };
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ =>
+        Task<IDictionary<string, string?>> Generator(CancellationToken _) =>
             Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = "v" });
 
-        var result = await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
+        var result = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, policy, testContextAccessor.Current.CancellationToken);
 
         result["f"].Should().Be("v");
     }
@@ -73,19 +73,23 @@ public class MultilayerHashCachePerNameFactoryTimeoutTests(ITestContextAccessor 
     {
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromSeconds(1) };
         using var cts = new CancellationTokenSource();
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = async ct =>
+        async Task<IDictionary<string, string?>> Generator(CancellationToken ct)
         {
             await cts.CancelAsync();
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return new Dictionary<string, string?> { ["f"] = "v" };
-        };
+        }
 
-        var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy, cts.Token);
+        var act = async () => await Sut.GetOrAddAsync(_cacheKey, Generator, policy, cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        GC.SuppressFinalize(this);
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask InitializeAsync()
     {

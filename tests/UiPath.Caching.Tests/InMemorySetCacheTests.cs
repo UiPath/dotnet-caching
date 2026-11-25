@@ -10,6 +10,8 @@ public class InMemorySetCacheTests
 
     // Hoisted out of the call below so the array is not rebuilt per invocation (CA1861).
     private static readonly string[] OneItem = ["a"];
+    private static readonly string[] ThreeItems = ["a", "b", "c"];
+    private static readonly string[] BAndMissing = ["b", "missing"];
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -115,7 +117,7 @@ public class InMemorySetCacheTests
         var popped = await sut.PopAsync<string>("k", token: Ct);
 
         popped.Should().NotBeNull();
-        new[] { "a", "b", "c" }.Should().Contain(popped!);
+        ThreeItems.Should().Contain(popped!);
         (await sut.CountAsync<string>("k", Ct)).Should().Be(2);
         (await sut.ContainsItemAsync("k", popped!, Ct)).Should().BeFalse();
     }
@@ -162,7 +164,7 @@ public class InMemorySetCacheTests
 
         (await sut.RemoveItemAsync("k", "a", Ct)).Should().BeTrue();
         (await sut.RemoveItemAsync("k", "a", Ct)).Should().BeFalse();
-        (await sut.RemoveItemsAsync("k", new[] { "b", "missing" }, Ct)).Should().Be(1);
+        (await sut.RemoveItemsAsync("k", BAndMissing, Ct)).Should().Be(1);
 
         (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo("c");
     }

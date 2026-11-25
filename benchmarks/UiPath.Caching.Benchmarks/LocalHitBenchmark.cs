@@ -19,7 +19,7 @@ public class LocalHitBenchmark
 
     private IHost _host = default!;
     private ICache<string> _cache = default!;
-    private ICache<string> _prefixed = default!;
+    private Cache<string> _prefixed = default!;
 
     [GlobalSetup]
     public async Task Setup()
