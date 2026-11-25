@@ -17,6 +17,7 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
     private const string Skip = "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.";
 
     private readonly string _unique = Guid.NewGuid().ToString("N")[..10];
+    private readonly System.Collections.Concurrent.ConcurrentQueue<KeyMoveAlert> _alerts = new();
     private ConnectionMultiplexer? _redis;
     private RedisKey? _nodeKey;
     private string? _field;
@@ -120,6 +121,39 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         (await UntilAsync(async () => (await Tokens(router, provider)).Any(t => t.StartsWith($"{Group}@{state.Ep}:{state.Id}:S0", StringComparison.Ordinal)))).Should().BeTrue();
     }
 
+    // A node of a build without key move has no km token in its advert: once it joins a group that has started, the leader holds the group, and the hold ends when it leaves.
+    [Fact]
+    public async Task A_node_without_key_move_that_joins_after_Start_holds_the_group_and_its_leaving_ends_the_hold()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var leader = Provider(keyMove: true, node: "a", startable: true);
+        var router = (Router)leader.GetRequiredService<IRouter>();
+        (await UntilAsync(() => router.KeyMove!.Runtime is not null)).Should().BeTrue();
+        var runtime = router.KeyMove!.Runtime!;
+        await runtime.Commands.InitAsync(Group, ["advc"], Ct);
+        (await runtime.Commands.ApproveAsync(Group, ApprovalKinds.StartNoDryRun, "test", "test", Ct)).Should().Be(ApproveResult.Stored);
+        (await runtime.Commands.ApproveAsync(Group, ApprovalKinds.StartMemory, "test", "test", Ct)).Should().Be(ApproveResult.Stored);
+
+        // The real start: the leader takes X1 through its barrier and the node acknowledges it.
+        var started = await UntilAsync(async () => (await runtime.Store.ReadAsync(Group, Ct)) is { State: not "S0", Durable: true });
+        started.Should().BeTrue("every start gate passes for one node with key move; the driver said: " + string.Join("; ", _alerts.Select(a => $"{a.Code} {a.Detail}").Distinct()));
+        (await runtime.Store.ReadAsync(Group, Ct))!.HoldAuto.Should().BeEmpty();
+
+        var phaseA = Provider(keyMove: false, node: "b");
+        try
+        {
+            _ = phaseA.GetRequiredService<IRouter>();
+            (await UntilAsync(async () => (await runtime.Store.ReadAsync(Group, Ct))!.HoldAuto.StartsWith("no_km:", StringComparison.Ordinal), seconds: 30)).Should().BeTrue("a node without key move joined");
+            (await runtime.Store.ReadAsync(Group, Ct))!.HoldAuto.Should().Contain("kmh" + _unique + "b");
+        }
+        finally
+        {
+            await phaseA.DisposeAsync();
+        }
+
+        (await UntilAsync(async () => (await runtime.Store.ReadAsync(Group, Ct))!.HoldAuto.Length == 0, seconds: 60)).Should().BeTrue("the node without key move left");
+    }
+
     [Fact]
     public async Task After_a_reconnect_the_node_reads_state_renews_its_lease_and_runs_commands_over_the_new_connection()
     {
@@ -166,9 +200,9 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
 
     private static async Task<bool> UntilAsync(Func<bool> condition) => await UntilAsync(() => Task.FromResult(condition()));
 
-    private static async Task<bool> UntilAsync(Func<Task<bool>> condition)
+    private static async Task<bool> UntilAsync(Func<Task<bool>> condition, int seconds = 20)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
+        var deadline = DateTime.UtcNow.AddSeconds(seconds);
         while (DateTime.UtcNow < deadline)
         {
             if (await condition())
@@ -200,13 +234,15 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         return entry ?? throw new InvalidOperationException("The router wrote no entry.");
     }
 
-    private ServiceProvider Provider(bool keyMove, IReadOnlyList<GroupRegistration>? groups = null)
+    // A startable node passes every start gate: the flag asks for 3, the facts hold, and the view needs no time to settle.
+    private ServiceProvider Provider(bool keyMove, IReadOnlyList<GroupRegistration>? groups = null, string node = "", bool startable = false)
     {
         var settings = new Dictionary<string, string?>
         {
             ["Caching:AppShortName"] = "kmhost",
             ["Caching:DefaultCache"] = KnownCacheProviderNames.Redis,
-            ["Caching:Connections:Redis:ConnectionString"] = fixture.ConnectionString,
+            // The preflight of a start reads the eviction policy, which needs an admin connection.
+            ["Caching:Connections:Redis:ConnectionString"] = startable ? fixture.ConnectionString + ",allowAdmin=true" : fixture.ConnectionString,
             ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
             ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
             ["RouterCaching:AppShortName"] = "kmhostrouter",
@@ -226,15 +262,24 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
                 router
                     .UseLibraryWhen(_ => true)
                     .UseEnvelope(new LegacyEnvelopeProxy())
-                    .UseNodeIdentity("kmh" + _unique)
+                    .UseNodeIdentity("kmh" + _unique + node)
                     .UseSourceConnection(() => Db)
                     .Add(new RouterCacheRegistration<List<long>> { Name = "advc", Group = Group, Source = source, RedisKey = source.RedisKey });
+                if (startable)
+                {
+                    // A group starts only while every node pins it to the library.
+                    router.UsePinWhen(_ => true);
+                }
+
                 if (keyMove)
                 {
-                    router.UseKeyMoveSetup(new KeyMoveSetup(groups ?? [new GroupRegistration(Group, false, true, ["advc"])], new FixedStage(2), new Facts(), new Space(), new NoClaim(), Library)
+                    router.UseKeyMoveSetup(new KeyMoveSetup(groups ?? [new GroupRegistration(Group, false, true, ["advc"])], new FixedStage(startable ? 3 : 2), new Facts(startable), new Space(), new NoClaim(), Library)
                     {
                         State = new KeyMoveStateOptions { ExpectedReplicasPerMaster = 0, LeaseRenewInterval = TimeSpan.FromMilliseconds(200), PollInterval = TimeSpan.FromMilliseconds(200) },
-                        Driver = new StageDriverOptions { AckInterval = TimeSpan.FromMilliseconds(50) },
+                        Alert = _alerts.Enqueue,
+                        Driver = startable
+                            ? new StageDriverOptions { AckInterval = TimeSpan.FromMilliseconds(50), UpgradeHold = TimeSpan.Zero }
+                            : new StageDriverOptions { AckInterval = TimeSpan.FromMilliseconds(50) },
                     });
                 }
             },
@@ -247,9 +292,9 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         public ValueTask<int?> GetStageAsync(string group, CancellationToken cancellationToken) => ValueTask.FromResult<int?>(stage);
     }
 
-    private sealed class Facts : IGroupFacts
+    private sealed class Facts(bool releaseFloor = false) : IGroupFacts
     {
-        public bool ReleaseFloorAttested => false;
+        public bool ReleaseFloorAttested => releaseFloor;
 
         public bool HasNoOrigin(string group, IReadOnlyList<string> cacheIds) => false;
 
