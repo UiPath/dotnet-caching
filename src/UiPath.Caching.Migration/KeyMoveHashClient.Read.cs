@@ -78,17 +78,16 @@ internal sealed partial class KeyMoveHashClient<T>
 
     private async ValueTask<HashRead<T>> ReadManagedAsync(string key, string[]? fields, KeyMovePlan plan, CancellationToken cancellationToken)
     {
-        var reads = fields is { Length: > 0 } ? new HashReads<T>(_p, fields) : _reads;
         var run = -1;
         while (true)
         {
             run++;
             var step = plan.Mode switch
             {
-                KeyMoveMode.S1 or KeyMoveMode.S2 => await ReadLegacyOnlyAsync(key, plan, reads, cancellationToken).ConfigureAwait(false),
-                KeyMoveMode.S3 => await PromoteReadAsync(key, reads, cancellationToken).ConfigureAwait(false),
-                KeyMoveMode.S5 => await reads.ReadUnionAsync(key, withSource: false, cancellationToken).ConfigureAwait(false),
-                _ => await reads.ReadUnionAsync(key, withSource: true, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.S1 or KeyMoveMode.S2 => await ReadLegacyOnlyAsync(key, plan, fields, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.S3 => await PromoteReadAsync(key, fields, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.S5 => await _reads.ReadUnionAsync(key, withSource: false, fields, cancellationToken).ConfigureAwait(false),
+                _ => await _reads.ReadUnionAsync(key, withSource: true, fields, cancellationToken).ConfigureAwait(false),
             };
             if (!step.Rerun)
             {
@@ -109,18 +108,17 @@ internal sealed partial class KeyMoveHashClient<T>
         }
     }
 
-    private async ValueTask<HashReadStep<T>> PromoteReadAsync(string key, HashReads<T> reads, CancellationToken cancellationToken)
+    private async ValueTask<HashReadStep<T>> PromoteReadAsync(string key, string[]? fields, CancellationToken cancellationToken)
     {
-        var promotion = ReferenceEquals(reads, _reads) ? _promotion : new HashPromotion<T>(_p, reads, _hints, _helper);
-        var promoted = await promotion.PromoteAsync(key, HashPromotionFlavour.Read, cancellationToken).ConfigureAwait(false);
+        var promoted = await _promotion.PromoteAsync(key, HashPromotionFlavour.Read, fields, cancellationToken).ConfigureAwait(false);
         return promoted.Status == HashPromotionStatus.Replan ? HashReadStep<T>.Again : HashReadStep<T>.Of(promoted.Read);
     }
 
     // S1 and S2 while nothing is promoted: L only; a NoOrigin miss reads the identity first, because a promotion may have moved the key.
-    private async ValueTask<HashReadStep<T>> ReadLegacyOnlyAsync(string key, KeyMovePlan plan, HashReads<T> reads, CancellationToken cancellationToken)
+    private async ValueTask<HashReadStep<T>> ReadLegacyOnlyAsync(string key, KeyMovePlan plan, string[]? fields, CancellationToken cancellationToken)
     {
-        var snap = await reads.SnapAsync(InPlace(key), replica: false, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);
-        var read = reads.InterpretRead(snap, _p.InPlace);
+        var snap = await _reads.SnapAsync(InPlace(key), replica: false, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);
+        var read = HashReads<T>.Interpret(snap, _p.InPlace, fields: fields);
         if (read.Kind != ReadOutcome.Absent || !_p.NoOrigin || Data is not { } data)
         {
             return HashReadStep<T>.Of(read);
@@ -135,13 +133,13 @@ internal sealed partial class KeyMoveHashClient<T>
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // The state of the key cannot be read: the blind rule, union N-first without promotion.
-            return await reads.ReadUnionAsync(key, withSource: true, cancellationToken).ConfigureAwait(false);
+            return await _reads.ReadUnionAsync(key, withSource: true, fields, cancellationToken).ConfigureAwait(false);
         }
 
         // A record that is absent or lost is not "unchanged": it follows the unreadable branch, the blind union rule.
         if (id is null)
         {
-            return await reads.ReadUnionAsync(key, withSource: true, cancellationToken).ConfigureAwait(false);
+            return await _reads.ReadUnionAsync(key, withSource: true, fields, cancellationToken).ConfigureAwait(false);
         }
 
         return id != plan.Act?.Id ? HashReadStep<T>.Again : HashReadStep<T>.Of(read);

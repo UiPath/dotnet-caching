@@ -283,6 +283,45 @@ public sealed class KeyMoveHashPromotionOutcomeTests(RedisFixture fixture)
         (await kit.FieldsAsync(kit.N("k"))).Should().BeEquivalentTo(new Dictionary<string, string> { ["z"] = "26" });
     }
 
+    [Fact]
+    public async Task A_lost_publish_uses_the_same_side_for_both_field_selections()
+    {
+        await using var kit = await StagedAsync(seed: false, clock: new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+        var source = new Dictionary<string, string> { ["broken"] = "source value", ["good"] = "source good" };
+        var winner = new Dictionary<string, string> { ["broken"] = "junk:native", ["good"] = "native good" };
+        await kit.SetAsync(kit.L("k"), source);
+        kit.Kit.Schedule.Hook = (step, _) => step == SchedulePointStep.Publish ? kit.SetAsync(kit.N("k"), winner) : Task.CompletedTask;
+
+        var narrow = await kit.Client.ReadAsync("k", ["broken"], Ct);
+        await kit.Db.KeyDeleteAsync(kit.N("k"));
+        var wide = await kit.Client.ReadAsync("k", ["broken", "good"], Ct);
+        await kit.Db.KeyDeleteAsync(kit.N("k"));
+        var whole = await kit.Client.ReadAsync("k", null, Ct);
+
+        (await kit.FieldsAsync(kit.N("k"))).Should().BeEquivalentTo(winner);
+        narrow.Fields.Should().BeEquivalentTo(whole.Only(["broken"]).Fields);
+        wide.Fields.Should().BeEquivalentTo(whole.Fields);
+        wide.Fields!["good"].Should().Be(new Item("source good"));
+    }
+
+    [Fact]
+    public async Task An_unreadable_source_is_counted_only_when_recovery_cannot_answer()
+    {
+        await using var kit = await StagedAsync(seed: false);
+        using var meter = new MeterCollector(kit.Kit.Cid);
+        var source = new Dictionary<string, string> { ["good"] = "value", ["broken"] = "junk:x" };
+        await kit.SetAsync(kit.L("k"), source);
+
+        var recovered = await kit.Client.ReadAsync("k", ["good", "broken"], Ct);
+
+        recovered.Fields.Should().BeEquivalentTo(KeyMoveHashKit.Items(("good", "value")));
+        meter.Count("move_unreadable_source").Should().Be(0);
+        (await kit.Client.ReadAsync("k", ["broken"], Ct)).Kind.Should().Be(ReadOutcome.Unreadable);
+        meter.Count("move_unreadable_source").Should().Be(1);
+        (await kit.FieldsAsync(kit.L("k"))).Should().BeEquivalentTo(source);
+        (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
