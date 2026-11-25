@@ -16,6 +16,8 @@ public sealed class AcmeEventFormat(byte? idByte = null) : IEventFormatterProxy<
 
     public int Disposals => _disposals;
 
+    internal Action<ICacheEvent>? OnDecode { get; set; }
+
     public void Dispose() => Interlocked.Increment(ref _disposals);
 
     public ReadOnlyMemory<byte> Encode(ICacheEvent @event)
@@ -67,6 +69,7 @@ public sealed class AcmeEventFormat(byte? idByte = null) : IEventFormatterProxy<
             Data = new CacheEventData(root.GetProperty("key").GetString() ?? string.Empty, properties.Count == 0 ? null : properties),
         };
         _decoded.Enqueue(decoded);
+        OnDecode?.Invoke(decoded);
         return decoded;
     }
 

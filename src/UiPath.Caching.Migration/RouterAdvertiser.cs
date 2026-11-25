@@ -36,6 +36,8 @@ internal sealed class RouterAdvertiser(
 
     public bool Stopped => Volatile.Read(ref _left) == 1;
 
+    internal Task Shutdown { get; private set; } = Task.CompletedTask;
+
     public void Start()
     {
         lock (_lifetimeGate)
@@ -155,7 +157,7 @@ internal sealed class RouterAdvertiser(
     private Task CancelAndDisposeWhenDone(Task loop)
     {
         var cancellation = _stop.CancelAsync();
-        _ = Task.WhenAll(loop, cancellation).ContinueWith(
+        Shutdown = Task.WhenAll(loop, cancellation).ContinueWith(
             DisposeStopSource, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return cancellation;
     }

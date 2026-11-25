@@ -13,12 +13,12 @@ public sealed class PendingAndRetryTests : RouterTestBase
         node.LibraryBackend.SettleWithin = TimeSpan.FromSeconds(60);
         await node.Cache.SetAsync("k", new Item("v"), default, Ct);
 
-        await WaitForTimerAsync();
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(60), Ct);
         Clock.Advance(TimeSpan.FromSeconds(30));
-        await Task.Delay(100, Ct);
 
         Bus.Published.Should().Be(1, "the command can still land for another 30 s");
-        await RunBackgroundAsync(node, TimeSpan.FromSeconds(31));
+        Clock.Advance(TimeSpan.FromSeconds(31));
+        await node.Core.DrainAsync().WaitAsync(Ct);
         Bus.Published.Should().Be(2);
     }
 
@@ -30,12 +30,12 @@ public sealed class PendingAndRetryTests : RouterTestBase
         node.LibraryBackend.SettleWithin = TimeSpan.FromSeconds(1);
         await node.Cache.SetAsync("k", new Item("v"), default, Ct);
 
-        await WaitForTimerAsync();
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(30), Ct);
         Clock.Advance(TimeSpan.FromSeconds(10));
-        await Task.Delay(100, Ct);
 
         Bus.Published.Should().Be(1);
-        await RunBackgroundAsync(node, TimeSpan.FromSeconds(30));
+        Clock.Advance(TimeSpan.FromSeconds(30));
+        await node.Core.DrainAsync().WaitAsync(Ct);
     }
 
     [Fact]
@@ -108,14 +108,5 @@ public sealed class PendingAndRetryTests : RouterTestBase
 
         node.Core.IsIdle.Should().BeTrue();
         Bus.Published.Should().Be(0, "the entry outlived the cap, so a late publish would protect nothing");
-    }
-
-    private async Task WaitForTimerAsync()
-    {
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (!Clock.HasTimers && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
     }
 }

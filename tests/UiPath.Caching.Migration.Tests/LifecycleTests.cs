@@ -71,43 +71,41 @@ public sealed class LifecycleTests : RouterTestBase
         (await write).Should().Be(WriteOutcome.Unknown);
         await RunBackgroundAsync(node, TimeSpan.FromSeconds(31));
         Bus.Events[^1].Type.Should().Be(KnownEventTypes.CacheRemoved, "the pending key the straggler began retires at its deadline");
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (DateTime.UtcNow < until)
-        {
-            try
-            {
-                tier();
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-
-            await Task.Delay(10, Ct);
-        }
-
-        throw new TimeoutException("the tier was never disposed after the straggler ended");
+        await node.Router.DisposeAsync().AsTask().WaitAsync(Ct);
+        tier.Should().Throw<ObjectDisposedException>("the tier is disposed after the straggler ends");
     }
 
     [Fact]
     public async Task A_publish_that_hangs_does_not_hold_back_the_next_write_of_the_key()
     {
         var node = NewNode();
-        Bus.Hold = new TaskCompletionSource();
+        Bus.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var publishing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Bus.OnAttempt = () => publishing.TrySetResult();
         var first = node.Cache.SetAsync("k", new Item("one"), default, Ct).AsTask();
-        await Task.Delay(100, Ct);
+        await publishing.Task.WaitAsync(Ct);
+        first.IsCompleted.Should().BeFalse();
 
-        var second = node.Cache.SetAsync("k", new Item("two"), default, Ct).AsTask();
-        var until = DateTime.UtcNow.AddSeconds(2);
-        while (node.LibraryBackend.Writes < 2 && DateTime.UtcNow < until)
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        node.LibraryBackend.InFlight = _ =>
         {
-            await Task.Delay(10, Ct);
+            secondEntered.TrySetResult();
+            return Task.CompletedTask;
+        };
+        var second = node.Cache.SetAsync("k", new Item("two"), default, Ct).AsTask();
+        try
+        {
+            await secondEntered.Task.WaitAsync(Ct);
+            node.LibraryBackend.Writes.Should().Be(2, "the key lock is free once the command is settled locally");
+        }
+        finally
+        {
+            Bus.Hold.SetResult();
         }
 
-        node.LibraryBackend.Writes.Should().Be(2, "the key lock is free once the command is settled locally");
-        Bus.Hold.SetResult();
         await first;
         await second;
+        Store["k"].Should().Be(new Item("two"));
     }
     [Fact]
     public async Task A_call_after_stop_fails_before_anything_is_sent()
@@ -139,7 +137,7 @@ public sealed class LifecycleTests : RouterTestBase
 
         var stop = node.StopAsync();
 
-        (await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(3), Ct))).Should().BeSameAs(stop);
+        await stop.WaitAsync(Ct);
         node.Core.IsIdle.Should().BeTrue();
     }
 
@@ -154,7 +152,7 @@ public sealed class LifecycleTests : RouterTestBase
         node.LibraryBackend.InFlight = async token =>
         {
             inFlight.TrySetResult();
-            await Task.Delay(Timeout.Infinite, token);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token);
         };
 
         var write = node.Cache.SetAsync("k", new Item("new"), default, cts.Token).AsTask();

@@ -18,12 +18,15 @@ namespace UiPath.Caching.Migration.Tests;
 public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
 {
     private const string Skip = "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.";
+    private static readonly TimeSpan ViewInterval = TimeSpan.FromMilliseconds(411);
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(5);
 
     private readonly string _cacheName = $"Wf{Guid.NewGuid():N}"[..12];
     private readonly string _app = $"wf{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
+    private readonly HashSet<ServiceProvider> _formatViewsArmed = [];
     private ConnectionMultiplexer? _redis;
+    private DateTimeOffset _serverTime;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -34,6 +37,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         if (fixture.Enabled)
         {
             _redis = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
+            _serverTime = await _redis.GetServer(_redis.GetEndPoints()[0]).TimeAsync();
         }
     }
 
@@ -74,17 +78,16 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
         var format = "messagepack";
-        var cache = Cache(NewNode("a", () => true, () => format));
+        var node = NewNode("a", () => true, () => format);
+        var cache = Cache(node);
         var value = new List<long> { 1, 2, 3 };
 
         await cache.SetAsync("early", value, Lifetime, Ct);
 
         (await Bytes("early")).Should().Equal(LegacyEnvelope.Write(value), "no node has acknowledged the pin yet, so the gate is closed and the group writes the envelope");
-        (await UntilAsync(async () =>
-        {
-            await cache.SetAsync("k", value, Lifetime, Ct);
-            return (await Bytes("k")) is { Length: > 0 } bytes && bytes[0] == TestFormatSerializer.Id;
-        })).Should().BeTrue("the group is switched once every node reads the format");
+        await RefreshFormatsAsync(node, TimeSpan.FromSeconds(4));
+        await cache.SetAsync("k", value, Lifetime, Ct);
+        (await Bytes("k"))![0].Should().Be(TestFormatSerializer.Id, "the group is switched once every node reads the format");
         var stored = await Bytes("k");
         stored!.Skip(1).Should().Equal(JsonSerializer.SerializeToUtf8Bytes(value), "the header byte is followed by the serializer's payload");
         (await Db.KeyTimeToLiveAsync(RedisKeyOf("k")))!.Value.Should().BeCloseTo(Lifetime, TimeSpan.FromSeconds(10));
@@ -104,7 +107,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
     public async Task The_key_move_writes_the_in_place_keys_in_the_format_the_group_writes_now()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 25, 0, 0, 0, TimeSpan.Zero));
+        var clock = new ManualTimeProvider(_serverTime);
         var node = NewNode("a", () => true, () => "messagepack", moveAlert: _ => { }, clock: clock);
         var router = (Router)node.GetRequiredService<IRouter>();
         var parts = router.Core.StartedParts!;
@@ -170,12 +173,14 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         var router = (Router)node.GetRequiredService<IRouter>();
         var cache = Cache(node);
         var routed = (RoutedCache<List<long>>)cache;
-        (await UntilAsync(() => Task.FromResult(routed.Library is KeyMoveClient<List<long>>))).Should().BeTrue();
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
+        routed.Library.Should().BeOfType<KeyMoveClient<List<long>>>();
         var move = router.KeyMove!;
         var reader = new MoveStateReader();
         var deferred = (DeferredStateReader)typeof(KeyMoveNode).GetField("_reader", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(move)!;
         deferred.Attach(reader);
-        (await UntilAsync(() => Task.FromResult(move.Monitor.RulesFor("g").Acting is { State: "S3" }))).Should().BeTrue();
+        await move.Monitor.StepAsync("g", Ct);
+        move.Monitor.RulesFor("g").Acting!.State.Should().Be("S3");
 
         var pin = router.Core.PinFor("g")!;
         router.Core.Pins!.Want(pin, true);
@@ -186,25 +191,25 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         var plain = ((KeyMoveClient<List<long>>)routed.Library).Parts.Plain;
         var value = new List<long> { 1, 2, 3 };
 
-        // Long past the time the switch takes when nothing holds it: every write is still the envelope, and the point of no return is not recorded.
-        var until = DateTime.UtcNow.AddSeconds(8);
-        while (DateTime.UtcNow < until)
+        var clock = (SignalingTimeProvider)router.Clock;
+        for (var pass = 0; pass < 3; pass++)
         {
-            (await plain.SetAsync("k", value, DateTimeOffset.UtcNow + Lifetime, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+            (await plain.SetAsync("k", value, clock.ToDateTimeOffset(Lifetime), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
             (await Bytes("k")).Should().Equal(LegacyEnvelope.Write(value), "the group's keys move, so it keeps its format");
-            await Task.Delay(TimeSpan.FromMilliseconds(250), Ct);
+            await RefreshFormatsAsync(node, TimeSpan.FromSeconds(4));
         }
 
         (await Db.KeyExistsAsync($"mg:{{{ScopeTokens.For(_app)}:g}}:sw")).Should().BeFalse("the switch was never asked for");
         alerts.Where(alert => alert.Code == "format_switch_held").Should().ContainSingle().Which.Group.Should().Be("g");
 
         reader.EndMove();
-        (await UntilAsync(() => Task.FromResult(move.Monitor.RulesFor("g").Acting is { State: "S0" }))).Should().BeTrue();
-        (await UntilAsync(async () =>
-        {
-            await cache.SetAsync("k", value, Lifetime, Ct);
-            return (await Bytes("k")) is { Length: > 0 } bytes && bytes[0] == TestFormatSerializer.Id;
-        })).Should().BeTrue("the move is over, so the same node switches");
+        await move.Monitor.StepAsync("g", Ct);
+        move.Monitor.RulesFor("g").Acting!.State.Should().Be("S0");
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+        (await cache.SetAsync("k", value, Lifetime, Ct)).Should().BeTrue();
+        await RefreshFormatsAsync(node, TimeSpan.FromSeconds(4));
+        (await cache.SetAsync("k", value, Lifetime, Ct)).Should().BeTrue();
+        (await Bytes("k"))![0].Should().Be(TestFormatSerializer.Id, "the move is over, so the same node switches");
         (await cache.GetAsync("k", Ct)).Should().Equal(value);
     }
 
@@ -212,13 +217,14 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
     public async Task A_group_that_asks_for_json_never_writes_the_header_format_even_when_it_is_pinned()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var cache = Cache(NewNode("a", () => true, () => null));
+        var node = NewNode("a", () => true, () => null);
+        var cache = Cache(node);
         var value = new List<long> { 4 };
 
         for (var i = 0; i < 6; i++)
         {
             await cache.SetAsync($"k{i}", value, Lifetime, Ct);
-            await Task.Delay(500, Ct);
+            await RefreshFormatsAsync(node, TimeSpan.FromMilliseconds(500));
         }
 
         for (var i = 0; i < 6; i++)
@@ -236,11 +242,10 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         var first = NewNode("a", () => true, () => "messagepack");
         var cache = Cache(first);
         var value = new List<long> { 7, 8 };
-        (await UntilAsync(async () =>
-        {
-            await cache.SetAsync("k", value, Lifetime, Ct);
-            return (await Bytes("k")) is { Length: > 0 } bytes && bytes[0] == TestFormatSerializer.Id;
-        })).Should().BeTrue();
+        await cache.SetAsync("k", value, Lifetime, Ct);
+        await RefreshFormatsAsync(first, TimeSpan.FromSeconds(4));
+        await cache.SetAsync("k", value, Lifetime, Ct);
+        (await Bytes("k"))![0].Should().Be(TestFormatSerializer.Id);
         _nodes.Remove(first);
         await first.DisposeAsync();
 
@@ -274,23 +279,29 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         down.Calls.Should().Be(0);
     }
 
-    private static async Task<bool> UntilAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(90);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
+    private static ICache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
 
-            await Task.Delay(250, Ct);
+    private async Task RefreshFormatsAsync(ServiceProvider node, TimeSpan by)
+    {
+        var router = (Router)node.GetRequiredService<IRouter>();
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
+        var clock = (SignalingTimeProvider)router.Clock;
+        var earliest = ViewInterval * 0.8;
+        var latest = ViewInterval * 1.2;
+        bool IsViewTimer(TimeSpan delay) => delay >= earliest && delay <= latest;
+
+        (await router.Advertiser!.WriteAsync(Ct)).Should().BeTrue();
+        await router.Core.Pins!.RefreshAsync(Ct);
+        if (_formatViewsArmed.Add(node))
+        {
+            await clock.WaitForTimerAsync(IsViewTimer, Ct);
         }
 
-        return false;
+        clock.Advance(latest);
+        await clock.WaitForTimerAsync(IsViewTimer, Ct);
+        clock.Advance(by);
+        await clock.WaitForTimerAsync(IsViewTimer, Ct);
     }
-
-    private static ICache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
 
     private async Task UseSwitchedFormatAsync(Router router, ManualTimeProvider clock)
     {
@@ -312,7 +323,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
 
     private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
 
-    private ServiceProvider NewNode(string name, Func<bool> pinned, Func<string?> format, Func<bool>? useLibrary = null, bool deadLibrary = false, ISourceCache<List<long>>? source = null, Action<KeyMoveAlert>? moveAlert = null, ManualTimeProvider? clock = null)
+    private ServiceProvider NewNode(string name, Func<bool> pinned, Func<string?> format, Func<bool>? useLibrary = null, bool deadLibrary = false, ISourceCache<List<long>>? source = null, Action<KeyMoveAlert>? moveAlert = null, TimeProvider? clock = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -323,18 +334,14 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
             ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
             ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
             ["Caching:Redis:FormatNegotiation:AdvertiseInterval"] = "00:00:01",
-            ["Caching:Redis:FormatNegotiation:ViewInterval"] = "00:00:01",
+            ["Caching:Redis:FormatNegotiation:ViewInterval"] = ViewInterval.ToString("c"),
             ["Caching:Redis:FormatNegotiation:LivenessWindow"] = "00:00:02",
             ["Caching:Redis:FormatNegotiation:UpgradeHold"] = "00:00:04",
             ["Caching:Redis:FormatNegotiation:MaxViewAge"] = "00:00:20",
         }).Build();
         var legacy = source ?? new LegacySource(_redis!, _cacheName);
         var redisKey = new LegacySource(_redis!, _cacheName).RedisKey;
-        var services = new ServiceCollection().AddLogging();
-        if (clock is not null)
-        {
-            services.AddSingleton<TimeProvider>(clock);
-        }
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(clock ?? new SignalingTimeProvider(_serverTime));
 
         services.AddCaching(configuration, builder =>
         {

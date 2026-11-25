@@ -34,6 +34,8 @@ internal sealed class TestNode : IAsyncDisposable
 
     public RouterCore Core { get; }
 
+    public SignalingTimeProvider Time => (SignalingTimeProvider)Core.Clock;
+
     public RoutedCache<Item> Cache { get; }
 
     public FakeBackend SourceBackend { get; }
@@ -66,15 +68,17 @@ internal sealed class TestNode : IAsyncDisposable
         Func<string, bool>? pinWhen = null,
         IPinStore? pinStore = null,
         string? scope = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        TimeProvider? startupClock = null)
     {
         var source = new Uri($"urn:test-{node ?? Guid.NewGuid().ToString("N")}");
         var sourceBackend = new FakeBackend(store, clock);
         var libraryBackend = new FakeBackend(store, clock);
-        var core = sharedCore ?? new RouterCore(clock, useLibrary ?? (_ => true), logger ?? NullLogger.Instance)
+        var core = sharedCore ?? new RouterCore(new SignalingTimeProvider(clock), useLibrary ?? (_ => true), logger ?? NullLogger.Instance)
         {
             BypassFlag = bypass,
             SourceTimeout = sourceTimeout ?? TimeSpan.FromSeconds(30),
+            StartupClock = startupClock,
             StartBound = startBound ?? TimeSpan.FromSeconds(5),
             CleanupBound = cleanupBound ?? TimeSpan.FromSeconds(10),
         };
@@ -120,19 +124,15 @@ internal sealed class TestNode : IAsyncDisposable
     public bool IsLocal(string key) => Core.Tier.TryGet(new LocalKey(CacheName, key), EpochOf(Cache), out _);
 
     /// <summary>The router's own stop, with the clock moved on while it waits.</summary>
-    public async Task StopAsync(TimeSpan? step = null)
+    public async Task StopAsync()
     {
         var stop = StartStop();
-        while (!stop.IsCompleted)
+        if (!Core.OperationsDrained.IsCompleted || Cache.PendingKeyCount > 0)
         {
-            await Task.WhenAny(stop, Task.Delay(20));
-            if (!stop.IsCompleted)
-            {
-                _clock.Advance(step ?? TimeSpan.FromSeconds(1));
-            }
+            _clock.Advance(TimeSpan.FromSeconds(5));
         }
 
-        await stop;
+        await stop.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     /// <summary>The router's dispose, as a provider runs it, with the clock left alone.</summary>
@@ -161,8 +161,7 @@ internal sealed class TestNode : IAsyncDisposable
         {
             Core.BeginStop();
             Core.CancelBackground();
-            // Real time: the injected clock stands still at teardown, so nothing that waits on it could end.
-            await Core.DrainAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            await Core.DrainAsync().WaitAsync(TestContext.Current.CancellationToken);
         }
 
         if (!_stopped)

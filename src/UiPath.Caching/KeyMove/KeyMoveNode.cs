@@ -39,8 +39,11 @@ internal sealed class KeyMoveNode
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _ledger = new BarrierLedger(setup.State, time);
         _ambiguity = new ThrottledAlerts(setup.Alert, time, setup.State.PollInterval);
-        _monitor = new GroupStateMonitor(_reader, setup.State, time, (group, code) => setup.Alert?.Invoke(new KeyMoveAlert(group, code, string.Empty)));
-        _poller = new StageFlagPoller(setup.Stages, IsActive, setup.State, time);
+        _monitor = new GroupStateMonitor(_reader, setup.State, time, (group, code) => setup.Alert?.Invoke(new KeyMoveAlert(group, code, string.Empty)))
+        {
+            PollScheduled = setup.SnapshotPollScheduled,
+        };
+        _poller = new StageFlagPoller(setup.Stages, IsActive, setup.State, time) { PollScheduled = setup.StagePollScheduled };
         Tokens = new KeyMoveAdvertTokens(
             setup.Groups,
             group => setup.Groups.FirstOrDefault(g => g.Name == group)?.CacheIds ?? [],
@@ -255,7 +258,10 @@ internal sealed class KeyMoveNode
             _setup.State,
             new FlagViews(_setup.Driver, _time),
             new ViewStability(_time),
-            _time);
+            _time)
+        {
+            Stepped = _setup.DriverStepped,
+        };
         _driver.Start(names, token);
     }
 

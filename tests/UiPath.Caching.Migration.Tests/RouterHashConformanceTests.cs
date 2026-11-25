@@ -20,10 +20,13 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
     private readonly string _cacheName = $"Rh{Guid.NewGuid():N}"[..12];
     private readonly string _app = $"rh{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
+    private DateTimeOffset _serverTime;
     private ConnectionMultiplexer? _redis;
     private bool _library;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private TimeProvider Clock => _nodes[^1].GetRequiredService<TimeProvider>();
 
     private IDatabase Db => _redis!.GetDatabase();
 
@@ -32,6 +35,7 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
         if (fixture.Enabled)
         {
             _redis = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
+            _serverTime = await _redis.GetServer(_redis.GetEndPoints()[0]).TimeAsync();
         }
     }
 
@@ -58,7 +62,7 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
         var cache = Cache(NewNode());
-        var deadline = DateTimeOffset.UtcNow.Add(Life);
+        var deadline = Clock.ToDateTimeOffset(Life);
 
         _library = false;
         await cache.SetAsync("k", Fields(("a", "1"), ("b", "2,3")), deadline, Ct);
@@ -76,7 +80,7 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
         var cache = Cache(NewNode());
-        var deadline = DateTimeOffset.UtcNow.Add(Life);
+        var deadline = Clock.ToDateTimeOffset(Life);
         var fields = Fields(("a", "1"), ("b", "2,3"));
 
         _library = false;
@@ -94,8 +98,8 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
         var cache = Cache(NewNode());
-        var deadline = DateTimeOffset.UtcNow.Add(Life);
-        var later = DateTimeOffset.UtcNow.AddHours(2);
+        var deadline = Clock.ToDateTimeOffset(Life);
+        var later = Clock.ToDateTimeOffset(TimeSpan.FromHours(2));
         var merge = new HashCacheEntryOptions(ExpireTime: deadline, SetOption: HashCacheSetOption.HashReplace);
 
         foreach (var (library, key) in new[] { (false, "viasource"), (true, "vialibrary") })
@@ -112,7 +116,7 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
         await SameHashAsync("viasource", "vialibrary");
         _library = true;
         (await cache.RefreshAsync("vialibrary", later, Ct)).Should().BeTrue();
-        (await Db.KeyTimeToLiveAsync(RedisKeyOf("vialibrary")))!.Value.Should().BeCloseTo(later - DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5));
+        (await Db.KeyTimeToLiveAsync(RedisKeyOf("vialibrary")))!.Value.Should().BeCloseTo(later - Clock.GetUtcNow(), TimeSpan.FromSeconds(5));
         (await cache.GetAsync("vialibrary", Ct)).Keys.Should().BeEquivalentTo("b", "c", "d");
     }
 
@@ -134,12 +138,9 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
     public async Task A_selected_read_answers_what_the_native_read_answers_for_every_kind_of_selector()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var routed = (RoutedHashCache<List<long>>)Cache(NewNode());
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (!routed.IsSubscribed && DateTime.UtcNow < until)
-        {
-            await Task.Delay(20, Ct);
-        }
+        var node = NewNode();
+        var routed = (RoutedHashCache<List<long>>)Cache(node);
+        await RouterTestBase.WaitForLibraryAsync(node.GetRequiredService<IRouter>(), Ct);
 
         _library = true;
         IHashCache<List<long>> surface = routed;
@@ -167,12 +168,9 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
     public async Task A_host_with_a_hash_registration_starts_the_library_and_gives_the_cache_the_plain_path_with_the_shared_tier()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var routed = (RoutedHashCache<List<long>>)Cache(NewNode());
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (!routed.IsSubscribed && DateTime.UtcNow < until)
-        {
-            await Task.Delay(20, Ct);
-        }
+        var node = NewNode();
+        var routed = (RoutedHashCache<List<long>>)Cache(node);
+        await RouterTestBase.WaitForLibraryAsync(node.GetRequiredService<IRouter>(), Ct);
 
         routed.IsSubscribed.Should().BeTrue("the library start attaches the hash cache");
         var plain = routed.Library.Should().BeOfType<LibraryHashPathClient<List<long>>>().Subject;
@@ -223,7 +221,7 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
             ["Caching:Broadcast:RedisStreams:Enabled"] = "true",
         }).Build();
         var source = new LegacyHashSource(_redis!, _cacheName);
-        var services = new ServiceCollection().AddLogging();
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(new ManualTimeProvider(_serverTime));
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(
             configuration,

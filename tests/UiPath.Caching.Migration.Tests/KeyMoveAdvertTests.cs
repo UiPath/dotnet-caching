@@ -38,13 +38,14 @@ public sealed class KeyMoveAdvertTests(RedisFixture fixture) : IAsyncLifetime
     [Fact]
     public void The_tokens_survive_the_router_entry_encoding_and_parse_as_the_leader_reads_them()
     {
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         var node = new KeyMoveAdvertTokens(
             [new GroupRegistration(Group, false, true)],
             _ => ["b", "a"],
-            new StageFlagPoller(new Source(4), _ => true, new KeyMoveStateOptions(), TimeProvider.System),
+            new StageFlagPoller(new Source(4), _ => true, new KeyMoveStateOptions(), clock),
             new Acks(new AckedIdentity(7, "ab12", "S3", "fwd")),
             new EpochGate(),
-            new GroupStateMonitor(new NoReader(), new KeyMoveStateOptions(), TimeProvider.System));
+            new GroupStateMonitor(new NoReader(), new KeyMoveStateOptions(), clock));
         var tokens = new List<string>();
         new KeyMoveTokens(node).AddTo(tokens);
 

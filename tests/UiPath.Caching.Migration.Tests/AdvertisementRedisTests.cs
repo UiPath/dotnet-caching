@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Threading.Channels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,9 +18,10 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
 {
     private const string Skip = "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.";
 
+    private readonly SignalingTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+    private readonly Channel<RouterAdvertisement> _writes = Channel.CreateUnbounded<RouterAdvertisement>();
     private readonly RedisKey _key = $"adv-test:{Guid.NewGuid():N}";
     private ConnectionMultiplexer? _redis;
-    private string? _identity;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -62,13 +64,19 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
     public async Task A_router_whose_library_never_starts_advertises_bypass()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
-        core.UseLibrary(token => Task.Delay(Timeout.Infinite, token).ContinueWith<LibraryParts>(_ => throw new OperationCanceledException(), TaskScheduler.Default));
-        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _key);
+        var bound = TimeSpan.FromMilliseconds(375);
+        var core = new RouterCore(_clock, _ => true, NullLogger.Instance) { StartupClock = _clock, StartBound = bound };
+        core.UseLibrary(token => new TaskCompletionSource<LibraryParts>(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token));
+        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(ObserveWrites(Db)), _key);
         await using var router = new Router(core, Array.Empty<(string, Type, object)>()) { Advertiser = Advertiser(store, core) };
-        router.Start();
+        var start = Task.Run(router.Start, Ct);
+        await _clock.WaitForTimerWhileRunningAsync(bound, start, Ct);
+        start.IsCompleted.Should().BeFalse();
+        _clock.Advance(bound);
+        await start.WaitAsync(Ct);
 
-        (await UntilAsync(async () => (await store.ReadAsync(Ct)).Count == 1)).Should().BeTrue("the entry needs no started library");
+        await _writes.Reader.ReadAsync(Ct);
+        (await store.ReadAsync(Ct)).Should().ContainSingle("the entry needs no started library");
         router.Mode.Should().Be(RouterMode.BypassLibrary);
         (await store.ReadAsync(Ct))[0].Advertisement.Has("byp").Should().BeTrue();
     }
@@ -77,20 +85,21 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
     public async Task A_mode_change_shows_at_once_and_a_stop_writes_the_departing_entry()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
-        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _key);
+        var core = new RouterCore(_clock, _ => true, NullLogger.Instance);
+        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(ObserveWrites(Db)), _key);
         await using var router = new Router(core, Array.Empty<(string, Type, object)>()) { Advertiser = Advertiser(store, core) };
         router.Start();
         router.Mode.Should().Be(RouterMode.Library);
-        (await UntilAsync(async () => (await store.ReadAsync(Ct)).Count == 1)).Should().BeTrue();
+        await _writes.Reader.ReadAsync(Ct);
+        (await store.ReadAsync(Ct)).Should().ContainSingle();
         (await store.ReadAsync(Ct))[0].Advertisement.Has("byp").Should().BeFalse();
 
         await router.EnterBypassAsync(Ct);
-        (await UntilAsync(async () => (await store.ReadAsync(Ct)).Single().Advertisement.Has("byp")))
-            .Should().BeTrue("a mode change writes at once, not at the next hourly interval");
+        (await _writes.Reader.ReadAsync(Ct)).Has("byp").Should().BeTrue("a mode change writes at once, before the next hourly interval");
+        (await store.ReadAsync(Ct)).Single().Advertisement.Has("byp").Should().BeTrue();
 
         await router.StopAsync(Ct);
-        (await UntilAsync(async () => (await store.ReadAsync(Ct)).Single().Advertisement.Left)).Should().BeTrue("a stopping router writes its departing entry");
+        (await store.ReadAsync(Ct)).Single().Advertisement.Left.Should().BeTrue("a stopping router writes its departing entry");
     }
 
     [Fact]
@@ -98,8 +107,8 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
         var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _key);
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
-        var advertiser = new RouterAdvertiser(store, "urn:live", "b", [new BypassTokens(core)], TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(50), TimeProvider.System, NullLogger.Instance);
+        var core = new RouterCore(_clock, _ => true, NullLogger.Instance);
+        var advertiser = new RouterAdvertiser(store, "urn:live", "b", [new BypassTokens(core)], TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(50), _clock, NullLogger.Instance);
         var time = await Db.ExecuteAsync("TIME");
         var now = (long.Parse((string)((RedisResult[])time!)[0]!, CultureInfo.InvariantCulture) * 1000) - 60_000;
         await Db.HashSetAsync(_key, "urn:dead#router", $"{now}|kind=router;inst=urn:dead;mig=");
@@ -108,7 +117,15 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         age.Should().BeGreaterThan(advertiser.Fresh, "a reader no longer counts it");
 
         advertiser.Start();
-        (await UntilAsync(async () => !await Db.HashExistsAsync(_key, "urn:dead#router"))).Should().BeTrue("a router prunes entries past the gone age");
+        var interval = TimeSpan.FromMilliseconds(50);
+        for (var write = 1; write < 10; write++)
+        {
+            await _clock.WaitForTimerAsync(interval, Ct);
+            _clock.Advance(interval);
+        }
+
+        await _clock.WaitForTimerAsync(interval, Ct);
+        (await Db.HashExistsAsync(_key, "urn:dead#router")).Should().BeFalse("a router prunes entries past the gone age");
         (await Db.HashExistsAsync(_key, advertiser.Field)).Should().BeTrue();
         await advertiser.StopAsync(TimeSpan.FromSeconds(1));
     }
@@ -126,7 +143,8 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         var key = RouterServiceCollectionExtensions.NodeListKey(stackCache, stackRedis);
         var field = stackCache.SourceUri!.ToString().ToLowerInvariant() + RouterAdvertisement.FieldSuffix;
 
-        (await UntilAsync(async () => await Db.HashExistsAsync(key, field))).Should().BeTrue("the entry lands where the stack's node list is, under the stack's identity");
+        await _writes.Reader.ReadAsync(Ct);
+        (await Db.HashExistsAsync(key, field)).Should().BeTrue("the entry lands where the stack's node list is, under the stack's identity");
         router.Advertiser!.Fresh.Should().Be(ownSection ? TimeSpan.FromSeconds(60) : TimeSpan.FromSeconds(150), "the router's section's LivenessWindow plus two intervals");
         if (ownSection)
         {
@@ -147,25 +165,31 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         {
             if (hangs)
             {
-                release.Wait(TimeSpan.FromSeconds(60));
+                release.Wait(Ct);
             }
 
             throw new InvalidOperationException("library build failed");
         }
 
-        await using var provider = Provider($"adv{Guid.NewGuid():N}"[..16], services => services
+        var identity = $"adv{Guid.NewGuid():N}"[..16];
+        await using var provider = Provider(identity, services => services
             .AddKeyedSingleton(RouterServiceCollectionExtensions.StackName, (_, _) => Fail<StackServices>())
             .AddKeyedSingleton(RouterServiceCollectionExtensions.StackName, (_, _) => Fail<IOptions<CacheOptions>>())
             .AddKeyedSingleton(RouterServiceCollectionExtensions.StackName, (_, _) => Fail<IOptions<RedisCacheOptions>>()));
-        var created = Task.Run(() => provider.GetRequiredService<IRouter>(), Ct);
-        (await Task.WhenAny(created, Task.Delay(TimeSpan.FromSeconds(15), Ct))).Should().BeSameAs(created);
-        var router = await created;
+        try
+        {
+            var router = await Task.Run(() => provider.GetRequiredService<IRouter>(), Ct).WaitAsync(Ct);
+            await _writes.Reader.ReadAsync(Ct);
+            var fields = (await Db.HashKeysAsync("caching:nodes")).Select(field => (string?)field);
+            fields.Should().Contain(field => field != null && field.Contains(identity, StringComparison.Ordinal), "the advertisement needs nothing from the library");
+            router.Mode.Should().Be(RouterMode.BypassLibrary);
+        }
+        finally
+        {
+            release.Set();
+        }
 
-        (await UntilAsync(async () => (await Db.HashKeysAsync("caching:nodes")).Any(f => ((string)f!).Contains(_identity!, StringComparison.Ordinal))))
-            .Should().BeTrue("the advertisement needs nothing from the library");
-        router.Mode.Should().Be(RouterMode.BypassLibrary);
-        release.Set();
-        foreach (var f in (await Db.HashKeysAsync("caching:nodes")).Where(f => ((string)f!).Contains(_identity!, StringComparison.Ordinal)))
+        foreach (var f in (await Db.HashKeysAsync("caching:nodes")).Where(f => ((string?)f)?.Contains(identity, StringComparison.Ordinal) == true))
         {
             await Db.HashDeleteAsync("caching:nodes", f);
         }
@@ -201,9 +225,9 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
         var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _key);
-        await store.WriteAsync("urn:a#router", new RouterAdvertisement("urn:a", "b", []), Ct);
+        var old = new RouterAdvertisement("urn:a", "b", []);
+        await Db.HashSetAsync(_key, "urn:a#router", $"1|{old.Encode()}");
         var (field, _, _, stamp) = (await store.ReadAsync(Ct)).Single();
-        await Task.Delay(5, Ct);
         await store.WriteAsync("urn:a#router", new RouterAdvertisement("urn:a", "b", []), Ct);
 
         await store.PruneAsync([(field, stamp)], Ct);
@@ -214,27 +238,23 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
     }
 
     private static RouterAdvertiser Advertiser(RouterAdvertisementStore store, RouterCore core) =>
-        new(store, "urn:n1", "b", [new BypassTokens(core)], TimeSpan.FromHours(1), TimeSpan.FromSeconds(1), TimeProvider.System, NullLogger.Instance);
+        new(store, "urn:n1", "b", [new BypassTokens(core)], TimeSpan.FromHours(1), TimeSpan.FromSeconds(1), core.Clock, NullLogger.Instance);
 
-    private static async Task<bool> UntilAsync(Func<Task<bool>> condition)
+    private IDatabase ObserveWrites(IDatabase database) => InterceptingProxy.Wrap(database, (method, args) =>
+        method.Name == nameof(IDatabase.ScriptEvaluateAsync) && args is [string script, RedisKey[] keys, RedisValue[] { Length: 2 } values, CommandFlags flags]
+            && (string?)values[1] is { } text && RouterAdvertisement.TryParse(text, out var advertisement)
+            ? WriteAsync(script, keys, values, flags, advertisement)
+            : InterceptingProxy.Proceed);
+
+    private async Task<RedisResult> WriteAsync(string script, RedisKey[] keys, RedisValue[] values, CommandFlags flags, RouterAdvertisement advertisement)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(25, Ct);
-        }
-
-        return false;
+        var result = await Db.ScriptEvaluateAsync(script, keys, values, flags);
+        _writes.Writer.TryWrite(advertisement);
+        return result;
     }
 
     private ServiceProvider Provider(string identity, Action<IServiceCollection>? after = null, bool ownSection = false, string? interval = null)
     {
-        _identity = identity;
         var section = ownSection ? "RouterCaching" : "Caching";
         var settings = new Dictionary<string, string?>
         {
@@ -255,7 +275,7 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
 
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var source = new LegacySource(_redis!, "advc");
-        var services = new ServiceCollection().AddLogging();
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(_clock);
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         if (ownSection)
         {
@@ -272,7 +292,7 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
                 .UseLibraryWhen(_ => true)
                 .UseEnvelope(new LegacyEnvelopeProxy())
                 .UseNodeIdentity(identity)
-                .UseSourceConnection(() => Db)
+                .UseSourceConnection(() => ObserveWrites(Db))
                 .Add(new RouterCacheRegistration<List<long>> { Name = "advc", Group = "advg", Source = source, RedisKey = source.RedisKey }),
             section);
         after?.Invoke(services);

@@ -1,7 +1,7 @@
 namespace UiPath.Caching.Migration.Tests.Support;
 
 /// <summary>The library hash cache as a script: a read answers fields, a <see cref="SnapshotOutcome"/> or nothing (absent), and a write answers a <see cref="StoreOutcome"/>.</summary>
-internal sealed class FakeMigrationHashCache : IMigrationHashCache
+internal sealed class FakeMigrationHashCache(TimeProvider? clock = null) : IMigrationHashCache
 {
     public Func<CacheKey, CancellationToken, Task<object?>> Read { get; set; } = (_, _) => Task.FromResult<object?>(null);
 
@@ -11,12 +11,14 @@ internal sealed class FakeMigrationHashCache : IMigrationHashCache
 
     public List<(string Call, HashCacheEntryOptions? Options)> Calls { get; } = [];
 
+    private DateTimeOffset Expiration => clock?.ToDateTimeOffset(TimeSpan.FromMinutes(1)) ?? DateTimeOffset.MaxValue;
+
     public async ValueTask<HashSnapshotRead<T>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         Keys.Add(cacheKey);
         return await Read(cacheKey, token) switch
         {
-            IDictionary<string, T?> fields => new HashSnapshotRead<T>(SnapshotOutcome.Found, (ICacheEntry<IDictionary<string, T?>>)(object)new TestEntry<IDictionary<string, T?>>(fields, DateTimeOffset.UtcNow.AddMinutes(1))),
+            IDictionary<string, T?> fields => new HashSnapshotRead<T>(SnapshotOutcome.Found, (ICacheEntry<IDictionary<string, T?>>)(object)new TestEntry<IDictionary<string, T?>>(fields, Expiration)),
             SnapshotOutcome outcome => new HashSnapshotRead<T>(outcome, null),
             _ => new HashSnapshotRead<T>(SnapshotOutcome.Absent, null),
         };

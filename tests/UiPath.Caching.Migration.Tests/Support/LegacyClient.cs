@@ -90,26 +90,14 @@ internal sealed class LegacySource(IConnectionMultiplexer redis, string cacheNam
 
     public async ValueTask<WriteResult> SetAsync(string key, List<long> value, CacheExpiry expiry, CancellationToken cancellationToken)
     {
-        var database = redis.GetDatabase();
-        if (expiry.Deadline is { } deadline)
-        {
-            await database.StringSetAsync(RedisKey(key), LegacyEnvelope.Write(value), deadline - DateTimeOffset.UtcNow).ConfigureAwait(false);
-        }
-        else
-        {
-            await database.StringSetAsync(RedisKey(key), LegacyEnvelope.Write(value)).ConfigureAwait(false);
-        }
-
+        await WriteAsync(redis.GetDatabase(), RedisKey(key), LegacyEnvelope.Write(value), expiry.Deadline, When.Always).ConfigureAwait(false);
         return WriteOutcome.Committed;
     }
 
-    public async ValueTask<AddResult> TryAddAsync(string key, List<long> value, CacheExpiry expiry, CancellationToken cancellationToken)
-    {
-        TimeSpan? ttl = expiry.Deadline is { } deadline ? deadline - DateTimeOffset.UtcNow : null;
-        return await redis.GetDatabase().StringSetAsync(RedisKey(key), LegacyEnvelope.Write(value), ttl, When.NotExists).ConfigureAwait(false)
+    public async ValueTask<AddResult> TryAddAsync(string key, List<long> value, CacheExpiry expiry, CancellationToken cancellationToken) =>
+        await WriteAsync(redis.GetDatabase(), RedisKey(key), LegacyEnvelope.Write(value), expiry.Deadline, When.NotExists).ConfigureAwait(false)
             ? AddOutcome.Added
             : AddOutcome.Exists;
-    }
 
     public async ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken)
     {
@@ -133,6 +121,22 @@ internal sealed class LegacySource(IConnectionMultiplexer redis, string cacheNam
                 await database.KeyDeleteAsync(key).ConfigureAwait(false);
             }
         }
+    }
+
+    internal static async Task<bool> WriteAsync(IDatabase database, RedisKey key, RedisValue value, DateTimeOffset? deadline, When when)
+    {
+        if (deadline is null || deadline == DateTimeOffset.MaxValue)
+        {
+            return await database.StringSetAsync(key, value, when: when).ConfigureAwait(false);
+        }
+
+        object[] arguments = [key, value, "PXAT", deadline.Value.ToUnixTimeMilliseconds()];
+        if (when == When.NotExists)
+        {
+            arguments = [.. arguments, "NX"];
+        }
+
+        return !(await database.ExecuteAsync("SET", arguments).ConfigureAwait(false)).IsNull;
     }
 }
 

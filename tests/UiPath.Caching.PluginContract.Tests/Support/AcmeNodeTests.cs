@@ -4,6 +4,7 @@ using StackExchange.Redis;
 using StackExchange.Redis.Profiling;
 using UiPath.Caching.Broadcast;
 using UiPath.Caching.Config;
+using UiPath.Caching.Migration.Tests.Support;
 using UiPath.Caching.PluginContract.Tests.Acme;
 using UiPath.Caching.Redis;
 using UiPath.Caching.Telemetry;
@@ -20,6 +21,8 @@ public abstract class AcmeNodeTests(RedisFixture fixture) : IDisposable
     protected const string ToBeta = "tobeta";
     protected const string Beta = "beta";
     protected const int BetaId = 0x110;
+
+    private static readonly TimeSpan ViewInterval = TimeSpan.FromMilliseconds(1373);
 
     private readonly List<ServiceProvider> _nodes = [];
     private readonly List<ServiceProvider> _started = [];
@@ -52,22 +55,6 @@ public abstract class AcmeNodeTests(RedisFixture fixture) : IDisposable
             Serializer = new SerializerPolicy { Write = write, Read = read, MigrateOnRead = migrate },
         };
 
-    protected static async Task<bool> UntilAsync(Func<Task<bool>> condition, int seconds = 15)
-    {
-        var until = DateTime.UtcNow.AddSeconds(seconds);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(50, Ct);
-        }
-
-        return false;
-    }
-
     protected static async Task StartAsync(ServiceProvider node)
     {
         node.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisStreams).Create(new TopicKey("string"));
@@ -83,6 +70,28 @@ public abstract class AcmeNodeTests(RedisFixture fixture) : IDisposable
         {
             await service.StopAsync(CancellationToken.None);
         }
+    }
+
+    protected static ITopic<ICacheEvent> Topic<T>(ServiceProvider node) =>
+        node.GetRequiredService<ITopicFactory>().Get().Create(new DefaultTopicKeyStrategy().GetTopicKey(typeof(T)));
+
+    protected static Task ReadyAsync(ServiceProvider node) => node.GetRequiredService<RedisTopicSignals>().WaitAsync(Ct);
+
+    protected static Task BarrierAsync<T>(ServiceProvider writer, ServiceProvider peer) =>
+        RedisTopicSignals.BarrierAsync(Topic<T>(writer), Topic<T>(peer), Ct);
+
+    protected static async Task AdvanceViewAsync(ServiceProvider node, Task view)
+    {
+        var time = (SignalingTimeProvider)node.GetRequiredService<TimeProvider>();
+        if (!view.IsCompleted)
+        {
+            var earliest = (ViewInterval * 0.8) - TimeSpan.FromMilliseconds(1);
+            var latest = ViewInterval * 1.2;
+            await time.WaitForTimerAsync(delay => delay >= earliest && delay <= latest, Ct);
+            time.Advance(latest);
+        }
+
+        await view.WaitAsync(Ct);
     }
 
     protected static RedisKey FindKey(ConnectionMultiplexer redis, string key) =>
@@ -166,7 +175,14 @@ public abstract class AcmeNodeTests(RedisFixture fixture) : IDisposable
 
     protected ServiceProvider Node(NodeSpec spec)
     {
-        var services = new ServiceCollection().AddLogging();
+        using var redis = ConnectionMultiplexer.Connect(fixture.ConnectionString);
+        var server = redis.GetServer(redis.GetEndPoints()[0]);
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(new SignalingTimeProvider(server.Time()));
+        if (spec.ObservedTopic is { } topic)
+        {
+            RedisTopicSignals.Add(services, topic);
+        }
+
         if (spec.Telemetry is not null)
         {
             services.AddSingleton(spec.Telemetry);
@@ -188,8 +204,8 @@ public abstract class AcmeNodeTests(RedisFixture fixture) : IDisposable
                     b.AddRedis(o =>
                     {
                         o.FormatNegotiation.Mode = spec.Mode;
-                        o.FormatNegotiation.AdvertiseInterval = TimeSpan.FromSeconds(1);
-                        o.FormatNegotiation.ViewInterval = TimeSpan.FromSeconds(1);
+                        o.FormatNegotiation.AdvertiseInterval = ViewInterval;
+                        o.FormatNegotiation.ViewInterval = ViewInterval;
                         o.FormatNegotiation.LivenessWindow = TimeSpan.FromSeconds(3);
                         o.FormatNegotiation.UpgradeHold = TimeSpan.Zero;
                         o.FormatNegotiation.MaxViewAge = TimeSpan.FromSeconds(10);
@@ -263,5 +279,7 @@ public abstract class AcmeNodeTests(RedisFixture fixture) : IDisposable
         public ICachingTelemetryProvider? Telemetry { get; init; }
 
         public ProfilingSession? Profile { get; init; }
+
+        public string? ObservedTopic { get; init; }
     }
 }
