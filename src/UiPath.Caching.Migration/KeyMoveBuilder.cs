@@ -13,6 +13,7 @@ public sealed class KeyMoveBuilder
     private readonly List<(string Name, bool Listed)> _groups = [];
     private readonly List<KeyMoveCacheRegistration> _caches = [];
     private readonly Dictionary<string, string> _formatSettled = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _inPlaceReadersDeployed = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _nodeListComplete = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _memoryFits = new(StringComparer.Ordinal);
     private readonly List<string> _excluded = [];
@@ -86,6 +87,16 @@ public sealed class KeyMoveBuilder
         return this;
     }
 
+    /// <summary>States that the code that reads and writes the in-place keys of <paramref name="group"/> is still deployed, with the id of the evidence for it.</summary>
+    /// <remarks>Close, the point of no return, waits for it, with no override: while that code is deployed, a step back past Close stays possible for a release. Keep it deployed for one release after the group closes.</remarks>
+    /// <param name="group">The group the evidence covers.</param>
+    /// <param name="evidenceId">A label for the application's evidence record, without comma, colon or whitespace.</param>
+    public KeyMoveBuilder AttestInPlaceReadersDeployed(string group, string evidenceId)
+    {
+        Attest(_inPlaceReadersDeployed, group, evidenceId);
+        return this;
+    }
+
     /// <summary>States that the node list of <paramref name="group"/> is complete, with the id of the evidence for it.</summary>
     /// <remarks>An id is good for one move, including its reverse: the first Start records it in the group's state, and no later Start, on any node or after a restart, accepts it again. A second move needs a new evidence id in the configuration, deployed to every node.</remarks>
     /// <param name="group">The group the evidence covers.</param>
@@ -153,7 +164,7 @@ public sealed class KeyMoveBuilder
         RefuseExcludedOverlap(caches);
         RefuseSharedPatterns(caches);
         var registrations = _groups.Select(g => new GroupRegistration(g.Name, true, g.Listed, [.. caches.Where(c => c.Group == g.Name).Select(c => c.Name)])).ToArray();
-        return new KeyMoveSetup(registrations, stages, new RegisteredGroupFacts(caches, _floorAttested, _formatSettled, _nodeListComplete, _memoryFits), new RegisteredKeySpace(caches, prefix, _alert, [.. _excluded], new Dictionary<string, TimeSpan>(_moveMinTtl)), new UnavailableMoveClaim(), prefix) { Alert = _alert, Caches = caches, Values = new KeyMoveValueClasses() };
+        return new KeyMoveSetup(registrations, stages, new RegisteredGroupFacts(caches, _floorAttested, _formatSettled, _nodeListComplete, _memoryFits, inPlaceReadersDeployed: _inPlaceReadersDeployed), new RegisteredKeySpace(caches, prefix, _alert, [.. _excluded], new Dictionary<string, TimeSpan>(_moveMinTtl)), new UnavailableMoveClaim(), prefix) { Alert = _alert, Caches = caches, Values = new KeyMoveValueClasses() };
     }
 
     // The prefix heads every scan pattern, so a character that a pattern reads as a wildcard would make the scan miss the keys it names.
@@ -328,7 +339,7 @@ public sealed class KeyMoveBuilder
             throw new InvalidOperationException($"UseMoveMinTtl names the group '{named}', which was not added.");
         }
 
-        var attested = new[] { _formatSettled, _nodeListComplete, _memoryFits }.SelectMany(d => d.Keys).FirstOrDefault(g => !groups.Contains(g));
+        var attested = new[] { _formatSettled, _nodeListComplete, _memoryFits, _inPlaceReadersDeployed }.SelectMany(d => d.Keys).FirstOrDefault(g => !groups.Contains(g));
         if (attested is not null)
         {
             throw new InvalidOperationException($"An attestation names the group '{attested}', which was not added.");

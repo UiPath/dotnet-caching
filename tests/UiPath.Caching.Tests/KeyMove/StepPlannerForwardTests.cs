@@ -214,6 +214,24 @@ public class StepPlannerForwardTests
         stillBlocked.AlertList.Single(a => a.Code == "close_pending").Detail.Should().Be("close.node_readiness:n2");
     }
 
+    // Close is the point of no return: it waits until the app attests that the code that reads the in-place keys is still deployed, and a forced close cannot skip that.
+    [Fact]
+    public async Task Close_waits_for_the_attestation_that_the_in_place_readers_are_still_deployed_and_no_force_skips_it()
+    {
+        var soaked = Drained.With((StateFields.DrainedAt, "0")) with { Residue = new Dictionary<string, long> { ["a"] = 2 } };
+        var good = new FakeMoverStatus { Report = FakeMoverStatus.Drained(), Inventory = new Dictionary<string, long> { ["a"] = 2 } };
+        var confirmed = Verdict(min: 5, confirmed: TimeSpan.FromMinutes(2));
+        var retired = new FakeGroupFacts { ReleaseFloorAttested = true, ReadersDeployed = false };
+
+        var consented = await DecideAsync(Input(soaked.Approved(ApprovalKinds.Close), flag: confirmed, facts: retired, mover: good));
+        var forced = await DecideAsync(Input(soaked.Approved(ApprovalKinds.CloseForce), flag: confirmed, facts: retired, mover: good));
+
+        consented.AlertList.Single(a => a.Code == "close_pending").Detail.Should().Be("close.in_place_readers:in_place_readers_not_attested");
+        forced.AlertList.Single(a => a.Code == "close_pending").Detail.Should().Contain("close.in_place_readers");
+        consented.Spec.Should().BeNull();
+        forced.Spec.Should().BeNull();
+    }
+
     [Fact]
     public async Task Needs_residue_known_for_every_cache_and_a_NoOrigin_cache_with_residue_has_no_override()
     {

@@ -33,4 +33,7 @@ internal interface IGroupFacts
 
     /// <summary>The estimate includes native keys, fences, and control records.</summary>
     bool MemoryFits(string group, string reportId, long estimatedBytes, double headroom);
+
+    /// <summary>The app attests that the code that reads and writes the group's in-place keys is still deployed, so a step back past Close stays possible for a release.</summary>
+    bool InPlaceReadersDeployed(string group);
 }

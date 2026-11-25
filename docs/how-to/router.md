@@ -106,6 +106,8 @@ A call is decided by the first of these that applies, and the router logs this o
 
 Meter `UiPath.Caching.Migration`, counters `local_hit`, `redis_hit`, `miss`, `factory_runs`, `unavailable`, `unreadable`, `publish_failed` and `pending`, each tagged `cache`, `group`, `path` and `path_reason` (`flag`, `predicate_error`, `bypass`, `bypass_flag_error`, `library_unavailable`, `other_client_read`, `other_client_unreadable`, `pin`, `pin_state_unknown`). `mode_change` (tags `mode`, `reason`) counts completed transitions and `library_start_failed` counts failed starts. `format_switch_held` (tags `group`, `pending`) counts a write that kept its format because the group's keys move.
 
+Meter `UiPath.Caching.KeyMove` includes `cache.keymove.gate_overrides` (tags `group`, `gate`), which counts each gate bypassed by an approval when the transition completes, and `cache.keymove.canary_keys` (tag `group`), which counts keys each inventory pass finds were written after all nodes stopped writing to the source side.
+
 ## Key move stage checks
 
 Use these check IDs to identify the missing evidence when a stage is blocked or an instance move holds admission.
@@ -119,6 +121,7 @@ Use these check IDs to identify the missing evidence when a stage is blocked or 
 | `start.claim_available` | Groups that require a move claim have a claim provider configured. |
 | `close.acks`, `close.soak`, `close.canary`, `close.consent` | Every fresh node acknowledges the identity, the soak has elapsed, no canary activity occurred during it, and consent covers the stored residue. |
 | `close.node_readiness`, `close.inventory`, `close.views` | Fresh nodes can use key move without bypassing, current residue fits within the approved counts, and all views confirm the close stage. |
+| `close.in_place_readers` | Close requires `AttestInPlaceReadersDeployed(group, evidenceId)` in the builder configuration. Until then, it emits `close_pending` with detail `close.in_place_readers:in_place_readers_not_attested`. No approval overrides this gate. |
 | `drain.confirming_pass`, `drain.skipped_accounted`, `drain.promotions_idle`, `drain.canary_zero` | The confirming pass finds nothing movable, all skips are accounted for, no promotions remain in flight, and the forward canary is zero. The first two IDs are reported together because the mover supplies one verdict for both. |
 | `dst_preflight`, `dst_state_missing`, `dst_unreachable`, `dst_preflight_timeout`, `dst_not_master`, `dst_replica_unhealthy` | Before updating the source control record, the destination state and masters must answer within the timeout, and known replica counts must meet the configured expectation. |
 | `baseline_unavailable`, `pend_wait_unavailable`, `mirror_open_unavailable` | The controller could not establish or confirm the generation baselines, the destination mirror pend, or the destination mirror open. |

@@ -39,13 +39,16 @@ public class KeyMoveRegistrationTests
         bare.NodeListComplete("g1", Fresh).Should().BeFalse();
         bare.MemoryFits("g1", "report-1", 1, 0.2).Should().BeFalse();
         bare.ReleaseFloorAttested.Should().BeFalse();
+        bare.InPlaceReadersDeployed("g1").Should().BeFalse();
 
-        var attested = Builder(Routed("a", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestFormatSettled("g1", "e1").AttestNodeListComplete("g1", "e2").AttestMemoryFits("g1", "report-1")).BuildKeyMove()!.Facts;
+        var attested = Builder(Routed("a", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestFormatSettled("g1", "e1").AttestNodeListComplete("g1", "e2").AttestMemoryFits("g1", "report-1").AttestInPlaceReadersDeployed("g1", "e3")).BuildKeyMove()!.Facts;
         attested.FormatSettled("g1", Fresh).Should().BeTrue();
         attested.NodeListComplete("g1", Fresh).Should().BeTrue();
         attested.MemoryFits("g1", "report-1", 1, 0.2).Should().BeTrue();
         attested.MemoryFits("g1", "report-2", 1, 0.2).Should().BeFalse("a newer dry-run report is not the one attested");
         attested.FormatSettled("g2", Fresh).Should().BeFalse("another group");
+        attested.InPlaceReadersDeployed("g1").Should().BeTrue();
+        attested.InPlaceReadersDeployed("g2").Should().BeFalse("another group");
     }
 
     [Fact]
@@ -220,6 +223,7 @@ public class KeyMoveRegistrationTests
         ((Action)(() => builder.AttestFormatSettled(" ", "e"))).Should().Throw<ArgumentException>();
         ((Action)(() => builder.AttestNodeListComplete("g1", string.Empty))).Should().Throw<ArgumentException>();
         ((Action)(() => builder.AttestMemoryFits("g1", " "))).Should().Throw<ArgumentException>();
+        ((Action)(() => builder.AttestInPlaceReadersDeployed("g1", " "))).Should().Throw<ArgumentException>();
     }
 
     private static KeyMoveCacheRegistration NullParse() => new()
@@ -259,6 +263,7 @@ public class KeyMoveRegistrationTests
         ("null cache name", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache(null!))), "cannot take part"),
         ("null parse delegate", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(NullParse())), "needs ParseInPlaceKey"),
         ("attestation for a group that was not added", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestMemoryFits("ghost", "r")), "which was not added"),
+        ("in-place readers attested for a group that was not added", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a")).AttestInPlaceReadersDeployed("ghost", "r")), "which was not added"),
         ("cache group not added", () => Using(p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", group: "other"))), "was not added"),
         ("cache not routed", () => Builder().UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))), "not registered with the router"),
         ("cache routed in another group", () => Builder(Routed("a", "g2")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a"))), "not registered with the router in the group 'g1'"),

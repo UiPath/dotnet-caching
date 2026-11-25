@@ -15,7 +15,7 @@ internal sealed partial class StageDriver
 
         return plan.Kind switch
         {
-            StepKind.Transit => await TransitAsync(group, state, input, plan.Spec!, memory, cancellationToken).ConfigureAwait(false),
+            StepKind.Transit => await TransitAsync(group, state, input, plan, memory, cancellationToken).ConfigureAwait(false),
             StepKind.Abandon => await AbandonAsync(group, state, input, cancellationToken).ConfigureAwait(false),
             StepKind.Resume => await ResumeAsync(group, state, input, plan.SkipBarriers, true, cancellationToken).ConfigureAwait(false),
             StepKind.ColdStart => await ColdStartAsync(group, state, input, cancellationToken).ConfigureAwait(false),
@@ -74,8 +74,9 @@ internal sealed partial class StageDriver
         return await services.Upkeep.RebuildAsync(group, state, plan.Caches, sequence, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<TransitionResult?> TransitAsync(string group, StateRecord state, StepInput input, TransitionSpec spec, GroupMemory memory, CancellationToken cancellationToken)
+    private async Task<TransitionResult?> TransitAsync(string group, StateRecord state, StepInput input, StepPlan plan, GroupMemory memory, CancellationToken cancellationToken)
     {
+        var spec = plan.Spec!;
         if (!await PrepareAsync(group, state, spec, cancellationToken).ConfigureAwait(false))
         {
             return null;
@@ -103,6 +104,7 @@ internal sealed partial class StageDriver
 
         if (result.Outcome == TransitionOutcome.Completed)
         {
+            CountOverrides(group, plan.OverriddenGates ?? []);
             await AfterCompletedAsync(group, spec, token, ep, target.Id, cancellationToken).ConfigureAwait(false);
         }
         else if (result.Outcome is TransitionOutcome.BarrierStuck or TransitionOutcome.CommitIncomplete or TransitionOutcome.CommitUncertain)

@@ -16,6 +16,8 @@ internal sealed class FakeGroupFacts : IGroupFacts
 
     public bool NodeListSettled { get; set; } = true;
 
+    public bool ReadersDeployed { get; set; } = true;
+
     public bool ReleaseFloorAttested { get; set; }
 
     public TimeSpan? SourceTtl { get; set; }
@@ -47,4 +49,6 @@ internal sealed class FakeGroupFacts : IGroupFacts
     public bool NodeListComplete(string group, StateRecord state) => NodeListSettled;
 
     public bool MemoryFits(string group, string reportId, long estimatedBytes, double headroom) => Fits;
+
+    public bool InPlaceReadersDeployed(string group) => ReadersDeployed;
 }

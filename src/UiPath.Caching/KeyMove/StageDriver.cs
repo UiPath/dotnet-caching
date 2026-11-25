@@ -79,6 +79,14 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
         return new StepOutcome(plan, result);
     }
 
+    private static void CountOverrides(string group, IReadOnlyList<string> gates)
+    {
+        foreach (var gate in gates)
+        {
+            KeyMoveTelemetry.CountGateOverride(group, gate);
+        }
+    }
+
     private async Task RunAsync(string group, CancellationToken cancellationToken)
     {
         try

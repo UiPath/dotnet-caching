@@ -6,13 +6,15 @@ namespace UiPath.Caching.KeyMove;
 /// <param name="nodeListComplete">The groups with a complete-node-list attestation, with the evidence id each attestation names; an id is good for one move, including its reverse.</param>
 /// <param name="memoryFits">The groups with a memory-headroom attestation, with the id of the dry-run report each attestation covers.</param>
 /// <param name="claimWired">A real move claim is wired, which a router group needs before it may start.</param>
+/// <param name="inPlaceReadersDeployed">The groups whose in-place readers the app attests are still deployed, with the evidence id each attestation names.</param>
 internal sealed class RegisteredGroupFacts(
     IReadOnlyList<KeyMoveCache> caches,
     bool releaseFloorAttested,
     IReadOnlyDictionary<string, string>? formatSettled = null,
     IReadOnlyDictionary<string, string>? nodeListComplete = null,
     IReadOnlyDictionary<string, string>? memoryFits = null,
-    bool claimWired = false) : IGroupFacts
+    bool claimWired = false,
+    IReadOnlyDictionary<string, string>? inPlaceReadersDeployed = null) : IGroupFacts
 {
     public const string FormatKind = "f";
     public const string NodeKind = "n";
@@ -54,6 +56,8 @@ internal sealed class RegisteredGroupFacts(
 
     /// <summary>True only for the dry-run report the attestation of this group covers; a newer report is a different one.</summary>
     public bool MemoryFits(string group, string reportId, long estimatedBytes, double headroom) => memoryFits is not null && memoryFits.TryGetValue(group, out var covered) && covered == reportId;
+
+    public bool InPlaceReadersDeployed(string group) => inPlaceReadersDeployed?.ContainsKey(group) == true;
 
     private static string Entry(string kind, string id) => kind + ":" + id;
 

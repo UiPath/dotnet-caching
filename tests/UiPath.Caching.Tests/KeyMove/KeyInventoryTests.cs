@@ -44,9 +44,11 @@ public class KeyInventoryTests(RedisContainerFixture fixture)
     public async Task The_canary_counts_keys_whose_life_says_they_were_written_after_S3_and_needs_the_time_of_S3()
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        using var counted = new KeyMoveMeterRecorder("cache.keymove.canary_keys", kit.Group);
         kit.Kit.Time.Advance(TimeSpan.FromDays(1));
         kit.Space.MaxTtl["a"] = TimeSpan.FromMinutes(10);
         await kit.SetAsync(MoveSide.Legacy, "a", "long", TimeSpan.FromHours(1));
+        await kit.SetAsync(MoveSide.Legacy, "a", "longer", TimeSpan.FromHours(2));
         await kit.SetAsync(MoveSide.Legacy, "a", "short", TimeSpan.FromSeconds(30));
         await kit.SetAsync(MoveSide.Legacy, "a", "never");
         (await kit.Inventory.RunAsync(kit.Group, Ct))!.Canary.Should().BeNull("no S3 time, no evidence");
@@ -55,7 +57,10 @@ public class KeyInventoryTests(RedisContainerFixture fixture)
         var t3 = kit.Kit.Time.GetUtcNow().AddMinutes(-2).ToUnixTimeMilliseconds();
         await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, t3.ToString(CultureInfo.InvariantCulture)), (StateFields.AllAck, state.Id)], []);
 
-        (await kit.Inventory.RunAsync(kit.Group, Ct))!.Canary.Should().Be(1, "an hour of life and two minutes since S3 beats the longest source life; thirty seconds does not; no expiry is not seen");
+        (await kit.Inventory.RunAsync(kit.Group, Ct))!.Canary.Should().Be(2, "both long-lived keys exceed the source life bound");
+        counted.Measured.Select(m => m.Value).Should().Equal(2L);
+        (await kit.Inventory.RunAsync(kit.Group, Ct))!.Canary.Should().Be(2);
+        counted.Measured.Select(m => m.Value).Should().Equal([2L, 2L], "each pass counts its canary keys, and a pass with no evidence counts none");
     }
 
     [Fact]

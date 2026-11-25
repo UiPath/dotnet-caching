@@ -205,6 +205,7 @@ UiPath.Caching.Migration.KeyMoveCacheRegistration.ParseNativeKey.init -> void
 UiPath.Caching.Migration.KeyMoveCacheRegistration.KeyMoveCacheRegistration() -> void
 UiPath.Caching.Migration.RouterBuilder.UseKeyMove(UiPath.Caching.KeyMove.IMigrationStageSource! stageSource, System.Action<UiPath.Caching.Migration.KeyMoveBuilder!>! configure) -> UiPath.Caching.Migration.RouterBuilder!
 UiPath.Caching.Migration.KeyMoveBuilder.AttestFormatSettled(string! group, string! evidenceId) -> UiPath.Caching.Migration.KeyMoveBuilder!
+UiPath.Caching.Migration.KeyMoveBuilder.AttestInPlaceReadersDeployed(string! group, string! evidenceId) -> UiPath.Caching.Migration.KeyMoveBuilder!
 UiPath.Caching.Migration.KeyMoveBuilder.AttestMemoryFits(string! group, string! dryRunReportId) -> UiPath.Caching.Migration.KeyMoveBuilder!
 UiPath.Caching.Migration.KeyMoveBuilder.AttestNodeListComplete(string! group, string! evidenceId) -> UiPath.Caching.Migration.KeyMoveBuilder!
 UiPath.Caching.Migration.KeyMoveBuilder.OnAlert(System.Action<UiPath.Caching.KeyMove.KeyMoveAlert!>! alert) -> UiPath.Caching.Migration.KeyMoveBuilder!

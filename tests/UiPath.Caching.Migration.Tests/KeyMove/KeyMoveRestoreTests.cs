@@ -98,7 +98,7 @@ public sealed class KeyMoveRestoreTests(RedisFixture fixture)
         await host.SeedAsync("late-legacy-value", [9]);
         await host.SetStageAsync(5);
 
-        await host.ExpectAlertAsync("close_pending", KeyMoveGateIds.CloseInventory);
+        await host.ExpectAlertAsync("close_pending", detail: $"{KeyMoveGateIds.CloseInventory}:{MovingCacheHost.CacheId}");
         (await host.LegacyKeysAsync()).Should().Equal(host.Legacy("late-legacy-value"));
         await host.AssertValueAsync("kept", [1]);
         await host.WriteAsync("late-legacy-value", [10]);

@@ -85,8 +85,10 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
     public async Task X5_is_abandoned_when_a_view_falls_after_the_gates_and_before_the_commit()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
+        using var overrides = new KeyMoveMeterRecorder("cache.keymove.gate_overrides", kit.Group);
         var drained = await ToDrainedAsync(kit);
-        await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "residue acknowledged", "op", CancellationToken.None);
+        kit.Mover.Report = FakeMoverStatus.Drained(1, ("a", 0));
+        await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.CloseForce, "residue acknowledged", "op", CancellationToken.None);
         for (var n = 0; n < 4; n++)
         {
             await kit.StepAsync(TimeSpan.FromSeconds(30));
@@ -101,6 +103,8 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
         var after = await kit.StateAsync();
         after.Should().Match<StateRecord>(s => s.State == "S4" && s.Durable && s.Ep > drained.Ep);
         after.Field(StateFields.ClosedAt).Should().BeEmpty();
+        kit.Alerts.Should().Contain(("gate_override", "close.canary"));
+        overrides.Measured.Should().BeEmpty();
     }
 
     [Fact]
