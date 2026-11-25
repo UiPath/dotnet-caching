@@ -110,7 +110,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
                 return await UnpromotedAsync(key, ensure, fields, cancellationToken).ConfigureAwait(false);
             }
 
-            var pass = NewPass(key, flavour, plan, attempt, unit, data, fields);
+            using var pass = NewPass(key, flavour, plan, attempt, unit, data, fields);
             return await RunUnitAsync(pass, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -273,7 +273,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         var decoded = pass.Decoded;
         var fields = new Dictionary<string, T?>(decoded.Fields.Where(f => f.Value is not null || TargetCodec.CachesNulls), StringComparer.Ordinal);
         pass.Served = fields.Count == 0 ? HashRead<T>.Of(ReadOutcome.Absent) : new HashRead<T>(ReadOutcome.Found, new Dictionary<string, T?>(decoded.Fields, StringComparer.Ordinal), pass.Expiration, decoded.Metadata);
-        if (!TryEncodeStaged(decoded, fields, out var staged))
+        if (!TryEncodeStaged(decoded, fields, out var staged, out pass.FormatLease))
         {
             return HashPromotionResult<T>.Of(HashPromotionStatus.NotPromoted, pass.Uncached);
         }
@@ -294,13 +294,14 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         return parts.Mappable?.Invoke(pass.Key) == false ? HashPromotionResult<T>.Of(HashPromotionStatus.Unreadable, pass.Served) : null;
     }
 
-    private bool TryEncodeStaged(DecodedHash<T> decoded, Dictionary<string, T?> fields, out IReadOnlyList<KeyValuePair<string, byte[]>> staged)
+    private bool TryEncodeStaged(DecodedHash<T> decoded, Dictionary<string, T?> fields, out IReadOnlyList<KeyValuePair<string, byte[]>> staged, out WriteLease lease)
     {
+        lease = default;
         try
         {
             // In reverse the in-place format keeps the user fields, and the metadata only where it has a field for it.
             var metadata = !reverse || parts.InPlace.CarriesMetadata ? decoded.Metadata : null;
-            staged = fields.Count == 0 && decoded.Fields.Count > 0 ? [] : TargetCodec.EncodeFields(fields, metadata);
+            staged = fields.Count == 0 && decoded.Fields.Count > 0 ? [] : TargetCodec.EncodeFields(fields, metadata, out lease);
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -531,8 +532,10 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         return again;
     }
 
-    private sealed class PromotionPass(string key, string source, string target, KeyMovePlan plan, bool ensure, int attempt, AdmittedUnit unit, KeyMoveData data, FencedKeys keys, RedisKey control)
+    private sealed class PromotionPass(string key, string source, string target, KeyMovePlan plan, bool ensure, int attempt, AdmittedUnit unit, KeyMoveData data, FencedKeys keys, RedisKey control) : IDisposable
     {
+        public WriteLease FormatLease;
+
         public string Key => key;
 
         /// <summary>L forward, N in reverse.</summary>
@@ -576,5 +579,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         public long Events { get; set; }
 
         public HashRead<T> Uncached => Served with { Uncached = true };
+
+        public void Dispose() => FormatLease.Dispose();
     }
 }

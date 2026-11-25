@@ -13,6 +13,13 @@ internal interface IKeyMoveHashCodec<T>
     /// <summary>The fields the side's write stores for <paramref name="fields"/>; an in-place side stores user fields only. An empty list means the write stores no key.</summary>
     IReadOnlyList<KeyValuePair<string, byte[]>> EncodeFields(IDictionary<string, T?> fields, IDictionary<string, string?>? metadata);
 
+    /// <summary>Encodes fields and hands the caller the format lease to hold through the write.</summary>
+    IReadOnlyList<KeyValuePair<string, byte[]>> EncodeFields(IDictionary<string, T?> fields, IDictionary<string, string?>? metadata, out WriteLease lease)
+    {
+        lease = default;
+        return EncodeFields(fields, metadata);
+    }
+
     /// <param name="stored">The stored fields, system fields included.</param>
     /// <param name="capped">False reads the hash whatever its size, as a read that serves it does; true applies the caps of a promotion.</param>
     DecodedHash<T> DecodeFields(IReadOnlyCollection<KeyValuePair<string, byte[]>> stored, bool capped = true);

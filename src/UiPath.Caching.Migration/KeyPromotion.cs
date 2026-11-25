@@ -142,15 +142,17 @@ internal sealed class KeyPromotion<T>
         }
 
         byte[] encoded;
+        WriteLease lease = default;
         try
         {
-            encoded = served.Value is null ? _target.EncodeNull()! : _target.Encode(served.Value);
+            encoded = served.Value is null ? _target.EncodeNull()! : _target.Encode(served.Value, out lease);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return new PromotionResult<T>(PromotionKind.Abandoned, uncached, Reason: "encode_failed");
         }
 
+        using var format = lease;
         var (drained, unpublished) = await PublishAsync(run, capture, encoded, snap.TtlMs, uncached, cancellationToken).ConfigureAwait(false);
         if (unpublished is { } stop)
         {

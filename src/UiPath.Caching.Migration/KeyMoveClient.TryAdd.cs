@@ -249,7 +249,8 @@ internal sealed partial class KeyMoveClient<T>
 
         try
         {
-            var bytes = Source.Codec.Encode(value);
+            var bytes = Source.Codec.Encode(value, out var lease);
+            using var format = lease;
             var created = await Source.CreateAsync(key, bytes, px).ConfigureAwait(false);
             return created ? TryAddResult<T>.Created : TryAddResult<T>.Exists(null);
         }
@@ -289,13 +290,16 @@ internal sealed partial class KeyMoveClient<T>
                 await At(FillPoint(mode)).ConfigureAwait(false);
             }
 
+            WriteLease lease = default;
+            var inPlaceBytes = mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.ReverseS4 ? Source.Codec.Encode(value, out lease) : null;
+            using var format = lease;
             var code = mode switch
             {
-                KeyMoveMode.S1 or KeyMoveMode.S2 => await Source.SetAsync(key, unit.Id, Source.Codec.Encode(value), px, true).ConfigureAwait(false),
+                KeyMoveMode.S1 or KeyMoveMode.S2 => await Source.SetAsync(key, unit.Id, inPlaceBytes!, px, true).ConfigureAwait(false),
                 KeyMoveMode.S5 => CreatedCode(await data.Db.StringSetAsync(Key(n), _p.Native.Encode(value), Expiry(px), When.NotExists, Master).ConfigureAwait(false)),
                 KeyMoveMode.S4 => await data.Scripts.FillAsync(Fenced(data, n), unit.Id, _p.Native.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
                 KeyMoveMode.ReverseS1 => await CreateOnNativeAsync(data, n, key, value, px, unit).ConfigureAwait(false),
-                KeyMoveMode.ReverseS4 => await data.Scripts.FillAsync(ReverseFenced(data, key), unit.Id, Source.Codec.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
+                KeyMoveMode.ReverseS4 => await data.Scripts.FillAsync(ReverseFenced(data, key), unit.Id, inPlaceBytes!, px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
                 KeyMoveMode.ReverseS3 => await CaptureAndPublishAsync(data, Source.Key(key), key, value, px, unit, cancellationToken, reverse: true).ConfigureAwait(false),
                 _ => await CaptureAndPublishAsync(data, n, key, value, px, unit, cancellationToken).ConfigureAwait(false),
             };
@@ -367,7 +371,9 @@ internal sealed partial class KeyMoveClient<T>
 
             var publication = PublicationFor(capture, px, MoveScripts.NoExpiry);
             await At(SchedulePointStep.Publish).ConfigureAwait(false);
-            var code = await data.Scripts.PublishAsync(keys, unit.Id, (reverse ? Source.Codec : _p.Native).Encode(value), publication).ConfigureAwait(false);
+            var bytes = (reverse ? Source.Codec : _p.Native).Encode(value, out var lease);
+            using var format = lease;
+            var code = await data.Scripts.PublishAsync(keys, unit.Id, bytes, publication).ConfigureAwait(false);
             if (code != MoveScripts.FenceMoved)
             {
                 return code;

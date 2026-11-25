@@ -119,11 +119,12 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         var reverse = KeyMovePlanning.IsReverseWrite(plan.Mode);
-        if (!TryEncodeWrite(writeValue, steps, reverse, out var sourceBytes, out var targetBytes))
+        if (!TryEncodeWrite(writeValue, steps, reverse, out var sourceBytes, out var targetBytes, out var formatLease))
         {
             return WriteOutcome.NotSent;
         }
 
+        using var format = formatLease;
         if (await PrepareMarkedAsync(key, steps, history.Applied, lease, cancellationToken).ConfigureAwait(false) is { } refused)
         {
             return refused;
@@ -148,7 +149,7 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         using var unit = admitted;
-        var form = new Form(key, steps, sourceBytes, targetBytes, px, unit.Id, MoveScripts.NewNonce(), absolute) { Reverse = reverse, First = !history.Attempted, Prior = history.Applied, Lease = lease };
+        var form = new Form(key, steps, sourceBytes, targetBytes, px, unit.Id, MoveScripts.NewNonce(), absolute) { Reverse = reverse, First = !history.Attempted, Prior = history.Applied, Lease = lease, FormatLease = formatLease };
         var ran = await RunStepsAsync(form, 0, unit, cancellationToken).ConfigureAwait(false);
         if (ran.Rerun)
         {
@@ -209,18 +210,25 @@ internal sealed partial class KeyMoveClient<T>
     }
 
     // Forward, Src is L and the target N; reverse, Src is N and the target L in its own format.
-    private bool TryEncodeWrite(T? value, WriteStep[] steps, bool reverse, out byte[]? sourceBytes, out byte[]? targetBytes)
+    private bool TryEncodeWrite(T? value, WriteStep[] steps, bool reverse, out byte[]? sourceBytes, out byte[]? targetBytes, out WriteLease lease)
     {
         sourceBytes = null;
         targetBytes = null;
+        lease = default;
         try
         {
             if (value is not null)
             {
                 var sourceCodec = reverse ? _p.Native : Source.Codec;
                 var targetCodec = reverse ? Source.Codec : _p.Native;
-                sourceBytes = steps.Contains(WriteStep.SrcSet) ? sourceCodec.Encode(value) : null;
-                targetBytes = steps.Contains(WriteStep.BumpSet) || steps.Contains(WriteStep.BumpSetMarked) || steps.Contains(WriteStep.NativeSet) ? targetCodec.Encode(value) : null;
+                if (steps.Contains(WriteStep.SrcSet))
+                {
+                    sourceBytes = sourceCodec.Encode(value, out lease);
+                }
+                else
+                {
+                    targetBytes = targetCodec.Encode(value, out lease);
+                }
             }
 
             return true;
@@ -359,7 +367,8 @@ internal sealed partial class KeyMoveClient<T>
 
                 await FinishMarkAsync(form).ConfigureAwait(false);
                 return true;
-            });
+            },
+            form.FormatLease.Retain());
         return WriteResult.UnknownWithin(_p.SettleWithin());
     }
 
@@ -530,6 +539,8 @@ internal sealed partial class KeyMoveClient<T>
         public bool Prior { get; init; }
 
         public WritePermitLease? Lease { get; init; }
+
+        public WriteLease FormatLease { get; init; }
 
         /// <summary>The marker this attempt's marked set wrote, as the script answered it.</summary>
         public string? MarkerValue { get; set; }

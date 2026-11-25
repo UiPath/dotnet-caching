@@ -7,6 +7,7 @@ using StackExchange.Redis;
 using UiPath.Caching.Config;
 using UiPath.Caching.KeyMove;
 using UiPath.Caching.Migration.Tests.Support;
+using UiPath.Caching.Negotiation;
 using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Migration.Tests;
@@ -97,6 +98,49 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         (await Bytes("down")).Should().Equal(LegacyEnvelope.Write(value), "a writer set back to json writes the envelope on the next write");
         (await cache.GetAsync("k", Ct)).Should().Equal(value, "a value already converted still reads");
         (await cache.GetAsync("early", Ct)).Should().Equal(value);
+    }
+
+    [Fact]
+    public async Task The_key_move_writes_the_in_place_keys_in_the_format_the_group_writes_now()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 25, 0, 0, 0, TimeSpan.Zero));
+        var node = NewNode("a", () => true, () => "messagepack", moveAlert: _ => { }, clock: clock);
+        var router = (Router)node.GetRequiredService<IRouter>();
+        var parts = router.Core.StartedParts!;
+        var binding = parts.Binder!.Bind<List<long>>("lists")!;
+        var value = new List<long> { 1, 2, 3 };
+
+        var early = binding.InPlace.Encode(value, out var earlyLease);
+        using (earlyLease)
+        {
+            await Db.StringSetAsync(binding.InPlaceKey("early"), early);
+        }
+
+        (await Bytes("early")).Should().Equal(LegacyEnvelope.Write(value));
+
+        var pin = router.Core.PinFor("g")!;
+        var pins = router.Core.Pins!;
+        await Db.StringSetAsync($"mg:{{{ScopeTokens.For(_app)}:g}}:sw", "1");
+        pins.Want(pin, true);
+        (await router.Advertiser!.WriteAsync(Ct)).Should().BeTrue();
+        await pins.RefreshAsync(Ct);
+        pins.HoldFor(pin).Should().BeNull();
+
+        var negotiation = parts.Started.OfType<FormatNegotiationService>().Single();
+        await negotiation.TickAsync(Ct);
+        clock.Advance(TimeSpan.FromSeconds(4));
+        await negotiation.TickAsync(Ct);
+        var switched = binding.InPlace.Encode(value, out var switchedLease);
+        using (switchedLease)
+        {
+            await Db.StringSetAsync(binding.InPlaceKey("switched"), switched);
+        }
+
+        var stored = await Bytes("switched");
+        stored![0].Should().Be(TestFormatSerializer.Id);
+        binding.InPlace.Decode(stored).Value.Should().Equal(value);
+        binding.InPlace.Decode(early).Value.Should().Equal(value);
     }
 
     [Fact]
@@ -234,7 +278,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
 
     private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
 
-    private ServiceProvider NewNode(string name, Func<bool> pinned, Func<string?> format, Func<bool>? useLibrary = null, bool deadLibrary = false, ISourceCache<List<long>>? source = null, Action<KeyMoveAlert>? moveAlert = null)
+    private ServiceProvider NewNode(string name, Func<bool> pinned, Func<string?> format, Func<bool>? useLibrary = null, bool deadLibrary = false, ISourceCache<List<long>>? source = null, Action<KeyMoveAlert>? moveAlert = null, ManualTimeProvider? clock = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -253,6 +297,11 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         var legacy = source ?? new LegacySource(_redis!, _cacheName);
         var redisKey = new LegacySource(_redis!, _cacheName).RedisKey;
         var services = new ServiceCollection().AddLogging();
+        if (clock is not null)
+        {
+            services.AddSingleton<TimeProvider>(clock);
+        }
+
         services.AddCaching(configuration, builder =>
         {
             builder.AddRedisConnection();

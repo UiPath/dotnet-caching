@@ -4,15 +4,35 @@ namespace UiPath.Caching.Migration;
 
 /// <summary>The hash key move codec of one side, over a hash cache's own write and read code.</summary>
 /// <param name="systemFields">False for the in-place side, whose hashes hold no metadata, write count or empty marker.</param>
-internal sealed class LibraryKeyMoveHashCodec<T>(IByteHashCodecCache cache, int maxValueBytes, int maxHashFields, bool systemFields) : IKeyMoveHashCodec<T>
+/// <param name="policy">The write policy of each encode, read at that encode; null writes the cache's default format.</param>
+internal sealed class LibraryKeyMoveHashCodec<T>(IByteHashCodecCache cache, int maxValueBytes, int maxHashFields, bool systemFields, Func<WriteLease>? policy = null) : IKeyMoveHashCodec<T>
     where T : class
 {
     public bool CachesNulls => cache.CachesNulls;
 
     public bool CarriesMetadata => systemFields;
 
-    public IReadOnlyList<KeyValuePair<string, byte[]>> EncodeFields(IDictionary<string, T?> fields, IDictionary<string, string?>? metadata) =>
-        systemFields ? cache.EncodeFields(fields, metadata, null) : cache.EncodeUserFields(fields, null);
+    public IReadOnlyList<KeyValuePair<string, byte[]>> EncodeFields(IDictionary<string, T?> fields, IDictionary<string, string?>? metadata)
+    {
+        var bytes = EncodeFields(fields, metadata, out var lease);
+        lease.Dispose();
+        return bytes;
+    }
+
+    public IReadOnlyList<KeyValuePair<string, byte[]>> EncodeFields(IDictionary<string, T?> fields, IDictionary<string, string?>? metadata, out WriteLease lease)
+    {
+        lease = policy?.Invoke() ?? default;
+        try
+        {
+            return systemFields ? cache.EncodeFields(fields, metadata, lease.Policy) : cache.EncodeUserFields(fields, lease.Policy);
+        }
+        catch
+        {
+            lease.Dispose();
+            lease = default;
+            throw;
+        }
+    }
 
     public DecodedHash<T> DecodeFields(IReadOnlyCollection<KeyValuePair<string, byte[]>> stored, bool capped = true)
     {

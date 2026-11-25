@@ -1,10 +1,31 @@
 namespace UiPath.Caching.Migration;
 
 /// <summary>The key move codec of one side, over a cache's own write and read code.</summary>
-internal sealed class LibraryKeyMoveCodec<T>(IByteCodecCache cache, int maxValueBytes) : IKeyMoveCodec<T>
+/// <param name="policy">The write policy of each encode, read at that encode; null writes the cache's default format.</param>
+internal sealed class LibraryKeyMoveCodec<T>(IByteCodecCache cache, int maxValueBytes, Func<WriteLease>? policy = null) : IKeyMoveCodec<T>
     where T : class
 {
-    public byte[] Encode(T value) => cache.Encode(value, null);
+    public byte[] Encode(T value)
+    {
+        var bytes = Encode(value, out var lease);
+        lease.Dispose();
+        return bytes;
+    }
+
+    public byte[] Encode(T value, out WriteLease lease)
+    {
+        lease = policy?.Invoke() ?? default;
+        try
+        {
+            return cache.Encode(value, lease.Policy);
+        }
+        catch
+        {
+            lease.Dispose();
+            lease = default;
+            throw;
+        }
+    }
 
     public byte[]? EncodeNull() => cache.CachesNulls ? [] : null;
 

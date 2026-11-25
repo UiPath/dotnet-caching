@@ -73,6 +73,10 @@ public static class RouterServiceCollectionExtensions
     /// <summary>The envelope in the stack's container, marked header-free so the stack reads it beside a registered format.</summary>
     internal static void AddEnvelope(IServiceCollection stack, ISerializerProxy<byte[]> envelope) => stack.AddSingleton(HeaderFreeEnvelope.Wrap(envelope));
 
+    // A router with no write format setting uses the stack’s default.
+    internal static Func<string, WriteLease> InPlacePolicy(RouterCore core) =>
+        group => core.WriteFormats is { } formats && core.PinFor(group) is { } pin ? formats.CurrentPolicy(pin) : default;
+
     internal static Func<TimeSpan> LibrarySettleWithin(IServiceProvider root, TimeSpan? explicitBound)
     {
         if (explicitBound is { } bound)
@@ -252,7 +256,7 @@ public static class RouterServiceCollectionExtensions
             ValidateLibraryOptions(root, builder, section, logger);
 
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
-            core.UseLibrary(token => StartLibraryAsync(root, builder, keyMove, setup, token));
+            core.UseLibrary(token => StartLibraryAsync(root, builder, keyMove, setup, core, token));
             if (builder.Bridge is { } bridge)
             {
                 core.Bridge = new BridgeHost(bridge, RouterIdentity(section, processId), core, logger) { MaxPending = builder.BridgeMaxPending };
@@ -394,7 +398,7 @@ public static class RouterServiceCollectionExtensions
             time);
     }
 
-    private static LibraryParts CollectLibraryParts(IServiceProvider root, RouterBuilder builder, IRedisConnector connector, List<IHostedService> started, IKeyMovePlane? plane, MoveTargets? movers, DryRunService? dryRuns)
+    private static LibraryParts CollectLibraryParts(IServiceProvider root, RouterBuilder builder, IRedisConnector connector, List<IHostedService> started, IKeyMovePlane? plane, MoveTargets? movers, DryRunService? dryRuns, RouterCore core)
     {
         var options = root.GetRequiredKeyedService<IOptions<CacheOptions>>(StackName).Value;
         var source = options.SourceUri ?? CacheOptions.MachineUri;
@@ -403,7 +407,7 @@ public static class RouterServiceCollectionExtensions
         var group = source.ToString().ToLowerInvariant();
         var libraryCache = root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis);
         var hash = builder.HashNames.Count > 0 ? LibraryHashCacheOf(root, builder.HashNames) : default;
-        var binder = builder.KeyMove is { Caches.Count: > 0 } registered && plane is not null ? KeyMoveBinderFor(root, libraryCache, registered, builder.InPlaceKeepsSystemFields) : null;
+        var binder = builder.KeyMove is { Caches.Count: > 0 } registered && plane is not null ? KeyMoveBinderFor(root, libraryCache, registered, builder.InPlaceKeepsSystemFields, InPlacePolicy(core)) : null;
         return new LibraryParts(
             libraryCache.AsMigrationCache(),
             connector,
@@ -426,7 +430,7 @@ public static class RouterServiceCollectionExtensions
 
     // The in-place side is the router's own library cache, so the codec cannot differ from what the library path writes, with or without an envelope; the native side is the application's Redis cache, with its serializers and effective format.
     // The hash codec caches are made the same way and are optional: a host that registers no hash cache in a key move group never asks for them, and binding a hash cache without them fails at startup.
-    private static KeyMoveBinder KeyMoveBinderFor(IServiceProvider root, ICache routerCache, KeyMoveSetup setup, bool inPlaceKeepsSystemFields)
+    private static KeyMoveBinder KeyMoveBinderFor(IServiceProvider root, ICache routerCache, KeyMoveSetup setup, bool inPlaceKeepsSystemFields, Func<string, WriteLease> inPlacePolicy)
     {
         if (routerCache is not IByteCodecCache inPlace)
         {
@@ -442,7 +446,8 @@ public static class RouterServiceCollectionExtensions
             classes: setup.Values as KeyMoveValueClasses,
             inPlaceHash: hashes ? HashCodecCacheOf(root.GetRequiredKeyedService<ICacheFactory>(StackName)) : null,
             nativeHash: hashes ? HashCodecCacheOf(root.GetRequiredService<ICacheFactory>()) : null,
-            inPlaceKeepsSystemFields: inPlaceKeepsSystemFields);
+            inPlaceKeepsSystemFields: inPlaceKeepsSystemFields,
+            inPlacePolicy: inPlacePolicy);
     }
 
     private static IByteHashCodecCache? HashCodecCacheOf(ICacheFactory factory) =>
@@ -460,7 +465,7 @@ public static class RouterServiceCollectionExtensions
     private static InvalidOperationException MissingRouterCodecCache() =>
         new("UseKeyMove needs the router's own Redis cache for the in-place format: enable the Redis cache provider in the router's caching section.");
 
-    private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, KeyMoveNode? keyMove, AdvertisementSetup? setup, CancellationToken cancellationToken)
+    private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, KeyMoveNode? keyMove, AdvertisementSetup? setup, RouterCore core, CancellationToken cancellationToken)
     {
         var started = new List<IHostedService>();
         try
@@ -496,7 +501,7 @@ public static class RouterServiceCollectionExtensions
                 started.Add(mover);
             }
 
-            return CollectLibraryParts(root, builder, connector, started, plane, movers, dryRuns);
+            return CollectLibraryParts(root, builder, connector, started, plane, movers, dryRuns, core);
         }
         catch
         {

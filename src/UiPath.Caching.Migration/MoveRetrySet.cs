@@ -57,15 +57,17 @@ internal sealed class MoveRetrySet(TimeProvider clock, KeyMoveOptions options, A
     }
 
     /// <param name="attempt">True when the step is done and nothing is left to retry.</param>
-    public void Add(string key, DateTimeOffset giveUpAt, Func<CancellationToken, Task<bool>> attempt)
+    public void Add(string key, DateTimeOffset giveUpAt, Func<CancellationToken, Task<bool>> attempt, WriteLease lease = default)
     {
-        var entry = new Entry(key, giveUpAt, attempt, options.RetryInitial, clock.GetTimestamp() + Ticks(options.RetryInitial));
+        var entry = new Entry(key, giveUpAt, attempt, options.RetryInitial, clock.GetTimestamp() + Ticks(options.RetryInitial)) { Lease = lease };
         switch (Register(entry))
         {
             case Registration.Stopped:
+                lease.Dispose();
                 Drop(key);
                 return;
             case Registration.Full:
+                lease.Dispose();
                 Exhaust(key);
                 return;
         }
@@ -303,6 +305,7 @@ internal sealed class MoveRetrySet(TimeProvider clock, KeyMoveOptions options, A
         }
 
         entry.Group = null;
+        entry.Lease.Dispose();
         if (--group.Outstanding == 0)
         {
             group.Done.TrySetResult();
@@ -406,6 +409,8 @@ internal sealed class MoveRetrySet(TimeProvider clock, KeyMoveOptions options, A
         public string Key { get; } = key;
 
         public KeyGroup? Group { get; set; }
+
+        public WriteLease Lease { get; init; }
 
         public DateTimeOffset GiveUpAt { get; } = giveUpAt;
 

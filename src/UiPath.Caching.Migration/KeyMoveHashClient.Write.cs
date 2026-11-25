@@ -225,13 +225,16 @@ internal sealed partial class KeyMoveHashClient<T>
             return turn;
         }
 
-        turn = await PrepareStepsAsync(run, cancellationToken).ConfigureAwait(false);
-        if (turn.Kind != TurnKind.Proceed)
+        try
         {
-            return turn;
+            turn = await PrepareStepsAsync(run, cancellationToken).ConfigureAwait(false);
+            return turn.Kind == TurnKind.Proceed ? await SendFormAsync(run, cancellationToken).ConfigureAwait(false) : turn;
         }
-
-        return await SendFormAsync(run, cancellationToken).ConfigureAwait(false);
+        finally
+        {
+            run.FormatLease.Dispose();
+            run.FormatLease = default;
+        }
     }
 
     private async ValueTask<Turn> SettleAndProbeAsync(WriteRun run, CancellationToken cancellationToken)
@@ -331,7 +334,7 @@ internal sealed partial class KeyMoveHashClient<T>
                 var reverse = KeyMovePlanning.IsReverseWrite(run.Plan.Mode);
                 var writesL = reverse ? writesTarget : writesSource;
                 var writesN = reverse ? writesSource : writesTarget;
-                run.InPlaceEntries = writesL ? EntriesOf(_p.InPlace.EncodeFields(run.Fields!, inPlaceMetadata)) : null;
+                run.InPlaceEntries = writesL ? EntriesOf(_p.InPlace.EncodeFields(run.Fields!, inPlaceMetadata, out run.FormatLease)) : null;
                 run.NativeEntries = writesN ? EntriesOf(_p.Native.EncodeFields(run.Fields!, run.Options.Metadata)) : null;
             }
 
@@ -375,7 +378,7 @@ internal sealed partial class KeyMoveHashClient<T>
         }
 
         using var unit = admitted ?? throw Unavailable();
-        var form = new Form(run.KeyName, run.Steps, run.InPlaceEntries, run.NativeEntries, run.Kind == HashWriteKind.Replace ? HashCacheSetOption.KeyReplace : HashCacheSetOption.HashReplace, run.ExpireAt, run.Names, unit.Id, MoveScripts.NewNonce(), run.Absolute, HashVersion.NewEpochSeed()) { Reverse = KeyMovePlanning.IsReverseWrite(run.Plan.Mode), First = !run.Attempted, Prior = run.Applied, Lease = run.Lease };
+        var form = new Form(run.KeyName, run.Steps, run.InPlaceEntries, run.NativeEntries, run.Kind == HashWriteKind.Replace ? HashCacheSetOption.KeyReplace : HashCacheSetOption.HashReplace, run.ExpireAt, run.Names, unit.Id, MoveScripts.NewNonce(), run.Absolute, HashVersion.NewEpochSeed()) { Reverse = KeyMovePlanning.IsReverseWrite(run.Plan.Mode), First = !run.Attempted, Prior = run.Applied, Lease = run.Lease, FormatLease = run.FormatLease };
         var (ranResult, rerun) = await RunStepsAsync(form, unit, cancellationToken).ConfigureAwait(false);
         if (!rerun)
         {
@@ -590,7 +593,8 @@ internal sealed partial class KeyMoveHashClient<T>
 
                 await FinishMarkAsync(form).ConfigureAwait(false);
                 return true;
-            });
+            },
+            form.FormatLease.Retain());
         return WriteResult.UnknownWithin(_p.SettleWithin());
     }
 
@@ -724,6 +728,8 @@ internal sealed partial class KeyMoveHashClient<T>
     // The state of one logical write across its reruns: once an attempt has been sent, a rerun is never refused for the marker limit.
     private sealed class WriteRun(string key, IDictionary<string, T?>? fields, HashWriteOptions options, string[]? names, WritePermitLease lease)
     {
+        public WriteLease FormatLease;
+
         public string KeyName => key;
 
         public IDictionary<string, T?>? Fields => fields;
@@ -771,6 +777,8 @@ internal sealed partial class KeyMoveHashClient<T>
         public bool Prior { get; init; }
 
         public WritePermitLease? Lease { get; init; }
+
+        public WriteLease FormatLease { get; init; }
 
         /// <summary>The marker this attempt's marked write wrote, as the script answered it.</summary>
         public string? MarkerValue { get; set; }

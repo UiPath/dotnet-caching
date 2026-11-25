@@ -115,7 +115,9 @@ internal sealed partial class KeyMoveHashClient<T>
         var l = InPlace(key);
         var n = Native(key);
         var inPlace = FillAttempt.LandsInPlace(mode);
-        if (!TryEncodeFill(fields, metadata, inPlace, out var stored) || stored.Count == 0)
+        var encoded = TryEncodeFill(fields, metadata, inPlace, out var stored, out var lease);
+        using var format = lease;
+        if (!encoded || stored.Count == 0)
         {
             return (WriteOutcome.NotSent, false);
         }
@@ -133,12 +135,13 @@ internal sealed partial class KeyMoveHashClient<T>
     }
 
     // False when the fields cannot be encoded; a hash with nothing to store comes back empty.
-    private bool TryEncodeFill(IDictionary<string, T?> fields, IDictionary<string, string?>? metadata, bool inPlace, out IReadOnlyList<KeyValuePair<string, byte[]>> stored)
+    private bool TryEncodeFill(IDictionary<string, T?> fields, IDictionary<string, string?>? metadata, bool inPlace, out IReadOnlyList<KeyValuePair<string, byte[]>> stored, out WriteLease lease)
     {
+        lease = default;
         try
         {
             var inPlaceMetadata = _p.InPlace.CarriesMetadata ? metadata : null;
-            stored = inPlace ? _p.InPlace.EncodeFields(fields, inPlaceMetadata) : _p.Native.EncodeFields(fields, metadata);
+            stored = inPlace ? _p.InPlace.EncodeFields(fields, inPlaceMetadata, out lease) : _p.Native.EncodeFields(fields, metadata);
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException && ex is not OperationCanceledException)

@@ -108,11 +108,12 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         var n = Native(key);
-        if (EncodeFill(value, mode) is not { } bytes)
+        if (EncodeFill(value, mode, out var lease) is not { } bytes)
         {
             return (WriteOutcome.NotSent, false);
         }
 
+        using var format = lease;
         long code;
         try
         {
@@ -147,11 +148,12 @@ internal sealed partial class KeyMoveClient<T>
     private bool CreateIsClosed(KeyMoveMode mode) => mode is KeyMoveMode.Closed or KeyMoveMode.Union ||
         (_p.NoOrigin && (mode == KeyMoveMode.S2 || KeyMovePlanning.IsReverseWrite(mode)));
 
-    private byte[]? EncodeFill(T value, KeyMoveMode mode)
+    private byte[]? EncodeFill(T value, KeyMoveMode mode, out WriteLease lease)
     {
+        lease = default;
         try
         {
-            return FillsInPlace(mode) ? Source.Codec.Encode(value) : _p.Native.Encode(value);
+            return FillsInPlace(mode) ? Source.Codec.Encode(value, out lease) : _p.Native.Encode(value);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException && ex is not OperationCanceledException)
         {
