@@ -31,6 +31,7 @@ internal static class RouterTelemetry
     private static readonly Counter<long> CleanupTimedOut = RouterMeter.CreateCounter<long>("cleanup_timed_out");
     private static readonly Counter<long> LibraryStartFailed = RouterMeter.CreateCounter<long>("library_start_failed");
     private static readonly Counter<long> Bridge = RouterMeter.CreateCounter<long>("bridge");
+    private static readonly Counter<long> FormatSwitchHeld = RouterMeter.CreateCounter<long>("format_switch_held");
 
     public static void CountLocalHit(string cache, string group, Route route) => Add(LocalHit, cache, group, route.Path, route.Reason);
 
@@ -57,6 +58,15 @@ internal static class RouterTelemetry
     }
 
     /// <summary>A counter of the key move data path: <c>capture_slow</c>, <c>fence_refused</c>, <c>gate_closed</c>, <c>promotion_expiring</c>, <c>identity_rerun</c>, <c>retry_exhausted</c>, <c>unreadable_source</c>.</summary>
+    /// <summary>A write that stayed on the group's current format because the group's keys are moving; <paramref name="pending"/> is the format it asked for.</summary>
+    public static void CountFormatSwitchHeld(string group, string pending)
+    {
+        if (FormatSwitchHeld.Enabled)
+        {
+            FormatSwitchHeld.Add(1, new TagList { { "group", group }, { "pending", pending } });
+        }
+    }
+
     public static void CountMove(string counter, string cache, string group)
     {
         var made = MoveCounters.GetOrAdd(counter, name => RouterMeter.CreateCounter<long>("move_" + name));

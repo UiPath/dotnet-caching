@@ -45,6 +45,9 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
     internal RouterAdvertiser? Advertiser { get; init; }
 
+    /// <summary>The router's shared state, which a test reaches to set the parts that the build wires.</summary>
+    internal RouterCore Core => _core;
+
     internal ISerializerProxy<byte[]>? Envelope { get; init; }
 
     internal TimeProvider Clock => _core.Clock;

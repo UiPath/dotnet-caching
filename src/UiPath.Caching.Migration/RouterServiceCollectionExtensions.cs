@@ -247,7 +247,7 @@ public static class RouterServiceCollectionExtensions
             }
 
             setup = AdvertisementSetup.TryCreate(root, builder, processId, section, logger);
-            ConfigurePin(builder, core, gate, setup, section, logger);
+            ConfigurePin(builder, core, gate, setup, section, keyMove, logger);
 
             var advertiser = setup is null ? null : CreateAdvertiser(setup, core, keyMove, logger);
             if (advertiser is not null && core.Pins is { } attached)
@@ -288,7 +288,7 @@ public static class RouterServiceCollectionExtensions
         logger.LogInformation("Caching router library options: {Options}", RegistrationValidator.Describe(stackCache, stackRedis));
     }
 
-    private static void ConfigurePin(RouterBuilder builder, RouterCore core, PinFormatGate? gate, AdvertisementSetup? setup, IConfigurationSection section, ILogger logger)
+    private static void ConfigurePin(RouterBuilder builder, RouterCore core, PinFormatGate? gate, AdvertisementSetup? setup, IConfigurationSection section, KeyMoveNode? keyMove, ILogger logger)
     {
         if (builder.PinPredicate is { } pinWhen)
         {
@@ -299,7 +299,11 @@ public static class RouterServiceCollectionExtensions
             core.Pins = pins;
             if (builder.WriteFormatPredicate is { } writeFormat)
             {
-                core.WriteFormats = new WriteFormatSelector(writeFormat, pins, logger);
+                core.WriteFormats = new WriteFormatSelector(writeFormat, pins, logger)
+                {
+                    MoveHold = keyMove is { HasGroups: true } && builder.KeyMove is { } moves ? WriteFormatSelector.HoldFrom(keyMove.Monitor, moves.Groups.Select(g => g.Name).ToHashSet(StringComparer.Ordinal)) : null,
+                    Alert = builder.KeyMove?.Alert,
+                };
             }
             gate!.Attach(pins);
         }
