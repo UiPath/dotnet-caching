@@ -712,6 +712,8 @@ public sealed class MoverPaceTests(RedisFixture fixture)
 
         public bool NoOrigin => inner.NoOrigin;
 
+        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
+
         public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
         {
             if (rate.Keys < Interlocked.Increment(ref _handled) || rate.Bytes < Interlocked.Read(ref _bytes))
@@ -732,6 +734,8 @@ public sealed class MoverPaceTests(RedisFixture fixture)
 
         public bool NoOrigin => inner.NoOrigin;
 
+        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
+
         public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
         {
             first();
@@ -750,6 +754,8 @@ public sealed class MoverPaceTests(RedisFixture fixture)
 
         public bool NoOrigin => inner.NoOrigin;
 
+        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
+
         public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
         {
             _times.Enqueue(TimeProvider.System.GetElapsedTime(started));
@@ -767,6 +773,8 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         public string CacheId => inner.CacheId;
 
         public bool NoOrigin => inner.NoOrigin;
+
+        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
         public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
         {

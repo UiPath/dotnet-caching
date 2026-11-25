@@ -55,6 +55,9 @@ internal sealed class KeyMover<T> : IMoveTarget
         }
     }
 
+    public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) =>
+        _promotion.ProbeAsync(key, new MoverFlavor(_p.NoOrigin ? TimeSpan.Zero : minTtl, _supersession), decode, cancellationToken);
+
     private static MoveResult ResultOf(PromotionResult<T> result) => result.Kind switch
     {
         PromotionKind.Promoted => MoveResult.Done with { Bytes = result.Bytes },
