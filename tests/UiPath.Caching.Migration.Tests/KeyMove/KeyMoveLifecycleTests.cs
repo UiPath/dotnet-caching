@@ -189,7 +189,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         var unexpectedNative = host.Native("before-start");
         await host.Db.StringSetAsync(unexpectedNative, "[999]").WaitAsync(Ct);
         await host.SetStageAsync(3);
-        await host.ExpectAlertAsync("start_blocked");
+        await host.ExpectAlertAsync("start_blocked", KeyMoveGateIds.StartNativeEmpty);
         await host.Db.KeyDeleteAsync(unexpectedNative).WaitAsync(Ct);
         await host.AdvanceAsync("S1");
         Assert.True(await host.Cache.SetAsync("ready", [71], deadline, Ct));

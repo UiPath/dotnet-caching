@@ -158,7 +158,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         }
         catch
         {
-            await host.DisposeAsync();
+            await host.DisposeAsync().AsTask().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             throw;
         }
     }
@@ -230,15 +230,16 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         return TestPoll.WaitAsync(() => passes.FinishedAfterAckAsync(Group, "fwd", Ct), () => "The mover did not record a clean pass.");
     }
 
-    public Task ExpectAlertAsync(string code) =>
+    public Task ExpectAlertAsync(string code, string? gate = null) =>
         TestPoll.WaitAsync(
             async () =>
             {
                 var step = await StepAsync();
                 Assert.False(step?.Plan.Kind is StepKind.Transit or StepKind.ColdStart, $"The driver advanced instead of reporting {code}.");
-                return step?.Plan.AlertList.Any(alert => alert.Code == code) == true;
+                return step?.Plan.AlertList.Any(alert => alert.Code == code
+                    && (gate is null || alert.Detail.Split(',').Any(detail => detail.StartsWith(gate + ":", StringComparison.Ordinal)))) == true;
             },
-            () => $"The stage driver did not report {code}. {Diagnostics()}");
+            () => $"The stage driver did not report {code} with gate {gate ?? "(any)"}. {Diagnostics()}");
 
     public async Task ExpectDrainBlockedAsync()
     {
@@ -348,7 +349,8 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         await Mover.StartAsync(Ct);
     }
 
-    public Task StopMoverAsync() => _services is null ? Task.CompletedTask : Mover.StopAsync(CancellationToken.None);
+    public Task StopMoverAsync() =>
+        _router?.Library?.Started.OfType<MoverHostedService>().SingleOrDefault()?.StopAsync(CancellationToken.None) ?? Task.CompletedTask;
 
     public async Task<string[]> LegacyKeysAsync() => await KeysAsync(Legacy("*"));
 
@@ -380,10 +382,11 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         var bytesAfterMove = (byte[]?)(await Db.StringGetAsync(Native(key), CommandFlags.DemandMaster).WaitAsync(Ct));
         Assert.NotNull(bytesWrittenByLibrary);
         Assert.Equal(bytesWrittenByLibrary, bytesAfterMove);
-        var referenceExpiry = (long)await Db.ExecuteAsync("PEXPIRETIME", [(RedisKey)reference], CommandFlags.DemandMaster).WaitAsync(Ct);
-        var movedExpiry = (long)await Db.ExecuteAsync("PEXPIRETIME", [(RedisKey)Native(key)], CommandFlags.DemandMaster).WaitAsync(Ct);
-        referenceExpiry.Should().BePositive();
-        movedExpiry.Should().BeInRange(referenceExpiry - 250, referenceExpiry + 250, $"the TTL for {key} must be preserved");
+        var referenceLife = Db.KeyTimeToLiveAsync(reference, CommandFlags.DemandMaster);
+        var movedLife = Db.KeyTimeToLiveAsync(Native(key), CommandFlags.DemandMaster);
+        await Task.WhenAll(referenceLife, movedLife).WaitAsync(Ct);
+        (await referenceLife).Should().BeGreaterThan(TimeSpan.Zero);
+        (await movedLife).Should().BeCloseTo((await referenceLife)!.Value, TimeSpan.FromMilliseconds(250), $"the TTL for {key} must be preserved");
     }
 
     public async Task AssertNativeLedgerAsync(IReadOnlyDictionary<string, List<long>?> ledger)
@@ -411,23 +414,29 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         try
         {
             await StopMoverAsync();
-            if (_services is not null)
-            {
-                await _services.DisposeAsync();
-            }
         }
         finally
         {
             try
             {
-                foreach (var batch in (await KeysAsync($"*{_name}*")).Chunk(256))
+                if (_services is not null)
                 {
-                    await Task.WhenAll(batch.Select(key => Db.KeyDeleteAsync(key)));
+                    await _services.DisposeAsync();
                 }
             }
             finally
             {
-                await _redis.DisposeAsync();
+                try
+                {
+                    foreach (var batch in (await KeysAsync($"*{_name}*")).Chunk(256))
+                    {
+                        await Task.WhenAll(batch.Select(key => Db.KeyDeleteAsync(key)));
+                    }
+                }
+                finally
+                {
+                    await _redis.DisposeAsync();
+                }
             }
         }
     }

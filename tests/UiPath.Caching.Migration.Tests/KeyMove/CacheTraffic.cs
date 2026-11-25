@@ -20,8 +20,20 @@ internal sealed class CacheTraffic : IAsyncDisposable
 
     public async Task RunUntilAsync(Task condition)
     {
-        var finished = await Task.WhenAny(condition, _workers);
-        await finished;
+        if (await Task.WhenAny(condition, _workers) == _workers)
+        {
+            try
+            {
+                await _workers;
+            }
+            catch
+            {
+                await condition.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                throw;
+            }
+        }
+
+        await condition;
     }
 
     public Task FinishAsync()

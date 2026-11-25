@@ -3,20 +3,39 @@ namespace UiPath.Caching.Migration.Tests.Support;
 /// <summary>Polls a test condition within a bounded interval.</summary>
 internal static class TestPoll
 {
+    private static readonly TimeSpan Interval = TimeSpan.FromMilliseconds(50);
+
     public static async Task<bool> UntilAsync(Func<Task<bool>> condition, TimeSpan timeout, TimeProvider clock)
     {
         var start = clock.GetTimestamp();
         var token = TestContext.Current.CancellationToken;
-        do
+        var remaining = timeout;
+        while (remaining > TimeSpan.Zero)
         {
-            if (await condition())
+            var pending = condition();
+            try
             {
-                return true;
+                if (await pending.WaitAsync(remaining, clock, token))
+                {
+                    return true;
+                }
+            }
+            catch (TimeoutException) when (!pending.IsFaulted)
+            {
+                return false;
+            }
+            finally
+            {
+                pending.Observe();
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(50), clock, token);
+            remaining = timeout - clock.GetElapsedTime(start);
+            if (remaining > TimeSpan.Zero)
+            {
+                await Task.Delay(remaining < Interval ? remaining : Interval, clock, token);
+                remaining = timeout - clock.GetElapsedTime(start);
+            }
         }
-        while (clock.GetElapsedTime(start) < timeout);
 
         return false;
     }
