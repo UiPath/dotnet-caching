@@ -22,6 +22,7 @@ internal sealed partial class KeyMoveClient<T>
                 KeyMoveMode.S3 => await PromoteAsync(key, plan, cancellationToken).ConfigureAwait(false),
                 KeyMoveMode.S5 => await ReadUnionAsync(key, withSource: false, cancellationToken).ConfigureAwait(false),
                 KeyMoveMode.S2 => await ReadLegacyOnlyAsync(key, plan, cancellationToken).ConfigureAwait(false),
+                _ when KeyMovePlanning.PromotesReverse(plan) => await ReadReverseAsync(key, plan, cancellationToken).ConfigureAwait(false),
                 _ => await ReadUnionAsync(key, withSource: true, cancellationToken).ConfigureAwait(false),
             };
             if (!step.Rerun)
@@ -74,6 +75,57 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         return id != plan.Act?.Id ? ReadStep<T>.Again : ReadStep<T>.Of(read);
+    }
+
+    // S3(rev): N on the master, and a hit is served and then promoted to L by the same unit. A miss reads L, with no re-read: a reverse promoter publishes L before it deletes N.
+    private async ValueTask<ReadStep<T>> ReadReverseAsync(string key, KeyMovePlan plan, CancellationToken cancellationToken)
+    {
+        var native = Interpret(await SnapAsync(Native(key), replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
+        if (native.Kind == ReadOutcome.Found)
+        {
+            await PromoteReverseAsync(key, plan, cancellationToken).ConfigureAwait(false);
+            return ReadStep<T>.Of(native);
+        }
+
+        if (!native.FallsThrough)
+        {
+            return ReadStep<T>.Of(native);
+        }
+
+        // No negative hint here: a miss does no promotion work for a hint to save, and a hint would skip the read of an L that a reverse writer has just set.
+        return ReadStep<T>.Of(Interpret(await SourceSnapAsync(key, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false), Source.Codec));
+    }
+
+    // The value read is served whatever the promotion ends with; a promotion that does not finish is left to a later read or the mover.
+    private async ValueTask PromoteReverseAsync(string key, KeyMovePlan plan, CancellationToken cancellationToken)
+    {
+        if (_p.NoOrigin)
+        {
+            return;
+        }
+
+        try
+        {
+            var (admitted, _) = await AdmitAsync(promotion: true, plan.Act?.Id, cancellationToken).ConfigureAwait(false);
+            using var unit = admitted;
+            if (unit is null || Data is not { } data)
+            {
+                return;
+            }
+
+            for (var attempt = 0; attempt <= _options.MaxFenceRetries; attempt++)
+            {
+                var result = await _reversePromotion.RunAsync(key, null, unit, data, attempt, AlwaysOwned.Instance, cancellationToken).ConfigureAwait(false);
+                if (result.Kind != PromotionKind.Restart)
+                {
+                    return;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
+        {
+            _ = ex;
+        }
     }
 
     // N on a replica, N on the master, then L and N on the master again: a replica miss is never a miss before the primary agrees, and forward N is the destination.

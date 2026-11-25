@@ -449,7 +449,13 @@ internal sealed partial class KeyMoveClient<T>
             return Fenced(data, Native(form.CallerKey));
         }
 
-        var l = _p.InPlaceKey(form.CallerKey);
+        return ReverseFenced(data, form.CallerKey);
+    }
+
+    // L under GL, the target of every reverse step.
+    private FencedKeys ReverseFenced(KeyMoveData data, string key)
+    {
+        var l = _p.InPlaceKey(key);
         return new FencedKeys(data.Names.ReverseFence(l), Key(l), ControlOf(data, l));
     }
 

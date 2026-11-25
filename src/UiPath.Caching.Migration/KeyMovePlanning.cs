@@ -28,6 +28,10 @@ internal static class KeyMovePlanning
         _ => otherwise,
     };
 
+    /// <summary>True for a read of S3(rev) under the rules that follow the state: an N hit is promoted to L.</summary>
+    public static bool PromotesReverse(KeyMovePlan plan) =>
+        plan.Mode == KeyMoveMode.Union && plan.Rules.Reads == ReadRule.Follow && plan.Act is { State: "S3", Direction: "rev" };
+
     /// <summary>True for the write modes of the reverse direction, which only the clients that run their forms leave open.</summary>
     public static bool IsReverseWrite(KeyMoveMode mode) => mode is KeyMoveMode.ReverseS1 or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4;
 

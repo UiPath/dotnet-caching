@@ -5,7 +5,7 @@ namespace UiPath.Caching.Migration;
 
 internal sealed partial class KeyMoveClient<T>
 {
-    /// <summary>Probes with <c>MGET N</c> per slot and checks replica misses on the master. Remaining misses follow read-through promotion per key. Only the existence probe is batched. Each source value is read after its key's capture.</summary>
+    /// <summary>Probes N with <c>MGET</c> per slot. Reverse read-through probes the master directly. Other reads check replica misses on the master. Each promotion captures its own fence before reading the source value.</summary>
     public async ValueTask<IReadOnlyDictionary<string, PathRead<T>>> ReadManyAsync(IReadOnlyList<string> keys, CancellationToken cancellationToken)
     {
         var result = new Dictionary<string, PathRead<T>>(keys.Count, StringComparer.Ordinal);
@@ -21,8 +21,15 @@ internal sealed partial class KeyMoveClient<T>
             return result;
         }
 
+        var reverse = KeyMovePlanning.PromotesReverse(plan);
         var missing = keys.Distinct(StringComparer.Ordinal).ToList();
-        missing = await ProbeBatchAsync(data, missing, result, cancellationToken).ConfigureAwait(false);
+        missing = await ProbeBatchAsync(data, missing, result, masterOnly: reverse, cancellationToken).ConfigureAwait(false);
+
+        if (reverse)
+        {
+            await Task.WhenAll(result.Where(entry => entry.Value.Kind == ReadOutcome.Found)
+                .Select(entry => PromoteReverseAsync(entry.Key, plan, cancellationToken).AsTask())).ConfigureAwait(false);
+        }
 
         if (missing.Count == 0 || plan.Mode == KeyMoveMode.S5)
         {
@@ -69,9 +76,10 @@ internal sealed partial class KeyMoveClient<T>
         }
     }
 
-    private async Task<List<string>> ProbeBatchAsync(KeyMoveData data, List<string> missing, Dictionary<string, PathRead<T>> result, CancellationToken cancellationToken)
+    private async Task<List<string>> ProbeBatchAsync(KeyMoveData data, List<string> missing, Dictionary<string, PathRead<T>> result, bool masterOnly, CancellationToken cancellationToken)
     {
-        foreach (var replica in new[] { true, false })
+        bool[] passes = masterOnly ? [false] : [true, false];
+        foreach (var replica in passes)
         {
             if (missing.Count == 0)
             {
