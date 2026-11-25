@@ -119,18 +119,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
 
         (await Bytes("early")).Should().Equal(LegacyEnvelope.Write(value));
 
-        var pin = router.Core.PinFor("g")!;
-        var pins = router.Core.Pins!;
-        await Db.StringSetAsync($"mg:{{{ScopeTokens.For(_app)}:g}}:sw", "1");
-        pins.Want(pin, true);
-        (await router.Advertiser!.WriteAsync(Ct)).Should().BeTrue();
-        await pins.RefreshAsync(Ct);
-        pins.HoldFor(pin).Should().BeNull();
-
-        var negotiation = parts.Started.OfType<FormatNegotiationService>().Single();
-        await negotiation.TickAsync(Ct);
-        clock.Advance(TimeSpan.FromSeconds(4));
-        await negotiation.TickAsync(Ct);
+        await UseSwitchedFormatAsync(router, clock);
         var switched = binding.InPlace.Encode(value, out var switchedLease);
         using (switchedLease)
         {
@@ -141,6 +130,35 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         stored![0].Should().Be(TestFormatSerializer.Id);
         binding.InPlace.Decode(stored).Value.Should().Equal(value);
         binding.InPlace.Decode(early).Value.Should().Equal(value);
+    }
+
+    [Fact]
+    public async Task A_reverse_after_the_switch_writes_the_in_place_keys_in_the_header_format()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 25, 0, 0, 0, TimeSpan.Zero));
+        var node = NewNode("a", () => true, () => "messagepack", moveAlert: _ => { }, clock: clock);
+        var router = (Router)node.GetRequiredService<IRouter>();
+        var inPlace = router.Core.StartedParts!.Binder!.Bind<Item>("lists")!.InPlace;
+        await UseSwitchedFormatAsync(router, clock);
+
+        await using var kit = await KeyMove.KeyMoveKit.CreateAsync(fixture, clock: clock, inPlace: inPlace);
+        await kit.PrepareAsync("promoted", "written");
+        await kit.SetStateAsync("S3", direction: "rev");
+        await kit.Db.StringSetAsync(kit.N("promoted"), "v1");
+        await kit.Db.StringSetAsync(kit.N("written"), "old");
+
+        (await kit.Client.ReadAsync("promoted", Ct)).Value!.Name.Should().Be("v1");
+        (await kit.Client.SetAsync("written", new Item("v2"), null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+
+        foreach (var (key, expected) in new[] { ("promoted", "v1"), ("written", "v2") })
+        {
+            var stored = (byte[]?)await kit.Db.StringGetAsync(kit.L(key));
+            stored.Should().NotBeNull(key);
+            stored[0].Should().Be(TestFormatSerializer.Id, $"the reverse writes {key} in the format the group switched to");
+            inPlace.Decode(stored).Value!.Name.Should().Be(expected, $"{key} decodes through the router-bound codec");
+            (await kit.ExistsAsync(kit.N(key))).Should().BeFalse(key);
+        }
     }
 
     [Fact]
@@ -273,6 +291,22 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
     }
 
     private static ICache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
+
+    private async Task UseSwitchedFormatAsync(Router router, ManualTimeProvider clock)
+    {
+        var pin = router.Core.PinFor("g")!;
+        var pins = router.Core.Pins!;
+        await Db.StringSetAsync($"mg:{{{ScopeTokens.For(_app)}:g}}:sw", "1");
+        pins.Want(pin, true);
+        (await router.Advertiser!.WriteAsync(Ct)).Should().BeTrue();
+        await pins.RefreshAsync(Ct);
+        pins.HoldFor(pin).Should().BeNull();
+
+        var negotiation = router.Core.StartedParts!.Started.OfType<FormatNegotiationService>().Single();
+        await negotiation.TickAsync(Ct);
+        clock.Advance(TimeSpan.FromSeconds(4));
+        await negotiation.TickAsync(Ct);
+    }
 
     private async Task<byte[]?> Bytes(string key) => (byte[]?)await Db.StringGetAsync(RedisKeyOf(key));
 
