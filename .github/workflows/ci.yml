@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [main, 'release/**']
   workflow_dispatch:  # run on a stacked branch whose PR does not target main
+  schedule:
+    - cron: '0 3 * * *'  # the fault tests, nightly
 
 jobs:
   # The oldest supported server: no ENTRIESREAD or max-deleted-entry-id, so the stream code takes its fallbacks.
@@ -49,9 +51,10 @@ jobs:
           REDIS_CONNECTION_STRING: 'localhost:6379'
         run: ./tests/UiPath.Caching.PluginContract.Tests/bin/Release/net10.0/UiPath.Caching.PluginContract.Tests
 
-  # Slot-sensitive tests need a real cluster: three masters, no replicas.
+  # Slot-sensitive tests need a real cluster: three masters, each with a replica, as eng/keymove-kit.sh starts it.
   test-redis-cluster:
     runs-on: uipath-ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -60,26 +63,60 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Start Redis cluster
+      - name: Start Redis cluster and a primary with a replica
         run: |
-          for port in 7000 7001 7002; do
-            docker run -d --name "redis-$port" --network host redis:7               redis-server --port "$port" --cluster-enabled yes --cluster-config-file "nodes-$port.conf" --appendonly no
-          done
-          for port in 7000 7001 7002; do
-            until docker exec "redis-$port" redis-cli -p "$port" ping | grep -q PONG; do sleep 1; done
-          done
-          docker exec redis-7000 redis-cli --cluster create 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 --cluster-replicas 0 --cluster-yes
-          until docker exec redis-7000 redis-cli -p 7000 cluster info | grep -q 'cluster_state:ok'; do sleep 1; done
+          eng/keymove-kit.sh up cluster --base 7000 | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
+          eng/keymove-kit.sh up replica --base 7010 | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
 
       - name: Build
-        run: dotnet build tests/UiPath.Caching.Tests -c Release -f net10.0
+        run: |
+          dotnet build tests/UiPath.Caching.Tests -c Release -f net10.0
+          dotnet build tests/UiPath.Caching.Migration.Tests -c Release -f net10.0
 
+      # The classes that hold a cluster test; their single-server tests run against the primary of the kit.
       - name: Cluster tests
         timeout-minutes: 20
         env:
           RUN_REDIS_INTEGRATION_TESTS: '1'
-          REDIS_CLUSTER_CONNECTION_STRING: '127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002'
-        run: ./tests/UiPath.Caching.Tests/bin/Release/net10.0/UiPath.Caching.Tests -class UiPath.Caching.Tests.KeyMove.MoveScriptsClusterTests
+        run: |
+          core=""
+          for c in KeyMove.MoveScriptsClusterTests KeyMove.KeyedPartialClusterTests KeyMove.GenerationClusterTests KeyMove.GroupDataOpsClusterTests \
+                   KeyMove.StateClusterTests KeyMove.StateBarrierProofTests KeyMove.ClaimStoreTests KeyMove.ClearSweepTests KeyMove.KeyMoveSweepTests \
+                   KeyMove.MovePlacementTests KeyMove.PreflightTests KeyMove.RegisteredKeySpaceDataTests KeyMove.StageCommandsTests \
+                   KeyMove.StateReviewFixesTests Redis.RedisConnectorSelectProbeTests; do
+            core="$core -class UiPath.Caching.Tests.$c"
+          done
+          # shellcheck disable=SC2086 # one argument per word
+          ./tests/UiPath.Caching.Tests/bin/Release/net10.0/UiPath.Caching.Tests $core
+          ./tests/UiPath.Caching.Migration.Tests/bin/Release/net10.0/UiPath.Caching.Migration.Tests \
+            -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveHashClusterTests -class UiPath.Caching.Migration.Tests.KeyMove.MoverLeaseTests
+
+  # The fault tests (failover, restart, pause) run on main and nightly only: a failure there goes to the flaky list and blocks no pull request.
+  test-chaos:
+    if: github.event_name != 'pull_request'
+    runs-on: uipath-ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73  # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Start Redis cluster and a primary with a replica
+        run: |
+          eng/keymove-kit.sh up cluster --base 7000 | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
+          eng/keymove-kit.sh up replica --base 7010 | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: dotnet build tests/UiPath.Caching.Migration.Tests -c Release -f net10.0
+
+      - name: Fault tests
+        timeout-minutes: 20
+        env:
+          RUN_REDIS_INTEGRATION_TESTS: '1'
+        run: ./tests/UiPath.Caching.Migration.Tests/bin/Release/net10.0/UiPath.Caching.Migration.Tests -trait "Category=Chaos"
 
   build-linux:
     runs-on: uipath-ubuntu-latest
