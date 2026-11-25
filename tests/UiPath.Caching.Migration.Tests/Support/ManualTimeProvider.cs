@@ -5,6 +5,7 @@ internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
 {
     private readonly object _gate = new();
     private readonly List<ManualTimer> _timers = [];
+    private readonly global::System.Threading.Channels.Channel<TimeSpan> _scheduled = global::System.Threading.Channels.Channel.CreateUnbounded<TimeSpan>();
     private TimeSpan _elapsed;
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
@@ -53,8 +54,11 @@ internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     {
         var timer = new ManualTimer(this, callback, state);
         timer.Change(dueTime, period);
+        _scheduled.Writer.TryWrite(dueTime);
         return timer;
     }
+
+    public ValueTask<TimeSpan> NextTimerAsync(CancellationToken token) => _scheduled.Reader.ReadAsync(token);
 
     public void Advance(TimeSpan by)
     {

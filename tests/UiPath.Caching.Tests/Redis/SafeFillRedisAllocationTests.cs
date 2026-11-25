@@ -63,17 +63,19 @@ public sealed class SafeFillRedisAllocationTests(RedisContainerFixture fixture, 
             await call(keys[i]);
         }
 
-        // The fewest of several rounds: a call's continuations run on pool threads, where the runtime may allocate meanwhile.
         var fewest = long.MaxValue;
         for (var round = 1; round <= Rounds; round++)
         {
-            var before = GC.GetTotalAllocatedBytes(precise: true);
+            var allocated = 0L;
             for (var i = 0; i < PerRound; i++)
             {
-                await call(keys[(round * PerRound) + i]);
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                var pending = call(keys[(round * PerRound) + i]);
+                allocated += GC.GetAllocatedBytesForCurrentThread() - before;
+                await pending;
             }
 
-            fewest = Math.Min(fewest, (GC.GetTotalAllocatedBytes(precise: true) - before) / PerRound);
+            fewest = Math.Min(fewest, allocated / PerRound);
         }
 
         return fewest;
@@ -82,6 +84,7 @@ public sealed class SafeFillRedisAllocationTests(RedisContainerFixture fixture, 
     private ICache Node(string provider)
     {
         var node = new ServiceCollection()
+            .AddSingleton<TimeProvider>(new ManualTimeProvider(DateTimeOffset.UnixEpoch))
             .AddLogging()
             .AddCaching(
                 b =>

@@ -4,6 +4,32 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class RedisContainerFixtureTests(RedisContainerFixture fixture)
 {
+    [Fact]
+    public async Task A_probe_does_not_turn_a_connection_failure_into_an_unsupported_capability()
+    {
+        var failure = new StackExchange.Redis.RedisConnectionException(StackExchange.Redis.ConnectionFailureType.UnableToConnect, StackExchange.Redis.CommandFlags.None, "connection unavailable");
+        Func<Task<bool>> probe = () => RedisContainerFixture.TryAsync(() => Task.FromException<StackExchange.Redis.RedisResult>(failure));
+        (await probe.Should().ThrowAsync<StackExchange.Redis.RedisConnectionException>()).Which.Should().BeSameAs(failure);
+    }
+
+    [Theory]
+    [InlineData("ERR unknown command", false)]
+    [InlineData("LOADING dataset", true)]
+    [InlineData("BUSY script", true)]
+    public async Task A_probe_distinguishes_an_unsupported_command_from_a_transient_failure(string message, bool transient)
+    {
+        var failure = new StackExchange.Redis.RedisServerException(StackExchange.Redis.RedisErrorKind.None, StackExchange.Redis.CommandFlags.None, message);
+        Func<Task<bool>> probe = () => RedisContainerFixture.TryAsync(() => Task.FromException<StackExchange.Redis.RedisResult>(failure));
+        if (transient)
+        {
+            (await probe.Should().ThrowAsync<StackExchange.Redis.RedisServerException>()).Which.Should().BeSameAs(failure);
+        }
+        else
+        {
+            (await probe()).Should().BeFalse();
+        }
+    }
+
     // A skip on Redis or Valkey would hide a regression, so no probe may be false there.
     [Fact]
     public void Every_capability_flag_is_true_on_a_Redis_or_Valkey_server()

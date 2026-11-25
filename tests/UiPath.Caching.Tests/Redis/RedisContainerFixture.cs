@@ -102,18 +102,25 @@ public sealed class RedisContainerFixture : IAsyncLifetime
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-    private static async Task<bool> TryAsync(Func<Task<RedisResult>> command)
+    internal static async Task<bool> TryAsync(Func<Task<RedisResult>> command)
     {
         try
         {
             await command();
             return true;
         }
-        catch (RedisException)
+        catch (RedisServerException ex) when (Unsupported(ex))
         {
             return false;
         }
     }
+
+    // A server reply is a definite answer, unless the server says it is in a temporary state.
+    private static bool Unsupported(RedisServerException error) =>
+        !(error.Message.Contains("LOADING", StringComparison.Ordinal)
+          || error.Message.Contains("BUSY", StringComparison.Ordinal)
+          || error.Message.Contains("TRYAGAIN", StringComparison.Ordinal)
+          || error.Message.Contains("MASTERDOWN", StringComparison.Ordinal));
 
     private static async Task<bool> CountsSubscribersPerClientAsync(ConnectionMultiplexer admin)
     {
@@ -122,26 +129,15 @@ public sealed class RedisContainerFixture : IAsyncLifetime
         try
         {
             await subscriber.SubscribeAsync(channel, static (_, _) => { });
-            for (var attempt = 0; attempt < 20; attempt++)
+            var sum = 0L;
+            foreach (var server in RedisTestKeys.Primaries(admin))
             {
-                var sum = 0L;
-                foreach (var server in RedisTestKeys.Primaries(admin))
-                {
-                    var reply = (RedisResult[]?)await server.ExecuteAsync("PUBSUB", "NUMSUB", channel.ToString());
-                    sum += (long)reply![1];
-                }
-
-                if (sum > 0)
-                {
-                    return sum == 1;
-                }
-
-                await Task.Delay(50);
+                var reply = (RedisResult[]?)await server.ExecuteAsync("PUBSUB", "NUMSUB", channel.ToString());
+                sum += (long)reply![1];
             }
-
-            return false;
+            return sum == 1;
         }
-        catch (RedisException)
+        catch (RedisServerException ex) when (Unsupported(ex))
         {
             return false;
         }
@@ -161,11 +157,11 @@ public sealed class RedisContainerFixture : IAsyncLifetime
             await db.ExecuteAsync("XREADGROUP", "GROUP", "g", "c", "COUNT", "1", "STREAMS", key, ">");
             return true;
         }
-        catch (RedisServerException ex) when (ex.Message.StartsWith("NOGROUP", StringComparison.Ordinal))
+        catch (RedisServerException ex) when (ex.Message.Contains("NOGROUP", StringComparison.Ordinal))
         {
             return false;
         }
-        catch (RedisException)
+        catch (RedisServerException ex) when (Unsupported(ex))
         {
             return false;
         }
@@ -180,7 +176,7 @@ public sealed class RedisContainerFixture : IAsyncLifetime
             var group = Array.Find(await db.StreamGroupInfoAsync(key), g => g.Name == "g");
             return group.EntriesRead == 1;
         }
-        catch (RedisException)
+        catch (RedisServerException ex) when (Unsupported(ex))
         {
             return false;
         }
@@ -203,7 +199,7 @@ public sealed class RedisContainerFixture : IAsyncLifetime
             var delta = await RedisTestKeys.CommandCallsAsync(admin, "cmdstat_get") - before;
             return delta is >= 3 and < 6;
         }
-        catch (RedisException)
+        catch (RedisServerException ex) when (Unsupported(ex))
         {
             return false;
         }
@@ -225,7 +221,7 @@ public sealed class RedisContainerFixture : IAsyncLifetime
             {
                 await connection.GetDatabase().ExecuteAsync("PING");
             }
-            catch (RedisServerException)
+            catch (RedisServerException ex) when (Unsupported(ex))
             {
                 // The refusal is what the log is to hold.
             }
@@ -237,7 +233,7 @@ public sealed class RedisContainerFixture : IAsyncLifetime
                 return fields.Contains("count") && fields.Contains("reason");
             });
         }
-        catch (RedisException)
+        catch (RedisServerException ex) when (Unsupported(ex))
         {
             return false;
         }
@@ -247,7 +243,7 @@ public sealed class RedisContainerFixture : IAsyncLifetime
             {
                 await admin.ExecuteAsync("ACL", "DELUSER", user);
             }
-            catch (RedisException)
+            catch (RedisServerException ex) when (Unsupported(ex))
             {
                 // The user is gone or never was.
             }
@@ -263,7 +259,7 @@ public sealed class RedisContainerFixture : IAsyncLifetime
             await server.ExecuteAsync("ACL", "DELUSER", probe);
             return true;
         }
-        catch (RedisServerException)
+        catch (RedisServerException ex) when (Unsupported(ex))
         {
             return false;
         }

@@ -30,6 +30,10 @@ internal sealed class AimdMoveRate : IMoveRate
         (_memory, _options, _time, _latency) = (memory, LastGoodOptions.Over(options), time ?? throw new ArgumentNullException(nameof(time)), latency);
     }
 
+    internal Task HealthObservation => _healthFlight.Current?.Observation ?? Task.CompletedTask;
+
+    internal Task HealthCancellation => _healthFlight.Current?.Cancellation ?? Task.CompletedTask;
+
     /// <summary>The rate the mover uses with no other source: <c>INFO</c> of the units' nodes, and the mover's own measurements.</summary>
     public static AimdMoveRate CreateDefault(IScanUnits units, IOptionsMonitor<KeyMoveMoverOptions> options, TimeProvider time) =>
         Compose(RedisInfoWatch.Reader(units), options, time);
@@ -203,7 +207,7 @@ internal sealed class AimdMoveRate : IMoveRate
         var call = new Call<T>(task, source);
 
         // The source goes with the work and its cancellation, not before: the work may still hold its token, and a failure after the timeout is observed here.
-        _ = task.ContinueWith(
+        call.Observation = task.ContinueWith(
             static (done, state) =>
             {
                 _ = done.Exception;
@@ -441,6 +445,19 @@ internal sealed class AimdMoveRate : IMoveRate
         private bool _workDone;
 
         public Task<T> Task { get; } = task;
+
+        public Task Observation { get; set; } = System.Threading.Tasks.Task.CompletedTask;
+
+        public Task Cancellation
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _cancelling ?? System.Threading.Tasks.Task.CompletedTask;
+                }
+            }
+        }
 
         public bool TimedOut { get; set; }
 

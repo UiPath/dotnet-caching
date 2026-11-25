@@ -19,24 +19,40 @@ public sealed class ClaimDurabilityTests
     {
         Assert.SkipUnless(Master is not null && Replica is not null, "Set REDIS_CONNECTION_STRING and CLAIM_REPLICA_CONNECTION_STRING to run.");
         await using var master = await ConnectionMultiplexer.ConnectAsync($"{Master},allowAdmin=true");
-        await using var replica = await ConnectionMultiplexer.ConnectAsync($"{Replica},allowAdmin=true,syncTimeout=10000");
         var db = master.GetDatabase();
         var key = (RedisKey)$"claimtest:mx:{{{Guid.NewGuid():N}}}";
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var waiting = System.Threading.Channels.Channel.CreateUnbounded<TaskCompletionSource<RedisResult>>();
+        var real = master.GetServer(master.GetEndPoints()[0]);
+        var server = InterceptingProxy.Wrap(real, (method, args) =>
+            method.Name == nameof(IServer.ExecuteAsync) && args[0] is "WAIT" ? WaitAsync((object[])args[1]!) : InterceptingProxy.Proceed);
+        var mux = InterceptingProxy.Wrap<IConnectionMultiplexer>(master, (method, _) => method.Name == nameof(IConnectionMultiplexer.GetServer) ? server : InterceptingProxy.Proceed);
+        var controlled = InterceptingProxy.Wrap(db, (method, _) => method.Name == "get_Multiplexer" ? mux : InterceptingProxy.Proceed);
+        async Task<RedisResult> WaitAsync(object[] arguments)
+        {
+            var answer = new TaskCompletionSource<RedisResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var timer = clock.CreateTimer(_ => answer.TrySetResult(RedisResult.Create(0)), null, TimeSpan.FromMilliseconds((long)arguments[1]), Timeout.InfiniteTimeSpan);
+            waiting.Writer.TryWrite(answer);
+            return await answer.Task;
+        }
         try
         {
-            var store = new ClaimStore(db, key, useScripts: true, new Version(7, 4)) { BarrierTimeout = TimeSpan.FromMilliseconds(200), BarrierRetries = 2 };
-            (await store.OpenAsync("rt:a", T1, "rt", restore: true)).Durability.Should().Be(ClaimDurability.Confirmed);
-
-            // The replica sleeps, so no acknowledgement arrives while the step is retried.
-            var sleeping = replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", "2");
-            await Task.Delay(100, TestContext.Current.CancellationToken);
+            await db.HashSetAsync(key, "rt:a", $"open|{T1}|rt|");
+            var store = new ClaimStore(controlled, key, useScripts: true, new Version(7, 4)) { BarrierTimeout = TimeSpan.FromMilliseconds(200), BarrierRetries = 2 };
 
             var result = await store.IdleAsync("rt:a", T1);
 
             result.Should().Be(new ClaimResult(0, ClaimDurability.NotApplicable), "idle needs an S0 cert, so nothing is written");
-            var cert = await store.CertifyAsync("rt:a", T1, 5, swept: false);
+            var pending = store.CertifyAsync("rt:a", T1, 5, swept: false);
+            for (var attempt = 0; attempt <= store.BarrierRetries; attempt++)
+            {
+                await waiting.Reader.ReadAsync(TestContext.Current.CancellationToken);
+                pending.IsCompleted.Should().BeFalse();
+                clock.Advance(store.BarrierTimeout);
+            }
+            var cert = await pending;
             cert.Should().Be(new ClaimResult(1, ClaimDurability.NotConfirmed));
-            await sleeping;
+            waiting.Reader.TryRead(out _).Should().BeFalse();
         }
         finally
         {
