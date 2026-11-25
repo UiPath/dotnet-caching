@@ -212,3 +212,29 @@ UiPath.Caching.Migration.KeyMoveBuilder.ExcludeKeyspace(string! pattern) -> UiPa
 UiPath.Caching.Migration.KeyMoveBuilder.UseMoveMinTtl(string! group, System.TimeSpan minTtl) -> UiPath.Caching.Migration.KeyMoveBuilder!
 UiPath.Caching.Migration.KeyMoveCacheRegistration.MoveMinTtl.get -> System.TimeSpan?
 UiPath.Caching.Migration.KeyMoveCacheRegistration.MoveMinTtl.init -> void
+UiPath.Caching.Migration.IRouter.GetHash<T>(string! cacheName) -> UiPath.Caching.IHashCache<T!>!
+UiPath.Caching.Migration.ISourceHashCache<T>
+UiPath.Caching.Migration.ISourceHashCache<T>.ClearAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask
+UiPath.Caching.Migration.ISourceHashCache<T>.GetAsync(string! key, string![]? fields, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.SourceRead<System.Collections.Generic.IDictionary<string!, T?>!>>
+UiPath.Caching.Migration.ISourceHashCache<T>.RemoveAsync(string! key, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.WriteResult>
+UiPath.Caching.Migration.ISourceHashCache<T>.RemoveFieldsAsync(string! key, string![]! fields, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.WriteResult>
+UiPath.Caching.Migration.ISourceHashCache<T>.SetAsync(string! key, System.Collections.Generic.IDictionary<string!, T?>! fields, UiPath.Caching.HashCacheSetOption mode, UiPath.Caching.Migration.CacheExpiry expiry, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.WriteResult>
+UiPath.Caching.Migration.RouterBuilder.AddHash<T>(UiPath.Caching.Migration.RouterHashCacheRegistration<T!>! registration) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.DefaultExpiry.get -> System.TimeSpan?
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.DefaultExpiry.init -> void
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.Group.get -> string!
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.Group.init -> void
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.LocalCap.get -> System.TimeSpan
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.LocalCap.init -> void
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.MaxHashFields.get -> int?
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.MaxHashFields.init -> void
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.Name.get -> string!
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.Name.init -> void
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.PendingWindow.get -> System.TimeSpan
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.PendingWindow.init -> void
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.RedisKey.get -> System.Func<string!, string!>!
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.RedisKey.init -> void
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.RouterHashCacheRegistration() -> void
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.Source.get -> UiPath.Caching.Migration.ISourceHashCache<T!>!
+UiPath.Caching.Migration.RouterHashCacheRegistration<T>.Source.init -> void

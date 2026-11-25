@@ -14,6 +14,10 @@ public interface IRouter
     ICache<T> Get<T>(string cacheName)
         where T : class;
 
+    /// <summary>The routed hash cache as the library's own <see cref="IHashCache{T}"/>. A metadata write throws <see cref="NotSupportedException"/> on every path. While the source serves the group, <c>Refresh</c>, <c>TimeToLive</c> and <c>ExpireTime</c> throw it too, as the source has none, and a write that carries metadata is refused; every other member works on every path.</summary>
+    IHashCache<T> GetHash<T>(string cacheName)
+        where T : class;
+
     /// <summary>Clears one routed cache by name, on every path; refused while its group's keys move, which has its own clear.</summary>
     Task ClearAsync(string cacheName, CancellationToken cancellationToken = default);
 

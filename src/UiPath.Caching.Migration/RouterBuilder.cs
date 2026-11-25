@@ -13,6 +13,7 @@ public sealed class RouterBuilder
     private readonly Dictionary<string, (string Group, Func<string, string> InPlaceKey)> _routed = new(StringComparer.Ordinal);
     private readonly HashSet<string> _names = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _excluded = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _hashNames = new(StringComparer.Ordinal);
     private (IMigrationStageSource Stages, KeyMoveBuilder Builder)? _keyMove;
 
     internal IReadOnlyList<Func<RouterCore, (string Name, Type Type, object Cache)>> Registrations => _registrations;
@@ -56,6 +57,9 @@ public sealed class RouterBuilder
     internal KeyMoveSetup? KeyMove { get; private set; }
 
     internal IReadOnlyDictionary<string, (string Group, Func<string, string> InPlaceKey)> Routed => _routed;
+
+    /// <summary>The names registered with <see cref="AddHash{T}"/>, which decide the kind of the key move caches.</summary>
+    internal IReadOnlySet<string> HashNames => _hashNames;
 
     public RouterBuilder Add<T>(RouterCacheRegistration<T> registration)
         where T : class
@@ -120,6 +124,36 @@ public sealed class RouterBuilder
             throw new ArgumentException($"Cache '{cacheName}' is already excluded.", nameof(cacheName));
         }
 
+        return this;
+    }
+
+    /// <summary>Registers a hash cache: <see cref="IRouter.GetHash{T}"/> returns it. It has no local copy yet, so <see cref="RouterHashCacheRegistration{T}.LocalCap"/> must be zero.</summary>
+    public RouterBuilder AddHash<T>(RouterHashCacheRegistration<T> registration)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentException.ThrowIfNullOrWhiteSpace(registration.Name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(registration.Group);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(registration.PendingWindow, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(registration.PendingWindow, LibrarySettleBound.Horizon);
+        if (registration.LocalCap != TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(registration), registration.LocalCap, $"The hash cache '{registration.Name}' has no local tier yet, so its LocalCap must be zero.");
+        }
+
+        if (registration.MaxHashFields is < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(registration), registration.MaxHashFields, $"The hash cache '{registration.Name}' needs MaxHashFields of at least one, or none.");
+        }
+
+        if (!_names.Add(registration.Name))
+        {
+            throw new ArgumentException($"A cache named '{registration.Name}' is already registered.", nameof(registration));
+        }
+
+        _hashNames.Add(registration.Name);
+        _routed[registration.Name] = (registration.Group, registration.RedisKey);
+        _registrations.Add(core => (registration.Name, typeof(IHashCache<T>), new RoutedHashCache<T>(core, registration)));
         return this;
     }
 
@@ -235,7 +269,7 @@ public sealed class RouterBuilder
     {
         if (_keyMove is { } given)
         {
-            KeyMove = given.Builder.Build(given.Stages, _routed);
+            KeyMove = given.Builder.Build(given.Stages, _routed, _hashNames);
         }
 
         return KeyMove;

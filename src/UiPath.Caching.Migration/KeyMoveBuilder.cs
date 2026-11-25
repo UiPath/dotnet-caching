@@ -125,7 +125,7 @@ public sealed class KeyMoveBuilder
         return this;
     }
 
-    internal KeyMoveSetup Build(IMigrationStageSource stages, IReadOnlyDictionary<string, (string Group, Func<string, string> InPlaceKey)> routed)
+    internal KeyMoveSetup Build(IMigrationStageSource stages, IReadOnlyDictionary<string, (string Group, Func<string, string> InPlaceKey)> routed, IReadOnlySet<string>? hashNames = null)
     {
         var prefix = _libraryPrefix ?? throw new InvalidOperationException("Key move needs UseLibraryKeyPrefix.");
         RefuseGlob(prefix);
@@ -146,7 +146,7 @@ public sealed class KeyMoveBuilder
                 throw new InvalidOperationException($"The key move cache '{cache.Name}' is added twice; a cache belongs to one group and is registered once.");
             }
 
-            caches.Add(Convert(cache, groups, routed, prefix));
+            caches.Add(Convert(cache, groups, routed, prefix, hashNames));
         }
 
         ValidateRelationships(groups, caches, names, routed);
@@ -180,7 +180,7 @@ public sealed class KeyMoveBuilder
         }
     }
 
-    private static KeyMoveCache Convert(KeyMoveCacheRegistration cache, HashSet<string> groups, IReadOnlyDictionary<string, (string Group, Func<string, string> InPlaceKey)> routed, string prefix)
+    private static KeyMoveCache Convert(KeyMoveCacheRegistration cache, HashSet<string> groups, IReadOnlyDictionary<string, (string Group, Func<string, string> InPlaceKey)> routed, string prefix, IReadOnlySet<string>? hashNames)
     {
         MoveKeyNames.ValidateName(cache.Name, nameof(cache));
         if (cache.ParseInPlaceKey is null || cache.ParseNativeKey is null || cache.FormatNativeKey is null)
@@ -204,7 +204,24 @@ public sealed class KeyMoveBuilder
             throw new InvalidOperationException($"The key move cache '{cache.Name}' is not registered with the router in the group '{cache.Group}'.");
         }
 
-        return new KeyMoveCache(cache.Name, cache.Group, cache.NoOrigin || cache.AtMostOnce, cache.AtMostOnce, cache.AcceptRefill, cache.MaxSourceTtl, cache.InPlacePattern, router.InPlaceKey, cache.ParseInPlaceKey, cache.NativePattern, cache.FormatNativeKey, cache.ParseNativeKey, cache.OwnsInPlaceKey, cache.OwnsNativeKey, cache.MoveMinTtl, Kind: cache.Kind);
+        return new KeyMoveCache(cache.Name, cache.Group, cache.NoOrigin || cache.AtMostOnce, cache.AtMostOnce, cache.AcceptRefill, cache.MaxSourceTtl, cache.InPlacePattern, router.InPlaceKey, cache.ParseInPlaceKey, cache.NativePattern, cache.FormatNativeKey, cache.ParseNativeKey, cache.OwnsInPlaceKey, cache.OwnsNativeKey, cache.MoveMinTtl, Kind: KindOf(cache, hashNames));
+    }
+
+    // The router registration decides what a cache stores: a hash cache is the one added with AddHash. A registration that names another kind is a mistake.
+    private static KeyMoveKind KindOf(KeyMoveCacheRegistration cache, IReadOnlySet<string>? hashNames)
+    {
+        if (hashNames is null)
+        {
+            return cache.Kind;
+        }
+
+        var kind = hashNames.Contains(cache.Name) ? KeyMoveKind.Hash : KeyMoveKind.String;
+        if (cache.Kind != KeyMoveKind.String && cache.Kind != kind)
+        {
+            throw new InvalidOperationException($"The key move cache '{cache.Name}' is registered with the router as {(kind == KeyMoveKind.Hash ? "a hash cache" : "a string cache")}, which its kind disagrees with.");
+        }
+
+        return kind;
     }
 
     private static void ValidateKeyspace(KeyMoveCacheRegistration cache, string prefix)

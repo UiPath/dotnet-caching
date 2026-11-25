@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Hosting;
 using UiPath.Caching.Broadcast;
+using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Migration;
 
@@ -9,6 +10,9 @@ namespace UiPath.Caching.Migration;
 /// <param name="Cache">The library cache behind <paramref name="Store"/>, for a conditional create and a refresh.</param>
 /// <param name="CacheNullValues">The library stores a null as a value; a router write of null then stores it, and without it removes.</param>
 /// <param name="Binder">Binds the byte codecs and key maps of the key move caches; none when the router has no key move group.</param>
+/// <param name="HashStore">The library hash cache behind the hash caches of the router; none when the router has no hash cache.</param>
+/// <param name="HashCache">The hash cache behind <paramref name="HashStore"/>, for a presence check and an expiry.</param>
+/// <param name="HashTier">The shared tier of that hash cache, which a miss fill writes through.</param>
 internal sealed record LibraryParts(
     IMigrationCache Store,
     IConnectionState Connection,
@@ -22,7 +26,10 @@ internal sealed record LibraryParts(
     ICache? Cache = null,
     bool CacheNullValues = false,
     KeyMoveBinder? Binder = null,
-    MoveTargets? Movers = null)
+    MoveTargets? Movers = null,
+    IMigrationHashCache? HashStore = null,
+    IHashCache? HashCache = null,
+    ISharedHashTier? HashTier = null)
 {
     public IReadOnlyList<IHostedService> Started { get; } = Started ?? [];
 

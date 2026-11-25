@@ -36,9 +36,9 @@ internal sealed class LibraryHashPathClient<T>(IMigrationHashCache store, IConne
                 SnapshotOutcome.Found when read.Entry is { Value: { Count: > 0 } value } entry => new HashRead<T>(ReadOutcome.Found, value, entry.Expiration == DateTimeOffset.MaxValue ? null : entry.Expiration, entry.Metadata),
 
                 // A hash that is cached empty is the answer, and an older one is not to be looked for.
-                SnapshotOutcome.Found => new HashRead<T>(ReadOutcome.Absent, null, null) { Stops = true },
+                SnapshotOutcome.Found => new HashRead<T>(ReadOutcome.Absent, null, read.Entry?.Expiration is { } at && at != DateTimeOffset.MaxValue ? at : null, read.Entry?.Metadata) { Stops = true },
                 SnapshotOutcome.Absent => HashRead<T>.Of(ReadOutcome.Absent),
-                SnapshotOutcome.Unreadable => HashRead<T>.Of(ReadOutcome.Unreadable),
+                SnapshotOutcome.Unreadable => await SelectedOnlyAsync(key, fields, cancellationToken).ConfigureAwait(false),
                 _ => HashRead<T>.Of(ReadOutcome.Unavailable),
             };
             return fields is null ? result : result.Only(fields);
@@ -145,6 +145,18 @@ internal sealed class LibraryHashPathClient<T>(IMigrationHashCache store, IConne
         {
             return WriteResult.UnknownWithin(bound);
         }
+    }
+
+    // A field that cannot be read fails the whole snapshot; the fields asked for may still be readable on their own, as the native read of them is.
+    private async ValueTask<HashRead<T>> SelectedOnlyAsync(string key, string[]? fields, CancellationToken cancellationToken)
+    {
+        if (fields is not { Length: > 0 } || Cache is not { } cache)
+        {
+            return HashRead<T>.Of(ReadOutcome.Unreadable);
+        }
+
+        var selected = await cache.GetAsync<T>(CacheKey.Verbatim(redisKey(key)), fields, null, cancellationToken).ConfigureAwait(false);
+        return selected.Count > 0 ? new HashRead<T>(ReadOutcome.Found, selected, null) : HashRead<T>.Of(ReadOutcome.Unreadable);
     }
 
     private async ValueTask<WriteResult> WriteAsync(string key, Func<CacheKey, CancellationToken, ValueTask<StoreOutcome>> command, CancellationToken cancellationToken)

@@ -95,7 +95,20 @@ internal sealed class Router : IRouter, IAsyncDisposable
         }
 
         return entry.Cache as ICache<T>
-            ?? throw new InvalidOperationException($"Cache '{cacheName}' holds {entry.Type.Name}, not {typeof(T).Name}.");
+            ?? throw new InvalidOperationException(IsHash(entry.Type) ? $"Cache '{cacheName}' is a hash cache: use GetHash." : $"Cache '{cacheName}' holds {entry.Type.Name}, not {typeof(T).Name}.");
+    }
+
+    public IHashCache<T> GetHash<T>(string cacheName)
+        where T : class
+    {
+        _core.ThrowIfStopped();
+        if (!_caches.TryGetValue(cacheName, out var entry))
+        {
+            throw new KeyNotFoundException($"No cache named '{cacheName}' is registered with the router.");
+        }
+
+        return entry.Cache as IHashCache<T>
+            ?? throw new InvalidOperationException(IsHash(entry.Type) ? $"Cache '{cacheName}' holds hashes of {entry.Type.GenericTypeArguments[0].Name}, not {typeof(T).Name}." : $"Cache '{cacheName}' is not a hash cache: use Get.");
     }
 
     /// <summary>Refuses new calls and cleans up once, whoever asks and whatever they cancel. The wait is bounded; a call or a pending key that outlives the bound keeps the router's resources alive until it has ended.</summary>
@@ -169,6 +182,8 @@ internal sealed class Router : IRouter, IAsyncDisposable
                     (cache as IRouterParticipant)?.ResetLocal();
                 }
             });
+
+    private static bool IsHash(Type type) => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IHashCache<>);
 
     private static void WarnInFlight(IRouterParticipant[] stoppables)
     {

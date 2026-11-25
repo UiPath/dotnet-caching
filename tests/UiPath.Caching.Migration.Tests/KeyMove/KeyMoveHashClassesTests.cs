@@ -69,12 +69,12 @@ public sealed class KeyMoveHashClassesTests(RedisFixture fixture)
     }
 
     [Fact]
-    public void A_registration_that_says_it_holds_hashes_makes_the_key_space_say_so_and_one_that_does_not_holds_strings()
+    public void A_cache_added_as_a_hash_cache_makes_the_key_space_say_so_and_one_that_is_not_holds_strings()
     {
         var setup = new RouterBuilder()
-            .Add(new RouterCacheRegistration<string> { Name = "a", Group = "g1", Source = new Source(), RedisKey = key => $"l:a:{key}" })
+            .AddHash(new RouterHashCacheRegistration<Item> { Name = "a", Group = "g1", Source = new FakeHashBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch)), RedisKey = key => $"l:a:{key}" })
             .Add(new RouterCacheRegistration<string> { Name = "b", Group = "g1", Source = new Source(), RedisKey = key => $"l:b:{key}" })
-            .UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Registration("a", KeyMoveKind.Hash)).AddCache(Registration("b", KeyMoveKind.String)))
+            .UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Registration("a", KeyMoveKind.String)).AddCache(Registration("b", KeyMoveKind.String)))
             .BuildKeyMove()!;
 
         setup.KeySpace.KindOf("g1", "a").Should().Be(KeyMoveKind.Hash);

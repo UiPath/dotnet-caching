@@ -101,6 +101,18 @@ public static class RouterServiceCollectionExtensions
         _ = CodecCacheOf(router) ?? throw MissingRouterCodecCache();
     }
 
+    // The plain path fills a hash through the shared tier, so a hash cache with a local tier on top cannot serve it: the library start fails, and the router stays on the source.
+    internal static (IMigrationHashCache? Store, IHashCache? Cache, ISharedHashTier? Tier) LibraryHashCacheOf(IServiceProvider root, IReadOnlySet<string> names)
+    {
+        var cache = root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateHashCache(KnownCacheProviderNames.Redis);
+        if (cache is IMigrationHashCache store && cache is ISharedHashTier tier)
+        {
+            return (store, cache, tier);
+        }
+
+        throw new InvalidOperationException($"The router's hash caches ({string.Join(", ", names.Order(StringComparer.Ordinal))}) need the library's Redis hash cache with no local tier, and the stack's hash cache is a {cache.GetType().Name}: enable the Redis cache provider for the router's stack and leave its local tier off.");
+    }
+
     /// <summary>The key the stack's node list store uses: the same name, with braces escaped, through the stack's key strategy.</summary>
     internal static RedisKey NodeListKey(CacheOptions cacheOptions, RedisCacheOptions redisOptions)
     {
@@ -367,6 +379,7 @@ public static class RouterServiceCollectionExtensions
         var streams = new PrefixStrategy(RedisKeyspaces.Streams, options);
         var group = source.ToString().ToLowerInvariant();
         var libraryCache = root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis);
+        var hash = builder.HashNames.Count > 0 ? LibraryHashCacheOf(root, builder.HashNames) : default;
         var binder = builder.KeyMove is { Caches.Count: > 0 } registered && plane is not null ? KeyMoveBinderFor(root, libraryCache, registered, builder.InPlaceKeepsSystemFields) : null;
         return new LibraryParts(
             libraryCache.AsMigrationCache(),
@@ -381,7 +394,10 @@ public static class RouterServiceCollectionExtensions
             libraryCache,
             root.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(StackName).Value.CacheNullValues,
             binder,
-            movers);
+            movers,
+            hash.Store,
+            hash.Cache,
+            hash.Tier);
     }
 
     // The in-place side is the router's own library cache, so the codec cannot differ from what the library path writes, with or without an envelope; the native side is the application's Redis cache, with its serializers and effective format.

@@ -2,7 +2,7 @@ using System.Reflection;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>A member of <see cref="ICache{T}"/> as one line of text, so the rule table can name it and a test can look it up.</summary>
+/// <summary>A member of <see cref="ICache{T}"/> or <see cref="IHashCache{T}"/> as one line of text, so the rule table can name it and a test can look it up.</summary>
 internal static class MemberSignature
 {
     public static string Of(MemberInfo member) => member switch
@@ -13,9 +13,11 @@ internal static class MemberSignature
     };
 
     /// <summary>The abstract members of the interface, which is what a class must implement; a sealed member forwards to them.</summary>
-    public static IEnumerable<MemberInfo> Required()
+    public static IEnumerable<MemberInfo> Required() => Required(typeof(ICache<>));
+
+    /// <summary>The abstract members of the generic interface <paramref name="type"/>.</summary>
+    public static IEnumerable<MemberInfo> Required(Type type)
     {
-        var type = typeof(ICache<>);
         foreach (var property in type.GetProperties().Where(p => p.GetMethod?.IsAbstract == true))
         {
             yield return property;

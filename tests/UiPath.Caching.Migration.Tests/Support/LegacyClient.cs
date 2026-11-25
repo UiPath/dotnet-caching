@@ -135,3 +135,84 @@ internal sealed class LegacySource(IConnectionMultiplexer redis, string cacheNam
         }
     }
 }
+
+/// <summary>The older client for one hash cache: key h:{cache},c:{key}, one envelope per field, an absolute expiry, and a clear that scans the cache's pattern.</summary>
+internal sealed class LegacyHashSource(IConnectionMultiplexer redis, string cacheName) : ISourceHashCache<List<long>>
+{
+    public string RedisKey(string key) => $"h:{cacheName},c:{key}";
+
+    public async ValueTask<SourceRead<IDictionary<string, List<long>?>>> GetAsync(string key, string[]? fields, CancellationToken cancellationToken)
+    {
+        HashEntry[] entries;
+        try
+        {
+            var database = redis.GetDatabase();
+            entries = fields is null
+                ? await database.HashGetAllAsync(RedisKey(key)).ConfigureAwait(false)
+                : [.. (await database.HashGetAsync(RedisKey(key), [.. fields.Select(f => (RedisValue)f)]).ConfigureAwait(false)).Select((value, i) => new HashEntry(fields[i], value)).Where(e => !e.Value.IsNull)];
+        }
+        catch (RedisException)
+        {
+            return SourceRead<IDictionary<string, List<long>?>>.Unavailable;
+        }
+
+        if (entries.Length == 0)
+        {
+            return SourceRead<IDictionary<string, List<long>?>>.Absent;
+        }
+
+        IDictionary<string, List<long>?> read = entries.ToDictionary(e => e.Name.ToString(), e => LegacyEnvelope.Read<List<long>>((byte[]?)e.Value));
+        return SourceRead<IDictionary<string, List<long>?>>.Found(read);
+    }
+
+    public async ValueTask<WriteResult> SetAsync(string key, IDictionary<string, List<long>?> fields, HashCacheSetOption mode, CacheExpiry expiry, CancellationToken cancellationToken)
+    {
+        var database = redis.GetDatabase();
+        if (mode == HashCacheSetOption.KeyReplace)
+        {
+            await database.KeyDeleteAsync(RedisKey(key)).ConfigureAwait(false);
+        }
+
+        await database.HashSetAsync(RedisKey(key), [.. fields.Select(f => new HashEntry(f.Key, f.Value is null ? RedisValue.EmptyString : LegacyEnvelope.Write(f.Value)))]).ConfigureAwait(false);
+        if (expiry.Deadline is { } deadline)
+        {
+            await database.KeyExpireAsync(RedisKey(key), deadline.UtcDateTime).ConfigureAwait(false);
+        }
+        else if (mode == HashCacheSetOption.KeyReplace)
+        {
+            await database.KeyPersistAsync(RedisKey(key)).ConfigureAwait(false);
+        }
+
+        return WriteOutcome.Committed;
+    }
+
+    public async ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken)
+    {
+        await redis.GetDatabase().KeyDeleteAsync(RedisKey(key)).ConfigureAwait(false);
+        return WriteOutcome.Committed;
+    }
+
+    public async ValueTask<WriteResult> RemoveFieldsAsync(string key, string[] fields, CancellationToken cancellationToken)
+    {
+        await redis.GetDatabase().HashDeleteAsync(RedisKey(key), [.. fields.Select(f => (RedisValue)f)]).ConfigureAwait(false);
+        return WriteOutcome.Committed;
+    }
+
+    public async ValueTask ClearAsync(CancellationToken cancellationToken)
+    {
+        var database = redis.GetDatabase();
+        foreach (var endpoint in redis.GetEndPoints())
+        {
+            var server = redis.GetServer(endpoint);
+            if (server.IsReplica)
+            {
+                continue;
+            }
+
+            await foreach (var key in server.KeysAsync(pattern: $"h:{cacheName},c:*"))
+            {
+                await database.KeyDeleteAsync(key).ConfigureAwait(false);
+            }
+        }
+    }
+}
