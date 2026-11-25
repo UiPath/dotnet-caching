@@ -315,6 +315,8 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         public bool NodeListComplete(string group, StateRecord state) => true;
 
         public bool MemoryFits(string group, string reportId, long estimatedBytes, double headroom) => true;
+
+        public bool InPlaceReadersDeployed(string group) => true;
     }
 
     private sealed class Space : IGroupKeySpace

@@ -11,14 +11,14 @@ internal static partial class StepPlanner
     // X7: S3 or S4 to S1(rev) through the reverse gates, or a stored forced reverse.
     private static StepPlan Reverse7(StepInput i, StageDriverOptions options)
     {
-        var (failures, forced) = StartGates.Reverse(i, options);
+        var (failures, overrides) = StartGates.Reverse(i, options);
         if (failures.Count > 0)
         {
             return StepPlan.Wait("reverse_blocked", string.Join(',', failures));
         }
 
         var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X7", "S1", "rev", 1, NewMoveId: true, WayBack: true, Binding: BindingChange.Retire));
-        return forced ? plan.With(new StageAlert("gate_override", ApprovalKinds.ForceReverse)) : plan;
+        return overrides.Count == 0 ? plan : plan.WithOverrides(ApprovalKinds.ForceReverse, overrides);
     }
 
     // S1(rev) is the barrier for NoOrigin caches; every fresh advert acknowledges it. The retire gate: no marker of the retiring generation is left, or the operator's consent to leave them.
@@ -32,7 +32,7 @@ internal static partial class StepPlanner
         var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X8", "S3", "rev", 1, WayBack: true, Binding: BindingChange.ClearRetiring));
         if (Approval.ValidFor(i.State, ApprovalKinds.RetireMarkers) is not null)
         {
-            return plan.With(new StageAlert("gate_override", ApprovalKinds.RetireMarkers));
+            return plan.WithOverrides(ApprovalKinds.RetireMarkers, [KeyMoveGateIds.ReverseRetire]);
         }
 
         var verdict = await i.Retire().ConfigureAwait(false);

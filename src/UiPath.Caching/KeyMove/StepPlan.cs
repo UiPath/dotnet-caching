@@ -12,7 +12,8 @@ internal sealed record StepPlan(
     bool AutoHoldClear = false,
     IReadOnlyList<(string Field, string Value)>? Fields = null,
     bool AllAck = false,
-    string? Caches = null)
+    string? Caches = null,
+    IReadOnlyList<string>? OverriddenGates = null)
 {
     public IReadOnlyList<StageAlert> AlertList => Alerts ?? [];
 
@@ -22,5 +23,6 @@ internal sealed record StepPlan(
 
     public static StepPlan Wait(string code, string detail) => new(StepKind.None, Alerts: [new StageAlert(code, detail)]);
 
-    public StepPlan With(params StageAlert[] alerts) => this with { Alerts = [.. AlertList, .. alerts] };
+    public StepPlan WithOverrides(string detail, IReadOnlyList<string> gates) =>
+        this with { Alerts = [.. AlertList, new StageAlert("gate_override", detail)], OverriddenGates = gates };
 }

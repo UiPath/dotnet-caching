@@ -5,10 +5,10 @@ internal static class StartGates
 {
     public static readonly string[] ReverseGates = [KeyMoveGateIds.StartKeyMoveSupport, KeyMoveGateIds.StartPins, KeyMoveGateIds.StartNodeList, KeyMoveGateIds.StartSnapshotFreshness];
 
-    public static (List<GateFailure> Failures, List<string> Overrides) Cheap(StepInput i, StageDriverOptions options)
+    public static (List<GateFailure> Failures, List<(string Gate, string Approval)> Overrides) Cheap(StepInput i, StageDriverOptions options)
     {
         var failures = new List<GateFailure>();
-        var overrides = new List<string>();
+        var overrides = new List<(string Gate, string Approval)>();
         var group = i.Group;
         AddNodeListFailures(i, failures);
 
@@ -53,11 +53,11 @@ internal static class StartGates
         return replicas.Length == 0 ? null : new GateFailure("preflight", string.Join(',', replicas));
     }
 
-    public static (List<GateFailure> Failures, bool Forced) Reverse(StepInput i, StageDriverOptions options)
+    public static (List<GateFailure> Failures, IReadOnlyList<string> Overrides) Reverse(StepInput i, StageDriverOptions options)
     {
         var failures = Cheap(i, options).Failures.Where(f => ReverseGates.Contains(f.Gate)).ToList();
         var forced = failures.Count > 0 && Approval.ValidFor(i.State, ApprovalKinds.ForceReverse) is not null;
-        return (forced ? [] : failures, forced);
+        return forced ? ([], [.. failures.Select(f => f.Gate).Distinct(StringComparer.Ordinal)]) : (failures, []);
     }
 
     private static void AddNodeListFailures(StepInput i, List<GateFailure> failures)
@@ -115,7 +115,7 @@ internal static class StartGates
 
     private static string Nodes(StepInput i, Func<NodeAdvert, bool> predicate) => string.Join(',', i.Fresh.Where(predicate).Select(a => a.Node));
 
-    private static void Overridable(StepInput i, string kind, string gate, string reason, bool holds, List<GateFailure> failures, List<string> overrides, bool counted = true)
+    private static void Overridable(StepInput i, string kind, string gate, string reason, bool holds, List<GateFailure> failures, List<(string Gate, string Approval)> overrides, bool counted = true)
     {
         if (holds)
         {
@@ -127,7 +127,7 @@ internal static class StartGates
         {
             if (counted)
             {
-                overrides.Add(kind);
+                overrides.Add((gate, kind));
             }
 
             return;

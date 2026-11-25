@@ -37,21 +37,29 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
     }
 
     [Fact]
-    public async Task X7_fails_closed_with_reverse_blocked_while_a_gate_fails_and_a_stored_forced_reverse_goes_ahead_and_is_counted()
+    public async Task A_forced_reverse_counts_each_bypassed_gate_and_retire_consent_counts_the_retire_gate()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
+        using var overrides = new KeyMoveMeterRecorder("cache.keymove.gate_overrides", kit.Group);
         await ToDrainedAsync(kit);
         kit.Fleet.All(n => n.Fl = 2);
         kit.Fleet.Nodes[1].Km = false;
+        kit.Facts.NodeListSettled = false;
 
         await StepsAsync(kit, 10, Ten);
 
         (await kit.StateAsync()).State.Should().Be("S4");
-        kit.Alerts.Should().Contain(("reverse_blocked", "start.km_support:n2"));
+        kit.Alerts.Should().Contain(("reverse_blocked", "start.km_support:n2,start.node_list:node_list_incomplete"));
         (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.ForceReverse, "n2 is gone", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
 
         await kit.StepUntilAsync("S1", "rev", advance: Ten);
         kit.Alerts.Should().Contain(("gate_override", ApprovalKinds.ForceReverse));
+        (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.RetireMarkers, "markers may stay", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
+        await kit.StepUntilAsync("S3", "rev");
+        kit.Alerts.Should().Contain(("gate_override", ApprovalKinds.RetireMarkers));
+
+        overrides.Measured.Select(m => (m.Value, Gate: m.Tags["gate"])).Should().Equal(
+            (1L, "start.km_support"), (1L, "start.node_list"), (1L, "reverse.retire"));
     }
 
     [Fact]

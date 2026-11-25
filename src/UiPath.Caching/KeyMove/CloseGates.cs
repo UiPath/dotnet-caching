@@ -2,7 +2,7 @@ namespace UiPath.Caching.KeyMove;
 
 internal static class CloseGates
 {
-    /// <summary>The close consent attests that source code is still deployed, and the inventory runs only after these checks pass.</summary>
+    /// <summary>The configuration attests that the in-place readers are still deployed, the consent acknowledges the residue, and the inventory runs only after these checks pass.</summary>
     public static async Task<CloseGateResult> CheapAsync(StepInput i, StageDriverOptions options)
     {
         var state = i.State;
@@ -33,6 +33,12 @@ internal static class CloseGates
         if (i.Fresh.Where(a => a.Bypasses || !a.HasKm).Select(a => a.Node).ToArray() is { Length: > 0 } bad)
         {
             failures.Add(new GateFailure(KeyMoveGateIds.CloseNodeReadiness, string.Join(',', bad)));
+        }
+
+        // No override: Close is the point of no return, so the code that could take the group back must still be there.
+        if (!i.Facts.InPlaceReadersDeployed(i.Group))
+        {
+            failures.Add(new GateFailure(KeyMoveGateIds.CloseInPlaceReaders, "in_place_readers_not_attested"));
         }
 
         if (i.Flag.Confirmed < options.CloseConfirm)

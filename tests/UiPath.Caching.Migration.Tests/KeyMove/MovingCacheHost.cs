@@ -83,7 +83,8 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             new Dictionary<string, string> { [Group] = "format" },
             new Dictionary<string, string> { [Group] = "nodes" },
             new Dictionary<string, string> { [Group] = new DryRunStamp(_dryRunAt, 0, string.Empty).ReportId },
-            claimWired: true);
+            claimWired: true,
+            inPlaceReadersDeployed: new Dictionary<string, string> { [Group] = "in-place-readers" });
         _claim = new RedisRouterMoveClaim(new ClaimStore(Db, Names.Claim(_name), true, version), _facts);
     }
 
@@ -230,16 +231,17 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         return TestPoll.WaitAsync(() => passes.FinishedAfterAckAsync(Group, "fwd", Ct), () => "The mover did not record a clean pass.");
     }
 
-    public Task ExpectAlertAsync(string code, string? gate = null) =>
+    public Task ExpectAlertAsync(string code, string? gate = null, string? detail = null) =>
         TestPoll.WaitAsync(
             async () =>
             {
                 var step = await StepAsync();
                 Assert.False(step?.Plan.Kind is StepKind.Transit or StepKind.ColdStart, $"The driver advanced instead of reporting {code}.");
                 return step?.Plan.AlertList.Any(alert => alert.Code == code
-                    && (gate is null || alert.Detail.Split(',').Any(detail => detail.StartsWith(gate + ":", StringComparison.Ordinal)))) == true;
+                    && (detail is null || alert.Detail == detail)
+                    && (gate is null || alert.Detail.Split(',').Any(entry => entry.StartsWith(gate + ":", StringComparison.Ordinal)))) == true;
             },
-            () => $"The stage driver did not report {code} with gate {gate ?? "(any)"}. {Diagnostics()}");
+            () => $"The stage driver did not report {code} with gate {gate ?? "(any)"} and detail {detail ?? "(any)"}. {Diagnostics()}");
 
     public async Task ExpectDrainBlockedAsync()
     {

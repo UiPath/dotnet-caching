@@ -49,6 +49,63 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task A_forced_close_counts_soak_and_canary_once_after_a_lost_fence_and_a_wait()
+    {
+        var options = new StageDriverOptions
+        {
+            UpgradeHold = TimeSpan.Zero,
+            AckStable = TimeSpan.Zero,
+            CloseConfirm = TimeSpan.Zero,
+            DrainedSoak = TimeSpan.FromDays(1),
+        };
+        await using var kit = await DriverKit.CreateAsync(fixture, options: options);
+        using var overrides = new KeyMoveMeterRecorder("cache.keymove.gate_overrides", kit.Group);
+        await kit.PrepareAsync();
+        await kit.StepUntilAsync("S3");
+        kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
+        var drained = await kit.StepUntilAsync("S4");
+        kit.Mover.Report = FakeMoverStatus.Drained(1, ("a", 0));
+        (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.CloseForce, "residue acknowledged", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
+        kit.Fence = new LeaseFence(kit.Kit.Names.Lead(kit.Group), "stale");
+
+        var refused = await kit.StepAsync();
+
+        refused!.Result!.Outcome.Should().Be(TransitionOutcome.LeaseLost);
+        (await kit.StateAsync()).Id.Should().Be(drained.Id);
+        kit.Alerts.Should().Contain(("gate_override", "close.soak,close.canary"));
+        overrides.Measured.Should().BeEmpty();
+
+        kit.Fence = null;
+        kit.Fleet.Nodes[1].Acks = false;
+        (await kit.StepAsync())!.Plan.Kind.Should().Be(StepKind.None);
+        overrides.Measured.Should().BeEmpty();
+        kit.Fleet.Nodes[1].Acks = true;
+
+        (await kit.StepAsync())!.Result!.Outcome.Should().Be(TransitionOutcome.Completed);
+        (await kit.StateAsync()).Should().Match<StateRecord>(s => s.State == "S5" && s.Durable);
+        await kit.StepAsync();
+
+        overrides.Measured.Select(m => (m.Value, Group: m.Tags["group"], Gate: m.Tags["gate"])).Should().Equal(
+            (1L, kit.Group, "close.soak"), (1L, kit.Group, "close.canary"));
+    }
+
+    [Fact]
+    public async Task A_forced_start_counts_the_memory_gate_once()
+    {
+        await using var kit = await DriverKit.CreateAsync(fixture);
+        using var overrides = new KeyMoveMeterRecorder("cache.keymove.gate_overrides", kit.Group);
+        await kit.PrepareAsync();
+        kit.Facts.Fits = false;
+        (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.StartMemory, "headroom accepted", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
+
+        await kit.StepUntilAsync("S1");
+        await kit.StepAsync();
+
+        kit.Alerts.Should().Contain(("gate_override", ApprovalKinds.StartMemory));
+        overrides.Measured.Select(m => (m.Value, Gate: m.Tags["gate"])).Should().Equal((1L, "start.memory_headroom"));
+    }
+
+    [Fact]
     public async Task X1_tells_the_facts_that_a_start_was_taken_once_and_no_other_step_does()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);

@@ -25,7 +25,9 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
         var now = time.GetUtcNow().ToUnixTimeMilliseconds();
         var t3 = T3Of(state);
 
-        return await scanner.RunAsync(space.Patterns(group, side), keys => CountAsync(keys, group, side, cacheIds, now, t3, cancellationToken), cancellationToken).ConfigureAwait(false);
+        var result = await scanner.RunAsync(space.Patterns(group, side), keys => CountAsync(keys, group, side, cacheIds, now, t3, cancellationToken), cancellationToken).ConfigureAwait(false);
+        KeyMoveTelemetry.CountCanaryKeys(group, result?.Canary ?? 0);
+        return result;
     }
 
     // S3 is when every node acknowledged the S3 identity; the leader stores the time with that acknowledgement, and a time that no acknowledgement of the current identity stands behind is an older move's.

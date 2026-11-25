@@ -9,6 +9,7 @@ internal static class KeyMoveGateIds
     public const string CloseNodeReadiness = "close.node_readiness";
     public const string CloseInventory = "close.inventory";
     public const string CloseViews = "close.views";
+    public const string CloseInPlaceReaders = "close.in_place_readers";
     public const string StartKeyMoveSupport = "start.km_support";
     public const string StartBinding = "start.binding";
     public const string StartPins = "start.pins";
@@ -25,6 +26,7 @@ internal static class KeyMoveGateIds
     public const string StartCacheSet = "start.cache_set";
     public const string StartNativeEmpty = "start.native_empty";
     public const string StartClaimAvailable = "start.claim_available";
+    public const string ReverseRetire = "reverse.retire";
     public const string DrainConfirmingPass = "drain.confirming_pass";
     public const string DrainSkippedAccounted = "drain.skipped_accounted";
     public const string DrainPromotionsIdle = "drain.promotions_idle";

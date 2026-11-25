@@ -52,7 +52,7 @@ internal static partial class StepPlanner
 
         var spec = new TransitionSpec("X1", "S1", "fwd", 0, NewMoveId: true, TakeClaim: i.Facts.TakesClaim(i.Group), Binding: BindingChange.Mint);
         var plan = new StepPlan(StepKind.Transit, spec);
-        return overrides.Count == 0 ? plan : plan.With(new StageAlert("gate_override", string.Join(',', overrides)));
+        return overrides.Count == 0 ? plan : plan.WithOverrides(string.Join(',', overrides.Select(o => o.Approval)), [.. overrides.Select(o => o.Gate)]);
     }
 
     private static async Task<StepPlan> FromReadyAsync(StepInput i, StageDriverOptions options, StepSide side)
@@ -218,7 +218,7 @@ internal static partial class StepPlanner
         }
 
         var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X5", "S5", "fwd", 1, RecheckViews: true, PostFields: [(StateFields.ClosedAt, Number(i.Now.ToUnixTimeMilliseconds()))]));
-        return failures.Overrides.Count == 0 ? plan : plan.With(new StageAlert("gate_override", string.Join(',', failures.Overrides)));
+        return failures.Overrides.Count == 0 ? plan : plan.WithOverrides(string.Join(',', failures.Overrides), failures.Overrides);
     }
 
     // No way out of S5 but the operator's abandon, for groups whose caches all accept a refill.
