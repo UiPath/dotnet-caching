@@ -28,6 +28,9 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
     /// <summary>Test seam: runs, and is awaited, just before a waiter looks at the key's current hold.</summary>
     internal Func<string, Task>? BeforeWaiterLooks { get; set; }
 
+    /// <summary>Test seam: signals which retry hold the pending waiter will await.</summary>
+    internal Action<Task>? AwaitingHold { get; set; }
+
     /// <param name="hold">A task that completes when the client has no retry of the key left: the final eviction waits for it, then for one more window, because a retry changes Redis until it ends.</param>
     public void Begin(string key, TimeSpan window, Task? hold = null)
     {
@@ -138,6 +141,7 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
                 if (awaited is not null)
                 {
                     // The retry of a trailing step is still under way: the key stays off the tier until it ends, and then for one window more.
+                    AwaitingHold?.Invoke(awaited);
                     await awaited.WaitAsync(stopping).ConfigureAwait(false);
                     FinishHold(entry, awaited);
                     continue;

@@ -75,9 +75,11 @@ public sealed class KeyMoveRestoreTests(RedisFixture fixture)
         var closed = await host.StateAsync();
         await host.Db.KeyDeleteAsync(host.Names.ControlFor(MovingCacheHost.Group, host.Native("kept"))).WaitAsync(Ct);
 
-        await TestPoll.WaitAsync(
-            async () => await host.StateAsync() is { State: "S5", Durable: true } repaired && repaired.Ep > closed.Ep,
-            () => "The leader did not repair the closed control record.");
+        await host.UpkeepAsync();
+        var repaired = await host.StateAsync();
+        repaired.State.Should().Be("S5");
+        repaired.Durable.Should().BeTrue();
+        repaired.Ep.Should().BeGreaterThan(closed.Ep);
         await host.SetStageAsync(2);
         await host.ExpectAlertAsync("flag_below_closed");
         await host.ApproveAsync(ApprovalKinds.Abandon);
@@ -200,9 +202,9 @@ public sealed class KeyMoveRestoreTests(RedisFixture fixture)
 
         await host.AdvanceAsync("S3");
         await host.StartMoverAsync();
-        await TestPoll.WaitAsync(
-            async () => await host.Db.KeyExistsAsync(host.Native("kept")).WaitAsync(Ct) && !await host.Db.KeyExistsAsync(host.Legacy("kept")).WaitAsync(Ct),
-            () => "The mover did not transfer the seed.");
+        await host.WaitForMoverPassAsync();
+        (await host.Db.KeyExistsAsync(host.Native("kept")).WaitAsync(Ct)).Should().BeTrue();
+        (await host.Db.KeyExistsAsync(host.Legacy("kept")).WaitAsync(Ct)).Should().BeFalse();
         if (stage == "S3")
         {
             await host.WaitForMoverPassAsync();
@@ -267,7 +269,7 @@ public sealed class KeyMoveRestoreTests(RedisFixture fixture)
             restored.Ep.Should().BeGreaterThan(pending.Ep);
             restored.Id.Should().NotBe(before.Id);
             restored.NPop.Should().Be(before.NPop);
-            await writes.WaitAsync(TimeSpan.FromSeconds(10), MovingCacheHost.Clock, Ct);
+            await writes.WaitAsync(Ct);
 
             await AssertLedgerAsync(host, ledger, native);
             if (committed is "S1" or "S2")

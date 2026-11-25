@@ -46,7 +46,7 @@ public sealed class InfoHealthTests(RedisFixture fixture)
         follower.LinkUp.Should().BeTrue();
         follower.ReplOffset.Should().BeGreaterThan(0);
 
-        var watch = RedisInfoWatch.Over(new MultiplexerScanUnits(() => both), new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions()), TimeProvider.System);
+        var watch = RedisInfoWatch.Over(new MultiplexerScanUnits(() => both), new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions()), new ManualTimeProvider(Start));
         var reading = await watch.ReadAsync(Ct);
 
         reading.Loads.Should().HaveCount(2);
@@ -201,8 +201,8 @@ public sealed class InfoHealthTests(RedisFixture fixture)
         await using var plain = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var units = new MultiplexerScanUnits(() => plain);
         var options = new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions());
-        var watch = RedisInfoWatch.Over(units, options, TimeProvider.System);
-        var rate = new AimdMoveRate(new RedisInfoHealthSource(watch, new MoverLatency(TimeProvider.System), options), watch, options, TimeProvider.System);
+        var watch = RedisInfoWatch.Over(units, options, new ManualTimeProvider(Start));
+        var rate = new AimdMoveRate(new RedisInfoHealthSource(watch, new MoverLatency(new ManualTimeProvider(Start)), options), watch, options, new ManualTimeProvider(Start));
 
         var read = async () => await watch.ReadAsync(Ct);
 
@@ -222,8 +222,8 @@ public sealed class InfoHealthTests(RedisFixture fixture)
 
         unit.Replicas.Should().ContainSingle().Which.Server.Should().NotBeNull();
         var withGhost = unit with { Replicas = [.. unit.Replicas, new ScanReplica("ghost:1", null)] };
-        var watch = RedisInfoWatch.Over(new Listed(withGhost), new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions()), TimeProvider.System);
-        var source = new RedisInfoHealthSource(watch, new MoverLatency(TimeProvider.System), new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions()));
+        var watch = RedisInfoWatch.Over(new Listed(withGhost), new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions()), new ManualTimeProvider(Start));
+        var source = new RedisInfoHealthSource(watch, new MoverLatency(new ManualTimeProvider(Start)), new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions()));
 
         var health = await source.GetHealthAsync(Ct);
 

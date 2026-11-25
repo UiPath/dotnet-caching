@@ -66,6 +66,8 @@ internal sealed class KeyMoveNode
     /// <summary>True when the setup names a group, so the node has anything to run.</summary>
     public bool HasGroups => _setup.Groups.Count > 0;
 
+    internal StageFlagPoller Stages => _poller;
+
     /// <summary>The scan units of the current connection, for the mover; null before the node is started.</summary>
     internal IScanUnits? ScanUnits => _wiring?.Units;
 
@@ -186,6 +188,10 @@ internal sealed class KeyMoveNode
     /// <summary>The stored state of <paramref name="group"/>, for the mover; null before the node is started or when none is stored.</summary>
     internal Task<StateRecord?> ReadStateAsync(string group, CancellationToken cancellationToken) =>
         _wiring is { } wiring ? wiring.Store.ReadAsync(group, cancellationToken) : Task.FromResult<StateRecord?>(null);
+
+    internal Task<bool> HoldLeaseAsync(string group) => _leases[group].TryHoldAsync();
+
+    internal Task StepUpkeepAsync(string group, CancellationToken cancellationToken) => CheckUpkeepAsync(group, cancellationToken);
 
     private Wiring Wire()
     {

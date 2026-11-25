@@ -12,18 +12,27 @@ public sealed class LastGoodOptionsTests
     {
         var inner = new SteppedOptions();
         var good = LastGoodOptions.Over(inner);
+        var contended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        good.Contended = () => contended.TrySetResult();
         good.CurrentValue.StartKeysPerSecond.Should().Be(1);
         inner.SetVersion(2);
         inner.StallNextRead();
 
-        // The first reader reads version 2 and stalls before it returns; version 3 arrives and a second reader reads it.
         var slow = Task.Run(() => good.CurrentValue.StartKeysPerSecond, Ct);
-        inner.Stalled.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        await inner.Stalled.Task.WaitAsync(Ct);
         inner.SetVersion(3);
         var fast = Task.Run(() => good.CurrentValue.StartKeysPerSecond, Ct);
-        await Task.WhenAny(fast, Task.Delay(TimeSpan.FromMilliseconds(300), TimeProvider.System, Ct));
-        inner.Release();
-        await Task.WhenAll(slow, fast).WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct);
+        try
+        {
+            await Task.WhenAny(contended.Task, fast).WaitAsync(Ct);
+        }
+        finally
+        {
+            inner.Release();
+        }
+
+        (await slow.WaitAsync(Ct)).Should().Be(2);
+        (await fast.WaitAsync(Ct)).Should().Be(3);
 
         inner.Invalidate();
         good.CurrentValue.StartKeysPerSecond.Should().Be(3, "a reload that fails validation keeps the newest options that were read, never an older one");
@@ -36,7 +45,7 @@ public sealed class LastGoodOptionsTests
         private volatile bool _invalid;
         private volatile int _version = 1;
 
-        public ManualResetEventSlim Stalled { get; } = new();
+        public TaskCompletionSource Stalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public KeyMoveMoverOptions CurrentValue
         {
@@ -50,8 +59,8 @@ public sealed class LastGoodOptionsTests
                 var value = new KeyMoveMoverOptions { StartKeysPerSecond = _version };
                 if (Interlocked.Exchange(ref _stall, 0) == 1)
                 {
-                    Stalled.Set();
-                    _release.Wait(TimeSpan.FromSeconds(10));
+                    Stalled.SetResult();
+                    _release.Wait(Ct);
                 }
 
                 return value;

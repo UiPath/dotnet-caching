@@ -366,11 +366,15 @@ public sealed class DryRunTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedAsync("key");
         var unit = (await kit.UnitIdsAsync()).Should().ContainSingle().Subject;
-        var clock = new ManualTimeProvider(TimeProvider.System.GetUtcNow());
-        var rate = new AimdMoveRate(new MoveRateTests.FakeHealth(), null, new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions()), clock);
+        var rateClock = new ManualTimeProvider(kit.Kit.Time.GetUtcNow());
+        var rate = new AimdMoveRate(new MoveRateTests.FakeHealth(), null, new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions()), rateClock);
         var pending = rate.Reserve(unit, 50, 0);
 
-        await Runner(kit, rate: rate).RunAsync(Ct);
+        var run = Runner(kit, rate: rate).RunAsync(Ct);
+        var reservation = kit.Kit.Time.NextTimerAsync(Ct).AsTask();
+        (await Task.WhenAny(run, reservation)).Should().BeSameAs(reservation);
+        kit.Kit.Time.Advance(await reservation);
+        await run;
 
         rate.Remaining(unit).Should().Be(pending);
         rate.Remaining("dry:" + unit).Should().Be(TimeSpan.FromMilliseconds(10));
@@ -403,9 +407,11 @@ public sealed class DryRunTests(RedisFixture fixture)
         kit.Kit.Connected = false;
 
         var run = Runner(kit).RunAsync(Ct);
-        await Task.Delay(TimeSpan.FromMilliseconds(150), TimeProvider.System, Ct);
+        var poll = kit.Kit.Time.NextTimerAsync(Ct).AsTask();
+        (await Task.WhenAny(run, poll)).Should().BeSameAs(poll);
         run.IsCompleted.Should().BeFalse();
         kit.Kit.Connected = true;
+        kit.Kit.Time.Advance(await poll);
 
         (await run).Caches[kit.Kit.Cid].Movable.Should().Be(1);
     }

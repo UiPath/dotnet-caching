@@ -29,7 +29,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         await host.StartMoverAsync(schedule: promotion);
         try
         {
-            await promotion.ReachedAsync.WaitAsync(TimeSpan.FromSeconds(20), MovingCacheHost.Clock, Ct);
+            await promotion.ReachedAsync.WaitAsync(Ct);
             List<long> value = [2];
             await host.WriteAsync("contended", value);
             ledger["contended"] = value;
@@ -82,12 +82,12 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         var before = await ReadProgressAsync();
         var movedBefore = (long?)before.SingleOrDefault(entry => entry.Name == "moved").Value ?? 0;
         await host.StartMoverAsync(health);
-        await health.Called.WaitAsync(TimeSpan.FromSeconds(20), MovingCacheHost.Clock, Ct);
+        await health.Called.WaitAsync(Ct);
 
-        var dwell = Task.Delay(MovingCacheHost.MoverPassPause * 8, MovingCacheHost.Clock, Ct);
         await host.AssertValueAsync("read-through", [23]);
         await ExerciseTrafficAsync(host, "during-pause", 31);
-        await dwell;
+        host.RateClock.Advance(await host.RateClock.NextTimerAsync(Ct));
+        var pause = await host.MoverClock.NextTimerAsync(Ct);
         (await ReadProgressAsync()).Should().BeEquivalentTo(before, "the mover counters must stay unchanged while health is unanswered");
 
         await host.SetStageAsync(4);
@@ -97,7 +97,10 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         (await host.NativeKeysAsync()).Should().BeEquivalentTo(host.Native("read-through"), host.Native("during-pause"), host.Native("during-pause-fill"));
 
         health.Recover();
-        await TestPoll.WaitAsync(async () => await ProgressAsync(host, "moved") > movedBefore, () => "The mover did not resume promoting keys after health recovered.");
+        host.RateClock.Advance(TimeSpan.FromSeconds(1));
+        host.MoverClock.Advance(pause);
+        await host.WaitForMoverPassAsync();
+        (await ProgressAsync(host, "moved")).Should().BeGreaterThan(movedBefore);
         await host.AdvanceAsync("S4");
         (await host.LegacyKeysAsync()).Should().BeEmpty();
         await host.AssertValueAsync("untouched", [17]);
@@ -166,7 +169,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         string[] untouched = cluster
             ? [.. Enumerable.Range(0, 128).Select(i => $"untouched-{i}").DistinctBy(key => host.Db.IdentifyEndpoint(host.Legacy(key)))]
             : ["untouched"];
-        var deadline = MovingCacheHost.Clock.GetUtcNow().AddMinutes(5);
+        var deadline = host.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(5));
         var ledger = new ConcurrentDictionary<string, List<long>?>();
         foreach (var key in writers.Concat(deletes).Concat(hits).Concat(untouched))
         {
@@ -192,7 +195,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         await host.ExpectAlertAsync("start_blocked", KeyMoveGateIds.StartNativeEmpty);
         await host.Db.KeyDeleteAsync(unexpectedNative).WaitAsync(Ct);
         await host.AdvanceAsync("S1");
-        Assert.True(await host.Cache.SetAsync("ready", [71], deadline, Ct));
+        Assert.True(await host.Cache.SetAsync("ready", [71], await host.ClientDeadlineAsync(deadline), Ct));
         ledger["ready"] = [71];
         await host.AdvanceAsync("S2");
         await host.AssertValueAsync("ready", ledger["ready"]);
@@ -201,6 +204,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
 
         var mutateDuringMove = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var legacyHitsRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var removals = 0;
         var operations = writers.Chunk(writers.Length / writerCount).Select<string[], Func<CancellationToken, Task>>(keys => token => WriteSeededKeys(keys, token)).ToList();
         operations.Add(DeleteSeededKeys);
         operations.Add(ReadSeededKeys);
@@ -209,9 +213,9 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         {
             try
             {
-                await traffic.RunUntilAsync(legacyHitsRead.Task.WaitAsync(TimeSpan.FromSeconds(5), MovingCacheHost.Clock, Ct));
+                await traffic.RunUntilAsync(legacyHitsRead.Task.WaitAsync(Ct));
                 await host.StartMoverAsync(schedule: promotion);
-                await traffic.RunUntilAsync(promotion.ReachedAsync.WaitAsync(TimeSpan.FromSeconds(20), MovingCacheHost.Clock, Ct));
+                await traffic.RunUntilAsync(promotion.ReachedAsync.WaitAsync(Ct));
                 mutateDuringMove.TrySetResult();
                 await traffic.WaitForStartAsync();
                 await host.SetStageAsync(4);
@@ -223,9 +227,11 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
                 promotion.Release();
             }
 
+            traffic.Continue();
             await traffic.RunUntilAsync(host.WaitForMoverPassAsync());
             (await ProgressAsync(host, "moved")).Should().BePositive("the mover must promote a key during the concurrent traffic");
             await traffic.FinishAsync();
+            removals.Should().Be(2 * deletes.Length);
         }
 
         var drained = await host.AdvanceAsync("S4");
@@ -244,7 +250,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         await host.AdvanceAsync("S5");
 
         List<long> closedValue = [301];
-        Assert.True(await host.Cache.SetAsync("closed", closedValue, deadline, Ct));
+        Assert.True(await host.Cache.SetAsync("closed", closedValue, await host.ClientDeadlineAsync(deadline), Ct));
         ledger["closed"] = closedValue;
         await host.AssertValueAsync("closed", closedValue);
 
@@ -265,7 +271,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
             foreach (var key in keys)
             {
                 List<long> next = [ledger[key]![0] + 1, -11];
-                Assert.True(await host.Cache.SetAsync(key, next, deadline, token));
+                Assert.True(await host.Cache.SetAsync(key, next, await host.ClientDeadlineAsync(deadline), token));
                 ledger[key] = next;
                 await host.AssertValueCoreAsync(key, next, token);
             }
@@ -277,6 +283,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
             foreach (var key in deletes)
             {
                 Assert.True(await host.Cache.RemoveAsync(key, token));
+                removals++;
                 ledger[key] = null;
                 await host.AssertValueCoreAsync(key, null, token);
             }

@@ -11,6 +11,9 @@ internal sealed class WritePermits(TimeProvider clock, int max) : IDisposable
 
     public int InFlight => max - _free.CurrentCount;
 
+    /// <summary>Test seam: signals when a write must wait for a permit.</summary>
+    internal Action? Blocked { get; set; }
+
     // A disposed source reads as stopped, so a caller after Dispose behaves as before the source was released.
     private CancellationToken StopToken
     {
@@ -27,7 +30,16 @@ internal sealed class WritePermits(TimeProvider clock, int max) : IDisposable
         }
     }
 
-    public Task WaitAsync(CancellationToken cancellationToken) => _free.WaitAsync(cancellationToken);
+    public Task WaitAsync(CancellationToken cancellationToken)
+    {
+        var wait = _free.WaitAsync(cancellationToken);
+        if (!wait.IsCompleted)
+        {
+            Blocked?.Invoke();
+        }
+
+        return wait;
+    }
 
     public void Release() => _free.Release();
 

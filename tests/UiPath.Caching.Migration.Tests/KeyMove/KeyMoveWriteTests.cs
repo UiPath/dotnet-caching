@@ -21,7 +21,7 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
         await kit.PrepareAsync("k");
         await kit.SetStateAsync(state, nPop: 0);
 
-        var result = await kit.Client.SetAsync("k", new Item("v1"), In(TimeSpan.FromMinutes(10)), Ct);
+        var result = await kit.Client.SetAsync("k", new Item("v1"), kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10)), Ct);
 
         result.Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.GetAsync(kit.L("k"))).Should().Be("v1");
@@ -81,7 +81,7 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
         await kit.Db.StringSetAsync(kit.L("k"), "v0");
         await kit.Db.StringSetAsync(kit.Names.ForwardFence(kit.N("k")), "before");
 
-        (await kit.Client.SetAsync("k", new Item("v1"), In(TimeSpan.FromMinutes(10)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.SetAsync("k", new Item("v1"), kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
 
         kit.Schedule.Steps.Should().Equal(SchedulePointStep.SourceDelete, SchedulePointStep.FenceObserve, SchedulePointStep.Bump);
         (await kit.ExistsAsync(kit.L("k"))).Should().BeFalse();
@@ -148,7 +148,7 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
         await kit.SetStateAsync("S5", swept: swept);
         await kit.Db.StringSetAsync(kit.L("k"), "old");
 
-        (await kit.Client.SetAsync("k", new Item("v1"), In(TimeSpan.FromMinutes(10)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.SetAsync("k", new Item("v1"), kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
 
         kit.Schedule.Steps.Should().Equal(swept ? [SchedulePointStep.NativeWrite] : [SchedulePointStep.SourceDelete, SchedulePointStep.NativeWrite]);
         (await kit.GetAsync(kit.N("k"))).Should().Be("v1");
@@ -167,7 +167,7 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
         await kit.SetStateAsync("S3");
         await kit.Db.StringSetAsync(kit.N("k"), "v0");
 
-        (await kit.Client.SetAsync("k", new Item("v1"), DateTimeOffset.UtcNow.AddMilliseconds(-5), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.SetAsync("k", new Item("v1"), kit.Clock.ToDateTimeOffset(TimeSpan.FromMilliseconds(-5)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
 
         (await kit.Client.SetAsync("k", new Item("v2"), null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
@@ -221,13 +221,16 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
         var open = kit.Plane.Rules;
         kit.Plane.Rules = open with { Writes = WriteRule.WaitThenFailClosed, WriteWait = TimeSpan.FromMilliseconds(400) };
         var write = kit.Client.SetAsync("k", new Item("v1"), null, Ct).AsTask();
-        await Task.Delay(50, Ct);
+        var admission = await kit.Time.NextTimerAsync(Ct);
         kit.Plane.Rules = open;
+        kit.Time.Advance(admission);
         (await write).Outcome.Should().Be(WriteOutcome.Committed);
 
         kit.Plane.Rules = open with { Writes = WriteRule.WaitThenFailClosed, WriteWait = TimeSpan.FromMilliseconds(60) };
-        var late = async () => await kit.Client.SetAsync("k", new Item("v2"), null, Ct);
-        await late.Should().ThrowAsync<CacheUnavailableException>();
+        var late = kit.Client.SetAsync("k", new Item("v2"), null, Ct).AsTask();
+        await kit.Time.NextTimerAsync(Ct);
+        kit.Time.Advance(TimeSpan.FromMilliseconds(60));
+        await Assert.ThrowsAsync<CacheUnavailableException>(() => late);
         (await kit.GetAsync(kit.N("k"))).Should().Be("v1");
     }
 
@@ -410,5 +413,4 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
         steps.Should().Equal(WriteStep.BumpSetMarked, WriteStep.SrcDel);
     }
 
-    private static DateTimeOffset In(TimeSpan span) => DateTimeOffset.UtcNow + span;
 }

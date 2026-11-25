@@ -37,7 +37,7 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
         (await kit.Client.RemoveFieldsAsync("k", ["a", "b"], Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.FieldsAsync(kit.L("k"))).Should().BeEquivalentTo(new Dictionary<string, string> { ["c"] = "3", ["d"] = "4" });
 
-        var until = DateTimeOffset.UtcNow.AddMinutes(10);
+        var until = kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10));
         (await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(until), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.FieldsAsync(kit.L("k"))).Should().BeEquivalentTo(new Dictionary<string, string> { ["x"] = "9" });
         (await kit.Db.KeyTimeToLiveAsync(kit.L("k")))!.Value.Should().BeGreaterThan(TimeSpan.FromMinutes(9));
@@ -102,7 +102,7 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
             }
         };
 
-        var written = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(DateTimeOffset.UtcNow.AddMinutes(5)), Ct);
+        var written = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(5))), Ct);
 
         written.Outcome.Should().Be(WriteOutcome.Committed);
         lAtDestination.Should().BeFalse("the source goes first, so a crash between the steps leaves a miss and never an older hash");
@@ -193,7 +193,7 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
         await kit.Kit.SetStateAsync("S3");
         await kit.SetAsync(kit.L("k"), Original, TimeSpan.FromMinutes(5));
 
-        var merged = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("d", "4"), ("a", "11")), Merge(DateTimeOffset.UtcNow.AddMinutes(7)), Ct);
+        var merged = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("d", "4"), ("a", "11")), Merge(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(7))), Ct);
 
         merged.Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.FieldsAsync(kit.N("k"))).Should().BeEquivalentTo(new Dictionary<string, string> { ["a"] = "11", ["b"] = "2", ["c"] = "3", ["d"] = "4" });
@@ -577,7 +577,7 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
         await kit.Kit.SetStateAsync("S3");
         await kit.SetAsync(kit.L("k"), Original);
 
-        (await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(DateTimeOffset.UtcNow.AddSeconds(-1)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromSeconds(-1))), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.Kit.ExistsAsync(kit.L("k"))).Should().BeFalse();
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
 

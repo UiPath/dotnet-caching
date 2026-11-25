@@ -345,7 +345,7 @@ public sealed class KeyMoveReversePromotionTests(RedisFixture fixture)
             await kit.Db.StringSetAsync(kit.Names.ForwardFence(kit.N("k")), "before");
         }
 
-        (await kit.Client.FillAsync("k", new Item("v1"), DateTimeOffset.UtcNow.AddMinutes(10), null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.FillAsync("k", new Item("v1"), kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10)), null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
 
         (await kit.GetAsync(kit.N("k"))).Should().Be("n:v1");
         (await kit.ExistsAsync(kit.L("k"))).Should().BeFalse();

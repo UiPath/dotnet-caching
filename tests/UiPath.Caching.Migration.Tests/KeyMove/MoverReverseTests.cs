@@ -33,7 +33,7 @@ public sealed class MoverReverseTests(RedisFixture fixture)
 
         (await kit.Db.KeyTimeToLiveAsync(kit.Kit.L("ttl")))!.Value.Should().BeGreaterThan(TimeSpan.FromMinutes(59));
         (await kit.Kit.ExistsAsync(kit.Kit.Names.ReverseFence(kit.Kit.L("ok")).ToString())).Should().BeTrue();
-        await kit.WaitProgressAsync(new Dictionary<string, long> { ["moved"] = 3 });
+        (await kit.ProgressAsync()).Should().BeEquivalentTo(new Dictionary<string, long> { ["moved"] = 3 });
         (await kit.PassedAsync("fwd")).Should().BeFalse("a reverse pass records under its own direction");
     }
 
@@ -93,8 +93,8 @@ public sealed class MoverReverseTests(RedisFixture fixture)
         host.Start();
         try
         {
-            await stateRead.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
-            await Task.Delay(TimeSpan.FromMilliseconds(300), TimeProvider.System, Ct);
+            await stateRead.Task.WaitAsync(Ct);
+            await kit.PollClock(host).NextTimerAsync(Ct);
 
             host.RunningUnits.Should().BeEmpty();
             (await kit.PassedAsync("fwd")).Should().BeFalse();
@@ -122,7 +122,7 @@ public sealed class MoverReverseTests(RedisFixture fixture)
 
         await kit.RunOnePassAsync(kit.Host(state: () => kit.State(direction: "rev")), "rev");
 
-        await kit.WaitProgressAsync(new Dictionary<string, long> { ["skipped:too_large"] = 1 });
+        (await kit.ProgressAsync()).Should().BeEquivalentTo(new Dictionary<string, long> { ["skipped:too_large"] = 1 });
         (await kit.Kit.GetAsync(kit.Kit.N("k"))).Should().Be("big:current");
         (await kit.Kit.ExistsAsync(legacy)).Should().BeFalse();
         ((string?)await kit.Db.StringGetAsync(fence)).Should().NotBeNullOrEmpty().And.NotBe("before");
@@ -144,7 +144,7 @@ public sealed class MoverReverseTests(RedisFixture fixture)
         var moving = kit.Target.MoveBackAsync("k", kit.Kit.Id, AlwaysOwned.Instance, Ct).AsTask();
         try
         {
-            await schedule.ReachedAsync.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+            await schedule.ReachedAsync.WaitAsync(Ct);
             (await kit.Kit.Client.SetAsync("k", new Item("new"), null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         }
         finally
@@ -183,7 +183,8 @@ public sealed class MoverReverseTests(RedisFixture fixture)
         host.Start();
         try
         {
-            await MoverKit.WaitAsync(async () => (await kit.ProgressAsync()).ContainsKey("skipped:no_reverse"));
+            await kit.WaitPassAttemptAsync(host);
+            (await kit.ProgressAsync()).Should().ContainKey("skipped:no_reverse");
         }
         finally
         {

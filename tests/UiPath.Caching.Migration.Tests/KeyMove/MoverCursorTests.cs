@@ -34,14 +34,16 @@ public sealed class MoverCursorTests(RedisFixture fixture)
         host.Start();
         try
         {
-            await MoverKit.WaitAsync(() => Task.FromResult(kit.Kit.Plane.Alerts.Any(a => a.Code == "mover_unit_unverified")));
+            var nextPass = await kit.Kit.Time.NextTimerAsync(Ct);
+            kit.Kit.Plane.Alerts.Should().Contain(a => a.Code == "mover_unit_unverified");
             scans.Cursors.Should().BeEmpty("no SCAN is sent with a position of a server that cannot be told from its restart");
             ((string?)await kit.Db.StringGetAsync(cursorKey)).Should().Be(stored.Text);
             (await kit.PassedAsync()).Should().BeFalse();
 
             // The run id comes back: the position of an unverified run is not resumed either, and the pass starts from zero.
             scans.Info = InfoFault.None;
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            kit.Kit.Time.Advance(nextPass);
+            await kit.WaitForPassAsync(host);
         }
         finally
         {

@@ -3,62 +3,43 @@ namespace UiPath.Caching.Migration.Tests.KeyMove;
 /// <summary>Runs independent cache operations and joins them when the test ends traffic.</summary>
 internal sealed class CacheTraffic : IAsyncDisposable
 {
-    private static readonly TimeSpan WorkerTimeout = TimeSpan.FromSeconds(10);
     private readonly CancellationTokenSource _stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
     private readonly Task _started;
     private readonly Task _workers;
-    private int _finishing;
+    private readonly TaskCompletionSource<bool> _nextRound = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public CacheTraffic(IReadOnlyList<Func<CancellationToken, Task>> operations)
     {
         var started = operations.Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
-        _workers = Task.WhenAll(operations.Select((operation, index) => RunAsync(operation, started[index], _stop.Token)));
+        _workers = Task.WhenAll(operations.Select((operation, index) => Task.Run(() => RunAsync(operation, started[index], _stop.Token), CancellationToken.None)));
         _started = Task.WhenAll(started.Select(worker => worker.Task));
     }
 
-    public Task WaitForStartAsync() => WaitForWorkersAsync(_started, "Cache traffic workers did not finish their first operation.");
+    public Task WaitForStartAsync() => RunUntilAsync(_started.WaitAsync(TestContext.Current.CancellationToken));
 
     public async Task RunUntilAsync(Task condition)
     {
         if (await Task.WhenAny(condition, _workers) == _workers)
         {
-            try
-            {
-                await _workers;
-            }
-            catch
-            {
-                await condition.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-                throw;
-            }
+            await _workers;
         }
 
         await condition;
     }
 
+    public void Continue() => _nextRound.TrySetResult(true);
+
     public Task FinishAsync()
     {
-        Volatile.Write(ref _finishing, 1);
-        return WaitForWorkersAsync(_workers, "Cache traffic workers did not finish their current operations.");
+        _nextRound.TrySetResult(false);
+        return _workers.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     public async ValueTask DisposeAsync()
     {
         using (_stop)
         {
-            await WaitForWorkersAsync(Task.WhenAll(_stop.CancelAsync(), _workers), "Cache traffic workers did not stop after cancellation.");
-        }
-    }
-
-    private static async Task WaitForWorkersAsync(Task workers, string message)
-    {
-        try
-        {
-            await workers.WaitAsync(WorkerTimeout, MovingCacheHost.Clock);
-        }
-        catch (TimeoutException ex) when (!workers.IsCompleted)
-        {
-            throw new TimeoutException(message, ex);
+            await Task.WhenAll(_stop.CancelAsync(), _workers);
         }
     }
 
@@ -66,13 +47,12 @@ internal sealed class CacheTraffic : IAsyncDisposable
     {
         try
         {
-            while (!token.IsCancellationRequested && Volatile.Read(ref _finishing) == 0)
+            await operation(token);
+            started.SetResult();
+            if (await _nextRound.Task.WaitAsync(token))
             {
                 await operation(token);
-                started.TrySetResult();
-                await Task.Delay(TimeSpan.FromMilliseconds(20), MovingCacheHost.Clock, token);
             }
-            started.TrySetCanceled(token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {

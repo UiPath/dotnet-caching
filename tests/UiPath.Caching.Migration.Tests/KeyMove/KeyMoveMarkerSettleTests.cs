@@ -61,7 +61,7 @@ public sealed class KeyMoveMarkerSettleTests(RedisFixture fixture)
     [InlineData("refused")]
     public async Task A_rerun_that_the_state_no_longer_admits_after_an_attempt_applied_is_Unknown_and_never_throws(string path)
     {
-        await using var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: true, options: new KeyMoveOptions { MaxReruns = 1, AdmissionPoll = TimeSpan.FromMilliseconds(5) });
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: true, options: new KeyMoveOptions { MaxReruns = 1, AdmissionPoll = TimeSpan.Zero });
         await kit.PrepareAsync("k");
         await kit.SetStateAsync("S3");
         kit.Schedule.Hook = async (step, nth) =>
@@ -125,22 +125,23 @@ public sealed class KeyMoveMarkerSettleTests(RedisFixture fixture)
         await using var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: true, options: new KeyMoveOptions { NoOriginWriteInflightMax = 1 });
         await kit.PrepareAsync("a", "b");
         await kit.SetStateAsync("S3");
+        var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Client.Permits.Blocked = () => blocked.TrySetResult();
         Task<WriteResult>? second = null;
-        bool? secondDoneInside = null;
-        kit.Schedule.Hook = async (step, nth) =>
+        kit.Schedule.Hook = async (step, _) =>
         {
             if (step == SchedulePointStep.SourceDelete && second is null)
             {
                 second = kit.Client.SetAsync("b", new Item("v2"), null, Ct).AsTask();
-                await Task.Delay(200, Ct);
-                secondDoneInside = second.IsCompleted;
+                var signal = await Task.WhenAny(blocked.Task, second).WaitAsync(Ct);
+                signal.Should().BeSameAs(blocked.Task, "the second write must wait for a permit");
+                second.IsCompleted.Should().BeFalse("the first write still holds the only permit");
             }
         };
 
         var first = await kit.Client.SetAsync("a", new Item("v1"), null, Ct);
-        var other = await second!.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var other = await second!.WaitAsync(Ct);
 
-        secondDoneInside.Should().BeFalse("the node has one permit and the first write holds it");
         first.Outcome.Should().Be(WriteOutcome.Committed);
         other.Outcome.Should().Be(WriteOutcome.Committed);
     }
@@ -160,8 +161,8 @@ public sealed class KeyMoveMarkerSettleTests(RedisFixture fixture)
     [InlineData(false)]
     public async Task A_marked_set_with_no_reply_keeps_its_permit_until_it_cannot_apply(bool scripts)
     {
-        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 23, 12, 0, 0, TimeSpan.Zero));
-        await using var kit = await KeyMoveKit.CreateAsync(fixture, scripts, noOrigin: true, clock: clock);
+        var clock = new ObservedClock(new DateTimeOffset(2026, 11, 23, 12, 0, 0, TimeSpan.Zero));
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, scripts, noOrigin: true, clock: clock, options: new KeyMoveOptions { NoOriginWriteInflightMax = 1 });
         await kit.PrepareAsync("k");
         await kit.SetStateAsync("S3");
         kit.Plane.Data = Faulty(kit, scripts);
@@ -170,16 +171,23 @@ public sealed class KeyMoveMarkerSettleTests(RedisFixture fixture)
 
         result.Outcome.Should().Be(WriteOutcome.Unknown);
         kit.Client.Permits.InFlight.Should().Be(1);
-        await AdvanceAsync(clock, TimeSpan.FromSeconds(5));
+        var free = kit.Client.Permits.WaitAsync(Ct);
+        await clock.NextTimerAsync(Ct);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        var nextCheck = await clock.NextTimerAsync(Ct);
         kit.Client.Permits.InFlight.Should().Be(1, "inside the deadline and the clock bound, or for a transaction with no deadline until its connection changes");
-        await AdvanceAsync(clock, TimeSpan.FromSeconds(3));
-        kit.Client.Permits.InFlight.Should().Be(scripts ? 0 : 1, "a script refuses the command after its deadline; a transaction has none");
+        clock.Advance(nextCheck + TimeSpan.FromSeconds(2));
         if (!scripts)
         {
+            nextCheck = await clock.NextTimerAsync(Ct);
+            kit.Client.Permits.InFlight.Should().Be(1, "a transaction has no deadline");
             kit.ConnectionEvent();
-            await AdvanceAsync(clock, TimeSpan.FromSeconds(2));
-            kit.Client.Permits.InFlight.Should().Be(0);
+            clock.Advance(nextCheck);
         }
+
+        await free.WaitAsync(Ct);
+        kit.Client.Permits.Release();
+        kit.Client.Permits.InFlight.Should().Be(0);
     }
 
     [Theory]
@@ -278,20 +286,5 @@ public sealed class KeyMoveMarkerSettleTests(RedisFixture fixture)
         });
         var version = kit.Mux.GetServers().Where(s => !s.IsReplica).Select(s => s.Version).Min() ?? new Version(7, 0);
         return new KeyMoveData(db, new MoveScripts(db, scripts, version), kit.Names, () => kit.Events, () => true);
-    }
-
-    // The clock moves in steps of a second, each after the timers that wait for it have been set.
-    private static async Task AdvanceAsync(ManualTimeProvider clock, TimeSpan by)
-    {
-        for (var left = by; left > TimeSpan.Zero; left -= TimeSpan.FromSeconds(1))
-        {
-            for (var i = 0; i < 100 && !clock.HasTimers; i++)
-            {
-                await Task.Delay(5, Ct);
-            }
-
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(20, Ct);
-        }
     }
 }

@@ -20,7 +20,7 @@ public sealed class KeyMoveFillTests(RedisFixture fixture)
         await kit.SetStateAsync("S1", nPop: 0);
         var box = new FillBox<Item>();
 
-        (await kit.Client.FillAsync("k", new Item("fill"), DateTimeOffset.UtcNow.AddMinutes(5), box, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.FillAsync("k", new Item("fill"), kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(5)), box, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.GetAsync(kit.L("k"))).Should().Be("fill");
 
         (await kit.Client.FillAsync("k", new Item("late"), null, box, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
@@ -114,7 +114,7 @@ public sealed class KeyMoveFillTests(RedisFixture fixture)
         await closed.Should().ThrowAsync<CacheUnavailableException>();
 
         await kit.SetStateAsync("S3");
-        (await kit.Client.FillAsync("k", new Item("fill"), DateTimeOffset.UtcNow.AddMilliseconds(-5), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
+        (await kit.Client.FillAsync("k", new Item("fill"), kit.Clock.ToDateTimeOffset(TimeSpan.FromMilliseconds(-5)), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
         (await kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
 
         await kit.SetStateAsync("S0");

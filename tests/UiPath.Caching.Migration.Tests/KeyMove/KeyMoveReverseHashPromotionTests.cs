@@ -242,7 +242,7 @@ public sealed class KeyMoveReverseHashPromotionTests(RedisFixture fixture)
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync("S3", direction: "rev");
         await kit.SetAsync(kit.N("k"), Original, TimeSpan.FromMinutes(1));
-        var deadline = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()).AddMinutes(30);
+        var deadline = DateTimeOffset.FromUnixTimeSeconds(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(30)).ToUnixTimeSeconds());
         var refresh = WriteOutcome.NotSent;
         kit.Kit.Schedule.Hook = async (step, nth) =>
         {
@@ -331,7 +331,7 @@ public sealed class KeyMoveReverseHashPromotionTests(RedisFixture fixture)
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync(state, direction: "rev");
 
-        (await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Replace(DateTimeOffset.UtcNow.AddMinutes(10)), null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Replace(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10))), null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
 
         (await kit.AllFieldsAsync(kit.L("k"))).Should().BeEquivalentTo(new Dictionary<string, string> { ["a"] = "1" });
         (await kit.Db.KeyTimeToLiveAsync(kit.L("k")))!.Value.Should().BeGreaterThan(TimeSpan.FromMinutes(9));

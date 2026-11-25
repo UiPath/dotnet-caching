@@ -14,8 +14,8 @@ public sealed class KeyMoveHashRouterTests(RedisFixture fixture)
     [Fact]
     public async Task A_walk_through_S1_S3_and_S5_loses_no_field_and_every_write_lands_on_the_side_of_its_state()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, clock: clock);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
+        var clock = kit.Kit.Time.Manual;
         await using var node = HashTestNode.Create(clock, "kmh" + kit.Kit.Unique, library: kit.Client);
         var cache = node.Surface;
         await kit.Kit.PrepareAsync("k");
@@ -49,8 +49,8 @@ public sealed class KeyMoveHashRouterTests(RedisFixture fixture)
     [Fact]
     public async Task A_miss_fill_in_S3_stores_what_the_generator_made_in_N_and_a_fill_that_lost_returns_the_winner()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, clock: clock);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
+        var clock = kit.Kit.Time.Manual;
         await using var node = HashTestNode.Create(clock, "kmh" + kit.Kit.Unique, library: kit.Client);
         await kit.Kit.PrepareAsync("made", "raced");
         await kit.Kit.SetStateAsync("S3");
@@ -75,8 +75,8 @@ public sealed class KeyMoveHashRouterTests(RedisFixture fixture)
     [Fact]
     public async Task A_write_with_metadata_is_refused_where_the_in_place_format_has_no_field_for_it_and_the_hash_is_not_touched()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, clock: clock);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
+        var clock = kit.Kit.Time.Manual;
         await using var node = HashTestNode.Create(clock, "kmh" + kit.Kit.Unique, library: kit.Client);
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync("S1", nPop: 0);
@@ -101,8 +101,8 @@ public sealed class KeyMoveHashRouterTests(RedisFixture fixture)
     [InlineData("S5", false)]
     public async Task A_refresh_in_every_state_takes_the_default_life_the_explicit_one_or_none(string state, bool scripts)
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, scripts, clock: clock);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, scripts);
+        var clock = kit.Kit.Time.Manual;
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync(state, nPop: state is "S1" or "S2" ? 0 : 1, swept: state == "S5");
         var side = state is "S1" or "S2" ? kit.L("k") : kit.N("k");
@@ -118,7 +118,7 @@ public sealed class KeyMoveHashRouterTests(RedisFixture fixture)
         (await kit.Db.KeyTimeToLiveAsync(side))!.Value.Should().BeCloseTo(TimeSpan.FromHours(2), TimeSpan.FromMinutes(1));
         (await none.Surface.RefreshAsync("k", TimeSpan.FromHours(3), Ct)).Should().BeTrue();
         (await kit.Db.KeyTimeToLiveAsync(side))!.Value.Should().BeCloseTo(TimeSpan.FromHours(3), TimeSpan.FromMinutes(1));
-        (await configured.Surface.RefreshAsync("k", DateTimeOffset.UtcNow.AddHours(4), Ct)).Should().BeTrue();
+        (await configured.Surface.RefreshAsync("k", clock.ToDateTimeOffset(TimeSpan.FromHours(4)), Ct)).Should().BeTrue();
         (await kit.Db.KeyTimeToLiveAsync(side))!.Value.Should().BeCloseTo(TimeSpan.FromHours(4), TimeSpan.FromMinutes(1));
     }
 

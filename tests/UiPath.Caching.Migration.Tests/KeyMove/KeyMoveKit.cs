@@ -62,6 +62,8 @@ internal sealed class KeyMoveKit : IAsyncDisposable
 
     public TimeProvider Clock { get; }
 
+    public ObservedClock Time => (ObservedClock)Clock;
+
     public KeyMoveClient<Item> Client { get; }
 
     public RecordingSchedule Schedule { get; } = new();
@@ -96,13 +98,19 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         try
         {
             var version = mux.GetServers().Where(s => !s.IsReplica).Select(s => s.Version).Min() ?? new Version(7, 0);
-            return new KeyMoveKit(mux, useScripts, noOrigin, clock ?? TimeProvider.System, options ?? new KeyMoveOptions(), unique, version, source, interceptDb, inPlace, native, nativePrefix);
+            return new KeyMoveKit(mux, useScripts, noOrigin, clock ?? new ObservedClock(await ServerTimeAsync(mux.GetDatabase())), options ?? new KeyMoveOptions(), unique, version, source, interceptDb, inPlace, native, nativePrefix);
         }
         catch
         {
             await CleanUpConnectionAsync(mux, unique);
             throw;
         }
+    }
+
+    public static async Task<DateTimeOffset> ServerTimeAsync(IDatabase database)
+    {
+        var time = (RedisResult[]?)await database.ExecuteAsync("TIME") ?? throw new InvalidOperationException("The server did not return its time.");
+        return DateTimeOffset.FromUnixTimeSeconds((long)time[0]).AddTicks((long)time[1] * TimeSpan.TicksPerMicrosecond);
     }
 
     public string L(string key) => $"km4:{Unique}:L:{key}";

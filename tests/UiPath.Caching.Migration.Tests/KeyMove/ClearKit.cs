@@ -10,24 +10,27 @@ internal sealed class ClearKit : IAsyncDisposable
     private ClearKit(KeyMoveKit kit)
     {
         Kit = kit;
+        RetryTime = new ObservedClock(kit.Time.Manual);
         Options = new KeyMoveStateOptions { ExpectedReplicasPerMaster = 0 };
         var version = kit.Mux.GetServers().Where(s => !s.IsReplica).Select(s => s.Version).Min() ?? new Version(7, 0);
         var database = kit.Db;
         Scripts = new MoveScripts(database, true, version);
         Topology = new MultiplexerTopology(kit.Mux, string.Empty, true, version, 0, barrierWait: Options.BarrierWait);
         Sampler = new ControlSampler(database, kit.Names, Topology);
-        Store = new StateStore(database, kit.Names, Scripts, Sampler, TimeProvider.System);
-        Sequence = new TransitionSequence(Topology, kit.Names, Options);
+        Store = new StateStore(database, kit.Names, Scripts, Sampler, kit.Clock);
+        Sequence = new TransitionSequence(Topology, kit.Names, Options, time: kit.Clock);
         Records = new ControlRecordReader(database, kit.Names);
-        Coordinator = new ClearCoordinator(Store, Scripts, Scripts, Records, kit.Names, Options, TimeProvider.System);
+        Coordinator = new ClearCoordinator(Store, Scripts, Scripts, Records, kit.Names, Options, kit.Clock);
         var library = "km4:";
         Cache = new KeyMoveCache(kit.Cid, kit.Group, false, false, false, null, $"{library}{kit.Unique}:L:*", k => kit.L(k), k => k[$"{library}{kit.Unique}:L:".Length..], $"{library}{kit.Unique}:N:*", k => kit.N(k), k => k[$"{library}{kit.Unique}:N:".Length..]);
         Space = new RegisteredKeySpace([Cache], library);
-        var scanner = new MasterScanner(() => kit.Mux.GetServers(), Topology, 0, string.Empty, TimeProvider.System, TimeSpan.Zero);
+        var scanner = new MasterScanner(() => kit.Mux.GetServers(), Topology, 0, string.Empty, kit.Clock, TimeSpan.Zero);
         Sweep = new KeyMoveSweep(scanner, Space, database, kit.Names);
     }
 
     public KeyMoveKit Kit { get; }
+
+    public ObservedClock RetryTime { get; }
 
     public KeyMoveStateOptions Options { get; }
 
@@ -62,7 +65,7 @@ internal sealed class ClearKit : IAsyncDisposable
 
     // The sweep over a key space in which the given caches are registered, for a registration that makes two caches own one key.
     public KeyMoveSweep SweepWith(params KeyMoveCache[] caches) =>
-        new(new MasterScanner(() => Kit.Mux.GetServers(), Topology, 0, string.Empty, TimeProvider.System, TimeSpan.Zero), new RegisteredKeySpace(caches, "km4:"), Kit.Db, Kit.Names);
+        new(new MasterScanner(() => Kit.Mux.GetServers(), Topology, 0, string.Empty, Kit.Clock, TimeSpan.Zero), new RegisteredKeySpace(caches, "km4:"), Kit.Db, Kit.Names);
 
     public async Task<StateRecord> StateAsync() => (await Store.ReadAsync(Kit.Group, CancellationToken.None))!;
 

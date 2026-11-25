@@ -35,7 +35,8 @@ public sealed class KeyMoveHashMarkerTests(RedisFixture fixture)
 
             return Task.CompletedTask;
         };
-        var deadline = expires ? DateTimeOffset.UtcNow.AddMilliseconds(400) : (DateTimeOffset?)null;
+        var lifetime = TimeSpan.FromMilliseconds(400);
+        var deadline = expires ? await KeyMoveKit.ServerTimeAsync(kit.Db) + lifetime : (DateTimeOffset?)null;
         (await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("z", "9")), new HashWriteOptions(HashCacheSetOption.KeyReplace, deadline), Ct)).Outcome.Should().Be(WriteOutcome.Unknown);
         kit.Kit.Schedule.Hook = null;
         kit.Kit.Connected = true;
@@ -44,7 +45,8 @@ public sealed class KeyMoveHashMarkerTests(RedisFixture fixture)
         (await kit.Kit.ExistsAsync(kit.L("k"))).Should().BeTrue("the second step did not run");
         if (expires)
         {
-            await Task.Delay(800, Ct);
+            kit.Kit.Time.Advance(lifetime);
+            await kit.Db.KeyExpireAsync(kit.N("k"), DateTime.UnixEpoch);
         }
         else
         {

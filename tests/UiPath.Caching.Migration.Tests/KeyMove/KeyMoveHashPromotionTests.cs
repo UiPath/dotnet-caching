@@ -397,11 +397,14 @@ public sealed class KeyMoveHashPromotionTests(RedisFixture fixture)
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync("S3");
         await kit.SetAsync(kit.L("k"), Original);
-        var written = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("z", "1")), new HashWriteOptions(HashCacheSetOption.KeyReplace, DateTimeOffset.UtcNow.AddMilliseconds(300)), Ct);
+        kit.Kit.Time.UtcOffset = TimeSpan.FromSeconds(-1);
+        var deadline = (await KeyMoveKit.ServerTimeAsync(kit.Db)).AddMilliseconds(300);
+        var written = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("z", "1")), new HashWriteOptions(HashCacheSetOption.KeyReplace, deadline), Ct);
         written.Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeTrue();
         await kit.SetAsync(kit.L("k"), Original);
         await kit.Db.HashSetAsync(kit.Kit.Control("k"), kit.Kit.Field("k"), $"{kit.Kit.Id}|n1");
-        await Task.Delay(600, Ct);
+        await Task.Delay(350, Ct);
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse("the write has expired");
 
         var read = await kit.Client.ReadAsync("k", null, Ct);

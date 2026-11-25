@@ -17,7 +17,7 @@ public sealed class KeyMoveHotPathTests
         foreach (var rules in new[] { GroupRules.Unaffected, S0Rules(), UnmanagedRules() })
         {
             var plane = new StubPlane("g", new EpochGate()) { Rules = rules };
-            var client = new KeyMoveClient<Item>(new KeyMoveClientParts<Item>("g", "c", false, k => "L" + k, k => "N" + k, ItemCodec.Instance, ItemCodec.Instance, plain, plane, TimeProvider.System, () => TimeSpan.Zero));
+            var client = new KeyMoveClient<Item>(new KeyMoveClientParts<Item>("g", "c", false, k => "L" + k, k => "N" + k, ItemCodec.Instance, ItemCodec.Instance, plain, plane, new ManualTimeProvider(DateTimeOffset.UnixEpoch), () => TimeSpan.Zero));
 
             var direct = Measure(plain);
             var routed = Measure(client);
@@ -69,7 +69,7 @@ public sealed class KeyMoveHotPathTests
         };
         var codec = new ItemHashCodec();
         var plain = new HashPlainStub();
-        using var client = new KeyMoveHashClient<Item>(new KeyMoveHashClientParts<Item>("g", "c", false, k => k, k => k, codec, codec, 10, plain, plane, TimeProvider.System, () => TimeSpan.Zero) { RunRetriesInBackground = false });
+        using var client = new KeyMoveHashClient<Item>(new KeyMoveHashClientParts<Item>("g", "c", false, k => k, k => k, codec, codec, 10, plain, plane, new ManualTimeProvider(DateTimeOffset.UnixEpoch), () => TimeSpan.Zero) { RunRetriesInBackground = false });
         string[] fields = ["one"];
         (await client.ReadAsync("k", fields, CancellationToken.None)).Kind.Should().Be(ReadOutcome.Unavailable);
         plain.Reads.Should().Be(0);

@@ -22,7 +22,7 @@ public sealed class KeyMoveHashFillTests(RedisFixture fixture)
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync(state, nPop: 0);
 
-        var filled = await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1"), ("b", "2")), Fill(DateTimeOffset.UtcNow.AddMinutes(5)), null, Ct);
+        var filled = await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1"), ("b", "2")), Fill(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(5))), null, Ct);
 
         filled.Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.AllFieldsAsync(kit.L("k"))).Should().BeEquivalentTo(Filled, "the in-place side keeps no system field");
@@ -45,7 +45,7 @@ public sealed class KeyMoveHashFillTests(RedisFixture fixture)
         filled.Outcome.Should().Be(WriteOutcome.NotSent);
         box.Lost.Should().BeTrue();
         box.Stored!.Keys.Should().BeEquivalentTo("w");
-        box.StoredExpiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(3), TimeSpan.FromSeconds(30));
+        box.StoredExpiration.Should().BeCloseTo(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(3)), TimeSpan.FromSeconds(30));
         (await kit.FieldsAsync(kit.L("k"))).Should().BeEquivalentTo(new Dictionary<string, string> { ["w"] = "won" });
         (await StagingAsync(kit)).Should().BeEmpty("a lost fill deletes its staging key");
     }
@@ -133,7 +133,7 @@ public sealed class KeyMoveHashFillTests(RedisFixture fixture)
         await kit.Kit.SetStateAsync("S3");
 
         (await kit.Client.FillAsync("k", KeyMoveHashKit.Items(), Fill(), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
-        (await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Fill(DateTimeOffset.UtcNow.AddSeconds(-1)), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
+        (await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Fill(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromSeconds(-1))), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
 
         await using var nulls = await KeyMoveHashKit.CreateAsync(fixture, nativeNulls: true);
@@ -153,15 +153,19 @@ public sealed class KeyMoveHashFillTests(RedisFixture fixture)
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync("S3");
         var before = await kit.Kit.FenceAsync("k");
-        kit.Kit.Schedule.Hook = async (step, _) =>
+        kit.Kit.Schedule.Hook = (step, _) =>
         {
             if (step == SchedulePointStep.Fill)
             {
-                await Task.Delay(1200, Ct);
+                kit.Kit.Time.Advance(TimeSpan.FromMilliseconds(1200));
             }
+
+            return Task.CompletedTask;
         };
 
-        var filled = await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Fill(DateTimeOffset.UtcNow.AddMilliseconds(700)), null, Ct);
+        var serverNow = await KeyMoveKit.ServerTimeAsync(kit.Db);
+        kit.Kit.Time.UtcOffset = serverNow - kit.Kit.Clock.GetUtcNow();
+        var filled = await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Fill(serverNow.AddMilliseconds(700)), null, Ct);
 
         filled.Outcome.Should().Be(WriteOutcome.NotSent);
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
@@ -177,17 +181,19 @@ public sealed class KeyMoveHashFillTests(RedisFixture fixture)
         await using var kit = await KeyMoveHashKit.CreateAsync(fixture, scripts);
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync("S3");
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(4);
+        var retryDelay = TimeSpan.FromMilliseconds(2500);
         kit.Kit.Schedule.Hook = async (step, nth) =>
         {
             if (step == SchedulePointStep.Fill && nth == 1)
             {
-                await Task.Delay(2500, Ct);
+                kit.Kit.Time.Advance(retryDelay);
                 await kit.Kit.SetStateAsync("S3");
             }
         };
 
-        var filled = await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Fill(deadline), null, Ct);
+        var serverNow = await KeyMoveKit.ServerTimeAsync(kit.Db);
+        kit.Kit.Time.UtcOffset = serverNow - kit.Kit.Clock.GetUtcNow() - retryDelay;
+        var filled = await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Fill(serverNow.AddMilliseconds(1500)), null, Ct);
 
         filled.Outcome.Should().Be(WriteOutcome.Committed);
         kit.Kit.Schedule.Steps.Count(s => s == SchedulePointStep.Fill).Should().Be(2, "the identity changed under the first attempt");
@@ -207,7 +213,7 @@ public sealed class KeyMoveHashFillTests(RedisFixture fixture)
 
         (await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Fill(), null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         kit.Kit.Schedule.Reset();
-        var expired = await kit.Client.FillAsync("late", KeyMoveHashKit.Items(("a", "1")), Fill(DateTimeOffset.UtcNow.AddMilliseconds(-5)), null, Ct);
+        var expired = await kit.Client.FillAsync("late", KeyMoveHashKit.Items(("a", "1")), Fill(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMilliseconds(-5))), null, Ct);
 
         (await kit.Db.KeyTimeToLiveAsync(kit.N("k"))).Should().BeNull();
         expired.Outcome.Should().Be(WriteOutcome.NotSent);
@@ -227,10 +233,10 @@ public sealed class KeyMoveHashFillTests(RedisFixture fixture)
         var tooLate = names.ForwardStaging(kit.N("late"), "t2");
         await kit.Db.HashSetAsync(inTime, "a", "1");
         await kit.Db.HashSetAsync(tooLate, "a", "1");
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds();
+        var deadline = kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(5)).ToUnixTimeMilliseconds();
 
         var published = await kit.Kit.Scripts.FillHashUntilAsync(kit.N("k"), names.ControlFor(kit.Kit.Group, kit.N("k")), inTime, kit.Kit.Id, deadline, null);
-        var late = await kit.Kit.Scripts.FillHashUntilAsync(kit.N("late"), names.ControlFor(kit.Kit.Group, kit.N("late")), tooLate, kit.Kit.Id, DateTimeOffset.UtcNow.AddSeconds(-1).ToUnixTimeMilliseconds(), null);
+        var late = await kit.Kit.Scripts.FillHashUntilAsync(kit.N("late"), names.ControlFor(kit.Kit.Group, kit.N("late")), tooLate, kit.Kit.Id, kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromSeconds(-1)).ToUnixTimeMilliseconds(), null);
 
         published.Should().Be(MoveScripts.Published);
         (await kit.Db.KeyExpireTimeAsync(kit.N("k")))!.Value.Should().BeCloseTo(DateTimeOffset.FromUnixTimeMilliseconds(deadline).UtcDateTime, TimeSpan.FromSeconds(1));

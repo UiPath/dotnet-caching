@@ -15,6 +15,8 @@ public sealed class MoverStateWindowTests(RedisFixture fixture)
         MinScanInterval = TimeSpan.Zero,
     };
 
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     [Theory]
     [InlineData("S2", true)]
     [InlineData("S3", false)]
@@ -28,7 +30,8 @@ public sealed class MoverStateWindowTests(RedisFixture fixture)
         host.Start();
         try
         {
-            await Task.Delay(600, TestContext.Current.CancellationToken);
+            await kit.PollClock(host).AdvanceNextTimerAsync(Ct);
+            await kit.PollClock(host).NextTimerAsync(Ct);
             host.RunningUnits.Should().BeEmpty();
         }
         finally
@@ -52,10 +55,11 @@ public sealed class MoverStateWindowTests(RedisFixture fixture)
         host.Start();
         try
         {
-            await Task.Delay(300, TestContext.Current.CancellationToken);
+            var poll = await kit.PollClock(host).NextTimerAsync(Ct);
             (await kit.PassedAsync()).Should().BeFalse();
             acked = true;
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            kit.PollClock(host).Advance(poll);
+            await kit.WaitForPassAsync(host);
         }
         finally
         {
@@ -89,7 +93,7 @@ public sealed class MoverStateWindowTests(RedisFixture fixture)
                 _ => () => kit.State() with { MoveId = MoverKit.MoveId + 1 },
             };
             gate.Release();
-            await Task.Delay(500, TestContext.Current.CancellationToken);
+            await kit.Kit.Time.NextTimerAsync(Ct);
         }
         finally
         {
