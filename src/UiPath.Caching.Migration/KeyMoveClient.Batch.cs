@@ -79,19 +79,18 @@ internal sealed partial class KeyMoveClient<T>
             }
 
             await At(replica ? SchedulePointStep.ReadDestination : SchedulePointStep.ReadDestinationOnMaster).ConfigureAwait(false);
-            RedisValue[] values;
-            try
+            var (values, failed) = await MultiGetAsync(data, missing, replica, cancellationToken).ConfigureAwait(false);
+
+            // A slot whose read failed makes only its own keys unavailable; the others go on.
+            if (failed.Count > 0)
             {
-                values = await MultiGetAsync(data, missing, replica).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                foreach (var key in missing)
+                foreach (var i in failed)
                 {
-                    result[key] = PathRead<T>.Of(ReadOutcome.Unavailable);
+                    result[missing[i]] = PathRead<T>.Of(ReadOutcome.Unavailable);
                 }
 
-                return [];
+                values = [.. values.Where((_, i) => !failed.Contains(i))];
+                missing = [.. missing.Where((_, i) => !failed.Contains(i))];
             }
 
             var hits = Enumerable.Range(0, missing.Count).Where(i => !values[i].IsNull).ToArray();
@@ -104,28 +103,30 @@ internal sealed partial class KeyMoveClient<T>
     }
 
     // A key that expires between MGET and PTTL is a miss. If PTTL fails, the local cap bounds any cached hit.
-    private async Task<long[]> ReadBatchLifetimesAsync(KeyMoveData data, List<string> missing, int[] hits, bool replica, CancellationToken cancellationToken)
+    // The remaining life of each hit; null for a hit whose life could not be read, which is never taken as no expiry.
+    private async Task<long?[]> ReadBatchLifetimesAsync(KeyMoveData data, List<string> missing, int[] hits, bool replica, CancellationToken cancellationToken)
     {
-        try
+        await At(SchedulePointStep.ReadLife).ConfigureAwait(false);
+        var flags = replica ? CommandFlags.PreferReplica : Master;
+        return await Task.WhenAll(hits.Select(async i =>
         {
-            await At(SchedulePointStep.ReadLife).ConfigureAwait(false);
-            var flags = replica ? CommandFlags.PreferReplica : Master;
-            return await Task.WhenAll(hits.Select(async i => (long)await data.Db.ExecuteAsync("PTTL", [Key(Native(missing[i]))], flags).ConfigureAwait(false))).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-        {
-            return [.. hits.Select(_ => -1L)];
-        }
+            try
+            {
+                return (long?)(long)await data.Db.ExecuteAsync("PTTL", [Key(Native(missing[i]))], flags).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
+        })).ConfigureAwait(false);
     }
 
-    private List<string> RecordBatchHits(List<string> missing, RedisValue[] values, Dictionary<int, long> life, Dictionary<string, PathRead<T>> result)
+    private List<string> RecordBatchHits(List<string> missing, RedisValue[] values, Dictionary<int, long?> life, Dictionary<string, PathRead<T>> result)
     {
         var still = new List<string>();
         for (var i = 0; i < missing.Count; i++)
         {
-            var read = values[i].IsNull || life[i] == -2
-                ? PathRead<T>.Of(ReadOutcome.Absent)
-                : Interpret(new KeyMoveSnap(ReadOutcome.Found, (byte[]?)values[i] ?? [], Math.Max(-1, life[i]), _p.Clock.GetUtcNow()), _p.Native, authoritativeNull: true);
+            var read = BatchHit(values[i], values[i].IsNull ? -2 : life[i]);
             if (read.FallsThrough)
             {
                 still.Add(missing[i]);
@@ -140,22 +141,42 @@ internal sealed partial class KeyMoveClient<T>
     }
 
     // One MGET per slot, so a cluster never sees a command that spans slots.
-    private async Task<RedisValue[]> MultiGetAsync(KeyMoveData data, List<string> keys, bool replica)
+    // A hit read with its life: a life that could not be read makes it unavailable, and a key gone since the MGET makes it absent.
+    private PathRead<T> BatchHit(RedisValue value, long? life) => life switch
+    {
+        null => PathRead<T>.Of(ReadOutcome.Unavailable),
+        -2 => PathRead<T>.Of(ReadOutcome.Absent),
+        _ => Interpret(new KeyMoveSnap(ReadOutcome.Found, (byte[]?)value ?? [], Math.Max(-1, life.Value), _p.Clock.GetUtcNow()), _p.Native, authoritativeNull: true),
+    };
+
+    // One MGET per slot; the indexes of the keys whose slot could not be read come back apart.
+    private async Task<(RedisValue[] Values, HashSet<int> Failed)> MultiGetAsync(KeyMoveData data, List<string> keys, bool replica, CancellationToken cancellationToken)
     {
         var flags = replica ? CommandFlags.PreferReplica : Master;
         var values = new RedisValue[keys.Count];
+        var failed = new HashSet<int>();
         var groups = keys.Select((key, index) => (key, index)).GroupBy(p => data.Names.SlotOf(Native(p.key))).ToList();
         var reads = groups.Select(async group =>
         {
             var members = group.ToArray();
-            var got = await data.Db.StringGetAsync([.. members.Select(m => Key(Native(m.key)))], flags).ConfigureAwait(false);
-            for (var i = 0; i < members.Length; i++)
+            try
             {
-                values[members[i].index] = got[i];
+                var got = await data.Db.StringGetAsync([.. members.Select(m => Key(Native(m.key)))], flags).ConfigureAwait(false);
+                for (var i = 0; i < members.Length; i++)
+                {
+                    values[members[i].index] = got[i];
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                lock (failed)
+                {
+                    failed.UnionWith(members.Select(m => m.index));
+                }
             }
         });
         await Task.WhenAll(reads).ConfigureAwait(false);
-        return values;
+        return (values, failed);
     }
 
     private async Task ReadMissingWithPromotionAsync(List<string> missing, KeyMovePlan plan, Dictionary<string, PathRead<T>> result, CancellationToken cancellationToken)

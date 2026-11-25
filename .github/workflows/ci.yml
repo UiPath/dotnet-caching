@@ -89,7 +89,8 @@ jobs:
           # shellcheck disable=SC2086 # one argument per word
           ./tests/UiPath.Caching.Tests/bin/Release/net10.0/UiPath.Caching.Tests $core
           ./tests/UiPath.Caching.Migration.Tests/bin/Release/net10.0/UiPath.Caching.Migration.Tests \
-            -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveHashClusterTests -class UiPath.Caching.Migration.Tests.KeyMove.MoverLeaseTests
+            -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveHashClusterTests -class UiPath.Caching.Migration.Tests.KeyMove.MoverLeaseTests \
+            -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveBatchClusterTests
 
   # The fault tests (failover, restart, pause) run on main and nightly only: a failure there goes to the flaky list and blocks no pull request.
   test-chaos:
