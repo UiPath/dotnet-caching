@@ -625,13 +625,12 @@ public class RehydrationCoordinatorTests
 
     private sealed class HangingLock : IDistributedLock
     {
+        private readonly TaskCompletionSource<IAsyncDisposable?> _pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public ValueTask<IAsyncDisposable> AcquireAsync(string key, TimeSpan expiry, TimeSpan waitTimeout, CancellationToken token) => throw new NotSupportedException();
 
-        public async ValueTask<IAsyncDisposable?> TryAcquireAsync(string key, TimeSpan expiry, CancellationToken token)
-        {
-            await Task.Delay(TimeSpan.FromSeconds(30), token);
-            return Substitute.For<IAsyncDisposable>();
-        }
+        public ValueTask<IAsyncDisposable?> TryAcquireAsync(string key, TimeSpan expiry, CancellationToken token) =>
+            new(_pending.Task.WaitAsync(token));
     }
 
     private sealed class CapturingLogger : ILogger

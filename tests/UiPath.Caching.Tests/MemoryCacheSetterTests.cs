@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Internal;
+using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Caching;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Broadcast;
@@ -10,6 +10,7 @@ namespace UiPath.Caching.Tests;
 public class MemoryCacheSetterTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private readonly TimeProvider _clock = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
 
     private IChangeTokenFactory _changeTokenFactory = default!;
     private ITopicFactory _topicFactory = default!;
@@ -18,13 +19,11 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;
     private IMemoryCache _memoryCache = default!;
-    private SystemClock _clock = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
     private CacheKey _cacheKey = default!;
-    private TimeProvider _cacheClock = default!;
     private RecordingTelemetryProvider _telemetryProvider = default!;
 
     private HashLocalMemorySetter? _sut = null;
@@ -34,17 +33,14 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     [Fact]
     public void Setter_inner_exception()
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-        }));
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
             HasChanged = false,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
             TransportId = "1234567890",
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
@@ -53,7 +49,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), _fixture.Create<TimeSpan?>());
@@ -64,17 +60,14 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     [Fact]
     public void Setter_emits_failure_event()
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-        }));
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
             HasChanged = false,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
 
         };
         bool @throw = false;
@@ -94,7 +87,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
@@ -111,17 +104,14 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     [Fact]
     public void RefreshMetadata_swallows_NewEntry_exception_and_emits_failure_event()
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-        }));
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
             HasChanged = false,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(token);
@@ -134,7 +124,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
 
         Sut.Set(x, cacheEntity, _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
@@ -152,17 +142,14 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     {
         var telemetry = new RefusingTelemetryProvider($"Caching.{nameof(MemoryCacheSetter)}.{nameof(MemoryCacheSetter.RefreshMetadata)}.Failed");
         _fixture.Inject<ICachingTelemetryProvider>(telemetry);
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-        }));
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
             HasChanged = false,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(token);
@@ -175,7 +162,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
 
         Sut.Set(x, cacheEntity, _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
@@ -188,17 +175,14 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     [Fact]
     public void Setter_max_duration()
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-        }));
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
             HasChanged = false,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -206,7 +190,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
@@ -219,17 +203,14 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     [InlineData(false)]
     public void A_renewed_copy_keeps_whether_the_entry_it_replaces_takes_read_marks(bool tracked)
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-        }));
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
             HasChanged = false,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -237,9 +218,9 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
-        var entry = new CacheEntryFactory().Create("v", _clock.UtcNow.AddDays(1));
+        var entry = new CacheEntryFactory().Create("v", _clock.GetUtcNow().AddDays(1));
         if (!tracked)
         {
             entry.Should().BeAssignableTo<ILocalEntry>().Subject.Track(false);
@@ -271,7 +252,6 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         _memoryCache = _fixture.Freeze<IMemoryCache>();
         _telemetryProvider = new RecordingTelemetryProvider();
         _fixture.Inject<ICachingTelemetryProvider>(_telemetryProvider);
-        _clock = new SystemClock();
 
         _options = new()
         {
@@ -280,8 +260,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
             CacheKeyStrategy = _cacheKeyStrategy,
             TopicKeyStrategy = _topicKeyStrategy,
         };
-        _cacheClock = new SystemClockTimeProvider(_clock);
-        _fixture.Inject(_cacheClock);
+        _fixture.Inject(_clock);
         _topicFactory = _fixture.Freeze<ITopicFactory>();
         _topicProvider = _fixture.Freeze<ITopicProvider>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();

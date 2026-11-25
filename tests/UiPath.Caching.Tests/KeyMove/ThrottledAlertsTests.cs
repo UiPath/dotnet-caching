@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Reflection;
 using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Tests.KeyMove;
@@ -31,6 +33,9 @@ public class ThrottledAlertsTests
         var act = () => throttle.Raise(Alert("k"));
 
         act.Should().NotThrow();
+        var sent = (ConcurrentDictionary<string, long>)typeof(ThrottledAlerts)
+            .GetField("_sent", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(throttle)!;
+        sent.Should().BeEmpty();
     }
 
     private static KeyMoveAlert Alert(string detail) => new("g1", "ambiguous_ownership", detail);

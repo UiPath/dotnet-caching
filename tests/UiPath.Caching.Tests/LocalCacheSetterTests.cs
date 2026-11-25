@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Internal;
+using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Caching;
 using UiPath.Caching.Tests.Broadcast;
 
@@ -8,6 +8,7 @@ namespace UiPath.Caching.Tests;
 public class LocalCacheSetterTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private readonly TimeProvider _clock = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
 
     private IChangeTokenFactory _changeTokenFactory = default!;
     private ITopicFactory _topicFactory = default!;
@@ -16,14 +17,12 @@ public class LocalCacheSetterTests : IAsyncLifetime
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;
     private IMemoryCache _memoryCache = default!;
-    private SystemClock _clock = default!;
     private ICacheEntrySizeProvider _sizeProvider = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
     private CacheKey _cacheKey = default!;
-    private TimeProvider _cacheClock = default!;
 
     private LocalMemorySetter? _sut = null;
 
@@ -32,17 +31,14 @@ public class LocalCacheSetterTests : IAsyncLifetime
     [Fact]
     public void Setter_inner_exception()
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-        }));
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
             HasChanged = false,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token, c => throw new Exception());
@@ -50,7 +46,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), _fixture.Create<TimeSpan?>());
@@ -61,17 +57,14 @@ public class LocalCacheSetterTests : IAsyncLifetime
     [Fact]
     public void Setter_max_duration()
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-        }));
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
             HasChanged = false,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -79,7 +72,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
@@ -90,16 +83,16 @@ public class LocalCacheSetterTests : IAsyncLifetime
     [Fact]
     public void Set_stores_the_entry_under_the_name_string()
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _fixture.Inject(_memoryCache);
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
-            .Returns(new TestChangeToken { Expiration = _clock.UtcNow.AddDays(1) });
+            .Returns(new TestChangeToken { Expiration = _clock.GetUtcNow().AddDays(1) });
         var item = _fixture.Create<ICacheEntry>();
         var x = new CacheEntryOptions()
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
 
         Sut.Set(x, item, _fixture.Create<Type>(), null).Should().BeTrue();
@@ -111,12 +104,8 @@ public class LocalCacheSetterTests : IAsyncLifetime
     [Fact]
     public void SizeLimit_set_provided_size_negative()
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-            SizeLimit = 2,
-        }));
         _options.SizeLimit = 2;
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _sizeProvider.GetSize(Arg.Any<ICacheEntry>())
             .Returns(-1);
 
@@ -126,7 +115,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
         var actual = Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), null);
         actual.Should().BeFalse();
@@ -137,12 +126,8 @@ public class LocalCacheSetterTests : IAsyncLifetime
     [Fact]
     public void SizeLimit_set_provided_size_positive()
     {
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
-        {
-            Clock = _clock,
-            SizeLimit = 2,
-        }));
         _options.SizeLimit = 2;
+        _memoryCache = new MemoryCacheFactory(_clock, NullLoggerFactory.Instance).Get(_options);
         _sizeProvider.GetSize(Arg.Any<ICacheEntry>())
             .Returns(-1);
 
@@ -152,7 +137,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),
+            Expiration = _clock.GetUtcNow().AddDays(1),
         };
         var actual = Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), null);
         actual.Should().BeFalse();
@@ -173,7 +158,6 @@ public class LocalCacheSetterTests : IAsyncLifetime
 
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
-        _clock = new SystemClock();
 
         _options = new()
         {
@@ -185,8 +169,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         _topicKeyStrategy = _fixture.Create<ITopicKeyStrategy>();
         _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
         _topicKeyStrategy.GetTopicKey<string>().Returns(_topicKey);
-        _cacheClock = new SystemClockTimeProvider(_clock);
-        _fixture.Inject(_cacheClock);
+        _fixture.Inject(_clock);
         _topicFactory = _fixture.Freeze<ITopicFactory>();
         _topicProvider = _fixture.Freeze<ITopicProvider>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();

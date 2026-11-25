@@ -52,7 +52,7 @@ public class LocalHitBenchmark
     public ValueTask<string?> PrefixedByKey() => _prefixed.GetAsync(Key);
 
     [Benchmark, BenchmarkCategory("Prefixed read")]
-    public ValueTask<string?> PrefixedByInterpolatedKey() => _prefixed.GetAsync($"user:{_id}");
+    public ValueTask<string?> PrefixedByInterpolatedKey() => ((ICache<string>)_prefixed).GetAsync($"user:{_id}");
 
     [Benchmark, BenchmarkCategory("Write")]
     public ValueTask<bool> Set() => _cache.SetAsync(Key, "value");

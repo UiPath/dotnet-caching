@@ -716,11 +716,14 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _innerCache.SetAsync(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new Exception());
 
-        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, default), new(_multiKey, default) }, _fixture.Create<TimeSpan>(), policy: null, token: testContextAccessor.Current.CancellationToken);
+        KeyValuePair<CacheKey, string?>[] values = [new(_cacheKey, "one"), new(_multiKey, "two")];
+        var actual = await Sut.SetAsync(values, _fixture.Create<TimeSpan>(), policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
 
-        actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, default), new(_multiKey, default) }, policy: null, token: testContextAccessor.Current.CancellationToken);
+        actual = await Sut.SetAsync(values, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
+
+        await _innerCache.Received(2).SetAsync(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
