@@ -1,0 +1,889 @@
+# Fixing a file means deleting its baseline section below.
+
+[*.cs]
+dotnet_diagnostic.RS0030.severity = error
+
+[UiPath.Caching.Migration.Tests/AdvertisementRedisTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/AdvertisementTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/BridgeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/ConformanceRedisTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/HardeningTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/HashCacheContractTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/CacheTraffic.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/ClearKit.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/DryRunTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/Harness/StepScheduler.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/InfoHealthTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveBatchClusterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveClearGateTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveClearOutcomeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveCodecTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveContractTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveFillTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashConformanceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashFillRefreshOutcomeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashFillTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashMarkerTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashOutcomeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashPromotionOutcomeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashPromotionTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashRefreshTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashRouterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashWaitTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHotPathTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveKit.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveLifecycleTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveMarkerSettleTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReadTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReverseHashPromotionTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReverseHashWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReversePromotionTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReverseWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReviewTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/LastGoodOptionsTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MoveRateTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MoveRetrySetTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MoverAdmissionTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MoverIdleTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MoverKit.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MoverLeaseTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MoverPaceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MoverReverseTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MoverStateWindowTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/MovingCacheHost.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/PendingHoldTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/UnmarkQueueTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMove/WritePermitsTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMoveAdvertTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/KeyMoveHostTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/LibraryBatchTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/LibraryHashPathClientTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/LibraryPathOutcomeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/LifecycleTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/ModeBoundsTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/ModeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/PendingAndRetryTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/PinHostTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/PinRedisTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/RegistrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/RouterCleanupTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/RouterHashConformanceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/RouterHostTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/RouterModeRedisTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/RouterRedisTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/SettleBoundDiTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/SingleFlightTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/StopAndFenceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/Support/ClusterKit.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/Support/ClusterKitTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/Support/FakeMigrationCache.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/Support/FakeMigrationHashCache.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/Support/LegacyClient.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/Support/RouterTestBase.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/Support/TestNode.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/Support/TestPoll.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/WriteFormatMoveHoldTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Migration.Tests/WriteFormatRedisTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.PluginContract.Tests/AcmeAutoSwitchTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.PluginContract.Tests/AcmeRedisTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.PluginContract.Tests/Support/AcmeNodeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/AutoFixtureCreator.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/BackgroundWritesTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/BatchSurfaceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/ChangeTokenTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/ConnectionStateMonitorTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/ConsumerGroupsTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/DepartedGroupDeleteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/DroppedEventsTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/KeyedSubjectTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisPubSubSubjectWriterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisPubSubTopicProviderTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisPubSubTopicTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamGapIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamHealthMaintainerIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamNotifyChannelTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamNotifyIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamOwnEventAllocationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamSubjectWriterIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamSubjectWriterStreamTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamSubjectWriterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamTopicMonitorTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamsShardedFallbackTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamsTopicProviderTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RedisStreamsTopicTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/RouterSeamsIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/SignalingFetchWaiterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/StreamsFallbackOffIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/StreamsFallbackPubSubRefusedTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/StreamsFallbackTopicTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Broadcast/StreamsFallbackWiringTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/CacheExpirationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/CacheKeyHandlerTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/CacheOfTBatchGetOrAddTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/CacheOfTTryAddTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/ConcreteCacheCallShapeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Distributed/DistributedCacheRedisIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/FactoryTimeoutTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Fakes/CachePeers.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Fakes/InMemoryMultilayer.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Fakes/PeerCluster.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Fakes/RunTables.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/FillPrimitivesTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/FillWatchesTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/GeneratedExpirationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/GetOrAddResultTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/HandlerKeyCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/HandlerKeyHashCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/InFlightTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/InMemorySetCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/InnerTierOutageTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/InvalidationSinkTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ByteCodecConformanceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ClaimDurabilityTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ClaimStoreTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ClearSweepTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/DataOpsKit.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/DirectCacheKeyspaceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/FailoverBarrierTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/GenerationClusterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/GroupStateMonitorTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/HashMigrationCacheIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/InstanceRecoveryKit.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/KeyMoveSweepTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/KeyedPartialClusterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/LeaderLeaseTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/MasterScannerTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/MoveScriptsRuntimeErrorTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/MoveSidesTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/RegisteredKeySpaceDataTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ReplicaBarrierTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ReplicaStall.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ServerBarrierDurabilityTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ServerBarrierManyDurabilityTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ServerBarrierManyTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ServerBarrierTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/ServerRecordWriterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/SideConnectionsCancellationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/StageAdmissionTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/StageFlagPollerSnapshotTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/StageFlagPollerTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/StateBarrierProofTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/StateClusterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/StateKit.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/StateRaceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/StateStoreTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/TimeSteps.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/TwoServerKit.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/KeyMove/TwoServerStateReaderTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Locking/BatchJoinTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Locking/LockTimeoutJoinTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Locking/MultilayerCacheBatchGetOrAddLockTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Locking/MultilayerCacheGetOrAddLockTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Locking/RedisDistributedLockTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MemoryCacheFactoryTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MemoryCacheSetterTokenReleaseTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MemoryOnlyGetOrAddMissTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MemoryOnlyReadMissTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MemorySetCacheConcurrencyTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MessagePack/MessagePackEventIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MessagePack/MessagePackIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MessagePack/MessagePackOutOfMemoryTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheBackgroundWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheBatchGetOrAddTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheBatchRehydrateTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheFailSafeEdgeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheFailSafeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheManyTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCachePerNameFactoryTimeoutTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCachePerNamePolicyWiringTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheRehydrateAdoptTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheRehydrateTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerCacheTryAddTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerHashCacheBackgroundWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerHashCacheManyTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerHashCacheMigrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerHashCachePerNameFactoryTimeoutTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerHashCachePerNameJitterTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerHashCacheRehydrateAdoptTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerHashCacheRehydrateTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerHashCacheReplaceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerHashCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerMigrationWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerSetCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/MultilayerSetOrderTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Negotiation/EffectiveWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Negotiation/EventFormatNegotiationIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Negotiation/FormatNegotiationIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Negotiation/NodeAdvertisementTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Negotiation/PubSubNegotiationServiceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Negotiation/RedisSubscriberSourceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/NullCacheConditionalAddTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/OpenTelemetry/OpenTelemetryCachingTelemetryProviderTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/OwnerArgumentTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/PeerFieldUpdateTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/PeerRefreshHashTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/PeerRefreshTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/PeerWriteGuardTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/AutoAckIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/BackgroundWriteIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/CallerCancellationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/ConnectorKeyPrefixTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/CrossSlotBatchIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/FailSafeIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/FillPrimitivesRedisIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/FormatInventoryIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/FormatSweeperTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/HashReplaceIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/InMemoryRedisMissIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/ManyKeysIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/MigrateOnReadHarness.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/MigrateOnReadIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/MigrationCacheRedisIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/NullCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/NullHashCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/PeerFieldUpdateIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/PeerRefreshIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/ReadListIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/ReadListLayeredIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisCacheFillManyTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisCacheSerializerTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisCacheTryAddTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisConnectorLifecycleTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisConnectorStaleEndpointTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisContainerFixture.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisFirstConnectIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisHashCacheMigrationOutcomeTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisHashCacheRenewRaceTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisHashCacheSerializerTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisHashCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisKeyFormatWiringTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisOnlyCacheIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisPlannedMaintenanceRegistrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisPlannedMaintenanceRoutingTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisReadScriptIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RedisSetCacheTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RehydrateAdoptIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/RemoveTombstoneRedisIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/SafeFillRedisIntegrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/SlotFanOutTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Redis/StreamsReady.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/RedisProfilerTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/RehydrationCoordinatorTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/RepeatInvalidationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/ReserveFirstTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/ResiliencePipelineFactoryTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/ResiliencePipelineWrapperTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/RunTableCombinationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SafeFillTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SafeHashFillTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SealedMemberPathTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Serialization/FormatMigratorTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Serialization/ValueMigrationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SetCacheProviderTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SharedGenerationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SpanGeneratedExpirationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SpanKeyDefaultWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SpanKeyOperationTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SpanKeyWriteTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/StaleValuesTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/StateAndArgumentOverloadTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/StatefulGetOrAddTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/SyncExtensionsTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/Telemetry/TelemetryListeningTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/TestCacheEntryTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/TestChangeToken.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/TimeProviderExtensionsTests.cs]
+dotnet_diagnostic.RS0030.severity = none
+
+[UiPath.Caching.Tests/VerbatimKeyEndToEndTests.cs]
+dotnet_diagnostic.RS0030.severity = none

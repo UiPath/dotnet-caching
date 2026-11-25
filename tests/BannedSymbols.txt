@@ -1,0 +1,15 @@
+M:System.Threading.Tasks.Task.Delay(System.Int32); Use ManualTimeProvider and advance time explicitly.
+M:System.Threading.Tasks.Task.Delay(System.Int32,System.Threading.CancellationToken); Use ManualTimeProvider and advance time explicitly.
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan); Use ManualTimeProvider and advance time explicitly.
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan,System.Threading.CancellationToken); Use ManualTimeProvider and advance time explicitly.
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan,System.TimeProvider); Use ManualTimeProvider and advance time explicitly.
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan,System.TimeProvider,System.Threading.CancellationToken); Use ManualTimeProvider and advance time explicitly.
+M:System.Threading.Thread.Sleep(System.Int32); Use ManualTimeProvider and advance time explicitly.
+M:System.Threading.Thread.Sleep(System.TimeSpan); Use ManualTimeProvider and advance time explicitly.
+T:System.Diagnostics.Stopwatch; Measure elapsed time with ManualTimeProvider and advance it explicitly.
+T:System.Threading.SpinWait; Use ManualTimeProvider and advance time explicitly.
+P:System.TimeProvider.System; Use ManualTimeProvider or a fake CacheClock and advance it explicitly.
+P:System.DateTime.Now; Read time from ManualTimeProvider or a fake ISystemClock.
+P:System.DateTime.UtcNow; Read time from ManualTimeProvider or a fake ISystemClock.
+P:System.DateTimeOffset.Now; Read time from ManualTimeProvider or a fake ISystemClock.
+P:System.DateTimeOffset.UtcNow; Read time from ManualTimeProvider or a fake ISystemClock.
