@@ -77,10 +77,39 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
             return new(WriteFormats.Envelope, null);
         }
 
-        // Counted as writing before the gate is asked, so a concurrent answer that clears the wanted bit cannot drop the group from the library's own check.
+        return LeaseIfReady(pin);
+    }
+
+    /// <summary>Chooses the format of a managed write. Only a group that has already switched can register demand.</summary>
+    public WriteLease CurrentPolicy(GroupPin pin, Action? observeWriting = null)
+    {
+        string? answer;
+        try
+        {
+            answer = format(pin.Group);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _ = ex;
+            return new(WriteFormats.Envelope, null);
+        }
+
+        if (!pin.Switched || !WriteFormats.WantsMessagePack(answer))
+        {
+            return new(WriteFormats.Envelope, null);
+        }
+
+        pins.Want(pin, true);
+        return LeaseIfReady(pin, observeWriting);
+    }
+
+    // Count before the gate check so a concurrent answer that clears demand cannot drop the writing group.
+    private WriteLease LeaseIfReady(GroupPin pin, Action? observeWriting = null)
+    {
         pin.EnterWriting();
         try
         {
+            observeWriting?.Invoke();
             if (Ready(pin))
             {
                 return new(WriteFormats.MessagePackPolicy, pin);

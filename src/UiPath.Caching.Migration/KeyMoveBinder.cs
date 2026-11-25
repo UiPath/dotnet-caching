@@ -4,7 +4,7 @@ namespace UiPath.Caching.Migration;
 
 /// <summary>Binds each registered key move cache to a codec per side.</summary>
 /// <param name="inPlaceKeepsSystemFields">Whether the hashes of the in-place side keep the system fields of the library's format (the metadata, the write count and the empty marker). False where the in-place side is the older client's format, which reads none of them.</param>
-internal sealed class KeyMoveBinder(IByteCodecCache inPlace, IByteCodecCache native, IReadOnlyList<KeyMoveCache> caches, KeyMoveOptions? options = null, KeyMoveValueClasses? classes = null, IByteHashCodecCache? inPlaceHash = null, IByteHashCodecCache? nativeHash = null, bool inPlaceKeepsSystemFields = false)
+internal sealed class KeyMoveBinder(IByteCodecCache inPlace, IByteCodecCache native, IReadOnlyList<KeyMoveCache> caches, KeyMoveOptions? options = null, KeyMoveValueClasses? classes = null, IByteHashCodecCache? inPlaceHash = null, IByteHashCodecCache? nativeHash = null, bool inPlaceKeepsSystemFields = false, Func<string, WriteLease>? inPlacePolicy = null)
 {
     private readonly KeyMoveOptions _options = options ?? new();
 
@@ -17,7 +17,7 @@ internal sealed class KeyMoveBinder(IByteCodecCache inPlace, IByteCodecCache nat
             return null;
         }
 
-        var binding = new KeyMoveBinding<T>(new LibraryKeyMoveCodec<T>(inPlace, _options.MaxValueBytes), new LibraryKeyMoveCodec<T>(native, _options.MaxValueBytes), cache.FormatInPlace, cache.FormatNative, cache.NoOrigin) { Options = _options };
+        var binding = new KeyMoveBinding<T>(new LibraryKeyMoveCodec<T>(inPlace, _options.MaxValueBytes, InPlacePolicyOf(cache.Group)), new LibraryKeyMoveCodec<T>(native, _options.MaxValueBytes), cache.FormatInPlace, cache.FormatNative, cache.NoOrigin) { Options = _options };
         Register(name, binding);
         return binding;
     }
@@ -46,7 +46,7 @@ internal sealed class KeyMoveBinder(IByteCodecCache inPlace, IByteCodecCache nat
 
         var binding = new KeyMoveHashBinding<T>(
             // The in-place side is the older client's format when the router was given an envelope: its readers know no system fields, so none is written to L. Only a move between library formats carries them.
-            new LibraryKeyMoveHashCodec<T>(inPlaceHash, _options.MaxValueBytes, fields, systemFields: inPlaceKeepsSystemFields),
+            new LibraryKeyMoveHashCodec<T>(inPlaceHash, _options.MaxValueBytes, fields, systemFields: inPlaceKeepsSystemFields, policy: InPlacePolicyOf(cache.Group)),
             new LibraryKeyMoveHashCodec<T>(nativeHash, _options.MaxValueBytes, fields, systemFields: true),
             cache.FormatInPlace,
             cache.FormatNative,
@@ -63,4 +63,7 @@ internal sealed class KeyMoveBinder(IByteCodecCache inPlace, IByteCodecCache nat
     /// <summary>Tells the inventory how to judge the hashes of a cache, for a binding that did not come from <see cref="BindHash{T}"/> too.</summary>
     public void RegisterHash<T>(string name, KeyMoveHashBinding<T> binding)
         where T : class => classes?.AddHash(name, binding);
+
+    // L is written in the format the group writes now: the envelope before its switch, MessagePack after it.
+    private Func<WriteLease>? InPlacePolicyOf(string group) => inPlacePolicy is { } policy ? () => policy(group) : null;
 }
