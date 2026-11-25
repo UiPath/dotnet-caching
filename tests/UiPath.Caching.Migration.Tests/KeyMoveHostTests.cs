@@ -15,12 +15,16 @@ namespace UiPath.Caching.Migration.Tests;
 public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
 {
     private const string Skip = "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.";
+    private const string RouterAppShortName = "kmhostrouter";
+    private const char SharedRouterSeparator = '$';
 
     private readonly string _unique = Guid.NewGuid().ToString("N")[..10];
     private readonly System.Collections.Concurrent.ConcurrentQueue<KeyMoveAlert> _alerts = new();
     private ConnectionMultiplexer? _redis;
     private RedisKey? _nodeKey;
     private string? _field;
+    private RedisKey? _isolatedNodeKey;
+    private RedisPinStore? _startedGroupPins;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -40,15 +44,32 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
 
     public async ValueTask DisposeAsync()
     {
-        if (_redis is not null)
+        if (_redis is null)
         {
-            await Db.KeyDeleteAsync([$"{Library}mg:{{{Group}}}:state", $"{Library}mg:{{{Group}}}:lead"]);
-            if (_nodeKey is { } key && _field is not null)
-            {
-                await Db.HashDeleteAsync(key, _field);
-            }
+            return;
+        }
 
-            await _redis.DisposeAsync();
+        await using var redis = _redis;
+        var names = new MoveKeyNames(string.Empty, Library, cluster: false);
+        await Db.KeyDeleteAsync([names.State(Group), names.Lead(Group), .. names.ControlRecords(Group).Select(record => record.Key)]);
+        if (_nodeKey is { } key && _field is not null)
+        {
+            await Db.HashDeleteAsync(key, _field);
+        }
+
+        if (_isolatedNodeKey is { } isolatedNodeKey)
+        {
+            await Db.KeyDeleteAsync(isolatedNodeKey);
+        }
+
+        if (_startedGroupPins is { } pins)
+        {
+            await Db.KeyDeleteAsync([pins.StateKey(Group), pins.AckKey(Group)]);
+            var server = redis.GetServers().Single();
+            await foreach (var remaining in server.KeysAsync(Db.Database, pattern: $"*{Group}*").WithCancellation(Ct))
+            {
+                Assert.Fail($"Redis still contains the group's key {remaining}.");
+            }
         }
     }
 
@@ -126,32 +147,47 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
     public async Task A_node_without_key_move_that_joins_after_Start_holds_the_group_and_its_leaving_ends_the_hold()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        await using var leader = Provider(keyMove: true, node: "a", startable: true);
+        var clock = new DriverTestClock();
+        var separator = await ReserveAdvertisementSeparatorAsync();
+        await using var leader = Provider(keyMove: true, node: "a", startable: true, clock: clock, separator: separator);
         var router = (Router)leader.GetRequiredService<IRouter>();
-        (await UntilAsync(() => router.KeyMove!.Runtime is not null)).Should().BeTrue();
         var runtime = router.KeyMove!.Runtime!;
+        await runtime.Driver!.StopAsync();
+        await clock.ReadyAsync();
+        var adverts = AdvertisementStore(leader);
+        _startedGroupPins = new RedisPinStore(adverts, string.Empty, ScopeTokens.For(RouterAppShortName));
         await runtime.Commands.InitAsync(Group, ["advc"], Ct);
         (await runtime.Commands.ApproveAsync(Group, ApprovalKinds.StartNoDryRun, "test", "test", Ct)).Should().Be(ApproveResult.Stored);
         (await runtime.Commands.ApproveAsync(Group, ApprovalKinds.StartMemory, "test", "test", Ct)).Should().Be(ApproveResult.Stored);
 
-        // The real start: the leader takes X1 through its barrier and the node acknowledges it.
-        var started = await UntilAsync(async () => (await runtime.Store.ReadAsync(Group, Ct)) is { State: not "S0", Durable: true });
-        started.Should().BeTrue("every start gate passes for one node with key move; the driver said: " + string.Join("; ", _alerts.Select(a => $"{a.Code} {a.Detail}").Distinct()));
-        (await runtime.Store.ReadAsync(Group, Ct))!.HoldAuto.Should().BeEmpty();
+        (await router.Advertiser!.WriteAsync(Ct)).Should().BeTrue();
+        var started = await StepAsync(runtime, clock);
+        started.Should().Match<StateRecord>(state => state.State != "S0" && state.Durable,
+            "every start gate passes for one node with key move; the driver said: " + string.Join("; ", _alerts.Select(a => $"{a.Code} {a.Detail}").Distinct()));
+        started.HoldAuto.Should().BeEmpty();
+        await AssertForeignAdvertDoesNotHoldAsync(runtime, clock);
 
-        var phaseA = Provider(keyMove: false, node: "b");
-        try
+        string joinedField;
+        await using (var nodeWithoutKeyMove = Provider(keyMove: false, node: "b", clock: clock, separator: separator))
         {
-            _ = phaseA.GetRequiredService<IRouter>();
-            (await UntilAsync(async () => (await runtime.Store.ReadAsync(Group, Ct))!.HoldAuto.StartsWith("no_km:", StringComparison.Ordinal), seconds: 30)).Should().BeTrue("a node without key move joined");
-            (await runtime.Store.ReadAsync(Group, Ct))!.HoldAuto.Should().Contain("kmh" + _unique + "b");
-        }
-        finally
-        {
-            await phaseA.DisposeAsync();
+            var joined = (Router)nodeWithoutKeyMove.GetRequiredService<IRouter>();
+            (await joined.Advertiser!.WriteAsync(Ct)).Should().BeTrue();
+            joinedField = joined.Advertiser.Field;
+            (await StepAsync(runtime, clock)).HoldAuto.Should().StartWith("no_km:").And.Contain("kmh" + _unique + "b");
+
+            for (var pass = 0; pass < 6; pass++)
+            {
+                var held = await StepAsync(runtime, clock);
+                held.HoldAuto.Should().StartWith("no_km:");
+                held.State.Should().NotBe("S0");
+            }
         }
 
-        (await UntilAsync(async () => (await runtime.Store.ReadAsync(Group, Ct))!.HoldAuto.Length == 0, seconds: 60)).Should().BeTrue("the node without key move left");
+        var entries = await adverts.ReadAsync(Ct);
+        entries.Should().Contain(entry => entry.Field == joinedField && entry.Advertisement.Left);
+        var released = await StepAsync(runtime, clock);
+        released.HoldAuto.Should().BeEmpty("the node without key move left");
+        released.State.Should().NotBe("S0");
     }
 
     [Fact]
@@ -216,15 +252,64 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         return false;
     }
 
+    private static RedisKey AdvertisementKey(char separator) => RouterServiceCollectionExtensions.NodeListKey(
+        new CacheOptions { Separator = separator },
+        new RedisCacheOptions { RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance });
+
     private async Task<IReadOnlyList<string>> Tokens(Router router, ServiceProvider provider) => (await EntryAsync(router, provider)).Tokens;
 
-    private async Task<RouterAdvertisement> EntryAsync(Router router, ServiceProvider provider)
+    private async Task<StateRecord> StepAsync(KeyMoveRuntime runtime, DriverTestClock clock)
+    {
+        clock.Advance();
+        (await runtime.Driver!.StepAsync(Group, Ct)).Should().NotBeNull("the router leads the group");
+        return (await runtime.Store.ReadAsync(Group, Ct))!;
+    }
+
+    private async Task AssertForeignAdvertDoesNotHoldAsync(KeyMoveRuntime runtime, DriverTestClock clock)
+    {
+        var sharedKey = AdvertisementKey(SharedRouterSeparator);
+        var sharedAdverts = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), sharedKey);
+        var foreignNode = $"foreign-{Group}";
+        var field = foreignNode + RouterAdvertisement.FieldSuffix;
+        try
+        {
+            await sharedAdverts.WriteAsync(field, new RouterAdvertisement(foreignNode, "test", []), Ct);
+            (await StepAsync(runtime, clock)).HoldAuto.Should().BeEmpty("the foreign node advertises to the shared hash");
+        }
+        finally
+        {
+            await Db.HashDeleteAsync(sharedKey, field);
+        }
+    }
+
+    private async Task<char> ReserveAdvertisementSeparatorAsync()
+    {
+        // The separator is one character. Reserve a private-use character atomically across test runners sharing Redis.
+        for (var separator = '\uE000'; separator <= '\uF8FF'; separator++)
+        {
+            var key = AdvertisementKey(separator);
+            if (await Db.HashSetAsync(key, "test-reservation", Group, When.NotExists))
+            {
+                _isolatedNodeKey = key;
+                return separator;
+            }
+        }
+
+        throw new InvalidOperationException("No test advertisement separator is available.");
+    }
+
+    private RouterAdvertisementStore AdvertisementStore(ServiceProvider provider)
     {
         var cacheOptions = provider.GetRequiredKeyedService<IOptions<CacheOptions>>(RouterServiceCollectionExtensions.StackName).Value;
         var redisOptions = provider.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(RouterServiceCollectionExtensions.StackName).Value;
-        _nodeKey = RouterServiceCollectionExtensions.NodeListKey(cacheOptions, redisOptions);
+        return new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), RouterServiceCollectionExtensions.NodeListKey(cacheOptions, redisOptions));
+    }
+
+    private async Task<RouterAdvertisement> EntryAsync(Router router, ServiceProvider provider)
+    {
+        var store = AdvertisementStore(provider);
+        _nodeKey = store.Key;
         _field = router.Advertiser!.Field;
-        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _nodeKey.Value);
         RouterAdvertisement? entry = null;
         await UntilAsync(async () =>
         {
@@ -235,7 +320,7 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
     }
 
     // A startable node passes every start gate: the flag asks for 3, the facts hold, and the view needs no time to settle.
-    private ServiceProvider Provider(bool keyMove, IReadOnlyList<GroupRegistration>? groups = null, string node = "", bool startable = false)
+    private ServiceProvider Provider(bool keyMove, IReadOnlyList<GroupRegistration>? groups = null, string node = "", bool startable = false, DriverTestClock? clock = null, char separator = SharedRouterSeparator)
     {
         var settings = new Dictionary<string, string?>
         {
@@ -245,8 +330,8 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
             ["Caching:Connections:Redis:ConnectionString"] = startable ? fixture.ConnectionString + ",allowAdmin=true" : fixture.ConnectionString,
             ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
             ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
-            ["RouterCaching:AppShortName"] = "kmhostrouter",
-            ["RouterCaching:Separator"] = "$",
+            ["RouterCaching:AppShortName"] = RouterAppShortName,
+            ["RouterCaching:Separator"] = separator.ToString(),
             ["RouterCaching:SourceUri"] = "urn:km-host",
             ["RouterCaching:Redis:FormatNegotiation:LivenessWindow"] = "00:00:30",
             ["RouterCaching:Redis:FormatNegotiation:AdvertiseInterval"] = "00:00:01",
@@ -254,6 +339,11 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var source = new LegacySource(_redis!, "advc");
         var services = new ServiceCollection().AddLogging();
+        if (clock is not null)
+        {
+            services.AddSingleton<TimeProvider>(clock);
+        }
+
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(
             configuration,
@@ -275,7 +365,12 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
                 {
                     router.UseKeyMoveSetup(new KeyMoveSetup(groups ?? [new GroupRegistration(Group, false, true, ["advc"])], new FixedStage(startable ? 3 : 2), new Facts(startable), new Space(), new NoClaim(), Library)
                     {
-                        State = new KeyMoveStateOptions { ExpectedReplicasPerMaster = 0, LeaseRenewInterval = TimeSpan.FromMilliseconds(200), PollInterval = TimeSpan.FromMilliseconds(200) },
+                        State = new KeyMoveStateOptions
+                        {
+                            ExpectedReplicasPerMaster = 0,
+                            LeaseRenewInterval = DriverTestClock.StartupInterval,
+                            PollInterval = DriverTestClock.StartupInterval,
+                        },
                         Alert = _alerts.Enqueue,
                         Driver = startable
                             ? new StageDriverOptions { AckInterval = TimeSpan.FromMilliseconds(50), UpgradeHold = TimeSpan.Zero }
@@ -285,6 +380,37 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
             },
             "RouterCaching");
         return services.BuildServiceProvider();
+    }
+
+    private sealed class DriverTestClock : TimeProvider
+    {
+        public static readonly TimeSpan StartupInterval = TimeSpan.FromMilliseconds(200);
+
+        private readonly ManualTimeProvider _time = new(DateTimeOffset.UnixEpoch);
+        private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _startupTimers;
+
+        public override long TimestampFrequency => _time.TimestampFrequency;
+
+        public override long GetTimestamp() => _time.GetTimestamp();
+
+        public override DateTimeOffset GetUtcNow() => _time.GetUtcNow();
+
+        public void Advance() => _time.Advance(TimeSpan.FromMilliseconds(250));
+
+        public Task ReadyAsync() => _ready.Task.WaitAsync(Ct);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = _time.CreateTimer(callback, state, dueTime, period);
+            // The flag read arms a timeout. The flag, snapshot and lease loops each arm a delay after their first pass.
+            if (dueTime == StartupInterval && Interlocked.Increment(ref _startupTimers) == 4)
+            {
+                _ready.TrySetResult();
+            }
+
+            return timer;
+        }
     }
 
     private sealed class FixedStage(int stage) : IMigrationStageSource
