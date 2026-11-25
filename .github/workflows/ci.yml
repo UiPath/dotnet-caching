@@ -189,22 +189,6 @@ jobs:
           /d:sonar.coverage.exclusions="eng/**,benchmarks/**,**/*.ps1"
           /d:sonar.cpd.exclusions="src/UiPath.Caching.Abstractions/ICache.cs,src/UiPath.Caching.Abstractions/ICacheOfT.cs,src/UiPath.Caching.Abstractions/IHashCache.cs,src/UiPath.Caching.Abstractions/IHashCacheOfT.cs"
 
-      # The key move tests need more servers than the service: a replica of it, two independent servers for an
-      # instance move, and a master with its own replica. The replicas allow DEBUG, since the tests stall them.
-      - name: Start the extra Redis servers
-        run: |
-          docker run -d --name redis-replica --network host redis:7 redis-server --port 6380 --replicaof 127.0.0.1 6379 --enable-debug-command yes --appendonly no
-          docker run -d --name redis-src --network host redis:7 redis-server --port 6381 --appendonly no
-          docker run -d --name redis-dst --network host redis:7 redis-server --port 6382 --appendonly no
-          docker run -d --name redis-sides --network host redis:7 redis-server --port 6383 --appendonly no
-          docker run -d --name redis-sides-replica --network host redis:7 redis-server --port 6384 --replicaof 127.0.0.1 6383 --enable-debug-command yes --appendonly no
-          for port in 6380 6381 6382 6383 6384; do
-            until docker exec redis-src redis-cli -p "$port" ping | grep -q PONG; do sleep 1; done
-          done
-          for port in 6380 6384; do
-            until docker exec redis-src redis-cli -p "$port" info replication | grep -q 'master_link_status:up'; do sleep 1; done
-          done
-
       - name: Restore
         run: dotnet restore UiPath.Caching.slnx
 
@@ -212,17 +196,8 @@ jobs:
         run: dotnet build UiPath.Caching.slnx -c Release --no-restore
 
       - name: Test
-        timeout-minutes: 20
-        env:
-          RUN_REDIS_INTEGRATION_TESTS: '1'
-          REDIS_CONNECTION_STRING: 'localhost:6379'
-          REDIS_REPLICA_CONNECTION_STRING: 'localhost:6380'
-          CLAIM_REPLICA_CONNECTION_STRING: 'localhost:6380'
-          TWO_SERVER_SRC: 'localhost:6381'
-          TWO_SERVER_DST: 'localhost:6382'
-          MOVE_SIDES_MASTER: 'localhost:6383'
-          MOVE_SIDES_REPLICA: 'localhost:6384'
-        run: dotnet test --solution UiPath.Caching.slnx -c Release --no-build -- --results-directory TestResults --report-xunit-trx --coverage --coverage-output-format xml
+        timeout-minutes: 12
+        run: bash eng/shard-redis-tests.sh --tfm net10.0
 
       - name: SonarQube Cloud end
         if: env.SONAR_TOKEN != ''
@@ -237,6 +212,40 @@ jobs:
 
       - name: Pack
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages
+
+  # net8.0 runs on its own runner, in parallel with build-linux, without coverage (Sonar reads net10.0's).
+  build-linux-net8:
+    if: github.event_name != 'schedule'
+    runs-on: uipath-ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73  # v6.1.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73  # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore UiPath.Caching.slnx
+
+      - name: Build
+        run: dotnet build UiPath.Caching.slnx -c Release --no-restore
+
+      - name: Test
+        timeout-minutes: 12
+        run: bash eng/shard-redis-tests.sh --tfm net8.0 --no-coverage
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: test-results-ubuntu-latest-net8
+          path: TestResults
 
   build-windows:
     if: github.event_name != 'schedule'
