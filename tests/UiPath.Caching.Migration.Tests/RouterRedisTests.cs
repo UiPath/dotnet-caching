@@ -197,21 +197,8 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
         (await Db.KeyExistsAsync(RedisKeyOf("bad"))).Should().BeTrue("the library does not delete what it cannot read");
     }
 
-    private static async Task<bool> UntilAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(50, Ct);
-        }
-
-        return false;
-    }
+    private static Task<bool> UntilAsync(Func<Task<bool>> condition) =>
+        TestPoll.UntilAsync(condition, TimeSpan.FromSeconds(20), TimeProvider.System);
 
     private static ICache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
 

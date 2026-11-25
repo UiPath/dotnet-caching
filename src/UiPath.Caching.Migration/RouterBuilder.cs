@@ -41,6 +41,12 @@ public sealed class RouterBuilder
 
     internal TimeSpan CleanupBound { get; set; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>The options of the mover hosts the router runs; null for the defaults.</summary>
+    internal MoverOptions? MoverOptions { get; set; }
+
+    /// <summary>The schedule point of the mover's promotions, which tests hold steps at; null for none.</summary>
+    internal ISchedulePoint? MoverSchedule { get; set; }
+
     internal Func<IDatabase>? SourceDatabase { get; private set; }
 
     internal IChannelBridge? Bridge { get; private set; }
