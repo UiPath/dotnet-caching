@@ -23,6 +23,8 @@ internal sealed class FakePinStore : IPinStore
     /// <summary>Runs inside a state read, after it began and before it answers, to make something happen during it.</summary>
     public Action? DuringStateRead { get; set; }
 
+    public Action? DuringAckRead { get; set; }
+
     /// <summary>Runs after a switch was asked for and before the store checks the acknowledgements, to make something happen in between.</summary>
     public Func<Task>? BeforeCommit { get; set; }
 
@@ -141,6 +143,7 @@ internal sealed class FakePinStore : IPinStore
     public Task<IReadOnlyDictionary<string, string>> ReadAcksAsync(string group, CancellationToken cancellationToken)
     {
         ThrowIfDown();
+        DuringAckRead?.Invoke();
         lock (_gate)
         {
             _log.Add("acks:" + group);

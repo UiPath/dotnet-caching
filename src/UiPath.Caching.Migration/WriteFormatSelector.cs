@@ -48,6 +48,7 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Report(pin.Group, ex);
+            Release(pin.Group);
             pins.Want(pin, false);
             return new(WriteFormats.Envelope, null);
         }
@@ -55,6 +56,7 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
         if (!WriteFormats.IsKnown(answer))
         {
             Report(pin.Group, null);
+            Release(pin.Group);
             pins.Want(pin, false);
             return new(WriteFormats.Envelope, null);
         }
@@ -71,6 +73,7 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
         pins.Want(pin, wanted);
         if (!wanted)
         {
+            Release(pin.Group);
             return new(WriteFormats.Envelope, null);
         }
 
@@ -165,7 +168,7 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Group {Group} asks for the {Pending} format while its keys move; it keeps its current format until the move is over.")]
     private partial void LogHeld(string group, string pending);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "The move of group {Group} is over; its write format switch goes ahead.")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "Group {Group} no longer has a pending write format switch held for a key move.")]
     private partial void LogReleased(string group);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The write format setting for group {Group} threw; the group writes the envelope.")]

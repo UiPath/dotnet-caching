@@ -27,7 +27,7 @@ public sealed class WriteFormatTests
     [InlineData(false, false, true, true, "format_not_wanted", "no group wants it")]
     public async Task The_gate_is_over_the_wanted_groups_only(bool aWanted, bool bWanted, bool bPinned, bool bAcked, string? hold, string because)
     {
-        var pins = Coordinator("a", "A", "B");
+        var pins = Coordinator("a");
         var a = pins.GroupFor("A");
         var b = pins.GroupFor("B");
         _pinned["A"] = true;
@@ -53,7 +53,7 @@ public sealed class WriteFormatTests
     [Fact]
     public async Task Nothing_wanted_keeps_the_gate_closed_and_records_nothing()
     {
-        var pins = Coordinator("a", "A");
+        var pins = Coordinator("a");
         pins.GroupFor("A");
         _pinned["A"] = true;
         pins.EvaluatePins();
@@ -65,10 +65,65 @@ public sealed class WriteFormatTests
         _store.Log.Should().NotContain("commit:A");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_wanted_group_waits_to_switch_until_its_move_ends(bool writing)
+    {
+        var moving = false;
+        var pins = ReadyCoordinator(out var group, _ => moving);
+        _format[group.Group] = "messagepack";
+        pins.Want(group, true);
+        moving = true;
+        if (writing)
+        {
+            group.EnterWriting();
+        }
+
+        try
+        {
+            await pins.RefreshAsync(Ct);
+
+            group.Wanted.Should().BeFalse();
+            group.Switched.Should().BeFalse();
+            _store.Log.Should().NotContain("commit:A");
+        }
+        finally
+        {
+            if (writing)
+            {
+                group.ExitWriting();
+            }
+        }
+
+        moving = false;
+        pins.Want(group, true);
+        await pins.RefreshAsync(Ct);
+
+        _store.Log.Should().ContainSingle(entry => entry == "commit:A");
+        group.Switched.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_move_that_starts_during_the_acknowledgement_read_prevents_the_switch()
+    {
+        var moving = false;
+        var pins = ReadyCoordinator(out var group, _ => moving);
+        _format[group.Group] = "messagepack";
+        pins.Want(group, true);
+        _store.DuringAckRead = () => moving = true;
+
+        await pins.RefreshAsync(Ct);
+
+        _store.Log.Should().Contain("acks:A").And.NotContain("commit:A");
+        group.Switched.Should().BeFalse();
+        group.Wanted.Should().BeFalse();
+    }
+
     [Fact]
     public async Task One_closed_wanted_group_holds_the_others_and_the_group_that_is_ready_writes_the_envelope()
     {
-        var pins = Coordinator("a", "A", "B");
+        var pins = Coordinator("a");
         var a = pins.GroupFor("A");
         var b = pins.GroupFor("B");
         _pinned["A"] = true;
@@ -100,7 +155,7 @@ public sealed class WriteFormatTests
     [Fact]
     public async Task A_wanted_group_that_goes_back_to_json_stops_holding_the_others_without_a_write()
     {
-        var pins = Coordinator("a", "A", "B");
+        var pins = Coordinator("a");
         var a = pins.GroupFor("A");
         var b = pins.GroupFor("B");
         _pinned["A"] = true;
@@ -125,7 +180,7 @@ public sealed class WriteFormatTests
     [Fact]
     public async Task A_group_that_asks_after_the_gate_was_computed_is_not_covered_until_the_next_pass()
     {
-        var pins = Coordinator("a", "A", "B");
+        var pins = Coordinator("a");
         var a = pins.GroupFor("A");
         var b = pins.GroupFor("B");
         _pinned["A"] = true;
@@ -147,7 +202,7 @@ public sealed class WriteFormatTests
     [Fact]
     public async Task A_node_that_joins_without_the_pin_closes_the_gate_and_the_group_writes_the_envelope_again()
     {
-        var pins = Coordinator("a", "A");
+        var pins = Coordinator("a");
         var a = pins.GroupFor("A");
         _pinned["A"] = true;
         _format["A"] = "messagepack";
@@ -188,7 +243,7 @@ public sealed class WriteFormatTests
     [Fact]
     public void A_group_that_wants_messagepack_writes_the_envelope_until_it_is_switched_and_asking_makes_it_wanted()
     {
-        var pins = Coordinator("a", "A");
+        var pins = Coordinator("a");
         var a = pins.GroupFor("A");
         _pinned["A"] = true;
         pins.EvaluatePins();
@@ -251,7 +306,7 @@ public sealed class WriteFormatTests
     [Fact]
     public async Task A_durable_group_whose_wanted_bit_is_cleared_before_its_write_is_still_checked_for_its_own_coverage()
     {
-        var pins = Coordinator("a", "A", "B");
+        var pins = Coordinator("a");
         var a = pins.GroupFor("A");
         var b = pins.GroupFor("B");
         _pinned["A"] = true;
@@ -407,9 +462,9 @@ public sealed class WriteFormatTests
         return (selector, pins, a);
     }
 
-    private PinCoordinator ReadyCoordinator(out GroupPin a)
+    private PinCoordinator ReadyCoordinator(out GroupPin a, Func<string, bool>? switchHold = null)
     {
-        var pins = Coordinator("a", "A");
+        var pins = Coordinator("a", switchHold);
         a = pins.GroupFor("A");
         _pinned["A"] = true;
         pins.EvaluatePins();
@@ -417,13 +472,14 @@ public sealed class WriteFormatTests
         return pins;
     }
 
-    private PinCoordinator Coordinator(string node, params string[] groups)
+    private PinCoordinator Coordinator(string node, Func<string, bool>? switchHold = null)
     {
         var core = new RouterCore(_clock, _ => false, NullLogger.Instance);
         var pins = new PinCoordinator(core, group => _pinned.GetValueOrDefault(group), _store, "app", TimeSpan.FromSeconds(15), MaxViewAge, NullLogger.Instance)
         {
             OwnField = node + RouterAdvertisement.FieldSuffix,
             WriteFormat = group => _formatThrows ? throw new InvalidOperationException("no such tenant") : _format.GetValueOrDefault(group),
+            SwitchHold = switchHold,
         };
         core.Pins = pins;
         return pins;

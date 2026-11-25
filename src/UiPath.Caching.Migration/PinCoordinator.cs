@@ -33,6 +33,9 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     /// <summary>The per-group write format setting; with it the gate covers the groups that want MessagePack, without it every group, as soon as the gate is asked.</summary>
     public Func<string, string?>? WriteFormat { get; init; }
 
+    /// <summary>True while a key move holds a group's pending format switch.</summary>
+    public Func<string, bool>? SwitchHold { get; init; }
+
     public string? Scope { get; } = scope;
 
     /// <summary>The field of this node's router entry; the gate needs it in the node list.</summary>
@@ -267,10 +270,26 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     {
         if (WriteFormat is not null)
         {
-            return [.. groups.Where(group => group.Wanted || group.Writing)];
+            return [.. groups.Where(group => (group.Wanted || group.Writing) && !SwitchHeld(group))];
         }
 
-        return Volatile.Read(ref _wanted) == 1 ? groups : [];
+        if (Volatile.Read(ref _wanted) == 0)
+        {
+            return [];
+        }
+
+        return SwitchHold is null ? groups : [.. groups.Where(group => !SwitchHeld(group))];
+    }
+
+    private bool SwitchHeld(GroupPin group)
+    {
+        if (group.Switched || SwitchHold?.Invoke(group.Group) != true)
+        {
+            return false;
+        }
+
+        group.SetWanted(false);
+        return true;
     }
 
     private async Task<bool> RefreshGroupAsync(GroupPin group, NodeCache nodes, CancellationToken cancellationToken)
@@ -444,6 +463,11 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
         // The point of no return is recorded before any write can use it, and only against the acknowledgements as they are in the store at that moment.
         foreach (var group in pinned.Where(group => !group.Durable))
         {
+            if (SwitchHeld(group))
+            {
+                return NotWanted;
+            }
+
             var refused = await CommitAsync(group, verdict.Required, cancellationToken).ConfigureAwait(false);
             if (refused is not null)
             {
@@ -469,6 +493,11 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
                 }
 
                 expected.Add(new(field, record));
+            }
+
+            if (SwitchHeld(group))
+            {
+                return NotWanted;
             }
 
             if (!await store.CommitSwitchAsync(group.Group, expected, cancellationToken).ConfigureAwait(false))

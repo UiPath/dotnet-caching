@@ -294,15 +294,24 @@ public static class RouterServiceCollectionExtensions
         {
             ValidatePinSetup(section, setup, logger);
 
+            var moves = keyMove is { HasGroups: true } ? builder.KeyMove : null;
+            var switchHold = keyMove is not null && moves is not null
+                ? WriteFormatSelector.HoldFrom(keyMove.Monitor, moves.Groups.Select(g => g.Name).ToHashSet(StringComparer.Ordinal))
+                : null;
+
             // Before the caches, which take their group's pin from it.
-            var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger) { WriteFormat = builder.WriteFormatPredicate };
+            var pins = new PinCoordinator(core, pinWhen, setup?.PinStore, setup?.Scope, setup?.RefreshInterval ?? TimeSpan.FromSeconds(15), setup?.MaxViewAge ?? TimeSpan.FromMinutes(2), logger)
+            {
+                WriteFormat = builder.WriteFormatPredicate,
+                SwitchHold = switchHold,
+            };
             core.Pins = pins;
             if (builder.WriteFormatPredicate is { } writeFormat)
             {
                 core.WriteFormats = new WriteFormatSelector(writeFormat, pins, logger)
                 {
-                    MoveHold = keyMove is { HasGroups: true } && builder.KeyMove is { } moves ? WriteFormatSelector.HoldFrom(keyMove.Monitor, moves.Groups.Select(g => g.Name).ToHashSet(StringComparer.Ordinal)) : null,
-                    Alert = builder.KeyMove?.Alert,
+                    MoveHold = switchHold,
+                    Alert = moves?.Alert,
                 };
             }
             gate!.Attach(pins);

@@ -1,8 +1,11 @@
+using System.Collections.Concurrent;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using UiPath.Caching.Config;
+using UiPath.Caching.KeyMove;
 using UiPath.Caching.Migration.Tests.Support;
 using UiPath.Caching.Redis;
 
@@ -43,7 +46,10 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         if (_redis is not null)
         {
             var server = _redis.GetServer(_redis.GetEndPoints()[0]);
-            foreach (var key in server.Keys(pattern: $"n:{_cacheName},c:*").Concat(server.Keys(pattern: $"mg:{{{ScopeTokens.For(_app)}:*")))
+            var keys = server.Keys(pattern: $"n:{_cacheName},c:*")
+                .Concat(server.Keys(pattern: $"mg:{{{ScopeTokens.For(_app)}:*"))
+                .Concat(server.Keys(pattern: $"{_app}:mg:*"));
+            foreach (var key in keys)
             {
                 await Db.KeyDeleteAsync(key);
             }
@@ -93,35 +99,45 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         (await cache.GetAsync("early", Ct)).Should().Equal(value);
     }
 
-    // A pinned node asks for MessagePack while its group's keys move: it writes the envelope until the move is over, then switches on its own.
     [Fact]
     public async Task A_pinned_node_that_asks_for_messagepack_during_a_move_switches_once_the_move_is_over_without_a_restart()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var node = NewNode("a", () => true, () => "messagepack");
-        var core = ((Router)node.GetRequiredService<IRouter>()).Core;
-        var moving = true;
-        var alerts = new List<UiPath.Caching.KeyMove.KeyMoveAlert>();
-        var moveRules = new UiPath.Caching.KeyMove.GroupRules(true, UiPath.Caching.KeyMove.ReadRule.Follow, UiPath.Caching.KeyMove.WriteRule.Follow, new UiPath.Caching.KeyMove.ActedState("S3", "fwd", 1, "id1", 1, false), null, false, true, []);
-        // The caches took this selector when they were built; the test gives it the rules of a group whose keys move.
-        core.WriteFormats!.MoveHold = _ => WriteFormatSelector.Moving(moving ? moveRules : UiPath.Caching.KeyMove.GroupRules.Unaffected);
-        core.WriteFormats.Alert = alerts.Add;
+        var alerts = new ConcurrentQueue<KeyMoveAlert>();
+        var node = NewNode("a", () => true, () => "messagepack", moveAlert: alerts.Enqueue);
+        var router = (Router)node.GetRequiredService<IRouter>();
         var cache = Cache(node);
+        var routed = (RoutedCache<List<long>>)cache;
+        (await UntilAsync(() => Task.FromResult(routed.Library is KeyMoveClient<List<long>>))).Should().BeTrue();
+        var move = router.KeyMove!;
+        var reader = new MoveStateReader();
+        var deferred = (DeferredStateReader)typeof(KeyMoveNode).GetField("_reader", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(move)!;
+        deferred.Attach(reader);
+        (await UntilAsync(() => Task.FromResult(move.Monitor.RulesFor("g").Acting is { State: "S3" }))).Should().BeTrue();
+
+        var pin = router.Core.PinFor("g")!;
+        router.Core.Pins!.Want(pin, true);
+        await router.Core.Pins.RefreshAsync(Ct);
+        pin.Wanted.Should().BeFalse();
+
+        // Managed writes use their move codecs. The router's bound plain path exercises the write format selector and stores real bytes.
+        var plain = ((KeyMoveClient<List<long>>)routed.Library).Parts.Plain;
         var value = new List<long> { 1, 2, 3 };
 
         // Long past the time the switch takes when nothing holds it: every write is still the envelope, and the point of no return is not recorded.
         var until = DateTime.UtcNow.AddSeconds(8);
         while (DateTime.UtcNow < until)
         {
-            await cache.SetAsync("k", value, Lifetime, Ct);
+            (await plain.SetAsync("k", value, DateTimeOffset.UtcNow + Lifetime, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
             (await Bytes("k")).Should().Equal(LegacyEnvelope.Write(value), "the group's keys move, so it keeps its format");
             await Task.Delay(TimeSpan.FromMilliseconds(250), Ct);
         }
 
         (await Db.KeyExistsAsync($"mg:{{{ScopeTokens.For(_app)}:g}}:sw")).Should().BeFalse("the switch was never asked for");
-        alerts.Should().ContainSingle().Which.Code.Should().Be("format_switch_held");
+        alerts.Where(alert => alert.Code == "format_switch_held").Should().ContainSingle().Which.Group.Should().Be("g");
 
-        moving = false;
+        reader.EndMove();
+        (await UntilAsync(() => Task.FromResult(move.Monitor.RulesFor("g").Acting is { State: "S0" }))).Should().BeTrue();
         (await UntilAsync(async () =>
         {
             await cache.SetAsync("k", value, Lifetime, Ct);
@@ -218,7 +234,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
 
     private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
 
-    private ServiceProvider NewNode(string name, Func<bool> pinned, Func<string?> format, Func<bool>? useLibrary = null, bool deadLibrary = false, ISourceCache<List<long>>? source = null)
+    private ServiceProvider NewNode(string name, Func<bool> pinned, Func<string?> format, Func<bool>? useLibrary = null, bool deadLibrary = false, ISourceCache<List<long>>? source = null, Action<KeyMoveAlert>? moveAlert = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -237,7 +253,14 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         var legacy = source ?? new LegacySource(_redis!, _cacheName);
         var redisKey = new LegacySource(_redis!, _cacheName).RedisKey;
         var services = new ServiceCollection().AddLogging();
-        services.AddCaching(configuration, builder => builder.AddRedisConnection());
+        services.AddCaching(configuration, builder =>
+        {
+            builder.AddRedisConnection();
+            if (moveAlert is not null)
+            {
+                builder.AddRedis();
+            }
+        });
         services.AddCachingRouter(
             configuration,
             router =>
@@ -261,10 +284,50 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
                 {
                     router.UseSourceConnection(() => Db);
                 }
+
+                if (moveAlert is not null)
+                {
+                    RegisterMove(router, moveAlert);
+                }
             });
         var provider = services.BuildServiceProvider();
         _nodes.Add(provider);
         _ = provider.GetRequiredService<IRouter>();
         return provider;
+    }
+
+    private void RegisterMove(RouterBuilder router, Action<KeyMoveAlert> alert)
+    {
+        var inPlace = RedisKeyOf(string.Empty);
+        var native = $"{_app}:native:";
+        router.UseKeyMove(new FixedStage(), moves => moves.UseLibraryKeyPrefix($"{_app}:").AddGroup("g", listed: true).OnAlert(alert)
+            .AddCache(new KeyMoveCacheRegistration
+            {
+                Name = "lists",
+                Group = "g",
+                InPlacePattern = inPlace + "*",
+                ParseInPlaceKey = key => key.StartsWith(inPlace, StringComparison.Ordinal) ? key[inPlace.Length..] : null,
+                NativePattern = native + "*",
+                FormatNativeKey = key => native + key,
+                ParseNativeKey = key => key.StartsWith(native, StringComparison.Ordinal) ? key[native.Length..] : null,
+            }));
+    }
+
+    private sealed class FixedStage : IMigrationStageSource
+    {
+        public ValueTask<int?> GetStageAsync(string group, CancellationToken cancellationToken) => ValueTask.FromResult<int?>(2);
+    }
+
+    private sealed class MoveStateReader : IStateReader
+    {
+        private StateRecord _state = new("S3", "fwd", 1, "moving", true, 1, string.Empty, 7, "lists", string.Empty, "moving", string.Empty, string.Empty, string.Empty);
+
+        public void EndMove() => Volatile.Write(ref _state, _state with { State = "S0", Ep = 2, Id = "ended", AllAck = "ended" });
+
+        public Task<StateRecord?> ReadAsync(string group, CancellationToken cancellationToken) => Task.FromResult<StateRecord?>(Volatile.Read(ref _state));
+
+        public Task<ControlSample?> ProbeAsync(string group, CancellationToken cancellationToken) => Task.FromResult<ControlSample?>(null);
+
+        public Task<ControlSample?> SampleAsync(string group, CancellationToken cancellationToken) => Task.FromResult<ControlSample?>(null);
     }
 }
