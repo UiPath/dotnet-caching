@@ -3,7 +3,7 @@ namespace UiPath.Caching.Migration;
 /// <summary>Where a hash promotion ended.</summary>
 internal enum HashPromotionStatus
 {
-    /// <summary>N holds the whole hash or the key is nowhere, and L holds nothing of it.</summary>
+    /// <summary>The target can answer the read, or the source has no hash left to move. The target is N forward and L in reverse.</summary>
     Complete,
 
     /// <summary>L still holds the hash after the unit: it changed under the promotion, N was gone, or the promotion did not finish.</summary>

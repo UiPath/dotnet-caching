@@ -271,7 +271,6 @@ public sealed class KeyMoveReverseHashWriteTests(RedisFixture fixture)
     }
 
     [Theory]
-    [InlineData("S3", "reverse_unpromoted", "2")]
     [InlineData("S4", "reverse_residue", "2")]
     [InlineData("S4", "reverse_residue", "junk:x")]
     public async Task A_reverse_merge_while_N_holds_the_hash_is_blocked_and_changes_nothing(string state, string reason, string value)
@@ -370,21 +369,6 @@ public sealed class KeyMoveReverseHashWriteTests(RedisFixture fixture)
         (await kit.Client.RefreshAsync("k", CacheExpiry.After(TimeSpan.FromMinutes(30)), Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
     }
 
-    [Fact]
-    public async Task S3_rev_refuses_a_refresh_while_only_N_holds_the_hash_and_leaves_its_life()
-    {
-        await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
-        using var meter = new MeterCollector(kit.Kit.Cid);
-        await kit.Kit.PrepareAsync("k");
-        await kit.Kit.SetStateAsync("S3", direction: "rev");
-        await kit.SetAsync(kit.N("k"), Original, TimeSpan.FromMinutes(1));
-
-        (await kit.Client.RefreshAsync("k", CacheExpiry.After(TimeSpan.FromMinutes(30)), Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
-
-        meter.Count("move_merge_blocked", "reason", "reverse_unpromoted").Should().Be(1);
-        (await kit.Db.KeyTimeToLiveAsync(kit.N("k")))!.Value.Should().BeLessThan(TimeSpan.FromMinutes(2));
-    }
-
     [Theory]
     [InlineData("S1")]
     [InlineData("S3")]
@@ -433,9 +417,9 @@ public sealed class KeyMoveReverseHashWriteTests(RedisFixture fixture)
     [InlineData("S4", "rev", typeof(CacheUnavailableException))]
     [InlineData("S1", "fwd", typeof(NotSupportedException))]
     [InlineData("S2", "fwd", typeof(NotSupportedException))]
-    public async Task A_fill_with_metadata_stays_closed_in_reverse_and_is_refused_by_the_forward_in_place_format(string state, string direction, Type exceptionType)
+    public async Task A_fill_with_metadata_is_refused_in_a_closed_reverse_cache_or_a_forward_format_without_metadata(string state, string direction, Type exceptionType)
     {
-        await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, noOrigin: direction == "rev");
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync(state, direction: direction);
         var options = new HashWriteOptions(HashCacheSetOption.KeyReplace, null, new Dictionary<string, string?> { ["owner"] = "me" });
@@ -443,19 +427,6 @@ public sealed class KeyMoveReverseHashWriteTests(RedisFixture fixture)
         var fill = async () => await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), options, null, Ct);
 
         (await fill.Should().ThrowAsync<Exception>()).Which.Should().BeOfType(exceptionType);
-    }
-
-    [Fact]
-    public async Task A_hash_fill_stays_closed_in_a_reverse_state()
-    {
-        await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
-        await kit.Kit.PrepareAsync("k");
-        await kit.Kit.SetStateAsync("S3", direction: "rev");
-
-        var fill = async () => await kit.Client.FillAsync("k", KeyMoveHashKit.Items(("a", "1")), Replace(), null, Ct);
-
-        await fill.Should().ThrowAsync<CacheUnavailableException>();
-        (await kit.Kit.ExistsAsync(kit.L("k"))).Should().BeFalse();
     }
 
     // The bump of a key delete is lost: the call is unknown and a retry waits for it, over the fence in force before it.

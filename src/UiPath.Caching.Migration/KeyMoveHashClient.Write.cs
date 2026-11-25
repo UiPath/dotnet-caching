@@ -429,11 +429,13 @@ internal sealed partial class KeyMoveHashClient<T>
             return (null, false, present == true);
         }
 
-        // N holds the hash: S4(rev) has no promoter and S3(rev) has none yet, so a merge on L would hide the fields of N.
-        if (reverse)
+        // N holds the hash: S4(rev) has no promoter, so a merge on L would hide the fields of N. S3(rev) promotes it first.
+        if (plan.Mode == KeyMoveMode.ReverseS4)
         {
-            return (Blocked(plan.Mode == KeyMoveMode.ReverseS4 ? "reverse_residue" : "reverse_unpromoted"), false, true);
+            return (Blocked("reverse_residue"), false, true);
         }
+
+        var promotion = reverse ? _reversePromotion : _promotion;
 
         if (plan.Mode == KeyMoveMode.S4)
         {
@@ -443,7 +445,7 @@ internal sealed partial class KeyMoveHashClient<T>
 
         for (var attempt = 0; attempt < MaxEnsureAttempts; attempt++)
         {
-            var promoted = await _promotion.PromoteAsync(key, HashPromotionFlavour.Ensure, cancellationToken).ConfigureAwait(false);
+            var promoted = await promotion.PromoteAsync(key, HashPromotionFlavour.Ensure, cancellationToken).ConfigureAwait(false);
             switch (promoted.Status)
             {
                 case HashPromotionStatus.Complete:
