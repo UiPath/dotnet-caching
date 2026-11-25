@@ -93,6 +93,43 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         (await cache.GetAsync("early", Ct)).Should().Equal(value);
     }
 
+    // A pinned node asks for MessagePack while its group's keys move: it writes the envelope until the move is over, then switches on its own.
+    [Fact]
+    public async Task A_pinned_node_that_asks_for_messagepack_during_a_move_switches_once_the_move_is_over_without_a_restart()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var node = NewNode("a", () => true, () => "messagepack");
+        var core = ((Router)node.GetRequiredService<IRouter>()).Core;
+        var moving = true;
+        var alerts = new List<UiPath.Caching.KeyMove.KeyMoveAlert>();
+        var moveRules = new UiPath.Caching.KeyMove.GroupRules(true, UiPath.Caching.KeyMove.ReadRule.Follow, UiPath.Caching.KeyMove.WriteRule.Follow, new UiPath.Caching.KeyMove.ActedState("S3", "fwd", 1, "id1", 1, false), null, false, true, []);
+        // The caches took this selector when they were built; the test gives it the rules of a group whose keys move.
+        core.WriteFormats!.MoveHold = _ => WriteFormatSelector.Moving(moving ? moveRules : UiPath.Caching.KeyMove.GroupRules.Unaffected);
+        core.WriteFormats.Alert = alerts.Add;
+        var cache = Cache(node);
+        var value = new List<long> { 1, 2, 3 };
+
+        // Long past the time the switch takes when nothing holds it: every write is still the envelope, and the point of no return is not recorded.
+        var until = DateTime.UtcNow.AddSeconds(8);
+        while (DateTime.UtcNow < until)
+        {
+            await cache.SetAsync("k", value, Lifetime, Ct);
+            (await Bytes("k")).Should().Equal(LegacyEnvelope.Write(value), "the group's keys move, so it keeps its format");
+            await Task.Delay(TimeSpan.FromMilliseconds(250), Ct);
+        }
+
+        (await Db.KeyExistsAsync($"mg:{{{ScopeTokens.For(_app)}:g}}:sw")).Should().BeFalse("the switch was never asked for");
+        alerts.Should().ContainSingle().Which.Code.Should().Be("format_switch_held");
+
+        moving = false;
+        (await UntilAsync(async () =>
+        {
+            await cache.SetAsync("k", value, Lifetime, Ct);
+            return (await Bytes("k")) is { Length: > 0 } bytes && bytes[0] == TestFormatSerializer.Id;
+        })).Should().BeTrue("the move is over, so the same node switches");
+        (await cache.GetAsync("k", Ct)).Should().Equal(value);
+    }
+
     [Fact]
     public async Task A_group_that_asks_for_json_never_writes_the_header_format_even_when_it_is_pinned()
     {

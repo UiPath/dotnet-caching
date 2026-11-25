@@ -44,6 +44,9 @@ internal sealed class GroupStateMonitor(IStateReader reader, KeyMoveStateOptions
     public GroupRules RulesFor(string group) =>
         _groups.TryGetValue(group, out var tracker) ? GroupRuleEvaluator.Evaluate(tracker.View(), options) : GroupRules.Unaffected;
 
+    /// <summary>True once the node has made a definitive read of the group's state; false before it, and for a group the monitor does not track.</summary>
+    public bool HasRead(string group) => _groups.TryGetValue(group, out var tracker) && tracker.View().SinceRead is not null;
+
     /// <summary>The state the node last read for the group, whether or not it acts on it yet; null for none.</summary>
     public StateRecord? CurrentState(string group) => _groups.TryGetValue(group, out var tracker) ? tracker.View().State : null;
 
