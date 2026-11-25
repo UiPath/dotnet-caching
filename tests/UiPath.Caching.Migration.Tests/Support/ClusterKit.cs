@@ -19,9 +19,8 @@ internal sealed class ClusterKit : IAsyncDisposable
         var connection = Environment.GetEnvironmentVariable("REDIS_CLUSTER_CONNECTION_STRING");
         Assert.SkipWhen(string.IsNullOrWhiteSpace(connection), "Set REDIS_CLUSTER_CONNECTION_STRING to run the cluster fault tests.");
         Assert.SkipUnless(Environment.GetEnvironmentVariable("REDIS_CLUSTER_REPLICAS") == "1", "Start the cluster with eng/keymove-kit.sh, which gives every master a replica.");
-        var kit = new ClusterKit(await ConnectionMultiplexer.ConnectAsync(connection + ",allowAdmin=true"));
-        await kit.WaitSettledAsync();
-        return kit;
+        var mux = await ConnectionMultiplexer.ConnectAsync(connection + ",allowAdmin=true");
+        return await CreateAsync(mux, static kit => kit.WaitSettledAsync());
     }
 
     /// <summary>Holds every client command on <paramref name="server"/> for <paramref name="span"/>.</summary>
@@ -52,30 +51,20 @@ internal sealed class ClusterKit : IAsyncDisposable
         return replica;
     }
 
-    /// <summary>Stops <paramref name="server"/> with SHUTDOWN NOSAVE; its container restarts it empty, and the cluster is waited for until it is ok again.</summary>
+    /// <summary>Stops <paramref name="server"/> with SHUTDOWN NOSAVE and waits for a new Redis process and a settled cluster.</summary>
     public async Task RestartAsync(IServer server)
     {
+        var runId = await ReadRunIdAsync(server);
         try
         {
             await server.ExecuteAsync("SHUTDOWN", "NOSAVE");
         }
-        catch (RedisException)
+        catch (RedisConnectionException ex) when (ex.FailureType == ConnectionFailureType.SocketClosed)
         {
             // The server closes the connection as it stops.
         }
 
-        await UntilAsync(async () =>
-        {
-            try
-            {
-                await server.PingAsync();
-                return true;
-            }
-            catch (RedisException)
-            {
-                return false;
-            }
-        });
+        await UntilAsync(async () => await ReadRunIdAsync(server) != runId);
         await WaitSettledAsync();
     }
 
@@ -122,7 +111,8 @@ internal sealed class ClusterKit : IAsyncDisposable
         await Mux.ConfigureAsync();
         var nodes = Nodes();
         var masters = nodes.Where(n => !n.IsReplica && n.Slots.Count > 0).ToList();
-        if (masters.Count == 0 || masters.Any(m => !nodes.Any(r => r.IsReplica && r.ParentNodeId == m.NodeId && r.IsConnected)))
+        var replicas = nodes.Where(n => n.IsReplica).ToList();
+        if (masters.Count == 0 || masters.Any(m => !replicas.Any(r => r.ParentNodeId == m.NodeId)))
         {
             return false;
         }
@@ -136,18 +126,38 @@ internal sealed class ClusterKit : IAsyncDisposable
             }
         }
 
+        foreach (var replica in replicas)
+        {
+            if (!replica.IsConnected || !await ReplicaIsReadyAsync(Mux.GetServer(replica.EndPoint)))
+            {
+                return false;
+            }
+        }
+
         return true;
     });
 
     public ValueTask DisposeAsync() => Mux.DisposeAsync();
 
-    private static async Task<string?> RoleAsync(IServer server)
+    internal static async Task<ClusterKit> CreateAsync(ConnectionMultiplexer mux, Func<ClusterKit, Task> settle)
     {
-        var role = await server.ExecuteAsync("ROLE");
-        return ((RedisResult[]?)role)?[0].ToString();
+        var kit = new ClusterKit(mux);
+        try
+        {
+            await settle(kit);
+            return kit;
+        }
+        catch
+        {
+            await kit.DisposeAsync();
+            throw;
+        }
     }
 
-    private static async Task UntilAsync(Func<Task<bool>> condition)
+    internal static async Task<string> ReadRunIdAsync(IServer server) =>
+        (await server.InfoAsync("server")).SelectMany(section => section).Single(field => field.Key == "run_id").Value;
+
+    internal static async Task UntilAsync(Func<Task<bool>> condition)
     {
         var started = TimeProvider.System.GetTimestamp();
         while (true)
@@ -159,7 +169,7 @@ internal sealed class ClusterKit : IAsyncDisposable
                     return;
                 }
             }
-            catch (RedisException)
+            catch (Exception ex) when (ex is RedisException or RedisTimeoutException)
             {
                 // A node that is restarting or failing over answers again shortly.
             }
@@ -171,6 +181,18 @@ internal sealed class ClusterKit : IAsyncDisposable
 
             await Task.Delay(TimeSpan.FromMilliseconds(200), TimeProvider.System);
         }
+    }
+
+    private static async Task<bool> ReplicaIsReadyAsync(IServer server)
+    {
+        var info = (await server.InfoAsync("replication")).SelectMany(section => section).ToDictionary();
+        return info.GetValueOrDefault("master_link_status") == "up" && info.GetValueOrDefault("master_sync_in_progress") == "0";
+    }
+
+    private static async Task<string?> RoleAsync(IServer server)
+    {
+        var role = await server.ExecuteAsync("ROLE");
+        return ((RedisResult[]?)role)?[0].ToString();
     }
 
     private static async Task MigrateAsync(SlotMigration migration, RedisKey[] keys)
