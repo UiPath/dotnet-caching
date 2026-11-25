@@ -58,7 +58,7 @@ internal sealed class InventoryMoverStatus(KeyInventory inventory, TimeProvider 
 
         // A key the registration maps to an invalid destination is no accepted skip class: the drain remains blocked while one exists.
         var confirmed = confirmAt is null || scan.At >= confirmAt;
-        return new DrainReport(moverPassed && confirmed && result.Movable == 0 && result.InvalidMapping == 0, result.Residue, result.Canary ?? 0);
+        return new DrainReport(moverPassed && confirmed && result.Movable == 0 && result.InvalidMapping == 0, result.Residue, result.Canary ?? 0, result.ExpectedUnmapped);
     }
 
     public async Task<IReadOnlyDictionary<string, long>> ResidueInventoryAsync(string group, CancellationToken cancellationToken) =>

@@ -2,7 +2,7 @@ using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Tests.KeyMove;
 
-// Keys are "<side prefix><cache>:<name>"; a key of a cache outside the managed set is not owned.
+// Keys are "<side prefix><cache>:<name>" unless a test overrides their ownership.
 internal sealed class FakeKeySpace(string nativePrefix, string legacyPrefix) : IGroupKeySpace
 {
     public Func<string, bool> Movable { get; set; } = key => key.Contains(":mv", StringComparison.Ordinal);
@@ -10,6 +10,8 @@ internal sealed class FakeKeySpace(string nativePrefix, string legacyPrefix) : I
     public Func<string, bool>? InvalidDestination { get; set; }
 
     public Dictionary<string, TimeSpan> MaxTtl { get; } = [];
+
+    public Dictionary<string, IReadOnlyList<string>> OwnersByKey { get; } = [];
 
     // A cache that is not listed stores strings.
     public Dictionary<string, KeyMoveKind> Kinds { get; } = [];
@@ -26,6 +28,11 @@ internal sealed class FakeKeySpace(string nativePrefix, string legacyPrefix) : I
     public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key)
     {
         OnOwnerOf?.Invoke(key);
+        if (OwnersByKey.TryGetValue(key, out var owners))
+        {
+            return owners;
+        }
+
         var prefix = PrefixOf(side);
         if (!key.StartsWith(prefix, StringComparison.Ordinal))
         {

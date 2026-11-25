@@ -813,14 +813,14 @@ public sealed class MoverPaceTests(RedisFixture fixture)
 
         public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
-        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
         {
             if (rate.Keys < Interlocked.Increment(ref _handled) || rate.Bytes < Interlocked.Read(ref _bytes))
             {
                 Interlocked.Increment(ref _uncharged);
             }
 
-            var result = await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+            var result = await inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
             Interlocked.Add(ref _bytes, result.Bytes);
             return result;
         }
@@ -835,10 +835,10 @@ public sealed class MoverPaceTests(RedisFixture fixture)
 
         public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
-        public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+        public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
         {
             first();
-            return inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+            return inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
         }
     }
 
@@ -855,10 +855,10 @@ public sealed class MoverPaceTests(RedisFixture fixture)
 
         public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
-        public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+        public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
         {
             _times.Enqueue(clock.GetElapsedTime(started));
-            return inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+            return inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
         }
     }
 }

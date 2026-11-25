@@ -344,7 +344,7 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         held = kit.Kit;
         await kit.SeedAsync("k");
 
-        var result = await kit.Target.MoveAsync("k", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, Ct);
+        var result = await kit.Target.MoveAsync("k", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, null, Ct);
 
         result.Moved.Should().BeFalse();
         result.SkipReason.Should().Be("duplicate", "the writer deleted L, so the second run finds nothing to promote");
@@ -360,6 +360,6 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
 
         public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
-        public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken) => inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+        public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken) => inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
     }
 }

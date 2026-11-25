@@ -26,7 +26,7 @@ internal sealed class CountingTarget(IMoveTarget inner) : IMoveTarget
 
     public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
-    public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+    public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
     {
         var n = _calls.AddOrUpdate(key, 1, (_, c) => c + 1);
         if (Before is not null && await Before(key, n) is { } answer)
@@ -34,7 +34,7 @@ internal sealed class CountingTarget(IMoveTarget inner) : IMoveTarget
             return answer;
         }
 
-        var result = await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+        var result = await inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
         if (result.Moved)
         {
             _moved.AddOrUpdate(key, 1, (_, c) => c + 1);
@@ -145,9 +145,9 @@ internal sealed class DoneTarget(IMoveTarget inner) : IMoveTarget
 
     public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
-    public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+    public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
     {
-        var result = await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+        var result = await inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
         _results.Enqueue(result);
         _resultEnqueued.TrySetResult();
         return result;

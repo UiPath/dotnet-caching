@@ -735,7 +735,7 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) =>
             ValueTask.FromResult(new DryRunProbe(DryRunClasses.Unavailable, null, null));
 
-        public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken) =>
+        public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
     }
 
