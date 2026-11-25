@@ -17,7 +17,7 @@ public class RedisConnectorStaleEndpointTests
         var h = new Harness();
 
         await h.ScanTwiceAcrossThresholdAsync();
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         h.Factory.CreateCount.Should().Be(2);
         h.Telemetry.Events.Should().ContainInOrder("Redis.StaleEndpointDetected", "Redis.ForcedReconnect");
@@ -35,7 +35,7 @@ public class RedisConnectorStaleEndpointTests
         h.Clock.Advance(TimeSpan.FromMinutes(5)); // first tick at 30 s records the outage; 4.5 min later it is not yet overdue
         h.Factory.CreateCount.Should().Be(1);
         h.Clock.Advance(TimeSpan.FromSeconds(30));
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         h.Factory.CreateCount.Should().Be(2);
         h.Telemetry.Events.Should().ContainInOrder("Redis.StaleEndpointDetected", "Redis.ForcedReconnect");
@@ -108,7 +108,7 @@ public class RedisConnectorStaleEndpointTests
         h.Topology.Members = [Live];
         h.Clock.Advance(TimeSpan.FromMinutes(5));
         await h.Connector.ScanStaleEndpointsAsync();
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         h.Factory.CreateCount.Should().Be(2);
         h.Telemetry.Events.Should().Equal("Redis.StaleEndpointStillAMember", "Redis.StaleEndpointDetected", "Redis.ForcedReconnect");
@@ -191,7 +191,7 @@ public class RedisConnectorStaleEndpointTests
 
         h.Clock.Advance(TimeSpan.FromSeconds(30));
         await h.Connector.ScanStaleEndpointsAsync();
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         h.Factory.CreateCount.Should().Be(2);
         h.Telemetry.Events.Should().ContainInOrder("Redis.StaleEndpointDetected", "Redis.ForcedReconnect");
@@ -235,7 +235,7 @@ public class RedisConnectorStaleEndpointTests
         h.Topology.RefreshLands = true;
         h.Clock.Advance(TimeSpan.FromSeconds(30));
         await h.Connector.ScanStaleEndpointsAsync();
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         h.Factory.CreateCount.Should().Be(2);
         h.Telemetry.Events.Should().ContainInOrder("Redis.StaleEndpointDetected", "Redis.ForcedReconnect");
@@ -274,12 +274,9 @@ public class RedisConnectorStaleEndpointTests
         h.Clock.Advance(TimeSpan.FromSeconds(30));
         await h.Connector.ScanStaleEndpointsAsync(); // two null refreshes on the first multiplexer
         h.Connector.ForceReconnect();
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        for (var i = 0; i < 500 && !h.Replacement.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IConnectionMultiplexer.ConfigureAsync)); i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken); // the rebuild releases its guard just after disposing the old multiplexer
-            await h.Connector.ScanStaleEndpointsAsync();
-        }
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await h.Connector.ReconnectTask;
+        await h.Connector.ScanStaleEndpointsAsync();
 
         for (var refreshes = 1; refreshes < RedisConnector.NullTopologyRefreshLimit; refreshes++)
         {
@@ -316,7 +313,7 @@ public class RedisConnectorStaleEndpointTests
             h.Clock.Advance(TimeSpan.FromSeconds(30));
             await h.Connector.ScanStaleEndpointsAsync(); // the remaining skipped intervals run out, then the refresh lands; the event is recorded before the rebuild is queued
         }
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         h.Factory.CreateCount.Should().Be(2);
         h.Telemetry.Events.Should().ContainInOrder("Redis.StaleEndpointDetected", "Redis.ForcedReconnect");
@@ -411,7 +408,7 @@ public class RedisConnectorStaleEndpointTests
 
         var scan = h.Connector.ScanStaleEndpointsAsync();
         h.Connector.ForceReconnect();
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
         await h.Topology.Refreshed();
         refresh.SetResult(true);
         await scan;
@@ -428,19 +425,13 @@ public class RedisConnectorStaleEndpointTests
         var h = new Harness(replacementAvailable: false);
 
         await h.ScanTwiceAcrossThresholdAsync();
-        for (var i = 0; i < 500 && h.Telemetry.Exceptions.Count == 0; i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await h.Connector.ReconnectTask;
         h.Factory.CreateCount.Should().Be(2);
         h.Telemetry.Exceptions.Should().ContainSingle();
-        await Task.Delay(100, TestContext.Current.CancellationToken); // let the failed rebuild release its guard
+        await h.Connector.ReconnectTask;
 
         await h.Connector.ScanStaleEndpointsAsync();
-        for (var i = 0; i < 500 && h.Telemetry.Exceptions.Count < 2; i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await h.Connector.ReconnectTask;
 
         h.Factory.CreateCount.Should().Be(3);
         h.Telemetry.Events.Should().Equal("Redis.StaleEndpointDetected", "Redis.StaleEndpointDetected");
@@ -466,7 +457,7 @@ public class RedisConnectorStaleEndpointTests
 
         h.RaiseConfigurationChanged();
         h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         h.Telemetry.Events.Should().ContainInOrder("Redis.StaleEndpointDetected", "Redis.ForcedReconnect");
         h.Connector.Dispose();
@@ -501,7 +492,7 @@ public class RedisConnectorStaleEndpointTests
         h.RaiseConfigurationChanged();
         h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
 
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
         h.Connector.Dispose();
     }
 
@@ -523,10 +514,10 @@ public class RedisConnectorStaleEndpointTests
         h.Topology.RefreshLands = true;
         h.Topology.Members = [Live];
         refresh.SetResult(true);
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await h.AwaitScansAsync();
         h.Clock.Advance(TimeSpan.FromSeconds(30)); // the next interval, well inside the threshold
 
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
         h.Connector.Dispose();
     }
 
@@ -542,7 +533,7 @@ public class RedisConnectorStaleEndpointTests
 
         h.Clock.Advance(TimeSpan.FromSeconds(30)); // the next interval, well inside the threshold
 
-        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
         h.Connector.Dispose();
     }
 
@@ -573,7 +564,7 @@ public class RedisConnectorStaleEndpointTests
         h.RaiseConfigurationChanged();
         h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
         await h.WaitForRefreshesAsync(1);
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await h.AwaitScansAsync();
 
         await h.Multiplexer.Received(1).ConfigureAsync(Arg.Any<TextWriter?>());
         h.Connector.Dispose();
@@ -592,7 +583,7 @@ public class RedisConnectorStaleEndpointTests
 
         h.RaiseConfigurationChanged();
         h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await h.AwaitScansAsync();
 
         await h.Multiplexer.Received(1).ConfigureAsync(Arg.Any<TextWriter?>());
         h.Connector.Dispose();
@@ -610,11 +601,11 @@ public class RedisConnectorStaleEndpointTests
         await h.WaitForRefreshesAsync(1);
         h.Clock.Advance(TimeSpan.FromSeconds(31)); // longer than the window opened before the refresh
         refresh.SetResult(true);
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await h.AwaitScansAsync();
 
         h.RaiseConfigurationChanged();
         h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await h.AwaitScansAsync();
 
         await h.Multiplexer.Received(1).ConfigureAsync(Arg.Any<TextWriter?>());
         h.Connector.Dispose();
@@ -757,6 +748,8 @@ public class RedisConnectorStaleEndpointTests
 
     private sealed class Harness
     {
+        private readonly List<Task> _scans = [];
+        private readonly System.Threading.Channels.Channel<bool> _refreshes = System.Threading.Channels.Channel.CreateUnbounded<bool>();
 
         public Harness(bool retiredIsMember = false, bool clusterConfigurationKnown = true, bool retiredIsConfigured = false, bool replacementAvailable = true, bool timerDriven = false, bool connectedNodeIsConfigured = true)
         {
@@ -773,6 +766,7 @@ public class RedisConnectorStaleEndpointTests
             Multiplexer.GetEndPoints(true).Returns(retiredIsConfigured ? [Seed, Retired] : [Seed]);
             Multiplexer.GetServers().Returns([LiveServer, RetiredServer]);
             Multiplexer.ConfigureAsync(Arg.Any<TextWriter?>()).Returns(_ => Topology.Refreshed());
+            Multiplexer.When(m => m.ConfigureAsync(Arg.Any<TextWriter?>())).Do(_ => _refreshes.Writer.TryWrite(true));
             Multiplexer.CloseAsync(Arg.Any<bool>()).Returns(Task.CompletedTask);
             Multiplexer.When(m => m.Dispose()).Do(_ => OldDisposed.TrySetResult());
 
@@ -799,15 +793,20 @@ public class RedisConnectorStaleEndpointTests
         public RedisConnector Connector { get; }
         public TaskCompletionSource OldDisposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public void RaiseConfigurationChanged() =>
+        public void RaiseConfigurationChanged()
+        {
             Multiplexer.ConfigurationChanged += Raise.EventWith(Multiplexer, new EndPointEventArgs(Multiplexer, Seed));
+            _scans.Add(Connector.TopologyScan);
+        }
+
+        public Task AwaitScansAsync() => Task.WhenAll(_scans);
 
         public async Task WaitForRefreshesAsync(int count)
         {
             bool Reached() => Multiplexer.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IConnectionMultiplexer.ConfigureAsync)) >= count;
-            for (var i = 0; i < 500 && !Reached(); i++)
+            while (!Reached())
             {
-                await Task.Delay(10, TestContext.Current.CancellationToken);
+                await _refreshes.Reader.ReadAsync(TestContext.Current.CancellationToken);
             }
 
             Reached().Should().BeTrue($"{count} membership refresh(es) should have run");
@@ -816,13 +815,11 @@ public class RedisConnectorStaleEndpointTests
         public async Task WaitForCreatesAsync(int count)
         {
             // A rebuild runs on the pool and clears its guard after the attempt, so wait for both.
-            for (var i = 0; i < 500 && (Factory.CreateCount < count || Telemetry.Exceptions.Count < count - 1); i++)
-            {
-                await Task.Delay(10, TestContext.Current.CancellationToken);
-            }
+            await AwaitScansAsync();
+            await Connector.ReconnectTask;
 
             Factory.CreateCount.Should().BeGreaterThanOrEqualTo(count);
-            await Task.Delay(100, TestContext.Current.CancellationToken);
+            await Connector.ReconnectTask;
         }
 
         public async Task ScanTwiceAcrossThresholdAsync()

@@ -6,9 +6,15 @@ public sealed class RedisContainerFixture : IAsyncLifetime
 {
     public const string StreamsSkipReason = "Needs the Redis Streams commands, which this server lacks or runs differently (no stream commands, or a deleted stream that keeps its groups).";
 
+    private ConnectionMultiplexer? _clockConnection;
+
     public bool Enabled { get; private set; }
 
     public string ConnectionString { get; private set; } = string.Empty;
+
+    public DateTimeOffset TimeOrigin => _clockConnection is { } connection
+        ? new DateTimeOffset(DateTime.SpecifyKind(connection.GetServer(connection.GetEndPoints()[0]).Time(), DateTimeKind.Utc))
+        : DateTimeOffset.UnixEpoch;
 
     /// <summary>The version of the server the tests run against; 0.0 when they do not run.</summary>
     public Version ServerVersion { get; private set; } = new(0, 0);
@@ -62,7 +68,8 @@ public sealed class RedisContainerFixture : IAsyncLifetime
         var connectionString = Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING");
         ConnectionString = string.IsNullOrWhiteSpace(connectionString) ? "localhost:6379" : connectionString;
         Enabled = true;
-        await using var connection = await ConnectionMultiplexer.ConnectAsync(ConnectionString);
+        var connection = await ConnectionMultiplexer.ConnectAsync(ConnectionString);
+        _clockConnection = connection;
         var server = connection.GetServer(connection.GetEndPoints()[0]);
         ServerVersion = server.Version;
         SupportsAcl = await CanSetAclUserAsync(server);
@@ -100,7 +107,7 @@ public sealed class RedisContainerFixture : IAsyncLifetime
         }
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync() => _clockConnection?.DisposeAsync() ?? ValueTask.CompletedTask;
 
     internal static async Task<bool> TryAsync(Func<Task<RedisResult>> command)
     {

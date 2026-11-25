@@ -27,12 +27,23 @@ public class RedisFirstConnectIntegrationTests(RedisContainerFixture fixture)
         {
             // More concurrent callers than the pool has threads: each one that blocked on the connect would hold a thread until it finished.
             var callers = (Environment.ProcessorCount * 6) + 16;
+            var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var count = 0;
             var reads = Enumerable.Range(0, callers)
-                .Select(_ => Task.Run(async () => await cache.GetOrAddAsync<string>($"it-{Guid.NewGuid():N}", _ => Task.FromResult<string?>("generated"), TimeSpan.FromMinutes(1), Ct), Ct))
+                .Select(_ => Task.Run(async () =>
+                {
+                    var read = cache.GetOrAddAsync<string>($"it-{Guid.NewGuid():N}", _ => Task.FromResult<string?>("generated"), TimeSpan.FromMinutes(1), Ct);
+                    if (Interlocked.Increment(ref count) == callers)
+                    {
+                        returned.TrySetResult();
+                    }
+                    return await read;
+                },
+                Ct))
                 .ToArray();
             // Every caller has started and is waiting on the connect, so none is queued for a thread: a caller blocked on the connect would hold its thread, and the rest would sit in the queue.
-            var drained = await DrainedAsync(TimeSpan.FromSeconds(3));
-            drained.Should().BeTrue("the pool has threads for every caller while all of them wait for the connect");
+            await returned.Task.WaitAsync(Ct);
+            reads.Should().OnlyContain(read => !read.IsCompleted);
             gated.Open();
 
             (await Task.WhenAll(reads)).Should().AllBe("generated");
@@ -41,22 +52,6 @@ public class RedisFirstConnectIntegrationTests(RedisContainerFixture fixture)
         {
             gated.Open();
         }
-    }
-
-    private static async Task<bool> DrainedAsync(TimeSpan timeout)
-    {
-        var started = System.Diagnostics.Stopwatch.StartNew();
-        while (started.Elapsed < timeout)
-        {
-            if (ThreadPool.PendingWorkItemCount == 0)
-            {
-                return true;
-            }
-
-            await Task.Delay(10, Ct);
-        }
-
-        return false;
     }
 
     private ServiceProvider BuildProvider(IRedisConnector connector) =>

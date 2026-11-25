@@ -108,7 +108,7 @@ public class RedisConnectorLifecycleTests
         var factory = new TokenCapturingFactory();
         var connector = NewConnector(factory);
         var connecting = connector.ConnectAsync(TestContext.Current.CancellationToken).AsTask();
-        var token = await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var token = await factory.Token.WaitAsync(TestContext.Current.CancellationToken);
         token.IsCancellationRequested.Should().BeFalse();
 
         connector.Dispose();
@@ -124,7 +124,7 @@ public class RedisConnectorLifecycleTests
         var factory = new TokenCapturingFactory(onToken: token => token.Register(() => throw new InvalidOperationException("callback boom")));
         var connector = NewConnector(factory, telemetry);
         _ = connector.ConnectAsync(TestContext.Current.CancellationToken).AsTask();
-        await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await factory.Token.WaitAsync(TestContext.Current.CancellationToken);
 
         var dispose = () => connector.Dispose();
 
@@ -139,7 +139,7 @@ public class RedisConnectorLifecycleTests
         var connector = NewConnector(factory);
         await connector.ConnectAsync(TestContext.Current.CancellationToken);
         connector.ForceReconnect();
-        var token = await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var token = await factory.Token.WaitAsync(TestContext.Current.CancellationToken);
 
         connector.Dispose();
 
@@ -154,7 +154,7 @@ public class RedisConnectorLifecycleTests
         var factory = new TokenCapturingFactory(holdUntil: release.Task);
         var connector = NewConnector(factory);
         var connecting = connector.ConnectAsync(TestContext.Current.CancellationToken).AsTask();
-        var token = await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var token = await factory.Token.WaitAsync(TestContext.Current.CancellationToken);
 
         connector.Dispose();
 
@@ -188,15 +188,12 @@ public class RedisConnectorLifecycleTests
             connector.ForceReconnect();
         }
 
-        await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await factory.Token.WaitAsync(TestContext.Current.CancellationToken);
 
         connector.Dispose();
         IsLifetimeDisposed(connector).Should().BeFalse("a factory is still running with its token");
         release.SetResult();
-        for (var i = 0; i < 500 && !IsLifetimeDisposed(connector); i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await Task.WhenAll(connecting, connector.ReconnectTask).ContinueWith(task => _ = task.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
         IsLifetimeDisposed(connector).Should().BeTrue("the factory has seen the cancellation and returned");
     }
@@ -209,14 +206,11 @@ public class RedisConnectorLifecycleTests
         var connector = NewConnector(factory, telemetry);
         await connector.ConnectAsync(TestContext.Current.CancellationToken);
         connector.ForceReconnect();
-        await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await factory.Token.WaitAsync(TestContext.Current.CancellationToken);
 
         connector.Dispose();
         var reconnecting = typeof(RedisConnector).GetField("_reconnecting", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        for (var i = 0; i < 500 && (int)reconnecting.GetValue(connector)! != 0; i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await connector.ReconnectTask;
 
         ((int)reconnecting.GetValue(connector)!).Should().Be(0, "the reconnect has finished");
         telemetry.Exceptions.Should().BeEmpty("a shutdown is not a failed reconnect");
@@ -271,7 +265,7 @@ public class RedisConnectorLifecycleTests
         connector.OnReconnected += (_, _) => reconnectedRaised = true;
 
         connector.ForceReconnect();
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         factory.CreateCount.Should().Be(2);
         await oldMultiplexer.Received(1).CloseAsync(true);
@@ -289,10 +283,7 @@ public class RedisConnectorLifecycleTests
         var connector = NewConnector(factory);
 
         var warmUp = connector.ConnectAsync(TestContext.Current.CancellationToken);
-        for (var i = 0; i < 100 && Volatile.Read(ref factory.CreateAsyncCount) == 0; i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await factory.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         connector.ForceReconnect();
 
@@ -351,7 +342,7 @@ public class RedisConnectorLifecycleTests
         connector.OnReconnected += (_, _) => reconnected.TrySetResult();
 
         connector.ForceReconnect();
-        await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await reconnected.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         connector.IsConnected.Should().BeTrue();
         factory.CreateCount.Should().Be(2);
@@ -372,7 +363,7 @@ public class RedisConnectorLifecycleTests
         connector.OnReconnected += (_, _) => reconnected = true;
 
         connector.ForceReconnect();
-        await telemetry.ExceptionTracked.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await telemetry.ExceptionTracked.WaitAsync(TestContext.Current.CancellationToken);
 
         reconnected.Should().BeFalse();
         connector.IsConnected.Should().BeTrue();
@@ -396,7 +387,7 @@ public class RedisConnectorLifecycleTests
         connector.OnReconnected += (_, _) => throw new InvalidOperationException("handler boom");
 
         connector.ForceReconnect();
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         oldMultiplexer.Received(1).Dispose();
         connector.Dispose();
@@ -420,7 +411,7 @@ public class RedisConnectorLifecycleTests
         connector.OnReconnected += (_, _) => Interlocked.Increment(ref reached);
 
         connector.ForceReconnect();
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         Volatile.Read(ref reached).Should().Be(1, "a throwing subscriber must not cost the rest their notification");
         telemetry.Exceptions.Should().ContainSingle().Which.Exception.Should().BeSameAs(boom);
@@ -587,7 +578,7 @@ public class RedisConnectorLifecycleTests
         connector.OnReconnected += (_, _) => Interlocked.Increment(ref reconnected);
 
         connector.ForceReconnect();
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         Volatile.Read(ref reconnected).Should().Be(1, "subscribers re-subscribe on this event");
         oldMultiplexer.Received(1).Dispose();
@@ -625,7 +616,7 @@ public class RedisConnectorLifecycleTests
         await connector.ConnectAsync(TestContext.Current.CancellationToken);
 
         connector.ForceReconnect();
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         oldMultiplexer.Received(1).Dispose();
         connector.Dispose();
@@ -645,7 +636,7 @@ public class RedisConnectorLifecycleTests
         connector.Dispose();
         gate.SetResult();
         await warmUp.Invoking(t => t).Should().ThrowAsync<ObjectDisposedException>("the connection it made was disposed, not handed back");
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         multiplexer.Received(1).Dispose();
     }
@@ -677,10 +668,10 @@ public class RedisConnectorLifecycleTests
         TaskScheduler.UnobservedTaskException += OnUnobserved;
         try
         {
-            await started.Task.WaitAsync(TimeSpan.FromSeconds(10), testToken);
+            await started.Task.WaitAsync(testToken);
             connector.Dispose();
             release.SetResult(Substitute.For<IConnectionMultiplexer>());
-            (await faulted.WaitAsync(TimeSpan.FromSeconds(10), testToken)).Should().BeTrue();
+            (await faulted.WaitAsync(testToken)).Should().BeTrue();
             await CollectAbandonedConnectAsync(pending, testToken);
 
             pending.IsAlive.Should().BeFalse("the abandoned task must be collected before checking for its exception");
@@ -745,7 +736,7 @@ public class RedisConnectorLifecycleTests
         var reconnected = new TaskCompletionSource();
         connector.OnReconnected += (_, _) => reconnected.TrySetResult();
         connector.ForceReconnect();
-        await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await reconnected.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         var onReplacement = MaintenanceEvent();
         replacement.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(replacement, onReplacement);
@@ -813,7 +804,7 @@ public class RedisConnectorLifecycleTests
         var reconnected = new TaskCompletionSource();
         connector.OnReconnected += (_, _) => reconnected.TrySetResult();
         connector.ForceReconnect();
-        await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await reconnected.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         seen.Should().ContainSingle("the generation about to carry commands is the one a MOVING describes")
             .Which.Should().BeSameAs(moving);
@@ -902,12 +893,11 @@ public class RedisConnectorLifecycleTests
     [SuppressMessage("SonarAnalyzer.CSharp", "S1215", Justification = "An unobserved task exception is published during finalization.")]
     private static async Task CollectAbandonedConnectAsync(WeakReference pending, CancellationToken cancellationToken)
     {
-        for (var attempt = 0; attempt < 20 && pending.IsAlive; attempt++)
-        {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            await Task.Delay(TimeSpan.FromMilliseconds(10), TimeProvider.System, cancellationToken);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        await Task.Yield();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
     }
 
     private static IServer StubServer(bool isReplica, bool isConnected)
@@ -1049,9 +1039,11 @@ public class RedisConnectorLifecycleTests
     private sealed class GatedFactory(IConnectionMultiplexer multiplexer, Task gate) : IConnectionMultiplexerFactory
     {
         public int CreateAsyncCount;
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref CreateAsyncCount);
+            Started.TrySetResult();
             await gate.ConfigureAwait(false);
             return multiplexer;
         }
@@ -1079,7 +1071,7 @@ public class RedisConnectorLifecycleTests
                 cancellationToken.ThrowIfCancellationRequested();
             }
 
-            await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            await new TaskCompletionSource().Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             throw new InvalidOperationException("unreachable");
         }
     }

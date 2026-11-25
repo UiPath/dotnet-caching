@@ -118,7 +118,7 @@ internal sealed partial class MultilayerCache
 
         try
         {
-            return (await FactoryTimeout.RunAsync(state, generator, policy.FactoryTimeout, options.CacheKey, Name, Telemetry, scope.Token).ConfigureAwait(false), null);
+            return (await FactoryTimeout.RunAsync(state, generator, policy.FactoryTimeout, options.CacheKey, Name, Telemetry, scope.Token, clock: _clock).ConfigureAwait(false), null);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && scope.Token.IsCancellationRequested) && TryGetStale<T>(name, policy, out var current, out var kept))
         {
@@ -148,7 +148,7 @@ internal sealed partial class MultilayerCache
         var late = false;
         try
         {
-            var generation = FactoryTimeout.RunAsync(state, generator, policy.FactoryTimeout, options.CacheKey, Name, Telemetry, own.Token);
+            var generation = FactoryTimeout.RunAsync(state, generator, policy.FactoryTimeout, options.CacheKey, Name, Telemetry, own.Token, clock: _clock);
             if (!generation.IsCompleted)
             {
                 using var timer = new CancellationTokenSource();

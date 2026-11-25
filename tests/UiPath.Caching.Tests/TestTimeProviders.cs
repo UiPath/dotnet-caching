@@ -27,6 +27,8 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     private int _created;
     private TaskCompletionSource _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    public event Action? TimerScheduled;
+
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
     /// <summary>How many timers were ever created, so a test can tell a new timer from one that already existed.</summary>
@@ -56,6 +58,24 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         }
     }
 
+    public async Task WaitForTimerAsync(CancellationToken token)
+    {
+        var scheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnTimerScheduled() => scheduled.TrySetResult();
+        TimerScheduled += OnTimerScheduled;
+        try
+        {
+            if (!HasTimers)
+            {
+                await scheduled.Task.WaitAsync(token);
+            }
+        }
+        finally
+        {
+            TimerScheduled -= OnTimerScheduled;
+        }
+    }
+
     public override DateTimeOffset GetUtcNow()
     {
         lock (_gate)
@@ -81,6 +101,7 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
             timer.Change(dueTime, period);
         }
 
+        TimerScheduled?.Invoke();
         return timer;
     }
 

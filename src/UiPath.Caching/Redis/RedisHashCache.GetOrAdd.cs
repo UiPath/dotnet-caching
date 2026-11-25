@@ -40,7 +40,7 @@ internal sealed partial class RedisHashCache
     private Task<IDictionary<string, T?>> RunGeneratorAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan? factoryTimeout, CancellationToken token) =>
         factoryTimeout is null || factoryTimeout.Value <= TimeSpan.Zero
             ? generator(state, token)
-            : FactoryTimeout.RunAsync(ct => generator(state, ct), factoryTimeout, cacheKey, Name, Telemetry, token);
+            : FactoryTimeout.RunAsync(ct => generator(state, ct), factoryTimeout, cacheKey, Name, Telemetry, token, clock: Clock);
 
     private ValueTask<bool> SetEmptyMarkerAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token)
     {

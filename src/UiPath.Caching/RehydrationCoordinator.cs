@@ -325,7 +325,8 @@ internal sealed class RehydrationCoordinator(
                 cacheName,
                 telemetry,
                 CancellationToken.None,
-                source: FactoryTimeout.SourceRehydrateLock).ConfigureAwait(false);
+                source: FactoryTimeout.SourceRehydrateLock,
+                clock: clock).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {

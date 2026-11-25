@@ -19,8 +19,9 @@ internal static class FactoryTimeout
         string cacheName,
         ICachingTelemetryProvider telemetry,
         CancellationToken token,
-        string source = SourceForeground) =>
-        RunAsync(factory, static (f, ct) => f(ct), factoryTimeout, cacheKey, cacheName, telemetry, token, source);
+        string source = SourceForeground,
+        TimeProvider? clock = null) =>
+        RunAsync(factory, static (f, ct) => f(ct), factoryTimeout, cacheKey, cacheName, telemetry, token, source, clock);
 
     /// <summary>As the overload above, with the factory's state passed to it rather than bound into a closure.</summary>
     public static Task<T> RunAsync<TState, T>(
@@ -31,11 +32,12 @@ internal static class FactoryTimeout
         string cacheName,
         ICachingTelemetryProvider telemetry,
         CancellationToken token,
-        string source = SourceForeground)
+        string source = SourceForeground,
+        TimeProvider? clock = null)
     {
         if (factoryTimeout is not null && factoryTimeout.Value > TimeSpan.Zero)
         {
-            return RunWithTimeoutAsync(state, factory, factoryTimeout.Value, cacheKey, cacheName, telemetry, source, token);
+            return RunWithTimeoutAsync(state, factory, factoryTimeout.Value, cacheKey, cacheName, telemetry, source, clock ?? TimeProvider.System, token);
         }
 
         // Nothing to time, so the factory's own task is handed back: an async wrapper would allocate a second one per run. A throw before it yields stays on the task, as the wrapper reported it.
@@ -57,14 +59,23 @@ internal static class FactoryTimeout
         string cacheName,
         ICachingTelemetryProvider telemetry,
         string source,
+        TimeProvider clock,
         CancellationToken token)
     {
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token);
         // CancelAfter throws when the delay exceeds Int32.MaxValue ms; clamp so misconfigured values degrade gracefully.
         var clampedTimeout = factoryTimeout.TotalMilliseconds > int.MaxValue
             ? TimeSpan.FromMilliseconds(int.MaxValue)
             : factoryTimeout;
-        linkedCts.CancelAfter(clampedTimeout);
+
+        // The system clock keeps the single linked source; only an injected clock needs its own timer source.
+        using var timeout = ReferenceEquals(clock, TimeProvider.System) ? null : new CancellationTokenSource(clampedTimeout, clock);
+        using var linkedCts = timeout is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(token)
+            : CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
+        if (timeout is null)
+        {
+            linkedCts.CancelAfter(clampedTimeout);
+        }
         try
         {
             return await factory(state, linkedCts.Token).ConfigureAwait(false);

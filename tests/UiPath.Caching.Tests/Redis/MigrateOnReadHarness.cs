@@ -53,11 +53,9 @@ internal sealed class MigrateOnReadHarness : IDisposable
     {
         var telemetry = new RecordingTelemetryProvider();
         fast ??= new PassthroughValueSerializer(0x10);
+        clock ??= new ManualTimeProvider(ServerTime(connectionString));
         var services = new ServiceCollection().AddLogging().AddSingleton<ICachingTelemetryProvider>(telemetry);
-        if (clock is not null)
-        {
-            services.AddSingleton(clock);
-        }
+        services.AddSingleton(clock);
 
         FormatNegotiator? negotiator = null;
         if (mode == FormatNegotiationMode.Auto)
@@ -65,7 +63,7 @@ internal sealed class MigrateOnReadHarness : IDisposable
             negotiator = new FormatNegotiator(
                 [new DesiredWrite(fast, ["10"], [Migrating, MigratingOpen, Narrow, NotMigrating], [])],
                 new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero },
-                TimeProvider.System);
+                clock);
             services.AddSingleton(new FormatNegotiation { Negotiator = negotiator });
         }
 
@@ -132,4 +130,12 @@ internal sealed class MigrateOnReadHarness : IDisposable
         (int)Telemetry.Metrics.Where(m => m.Name == Metrics.SerializerRewrite && m.Properties!["outcome"] == outcome).Sum(m => m.Value);
 
     public void Dispose() => _provider.Dispose();
+
+    // Expiries go to Redis as absolute times, so the fake clock starts at the server's time.
+    private static DateTimeOffset ServerTime(string connectionString)
+    {
+        using var connection = ConnectionMultiplexer.Connect(connectionString);
+        var time = (RedisResult[])connection.GetDatabase().Execute("TIME")!;
+        return DateTimeOffset.FromUnixTimeSeconds((long)time[0]).AddTicks((long)time[1] * 10);
+    }
 }

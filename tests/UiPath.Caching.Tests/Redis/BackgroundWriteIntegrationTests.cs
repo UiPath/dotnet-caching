@@ -9,7 +9,7 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
-    private static readonly TimeSpan Slow = TimeSpan.FromMilliseconds(150);
+    private readonly RedisTestSignals _signals = new();
     private readonly string _app = $"bw{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
 
@@ -19,19 +19,20 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task A_peer_woken_by_a_set_never_keeps_the_value_the_set_replaced()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (_, writer) = Node("a", new DelayedWrites(Slow));
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        var (_, writer) = Node("a", writes);
         var (_, peer) = Node("b");
         var key = Unique();
+        writes.Open();
         (await writer.SetAsync(key, "old", Ct)).Should().BeTrue();
         (await peer.GetAsync<string>(key, Ct)).Should().Be("old");
 
+        writes.Hold();
         var set = writer.SetAsync(key, "new", Ct).AsTask();
-        // Reading as the invalidation lands: a value read from the store before the write reaches it would stay local for the whole lifetime.
-        while (!set.IsCompleted)
-        {
-            _ = await peer.GetAsync<string>(key, Ct);
-            await Task.Delay(2, Ct);
-        }
+        await writes.Entered.Task.WaitAsync(Ct);
+        set.IsCompleted.Should().BeFalse();
+        _ = await peer.GetAsync<string>(key, Ct);
+        writes.Open();
 
         (await set).Should().BeTrue();
         (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "new")).Should().BeTrue("the peer drops its copy on the event and the store already holds the new value");
@@ -41,16 +42,18 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task A_background_set_returns_before_its_write_and_the_value_reaches_redis_and_the_peer_after()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (_, writer) = Node("a", new DelayedWrites(TimeSpan.FromMilliseconds(600)), background: true);
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        var (_, writer) = Node("a", writes, background: true);
         var (_, peer) = Node("b");
         var key = Unique();
 
-        var started = DateTime.UtcNow;
         (await writer.SetAsync(key, "v", Ct)).Should().BeTrue();
 
-        (DateTime.UtcNow - started).Should().BeLessThan(TimeSpan.FromMilliseconds(400), "the write itself takes 600 ms");
+        await writes.Entered.Task.WaitAsync(Ct);
+        writes.IsHeld.Should().BeTrue("the caller returned while the write was held");
         (await writer.GetAsync<string>(key, Ct)).Should().Be("v", "the value is local at once");
         (await peer.GetAsync<string>(key, Ct)).Should().BeNull("the write has not reached the store yet");
+        writes.Open();
         (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "v")).Should().BeTrue();
     }
 
@@ -58,20 +61,21 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task A_background_set_replacing_a_value_invalidates_the_peer_only_after_the_write()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (_, writer) = Node("a", new DelayedWrites(Slow), background: true);
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        var (_, writer) = Node("a", writes, background: true);
         var (peerNode, peer) = Node("b");
         var key = Unique();
+        writes.Open();
         (await writer.SetAsync(key, "old", Ct)).Should().BeTrue();
         (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "old")).Should().BeTrue();
         await StreamsReady.AwaitSubscribedAsync(peerNode);
 
+        writes.Hold();
         (await writer.SetAsync(key, "new", Ct)).Should().BeTrue();
-        var until = DateTime.UtcNow.AddSeconds(2);
-        while (DateTime.UtcNow < until)
-        {
-            _ = await peer.GetAsync<string>(key, Ct);
-            await Task.Delay(2, Ct);
-        }
+        await writes.Entered.Task.WaitAsync(Ct);
+        (await peer.GetAsync<string>(key, Ct)).Should().Be("old");
+        writes.Open();
+        await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "new");
 
         (await peer.GetAsync<string>(key, Ct)).Should().Be("new");
     }
@@ -80,15 +84,17 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task Background_sets_of_one_key_land_in_redis_in_the_order_they_were_issued_when_the_first_write_is_slow()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (_, writer) = Node("a", new SlowFirstWrite(TimeSpan.FromMilliseconds(400)), background: true);
+        var writes = new GatedWrites(firstOnly: true) { Completed = _signals.Pulse };
+        var (_, writer) = Node("a", writes, background: true);
         var (_, peer) = Node("b");
         var key = Unique();
 
         (await writer.SetAsync(key, "v1", Ct)).Should().BeTrue();
         (await writer.SetAsync(key, "v2", Ct)).Should().BeTrue();
+        writes.Open();
 
         (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "v2")).Should().BeTrue();
-        await Task.Delay(700, Ct);
+        await writes.FirstCompleted.Task.WaitAsync(Ct);
         (await peer.GetAsync<string>(key, Ct)).Should().Be("v2", "the slow first write must not land after the second");
     }
 
@@ -96,12 +102,16 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task Disposing_the_cache_lets_the_background_write_finish()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (node, writer) = Node("a", new DelayedWrites(TimeSpan.FromMilliseconds(500)), background: true);
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        var (node, writer) = Node("a", writes, background: true);
         var (_, peer) = Node("b");
         var key = Unique();
         (await writer.SetAsync(key, "v", Ct)).Should().BeTrue();
 
-        await node.DisposeAsync();
+        var disposing = Task.Run(async () => await node.DisposeAsync(), Ct);
+        await writes.Entered.Task.WaitAsync(Ct);
+        writes.Open();
+        await disposing;
 
         (await peer.GetAsync<string>(key, Ct)).Should().Be("v");
     }
@@ -110,13 +120,15 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task A_value_changed_after_a_background_set_returns_is_stored_as_it_was()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (_, writer) = Node("a", new DelayedWrites(TimeSpan.FromMilliseconds(300)), background: true);
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        var (_, writer) = Node("a", writes, background: true);
         var (_, peer) = Node("b");
         var key = Unique();
         var value = new Box { Text = "before" };
 
         (await writer.SetAsync(key, value, Ct)).Should().BeTrue();
         value.Text = "after";
+        writes.Open();
 
         (await EventuallyAsync(async () => await peer.GetAsync<Box>(key, Ct) is not null)).Should().BeTrue();
         (await peer.GetAsync<Box>(key, Ct))!.Text.Should().Be("before");
@@ -126,14 +138,16 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task A_background_fill_returns_before_its_write_and_the_peer_finds_it_after()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (_, writer) = Node("a", new DelayedWrites(TimeSpan.FromMilliseconds(600)), background: true);
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        var (_, writer) = Node("a", writes, background: true);
         var (_, peer) = Node("b");
         var key = Unique();
 
-        var started = DateTime.UtcNow;
         (await writer.GetOrAddAsync<string>(key, static _ => Task.FromResult<string?>("gen"), TimeSpan.FromMinutes(5), Ct)).Should().Be("gen");
 
-        (DateTime.UtcNow - started).Should().BeLessThan(TimeSpan.FromMilliseconds(400));
+        await writes.Entered.Task.WaitAsync(Ct);
+        writes.IsHeld.Should().BeTrue("the caller returned while the write was held");
+        writes.Open();
         (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "gen")).Should().BeTrue();
     }
 
@@ -141,20 +155,22 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task A_peer_woken_by_a_hash_set_never_keeps_the_hash_the_set_replaced()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (writerNode, _) = Node("a", new DelayedWrites(Slow));
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        var (writerNode, _) = Node("a", writes);
         var (peerNode, _) = Node("b");
         var writer = Hashes(writerNode);
         var peer = Hashes(peerNode);
         var key = Unique();
+        writes.Open();
         (await writer.SetAsync(key, Fields("old"), Ct)).Should().BeTrue();
         (await peer.GetAsync<string>(key, Ct))!["f"].Should().Be("old");
 
+        writes.Hold();
         var set = writer.SetAsync(key, Fields("new"), Ct).AsTask();
-        while (!set.IsCompleted)
-        {
-            _ = await peer.GetAsync<string>(key, Ct);
-            await Task.Delay(2, Ct);
-        }
+        await writes.Entered.Task.WaitAsync(Ct);
+        set.IsCompleted.Should().BeFalse();
+        _ = await peer.GetAsync<string>(key, Ct);
+        writes.Open();
 
         (await set).Should().BeTrue();
         (await EventuallyAsync(async () => Field(await peer.GetAsync<string>(key, Ct)) == "new")).Should().BeTrue();
@@ -164,17 +180,19 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task A_background_hash_set_returns_before_its_write_and_the_hash_reaches_redis_after()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (writerNode, _) = Node("a", new DelayedWrites(TimeSpan.FromMilliseconds(600)), background: true);
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        var (writerNode, _) = Node("a", writes, background: true);
         var (peerNode, _) = Node("b");
         var writer = Hashes(writerNode);
         var peer = Hashes(peerNode);
         var key = Unique();
 
-        var started = DateTime.UtcNow;
         (await writer.SetAsync(key, Fields("v"), Ct)).Should().BeTrue();
 
-        (DateTime.UtcNow - started).Should().BeLessThan(TimeSpan.FromMilliseconds(400));
+        await writes.Entered.Task.WaitAsync(Ct);
+        writes.IsHeld.Should().BeTrue("the caller returned while the write was held");
         (await writer.GetAsync<string>(key, Ct))!["f"].Should().Be("v");
+        writes.Open();
         (await EventuallyAsync(async () => Field(await peer.GetAsync<string>(key, Ct)) == "v")).Should().BeTrue();
     }
 
@@ -182,7 +200,8 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task Background_hash_sets_of_one_key_land_in_redis_in_the_order_they_were_issued_when_the_first_write_is_slow()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (writerNode, _) = Node("a", new SlowFirstWrite(TimeSpan.FromMilliseconds(400)), background: true);
+        var writes = new GatedWrites(firstOnly: true) { Completed = _signals.Pulse };
+        var (writerNode, _) = Node("a", writes, background: true);
         var (peerNode, _) = Node("b");
         var writer = Hashes(writerNode);
         var peer = Hashes(peerNode);
@@ -190,9 +209,10 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
 
         await writer.SetAsync(key, Fields("v1"), Ct);
         await writer.SetAsync(key, Fields("v2"), Ct);
+        writes.Open();
 
         (await EventuallyAsync(async () => Field(await peer.GetAsync<string>(key, Ct)) == "v2")).Should().BeTrue();
-        await Task.Delay(700, Ct);
+        await writes.FirstCompleted.Task.WaitAsync(Ct);
         (await peer.GetAsync<string>(key, Ct))!["f"].Should().Be("v2");
     }
 
@@ -200,17 +220,20 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     public async Task A_background_hash_fill_returns_before_its_write_and_disposing_the_cache_lets_it_finish()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var (writerNode, _) = Node("a", new DelayedWrites(TimeSpan.FromMilliseconds(600)), background: true);
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        var (writerNode, _) = Node("a", writes, background: true);
         var (peerNode, _) = Node("b");
         var writer = Hashes(writerNode);
         var peer = Hashes(peerNode);
         var key = Unique();
 
-        var started = DateTime.UtcNow;
         (await writer.GetOrAddAsync<string>(key, static _ => Task.FromResult<IDictionary<string, string?>>(Fields("gen")), TimeSpan.FromMinutes(5), Ct))["f"].Should().Be("gen");
-        (DateTime.UtcNow - started).Should().BeLessThan(TimeSpan.FromMilliseconds(400));
+        await writes.Entered.Task.WaitAsync(Ct);
+        writes.IsHeld.Should().BeTrue("the caller returned while the write was held");
 
-        await writerNode.DisposeAsync();
+        var disposing = Task.Run(async () => await writerNode.DisposeAsync(), Ct);
+        writes.Open();
+        await disposing;
 
         (await peer.GetAsync<string>(key, Ct))!["f"].Should().Be("gen");
     }
@@ -220,7 +243,8 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var services = new ServiceCollection();
-        services.AddSingleton<IResiliencePipelineProvider>(new WritePipelineProvider(new DelayedWrites(TimeSpan.FromMilliseconds(500))));
+        var writes = new GatedWrites { Completed = _signals.Pulse };
+        services.AddSingleton<IResiliencePipelineProvider>(new WritePipelineProvider(writes));
         var provider = services
             .AddCaching(
                 b =>
@@ -235,15 +259,18 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
                     o.AppShortName = _app;
                     o.DefaultCachePolicy = new CachePolicy { BackgroundDistributedWrite = true };
                 })
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);
         var cache = provider.GetRequiredService<Microsoft.Extensions.Caching.Distributed.IDistributedCache>();
 
-        var started = DateTime.UtcNow;
-        await cache.SetAsync(Unique(), [1, 2, 3], new Microsoft.Extensions.Caching.Distributed.DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) }, Ct);
+        var set = cache.SetAsync(Unique(), [1, 2, 3], new Microsoft.Extensions.Caching.Distributed.DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) }, Ct);
+        await writes.Entered.Task.WaitAsync(Ct);
+        set.IsCompleted.Should().BeFalse("the adapter must keep the payload until its write completes");
+        writes.Open();
+        await set;
 
-        (DateTime.UtcNow - started).Should().BeGreaterThan(TimeSpan.FromMilliseconds(450), "the adapter's payload may be memory the caller reclaims on return");
     }
 
     public void Dispose()
@@ -264,21 +291,7 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
 
     private static string Unique() => $"it-{Guid.NewGuid():N}";
 
-    private static async Task<bool> EventuallyAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20, Ct);
-        }
-
-        return false;
-    }
+    private Task<bool> EventuallyAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
 
     private (ServiceProvider Provider, ICache Cache) Node(string source, IResiliencePipeline? writes = null, bool background = false)
     {
@@ -303,6 +316,7 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                     o.DefaultCachePolicy = new CachePolicy { BackgroundDistributedWrite = background };
                 })
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);
@@ -319,27 +333,45 @@ public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixtur
         public IResiliencePipeline Get(string? name) => name == ResiliencePipelineNames.Write ? writes : EmptyResiliencePipeline.Instance;
     }
 
-    private sealed class DelayedWrites(TimeSpan delay) : IResiliencePipeline
+    private sealed class GatedWrites(bool firstOnly = false) : IResiliencePipeline
     {
-        public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
-        {
-            await Task.Delay(delay, CancellationToken.None).ConfigureAwait(false);
-            return await callback(cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    private sealed class SlowFirstWrite(TimeSpan delay) : IResiliencePipeline
-    {
+        private TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _calls;
 
+        public TaskCompletionSource Entered { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource FirstCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Action? Completed { get; init; }
+
+        public bool IsHeld => !_release.Task.IsCompleted;
+
+        public void Open() => _release.TrySetResult();
+
+        public void Hold()
+        {
+            _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
         public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
         {
-            if (Interlocked.Increment(ref _calls) == 1)
+            var first = Interlocked.Increment(ref _calls) == 1;
+            if (!firstOnly || first)
             {
-                await Task.Delay(delay, CancellationToken.None).ConfigureAwait(false);
+                var release = _release.Task;
+                Entered.TrySetResult();
+                await release.ConfigureAwait(false);
             }
 
-            return await callback(cancellationToken).ConfigureAwait(false);
+            var result = await callback(cancellationToken).ConfigureAwait(false);
+            Completed?.Invoke();
+            if (first)
+            {
+                FirstCompleted.TrySetResult();
+            }
+
+            return result;
         }
     }
 }

@@ -9,8 +9,10 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class SafeFillRedisIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
+
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
 
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
     private readonly string _app = $"sf{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
     private ConnectionMultiplexer? _raw;
@@ -38,7 +40,7 @@ public sealed class SafeFillRedisIntegrationTests(RedisContainerFixture fixture)
         }
 
         var slow = a.GetOrAddAsync<string>(key, Generate, Ttl, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
 
         (await b.GetOrAddAsync<string>(key, _ => Task.FromResult<string?>("from-b"), Ttl, Ct)).Should().Be("from-b");
         release.SetResult();
@@ -68,7 +70,7 @@ public sealed class SafeFillRedisIntegrationTests(RedisContainerFixture fixture)
         }
 
         var batch = a.GetOrAddAsync<string, int>([new(x, 1), new(y, 2), new(z, 3)], Generate, Ttl, null, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         (await b.GetOrAddAsync<string>(y, _ => Task.FromResult<string?>("from-b"), Ttl, Ct)).Should().Be("from-b");
         release.SetResult();
 
@@ -108,7 +110,7 @@ public sealed class SafeFillRedisIntegrationTests(RedisContainerFixture fixture)
         }
 
         var racing = a.GetOrAddAsync<string>(held, Generate, Ttl, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         (await b.GetOrAddAsync<string>(held, _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["z"] = "0" }), Ttl, Ct)).Should().ContainKey("z");
         release.SetResult();
 
@@ -127,9 +129,9 @@ public sealed class SafeFillRedisIntegrationTests(RedisContainerFixture fixture)
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var inner = Tier();
         var key = (CacheKey)$"it-{Guid.NewGuid():N}";
-        (await inner.SetVersionedAsync<string>(key, new Dictionary<string, string?> { ["z"] = "0" }, new HashCacheEntryOptions(ExpireTime: DateTimeOffset.UtcNow.AddMinutes(5)), null, new PeerFieldLimits(8, 1024), Ct)).Written.Should().BeTrue();
+        (await inner.SetVersionedAsync<string>(key, new Dictionary<string, string?> { ["z"] = "0" }, new HashCacheEntryOptions(ExpireTime: _time.GetUtcNow().AddMinutes(5)), null, new PeerFieldLimits(8, 1024), Ct)).Written.Should().BeTrue();
 
-        var filled = await inner.FillVersionedAsync<string>(key, new Dictionary<string, string?> { ["a"] = "1" }, new HashCacheEntryOptions(ExpireTime: DateTimeOffset.UtcNow.AddSeconds(-1)), null, new PeerFieldLimits(8, 1024), Ct);
+        var filled = await inner.FillVersionedAsync<string>(key, new Dictionary<string, string?> { ["a"] = "1" }, new HashCacheEntryOptions(ExpireTime: _time.GetUtcNow().AddSeconds(-1)), null, new PeerFieldLimits(8, 1024), Ct);
 
         filled.Written.Should().BeFalse();
         (await Raw.HashExistsAsync(HashKey(key), "z")).Should().BeTrue("a fill of an absent key deletes nothing it did not find absent");
@@ -167,7 +169,7 @@ public sealed class SafeFillRedisIntegrationTests(RedisContainerFixture fixture)
 
     private ServiceProvider Provider(string source, Action<RedisCacheOptions> redis)
     {
-        var provider = new ServiceCollection()
+        var provider = new ServiceCollection().AddSingleton<TimeProvider>(_time)
             .AddCaching(
                 b =>
                 {

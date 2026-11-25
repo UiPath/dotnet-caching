@@ -12,8 +12,11 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
 {
+
     // Redis stamps expirations with its own clock, which can drift from the test host's (a container VM, for one).
     private static readonly TimeSpan ClockSkew = TimeSpan.FromSeconds(5);
+
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -42,7 +45,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
             var tag = Guid.NewGuid().ToString("N");
             CacheKey key = $"{{{tag}}}a";
             CacheKey missing = $"{{{tag}}}b";
-            var expiration = DateTimeOffset.UtcNow.AddMinutes(5);
+            var expiration = _time.GetUtcNow().AddMinutes(5);
             var fields = new Dictionary<string, string?> { ["f"] = "v" };
 
             (await cache.SetAsync(key, "value", expiration, policy: null, Ct)).Should().BeTrue();
@@ -83,7 +86,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         var factory = provider.GetRequiredService<ICacheFactory>();
         var cache = factory.CreateCache(KnownCacheProviderNames.Redis);
         var hashCache = factory.CreateHashCache(KnownCacheProviderNames.Redis);
-        var expiration = DateTimeOffset.UtcNow.AddMinutes(5);
+        var expiration = _time.GetUtcNow().AddMinutes(5);
         var fields = new Dictionary<string, string?> { ["f"] = "v" };
 
         (await cache.SetAsync("a", "value", expiration, policy: null, Ct)).Should().BeTrue();
@@ -121,7 +124,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         CacheKey withTtl = $"{{{tag}}}ttl";
         CacheKey noTtl = $"{{{tag}}}forever";
         CacheKey missing = $"{{{tag}}}missing";
-        var expiration = DateTimeOffset.UtcNow.AddMinutes(5);
+        var expiration = _time.GetUtcNow().AddMinutes(5);
         (await cache.SetAsync(withTtl, "a", expiration, policy: null, Ct)).Should().BeTrue();
         (await cache.SetAsync(noTtl, "b", expiration, policy: null, Ct)).Should().BeTrue();
         var rawKey = RedisTestKeys.Keys(admin, $"*{tag}*forever*").Single();
@@ -160,7 +163,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         using var provider = Build(fixture.ConnectionString, connector: new PrefixingConnector(mux, prefix: null), readScripts: true);
         var cache = provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis);
         CacheKey key = $"{{{Guid.NewGuid():N}}}script";
-        var expiration = DateTimeOffset.UtcNow.AddMinutes(5);
+        var expiration = _time.GetUtcNow().AddMinutes(5);
         (await cache.SetAsync(key, "a", expiration, policy: null, Ct)).Should().BeTrue();
         await cache.GetCacheEntryAsync<string>(key, policy: null, Ct);
 
@@ -187,7 +190,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         var tag = Guid.NewGuid().ToString("N");
         CacheKey key = $"{{{tag}}}h";
         CacheKey missing = $"{{{tag}}}missing";
-        var expiration = DateTimeOffset.UtcNow.AddMinutes(5);
+        var expiration = _time.GetUtcNow().AddMinutes(5);
         var fields = new Dictionary<string, string?> { ["f"] = "v", ["g"] = "w" };
         (await hashCache.SetAsync(key, fields, expiration, policy: null, Ct)).Should().BeTrue();
         await hashCache.GetCacheEntryAsync<string>(missing, policy: null, Ct);
@@ -217,9 +220,9 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
 
     private static int Count(Dictionary<string, int> calls, string command) => calls.GetValueOrDefault(command);
 
-    private static ServiceProvider Build(string connectionString, string app = "readscript", IRedisConnector? connector = null, bool readScripts = true)
+    private ServiceProvider Build(string connectionString, string app = "readscript", IRedisConnector? connector = null, bool readScripts = true)
     {
-        var services = new ServiceCollection();
+        var services = new ServiceCollection().AddSingleton<TimeProvider>(_time);
         if (connector is not null)
         {
             services.AddSingleton(connector);

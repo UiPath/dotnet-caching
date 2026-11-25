@@ -2,6 +2,8 @@ namespace UiPath.Caching.Tests.Redis;
 
 public class NullCacheTests(ITestContextAccessor testContextAccessor)
 {
+
+    private readonly ManualTimeProvider _time = new(DateTimeOffset.UnixEpoch);
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     [Fact]
@@ -32,7 +34,7 @@ public class NullCacheTests(ITestContextAccessor testContextAccessor)
         var sut = new NullCache();
         CacheKey cacheKey = _fixture.Create<string>();
         var expected = _fixture.Create<TestDto?>();
-        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), DateTimeOffset.UtcNow, token: testContextAccessor.Current.CancellationToken);
+        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), _time.GetUtcNow(), token: testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -48,7 +50,7 @@ public class NullCacheTests(ITestContextAccessor testContextAccessor)
         {
             await ((ICache)NullCache.Instance).GetOrAddAsync<string, int, Source>(entries, source, static (s, states, _) => s.LoadAsync(states), policy: null, token),
             await ((ICache)NullCache.Instance).GetOrAddAsync<string, int, Source>(entries, source, static (s, states, _) => s.LoadAsync(states), TimeSpan.FromMinutes(1), policy: null, token),
-            await ((ICache)NullCache.Instance).GetOrAddAsync<string, int, Source>(entries, source, static (s, states, _) => s.LoadAsync(states), DateTimeOffset.UtcNow.AddMinutes(1), policy: null, token),
+            await ((ICache)NullCache.Instance).GetOrAddAsync<string, int, Source>(entries, source, static (s, states, _) => s.LoadAsync(states), _time.GetUtcNow().AddMinutes(1), policy: null, token),
         };
 
         actual.Should().AllSatisfy(result => result.Should().Equal(new KeyValuePair<int, string?>(1, "v1"), new KeyValuePair<int, string?>(2, "v2")));

@@ -170,7 +170,7 @@ public class RedisKeyFormatWiringTests
             Options.Create(redisOptions),
             Options.Create(options),
             NullLogger<RedisStreamHealthMaintainer>.Instance,
-            TimeProvider.System);
+            new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         maintainer.Initialize();
         return maintainer;
     }

@@ -571,13 +571,23 @@ public sealed class FormatSweeperTests : IDisposable
     {
         while (!run.IsCompleted)
         {
-            if (_clock.HasTimers)
+            var scheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnTimerScheduled() => scheduled.TrySetResult();
+            _clock.TimerScheduled += OnTimerScheduled;
+            try
             {
-                _clock.Advance(TimeSpan.FromMilliseconds(100));
+                if (_clock.HasTimers)
+                {
+                    _clock.Advance(TimeSpan.FromMilliseconds(100));
+                }
+                else
+                {
+                    await Task.WhenAny(run, scheduled.Task).WaitAsync(Ct);
+                }
             }
-            else
+            finally
             {
-                await Task.Delay(1, Ct);
+                _clock.TimerScheduled -= OnTimerScheduled;
             }
         }
     }

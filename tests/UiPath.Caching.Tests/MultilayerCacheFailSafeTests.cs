@@ -96,11 +96,13 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
 
         static async Task<string?> Hanging(CancellationToken ct)
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(ct);
             return "late";
         }
 
-        var value = await _cache.GetOrAddAsync(Key, Hanging, Lifetime, policy, Ct);
+        var pending = _cache.GetOrAddAsync(Key, Hanging, Lifetime, policy, Ct).AsTask();
+        _clock.Advance(policy.FactoryTimeout!.Value);
+        var value = await pending;
 
         value.Should().Be("v1");
     }

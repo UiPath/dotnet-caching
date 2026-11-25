@@ -8,8 +8,10 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class MigrationCacheRedisIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
+
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
 
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
     private readonly string _app = $"mc{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _providers = [];
     private ConnectionMultiplexer? _raw;
@@ -30,7 +32,7 @@ public sealed class MigrationCacheRedisIntegrationTests(RedisContainerFixture fi
 
         read.Outcome.Should().Be(SnapshotOutcome.Found);
         read.Entry!.Value.Should().Be("v");
-        read.Entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Ttl, TimeSpan.FromSeconds(15));
+        read.Entry.Expiration.Should().BeCloseTo(_time.GetUtcNow() + Ttl, TimeSpan.FromSeconds(15));
     }
 
     [Fact]
@@ -68,7 +70,7 @@ public sealed class MigrationCacheRedisIntegrationTests(RedisContainerFixture fi
         var cache = Open("127.0.0.1:1,abortConnect=false,connectTimeout=50").AsMigrationCache();
 
         (await cache.ReadSnapshotAsync<string>("k", null, Ct)).Should().Be(new SnapshotRead<string>(SnapshotOutcome.Failed, null));
-        (await cache.WriteAsync("k", "v", DateTimeOffset.UtcNow + Ttl, null, Ct)).Should().Be(StoreOutcome.NotSent);
+        (await cache.WriteAsync("k", "v", _time.GetUtcNow() + Ttl, null, Ct)).Should().Be(StoreOutcome.NotSent);
         (await cache.DeleteAsync<string>("k", Ct)).Should().Be(StoreOutcome.NotSent);
     }
 
@@ -80,7 +82,7 @@ public sealed class MigrationCacheRedisIntegrationTests(RedisContainerFixture fi
         var migration = cache.AsMigrationCache();
         var key = Unique();
 
-        (await migration.WriteAsync(key, "v", DateTimeOffset.UtcNow + Ttl, null, Ct)).Should().Be(StoreOutcome.Committed);
+        (await migration.WriteAsync(key, "v", _time.GetUtcNow() + Ttl, null, Ct)).Should().Be(StoreOutcome.Committed);
         (await cache.GetAsync<string>(key, Ct)).Should().Be("v");
         (await Raw.KeyTimeToLiveAsync(Find(key)))!.Value.Should().BeCloseTo(Ttl, TimeSpan.FromSeconds(15));
         (await migration.DeleteAsync<string>(key, Ct)).Should().Be(StoreOutcome.Committed);
@@ -98,7 +100,7 @@ public sealed class MigrationCacheRedisIntegrationTests(RedisContainerFixture fi
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        (await migration.WriteAsync(key, "new", DateTimeOffset.UtcNow + Ttl, null, cts.Token)).Should().Be(StoreOutcome.NotSent);
+        (await migration.WriteAsync(key, "new", _time.GetUtcNow() + Ttl, null, cts.Token)).Should().Be(StoreOutcome.NotSent);
         (await migration.DeleteAsync<string>(key, cts.Token)).Should().Be(StoreOutcome.NotSent);
 
         (await cache.GetAsync<string>(key, Ct)).Should().Be("kept");
@@ -124,7 +126,7 @@ public sealed class MigrationCacheRedisIntegrationTests(RedisContainerFixture fi
 
     private ICache Open(string? connection = null, bool removeUnreadable = true)
     {
-        var provider = new ServiceCollection()
+        var provider = new ServiceCollection().AddSingleton<TimeProvider>(_time)
             .AddCaching(
                 b =>
                 {

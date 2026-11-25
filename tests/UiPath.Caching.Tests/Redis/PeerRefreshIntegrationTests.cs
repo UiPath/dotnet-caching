@@ -10,6 +10,7 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
+    private readonly RedisTestSignals _signals = new();
     private readonly string _app = $"pr{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
     private bool _onStreams = true;
@@ -61,7 +62,12 @@ public sealed class PeerRefreshIntegrationTests(RedisContainerFixture fixture) :
             (await peer.GetAsync<string>(key, null, Ct)).Should().Be("old");
         }
 
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var layered = (MultilayerCache)peer;
+        layered.PeerRefreshHold = release.Task;
         (await writer.SetManyAsync(keys.Select(k => new KeyValuePair<CacheKey, string?>(k, "new")), (CachePolicy?)null, Ct)).Should().BeEmpty();
+        await EventuallyAsync(() => Task.FromResult(layered.RunsInFlight >= keys.Length));
+        release.SetResult();
 
         foreach (var key in keys)
         {
@@ -102,39 +108,9 @@ public sealed class PeerRefreshIntegrationTests(RedisContainerFixture fixture) :
     }
 
     // The peer's subscription starts while its first read returns; a write before its consumer group exists is reported as a gap that clears the peer's copies instead of refreshing them. Returns the telemetry metrics the warm-up produced, which the test skips.
-    private static async Task<int> WarmAsync(ICache writer, ICache peer, RecordingTelemetryProvider telemetry)
-    {
-        var key = Unique();
-        // The peer writes the old value itself, so only the writer's one event can reach its copy.
-        (await peer.SetAsync(key, "old", Ct)).Should().BeTrue();
-        (await peer.GetAsync<string>(key, Ct)).Should().Be("old");
-        (await writer.SetAsync(key, "new", Ct)).Should().BeTrue();
-        (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "new")).Should().BeTrue("the peer's subscription to the topic is live");
-
-        // The refresh the warm-up's own write may have started ends, and is reported, before the test counts from here.
-        var cache = (MultilayerCache)peer;
-        (await EventuallyAsync(() => Task.FromResult(cache.RunsInFlight == 0))).Should().BeTrue("the warm-up's refresh ended");
-        cache.FlushPeerRefreshMetrics();
-        return telemetry.Metrics.Count;
-    }
-
     private static string Unique() => $"it-{Guid.NewGuid():N}";
 
-    private static async Task<bool> EventuallyAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20, Ct);
-        }
-
-        return false;
-    }
+    private Task<bool> EventuallyAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
 
     private ICache Node(string source, ICachingTelemetryProvider? telemetry = null)
     {
@@ -158,6 +134,7 @@ public sealed class PeerRefreshIntegrationTests(RedisContainerFixture fixture) :
                     o.AppShortName = _app;
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                 })
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);
@@ -165,4 +142,21 @@ public sealed class PeerRefreshIntegrationTests(RedisContainerFixture fixture) :
         _onStreams &= StreamsReady.Await(provider);
         return cache;
     }
+
+    private async Task<int> WarmAsync(ICache writer, ICache peer, RecordingTelemetryProvider telemetry)
+    {
+        var key = Unique();
+        // The peer writes the old value itself, so only the writer's one event can reach its copy.
+        (await peer.SetAsync(key, "old", Ct)).Should().BeTrue();
+        (await peer.GetAsync<string>(key, Ct)).Should().Be("old");
+        (await writer.SetAsync(key, "new", Ct)).Should().BeTrue();
+        (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "new")).Should().BeTrue("the peer's subscription to the topic is live");
+
+        // The refresh the warm-up's own write may have started ends, and is reported, before the test counts from here.
+        var cache = (MultilayerCache)peer;
+        (await EventuallyAsync(() => Task.FromResult(cache.RunsInFlight == 0))).Should().BeTrue("the warm-up's refresh ended");
+        cache.FlushPeerRefreshMetrics();
+        return telemetry.Metrics.Count;
+    }
+
 }

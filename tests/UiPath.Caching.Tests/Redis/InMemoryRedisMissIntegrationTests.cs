@@ -40,17 +40,19 @@ public class InMemoryRedisMissIntegrationTests(RedisContainerFixture fixture)
         var cache = provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
         var key = Unique();
         var calls = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Load(CancellationToken ct)
         {
             Interlocked.Increment(ref calls);
-            await Task.Delay(TimeSpan.FromMilliseconds(300), ct);
+            await release.Task.WaitAsync(ct);
             return "loaded";
         }
 
         (await cache.GetAsync<string>(Unique(), Ct)).Should().BeNull();
         _ = profiler.Session.FinishProfiling().ToList();
-        var callers = Enumerable.Range(0, 30).Select(_ => Task.Run(async () => await cache.GetOrAddAsync(key, Load, TimeSpan.FromMinutes(5), Ct), Ct)).ToArray();
+        var callers = Enumerable.Range(0, 30).Select(_ => cache.GetOrAddAsync(key, Load, TimeSpan.FromMinutes(5), Ct).AsTask()).ToArray();
 
+        release.SetResult();
         (await Task.WhenAll(callers)).Should().AllBe("loaded");
         var commands = profiler.Session.FinishProfiling().Select(c => c.Command).ToList();
         calls.Should().Be(1);

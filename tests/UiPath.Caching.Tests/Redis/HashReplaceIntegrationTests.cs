@@ -8,6 +8,8 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
+    private readonly RedisTestSignals _signals = new();
     private readonly string _app = $"hr{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
 
@@ -26,11 +28,7 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
         (await writer.SetAsync<string>(key, new Dictionary<string, string?> { ["a"] = "9" }, new HashCacheEntryOptions(SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
 
         (await writer.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(new Dictionary<string, string?> { ["a"] = "9", ["b"] = "2" });
-        var until = TimeProvider.System.GetUtcNow().AddSeconds(5);
-        while (!((await peer.GetAsync<string>(key, Ct)).TryGetValue("a", out var seen) && seen == "9") && TimeProvider.System.GetUtcNow() < until)
-        {
-            await Task.Delay(20, Ct);
-        }
+        await EventuallyAsync(async () => (await peer.GetAsync<string>(key, Ct)).TryGetValue("a", out var seen) && seen == "9");
 
         (await peer.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(new Dictionary<string, string?> { ["a"] = "9", ["b"] = "2" });
     }
@@ -62,11 +60,7 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
         (await writer.RemoveFieldsAsync<string>(key, ["b"], Ct)).Should().BeTrue();
 
         (await writer.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(new Dictionary<string, string?> { ["a"] = "1", ["c"] = "3" });
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while ((await peer.GetAsync<string>(key, Ct)).Count != 2 && DateTime.UtcNow < until)
-        {
-            await Task.Delay(20, Ct);
-        }
+        await EventuallyAsync(async () => (await peer.GetAsync<string>(key, Ct)).Count == 2);
 
         (await peer.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(new Dictionary<string, string?> { ["a"] = "1", ["c"] = "3" });
     }
@@ -98,7 +92,7 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
         (await cache.SetAsync<string>(key, many, ttl, Ct)).Should().BeTrue();
         (await cache.GetAsync<string>(key, Ct)).Should().HaveCount(5000);
         (await cache.GetAsync<string>(key, ["f4999", "f0", "f2500"], Ct)).Should().BeEquivalentTo(new Dictionary<string, string?> { ["f4999"] = "v4999", ["f0"] = "v0", ["f2500"] = "v2500" });
-        (await cache.GetCacheEntryAsync<string>(key, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + ttl, TimeSpan.FromSeconds(30));
+        (await cache.GetCacheEntryAsync<string>(key, Ct)).Expiration.Should().BeCloseTo(_time.GetUtcNow() + ttl, TimeSpan.FromSeconds(30));
 
         var smaller = Enumerable.Range(0, 3000).ToDictionary(i => $"g{i}", i => (string?)$"w{i}");
         (await cache.SetAsync<string>(key, smaller, ttl, Ct)).Should().BeTrue();
@@ -132,14 +126,22 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var cache = Hashes("a", fieldBatch: 50);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        var chunks = 0;
+        _signals.TransactionQueued = () =>
+        {
+            chunks++;
+            _time.Advance(TimeSpan.FromMilliseconds(3));
+        };
         var run = Guid.NewGuid().ToString("N");
         var fields = Enumerable.Range(0, 2000).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
         for (var round = 0; round < 20; round++)
         {
-            var deadline = TimeProvider.System.GetUtcNow().AddMilliseconds(2);
+            var deadline = _time.GetUtcNow().AddMilliseconds(2);
             await cache.SetAsync<string>($"it-{run}-{round}", fields, new HashCacheEntryOptions(ExpireTime: deadline, SetOption: setOption), Ct);
         }
 
+        chunks.Should().BeGreaterThan(0);
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         await foreach (var key in RedisTestKeys.KeysAsync(redis, $"*{run}*"))
         {
@@ -172,7 +174,7 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
         var cache = Hashes("a", fieldBatch: 100);
         var name = $"it-{Guid.NewGuid():N}";
         var fields = new Dictionary<string, string?> { ["f"] = "v", ["g"] = "w" };
-        var expires = DateTimeOffset.UtcNow.AddMinutes(10);
+        var expires = _time.GetUtcNow().AddMinutes(10);
 
         (await cache.SetAsync<string>($"{name}", fields, null, Ct)).Should().BeTrue();
         (await cache.SetAsync<string>($"{name}", fields, TimeSpan.FromMinutes(10), null, Ct)).Should().BeTrue();
@@ -202,7 +204,7 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
         var entry = await cache.GetCacheEntryAsync<string>(key, Ct);
 
         entry.Value.Should().BeEquivalentTo(many);
-        entry.Expiration.Should().BeAfter(DateTimeOffset.UtcNow);
+        entry.Expiration.Should().BeAfter(_time.GetUtcNow());
         (await cache.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(many);
     }
 
@@ -216,9 +218,11 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
         GC.SuppressFinalize(this);
     }
 
+    private Task<bool> EventuallyAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
+
     private IHashCache Hashes(string source, int fieldBatch = 1000)
     {
-        var provider = new ServiceCollection()
+        var provider = new ServiceCollection().AddSingleton<TimeProvider>(_time)
             .AddCaching(
                 b =>
                 {
@@ -232,6 +236,7 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
                     o.AppShortName = _app;
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                 })
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);

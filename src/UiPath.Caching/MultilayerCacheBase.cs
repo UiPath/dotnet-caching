@@ -216,7 +216,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
         Func<CancellationToken, Task<TResult>> factory,
         TimeSpan? factoryTimeout,
         CancellationToken token) =>
-        FactoryTimeout.RunAsync(factory, factoryTimeout, cacheKey, Name, Telemetry, token);
+        FactoryTimeout.RunAsync(factory, factoryTimeout, cacheKey, Name, Telemetry, token, clock: _clock);
 
     /// <summary>The L2 write lifetime: a caller value as-is, else <see cref="ResolveDuration"/> jittered.</summary>
     protected TimeSpan ResolveWriteDuration(CachePolicy policy, TimeSpan? callerExpiration = null) =>

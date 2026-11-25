@@ -12,7 +12,7 @@ namespace UiPath.Caching.Tests.Redis;
 public class RedisCacheFillManyTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
-    private readonly DateTimeOffset _now = DateTimeOffset.UtcNow;
+    private readonly DateTimeOffset _now = DateTimeOffset.UnixEpoch;
     private readonly RecordingTelemetryProvider _telemetry = new();
     private readonly IBatch _batch = Substitute.For<IBatch>();
     private readonly ITransaction _transaction = Substitute.For<ITransaction>();

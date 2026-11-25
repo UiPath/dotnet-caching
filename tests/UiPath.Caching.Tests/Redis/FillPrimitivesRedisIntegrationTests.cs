@@ -16,6 +16,8 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
 
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
+    private readonly RedisTestSignals _signals = new();
     private readonly string _app = $"fp{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
     private ConnectionMultiplexer? _raw;
@@ -68,9 +70,9 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         }
 
         var running = writer.GetOrAddAsync<string>(key, Generate, Ttl, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
 
-        var fill = await writer.TryFillAsync(key, "filled", Ttl, Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var fill = await writer.TryFillAsync(key, "filled", Ttl, Ct).AsTask().WaitAsync(Ct);
 
         fill.Outcome.Should().Be(FillOutcome.Added);
         release.SetResult();
@@ -192,7 +194,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         var entry = (await node.AsMigrationCache().ReadSnapshotAsync<string>(key, null, Ct)).Entry!;
 
         entry.Value.Should().Be("fresh");
-        entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Ttl, TimeSpan.FromSeconds(15));
+        entry.Expiration.Should().BeCloseTo(_time.GetUtcNow() + Ttl, TimeSpan.FromSeconds(15));
         (await node.GetAsync<string>(key, Ct)).Should().Be("old");
     }
 
@@ -216,7 +218,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     public async Task An_unreachable_server_is_a_failure_and_the_value_is_still_kept_locally()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var provider = new ServiceCollection()
+        var provider = new ServiceCollection().AddSingleton<TimeProvider>(_time)
             .AddCaching(
                 b =>
                 {
@@ -225,6 +227,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
                     b.AddInMemoryRedis(o => o.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(1));
                 },
                 o => o.AppShortName = _app)
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);
@@ -319,7 +322,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     public async Task A_deadline_stays_absolute_while_a_slow_comparer_runs(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var clock = new SkewedClock();
+        var clock = new SkewedClock(_time);
         var node = RedisOnly("a", scripts, clock);
         var key = Unique();
         (await node.SetAsync(key, "base", TimeSpan.FromHours(1), Ct)).Should().BeTrue();
@@ -341,7 +344,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     public async Task A_deadline_that_passes_during_the_call_writes_nothing_and_fails(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var clock = new SkewedClock();
+        var clock = new SkewedClock(_time);
         var node = RedisOnly("a", scripts, clock);
         var key = Unique();
         (await node.SetAsync(key, "base", TimeSpan.FromHours(1), Ct)).Should().BeTrue();
@@ -362,7 +365,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.SupportsAcl, "Needs ACL SETUSER, which this server does not allow.");
-        var clock = new SkewedClock();
+        var clock = new SkewedClock(_time);
         var key = Unique();
         await WithoutScriptsAsync(async logs =>
         {
@@ -380,7 +383,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.SupportsAcl, "Needs ACL SETUSER, which this server does not allow.");
-        var clock = new SkewedClock();
+        var clock = new SkewedClock(_time);
         var key = Unique();
         await WithoutScriptsAsync(async logs =>
         {
@@ -421,7 +424,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     public async Task A_deadline_that_lapses_after_the_last_lost_compare_and_set_writes_nothing_and_fails(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var clock = new LapsingClock();
+        var clock = new LapsingClock(_time);
         var node = RedisOnly("a", scripts, clock);
         var key = Unique();
         (await node.SetAsync(key, "base", TimeSpan.FromHours(1), Ct)).Should().BeTrue();
@@ -453,7 +456,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var node = RedisOnly("a", false);
         var key = Unique();
-        var past = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var past = _time.GetUtcNow().AddMinutes(-1);
 
         foreach (var act in new Func<Task>[]
         {
@@ -492,8 +495,8 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var node = RedisOnly("a", scripts);
         var (filled, changed, forever) = (Unique(), Unique(), Unique());
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(10);
-        var later = DateTimeOffset.UtcNow.AddHours(2);
+        var deadline = _time.GetUtcNow().AddMinutes(10);
+        var later = _time.GetUtcNow().AddHours(2);
         var tolerance = TimeSpan.FromSeconds(15);
 
         var added = await node.TryFillAsync(filled, "v", deadline, Ct);
@@ -594,7 +597,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     public async Task A_fill_and_a_compare_and_set_work_over_a_compressed_stored_value()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        using var provider = new ServiceCollection()
+        using var provider = new ServiceCollection().AddSingleton<TimeProvider>(_time)
             .AddLogging()
             .AddCaching(
                 b =>
@@ -608,6 +611,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
                     o.AppShortName = _app;
                     o.Policies["mp"] = MigrateOnReadHarness.Policy("messagepack", null, migrate: true);
                 })
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         var cache = provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis);
         var policy = provider.GetRequiredService<ICachePolicyFactory>().Resolve("mp")!;
@@ -648,6 +652,18 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     private static string Unique() => $"it-{Guid.NewGuid():N}";
 
     // A read by the writer subscribes it to the topic, so the peer's events during its next call are heard.
+    private static int StripeOf(ICache cache, string key)
+    {
+        var builder = (CacheEntryBuilder)typeof(MultilayerCache).GetField("_entryBuilder", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache)!;
+        return BackgroundWrites.Stripe(builder.BuildEntryOptions<string>(key).CacheKey.Name);
+    }
+
+    private static long[] ChangesHeard(ICache cache)
+    {
+        var background = typeof(MultilayerCacheBase).GetField("_background", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache)!;
+        return (long[])typeof(BackgroundWrites).GetField("_changes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(background)!;
+    }
+
     private static async Task<string> ArmAsync(ICache writer, ICache peer)
     {
         var probe = Unique();
@@ -656,7 +672,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         return probe;
     }
 
-    private static async Task SettledAsync(ICache writer, ICache peer)
+    private async Task SettledAsync(ICache writer, ICache peer)
     {
         var probe = await ArmAsync(peer, writer);
         (await writer.SetAsync(probe, "s1", Ct)).Should().BeTrue();
@@ -664,7 +680,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
     }
 
     // The writer's counter for the key's stripe moves when it processes the peer's event for the key, or when it learns it lost events.
-    private static void PeerWritesAndWriterHears(ICache writer, ICache peer, string key, bool remove = false, string? rewrite = null)
+    private void PeerWritesAndWriterHears(ICache writer, ICache peer, string key, bool remove = false, string? rewrite = null)
     {
         var stripe = StripeOf(writer, key);
         var before = ChangesHeard(writer)[stripe];
@@ -682,35 +698,9 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         EventuallyAsync(() => Task.FromResult(ChangesHeard(writer)[stripe] > before)).GetAwaiter().GetResult().Should().BeTrue("the writer has processed the peer's event for the key");
     }
 
-    private static int StripeOf(ICache cache, string key)
-    {
-        var builder = (CacheEntryBuilder)typeof(MultilayerCache).GetField("_entryBuilder", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache)!;
-        return BackgroundWrites.Stripe(builder.BuildEntryOptions<string>(key).CacheKey.Name);
-    }
+    private Task<bool> EventuallyAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
 
-    private static long[] ChangesHeard(ICache cache)
-    {
-        var background = typeof(MultilayerCacheBase).GetField("_background", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache)!;
-        return (long[])typeof(BackgroundWrites).GetField("_changes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(background)!;
-    }
-
-    private static async Task<bool> EventuallyAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20, Ct);
-        }
-
-        return false;
-    }
-
-    private static async Task WarmAsync(ICache writer, ICache peer)
+    private async Task WarmAsync(ICache writer, ICache peer)
     {
         var key = Unique();
         (await peer.SetAsync(key, "old", Ct)).Should().BeTrue();
@@ -726,7 +716,6 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         await Raw.KeyDeleteAsync(redisKey);
         return redisKey;
     }
-
 
     private async Task WithoutScriptsAsync(Func<RefusalLogs, Task> body)
     {
@@ -766,7 +755,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
 
     private ServiceProvider Provider(string source, bool scripts, TimeProvider? clock = null, bool nulls = false, bool pubsub = false, ILoggerProvider? logs = null, bool restricted = false)
     {
-        var services = new ServiceCollection();
+        var services = new ServiceCollection().AddSingleton<TimeProvider>(_time);
         if (logs is not null)
         {
             services.AddLogging(l => l.AddProvider(logs));
@@ -808,6 +797,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
                         o.DefaultTopic = KnownTopicNames.RedisPubSub;
                     }
                 })
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);
@@ -862,18 +852,18 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         public int GetHashCode(TestDto obj) => obj.Id;
     }
 
-    /// <summary>The system clock until a set number of reads has passed, and eleven minutes ahead of it after.</summary>
-    private sealed class LapsingClock : TimeProvider
+    /// <summary>The supplied clock until a set number of reads has passed, and eleven minutes ahead of it after.</summary>
+    private sealed class LapsingClock(TimeProvider clock) : TimeProvider
     {
         private int _reads = int.MaxValue;
 
         public void LapseAfter(int reads) => Volatile.Write(ref _reads, reads);
 
-        public override DateTimeOffset GetUtcNow() => Interlocked.Decrement(ref _reads) < 0 ? base.GetUtcNow().AddMinutes(11) : base.GetUtcNow();
+        public override DateTimeOffset GetUtcNow() => Interlocked.Decrement(ref _reads) < 0 ? clock.GetUtcNow().AddMinutes(11) : clock.GetUtcNow();
     }
 
-    /// <summary>The system clock plus an offset a test moves.</summary>
-    private sealed class SkewedClock : TimeProvider
+    /// <summary>The supplied clock plus an offset a test moves.</summary>
+    private sealed class SkewedClock(TimeProvider clock) : TimeProvider
     {
         private long _skewTicks;
 
@@ -883,7 +873,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
             set => Interlocked.Exchange(ref _skewTicks, value.Ticks);
         }
 
-        public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + Skew;
+        public override DateTimeOffset GetUtcNow() => clock.GetUtcNow() + Skew;
     }
 
     /// <summary>A value that runs a callback while it is serialized.</summary>

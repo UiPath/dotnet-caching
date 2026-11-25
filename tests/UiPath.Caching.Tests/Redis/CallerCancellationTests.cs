@@ -17,6 +17,7 @@ namespace UiPath.Caching.Tests.Redis;
 /// <summary>A call whose token is cancelled reaches its caller: no warning, no failure and no hit or miss is recorded for it.</summary>
 public class CallerCancellationTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private readonly ManualTimeProvider _time = new(DateTimeOffset.UnixEpoch);
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private readonly RecordingTelemetryProvider _telemetry = new();
     private CacheKey _cacheKey = default!;
@@ -33,8 +34,8 @@ public class CallerCancellationTests(ITestContextAccessor testContextAccessor) :
         _cacheKey = _fixture.Create<string>();
         RedisKey redisKey = string.Join(':', prefix, RedisKeyspaces.String, _cacheKey).ToLowerInvariant();
         var clock = _fixture.Freeze<ISystemClock>();
-        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(clock));
-        clock.UtcNow.Returns(_ => DateTimeOffset.UtcNow);
+        _fixture.Inject<TimeProvider>(_time);
+        clock.UtcNow.Returns(_ => _time.GetUtcNow());
         _pipelines = _fixture.Freeze<IResiliencePipelineProvider>();
         var noOpExecutor = new EmptyResiliencePipeline();
         _pipelines.Get(ResiliencePipelineNames.Read).Returns(noOpExecutor);
@@ -303,7 +304,7 @@ public class CallerCancellationTests(ITestContextAccessor testContextAccessor) :
     public async Task A_lock_acquire_that_the_factory_timeout_ends_is_still_reported_as_a_factory_timeout()
     {
         var redis = _fixture.Freeze<IRedisConnector>();
-        redis.ConnectAsync(Arg.Any<CancellationToken>()).Returns(call => new ValueTask(Task.Delay(Timeout.Infinite, call.Arg<CancellationToken>())));
+        redis.ConnectAsync(Arg.Any<CancellationToken>()).Returns(call => new ValueTask(new TaskCompletionSource().Task.WaitAsync(call.Arg<CancellationToken>())));
         var sut = new RedisDistributedLock(redis, Options.Create(new CacheOptions()), _telemetry);
 
         var acquiring = FactoryTimeout.RunAsync<IAsyncDisposable?>(
@@ -313,7 +314,9 @@ public class CallerCancellationTests(ITestContextAccessor testContextAccessor) :
             "cache",
             _telemetry,
             CancellationToken.None,
-            source: FactoryTimeout.SourceRehydrateLock);
+            source: FactoryTimeout.SourceRehydrateLock,
+            clock: _time);
+        _time.Advance(TimeSpan.FromMilliseconds(50));
 
         await acquiring.Invoking(a => a).Should().ThrowAsync<TimeoutException>();
         _telemetry.Events.Should().ContainSingle(e => e.Name == "cache.factory.timed_out").Which.Properties!["source"].Should().Be("rehydrate-lock");
@@ -323,7 +326,7 @@ public class CallerCancellationTests(ITestContextAccessor testContextAccessor) :
     public async Task A_health_probe_the_host_cancels_is_rethrown_by_the_health_check_service()
     {
         using var cts = new CancellationTokenSource();
-        using var provider = HealthServiceWith(HungConnector(), TimeSpan.FromSeconds(30));
+        using var provider = HealthServiceWith(HungConnector(), TimeSpan.FromSeconds(30), _time);
         var checking = provider.GetRequiredService<HealthCheckService>().CheckHealthAsync(cts.Token);
         await cts.CancelAsync();
 
@@ -333,33 +336,36 @@ public class CallerCancellationTests(ITestContextAccessor testContextAccessor) :
     [Fact]
     public async Task A_health_probe_that_runs_past_the_services_timeout_is_reported_unhealthy()
     {
-        using var provider = HealthServiceWith(HungConnector(), TimeSpan.FromMilliseconds(100));
+        using var provider = HealthServiceWith(HungConnector(), TimeSpan.FromMilliseconds(100), _time);
 
-        var report = await provider.GetRequiredService<HealthCheckService>().CheckHealthAsync(testContextAccessor.Current.CancellationToken);
+        var checking = provider.GetRequiredService<HealthCheckService>().CheckHealthAsync(testContextAccessor.Current.CancellationToken);
+        await _time.WaitForTimerAsync(testContextAccessor.Current.CancellationToken);
+        _time.Advance(TimeSpan.FromMilliseconds(100));
+        var report = await checking;
 
         report.Status.Should().Be(HealthStatus.Unhealthy);
     }
 
     private static async Task<bool> HangUntilAsync(CancellationToken token)
     {
-        await Task.Delay(Timeout.Infinite, token);
+        await new TaskCompletionSource().Task.WaitAsync(token);
         return true;
     }
 
     private static TaskCompletionSource<T> Pending<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private static ServiceProvider HealthServiceWith(IRedisConnector connector, TimeSpan timeout) =>
+    private static ServiceProvider HealthServiceWith(IRedisConnector connector, TimeSpan timeout, TimeProvider clock) =>
         new ServiceCollection()
             .AddLogging()
             .AddHealthChecks()
-            .Add(new HealthCheckRegistration("redis", _ => new RedisHealthCheck(connector), HealthStatus.Unhealthy, null, timeout))
+            .Add(new HealthCheckRegistration("redis", _ => new TimedHealthCheck(new RedisHealthCheck(connector), clock, timeout), HealthStatus.Unhealthy, null, Timeout.InfiniteTimeSpan))
             .Services
             .BuildServiceProvider();
 
     private static IRedisConnector HungConnector()
     {
         var connector = Substitute.For<IRedisConnector>();
-        connector.ConnectAsync(Arg.Any<CancellationToken>()).Returns(call => new ValueTask(Task.Delay(Timeout.Infinite, call.Arg<CancellationToken>())));
+        connector.ConnectAsync(Arg.Any<CancellationToken>()).Returns(call => new ValueTask(new TaskCompletionSource().Task.WaitAsync(call.Arg<CancellationToken>())));
         return connector;
     }
 
@@ -394,4 +400,14 @@ public class CallerCancellationTests(ITestContextAccessor testContextAccessor) :
         _telemetry.Exceptions.Should().BeEmpty();
         _telemetry.Metrics.Should().NotContain(m => m.Name.StartsWith("Caching.Stats.", StringComparison.Ordinal), "a cancelled call is neither a hit nor a miss");
     }
+    private sealed class TimedHealthCheck(IHealthCheck inner, TimeProvider clock, TimeSpan timeout) : IHealthCheck
+    {
+        public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+        {
+            using var budget = new CancellationTokenSource(timeout, clock);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budget.Token);
+            return await inner.CheckHealthAsync(context, linked.Token);
+        }
+    }
+
 }

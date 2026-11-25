@@ -9,6 +9,9 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public class RedisOnlyCacheIntegrationTests(RedisContainerFixture fixture)
 {
+
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -39,16 +42,18 @@ public class RedisOnlyCacheIntegrationTests(RedisContainerFixture fixture)
         var cache = provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis);
         var key = Unique();
         var calls = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         async Task<string?> Load(CancellationToken ct)
         {
             Interlocked.Increment(ref calls);
-            await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
+            await release.Task.WaitAsync(ct);
             return "loaded";
         }
 
-        var reads = Enumerable.Range(0, 30).Select(_ => Task.Run(async () => await cache.GetOrAddAsync(key, Load, TimeSpan.FromMinutes(5), Ct), Ct)).ToArray();
+        var reads = Enumerable.Range(0, 30).Select(_ => cache.GetOrAddAsync(key, Load, TimeSpan.FromMinutes(5), Ct).AsTask()).ToArray();
 
+        release.SetResult();
         (await Task.WhenAll(reads)).Should().AllBe("loaded");
         calls.Should().Be(1);
         (await cache.GetAsync<string>(key, Ct)).Should().Be("loaded");
@@ -63,18 +68,20 @@ public class RedisOnlyCacheIntegrationTests(RedisContainerFixture fixture)
         var cache = provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis);
         var key = Unique();
         var calls = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         async Task<string?> Load(CancellationToken ct)
         {
             Interlocked.Increment(ref calls);
-            await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
+            await release.Task.WaitAsync(ct);
             return "loaded";
         }
 
         (await cache.GetAsync<string>(Unique(), Ct)).Should().BeNull();
         _ = profiler.Session.FinishProfiling().ToList();
-        var callers = Enumerable.Range(0, 30).Select(_ => Task.Run(async () => await cache.GetOrAddAsync(key, Load, TimeSpan.FromMinutes(5), Ct), Ct)).ToArray();
+        var callers = Enumerable.Range(0, 30).Select(_ => cache.GetOrAddAsync(key, Load, TimeSpan.FromMinutes(5), Ct).AsTask()).ToArray();
 
+        release.SetResult();
         (await Task.WhenAll(callers)).Should().AllBe("loaded");
         var commands = profiler.Session.FinishProfiling().Where(c => c.GetStatement().Contains(key, StringComparison.Ordinal)).Select(c => c.Command).ToList();
         calls.Should().Be(1);
@@ -110,8 +117,8 @@ public class RedisOnlyCacheIntegrationTests(RedisContainerFixture fixture)
         var live = Unique();
         var stale = Unique();
 
-        (await cache.GetOrAddWithExpirationAsync<string>(live, _ => Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(10))), Ct)).Should().Be("jwt");
-        (await cache.GetOrAddWithExpirationAsync<string>(stale, _ => Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(-1))), Ct)).Should().Be("jwt");
+        (await cache.GetOrAddWithExpirationAsync<string>(live, _ => Task.FromResult(new GeneratedValue<string>("jwt", _time.GetUtcNow().AddMinutes(10))), Ct)).Should().Be("jwt");
+        (await cache.GetOrAddWithExpirationAsync<string>(stale, _ => Task.FromResult(new GeneratedValue<string>("jwt", _time.GetUtcNow().AddMinutes(-1))), Ct)).Should().Be("jwt");
 
         (await cache.TimeToLiveAsync<string>(live, Ct)).Should().BeCloseTo(TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(1));
         (await cache.ContainsAsync<string>(stale, Ct)).Should().BeFalse("a value that has already expired is not stored");
@@ -120,7 +127,7 @@ public class RedisOnlyCacheIntegrationTests(RedisContainerFixture fixture)
     private static string Unique() => $"it-{Guid.NewGuid():N}";
 
     private ServiceProvider Build(IRedisProfiler? profiler = null) =>
-        new ServiceCollection()
+        new ServiceCollection().AddSingleton<TimeProvider>(_time)
             .AddSingleton(profiler ?? NullRedisProfiler.Instance)
             .AddCaching(
                 b =>

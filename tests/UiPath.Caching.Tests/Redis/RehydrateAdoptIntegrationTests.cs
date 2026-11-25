@@ -25,6 +25,8 @@ public sealed class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture
         },
     };
 
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
+    private readonly RedisTestSignals _signals = new();
     private readonly string _app = $"ra{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
 
@@ -57,7 +59,14 @@ public sealed class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture
         (await b.GetOrAddAsync(key, GenerateB, Policy, Ct)).Should().Be("v1");
 
         // Past the threshold of the 30 s lifetime (3 s), both copies are due.
-        await Task.Delay(TimeSpan.FromSeconds(3.5), Ct);
+        _time.Advance(TimeSpan.FromSeconds(3.5));
+        await using (var connection = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString))
+        {
+            foreach (var redisKey in RedisTestKeys.Keys(connection, $"*{key}"))
+            {
+                await connection.GetDatabase().KeyExpireAsync(redisKey, TimeSpan.FromSeconds(26.5));
+            }
+        }
         versionOfA = "v2";
         (await a.GetOrAddAsync(key, GenerateA, Policy, Ct)).Should().Be("v1");
         (await EventuallyAsync(() => Tracked(telemetryA, "cache.rehydrate.succeeded"))).Should().BeTrue("node a refreshed the key");
@@ -91,23 +100,9 @@ public sealed class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture
 
     private static bool Tracked(RecordingTelemetryProvider telemetry, string name) => telemetry.Events.Any(e => e.Name == name);
 
-    private static Task<bool> EventuallyAsync(Func<bool> condition) => EventuallyAsync(() => Task.FromResult(condition()));
+    private Task<bool> EventuallyAsync(Func<bool> condition) => EventuallyAsync(() => Task.FromResult(condition()));
 
-    private static async Task<bool> EventuallyAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20, Ct);
-        }
-
-        return false;
-    }
+    private Task<bool> EventuallyAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
 
     private async Task<bool> LockGoneAsync(string key)
     {
@@ -117,7 +112,7 @@ public sealed class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture
 
     private ICache Node(string source, bool broadcast, ICachingTelemetryProvider telemetry)
     {
-        var provider = new ServiceCollection()
+        var provider = new ServiceCollection().AddSingleton<TimeProvider>(_time)
             .AddSingleton(telemetry)
             .AddCaching(
                 b =>
@@ -139,6 +134,7 @@ public sealed class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture
                     o.AppShortName = _app;
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                 })
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);

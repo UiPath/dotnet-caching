@@ -34,10 +34,17 @@ public static class StreamsReady
             return;
         }
 
-        var until = DateTime.UtcNow + Timeout;
-        while (DateTime.UtcNow < until && subscriptions.Confirmed().Count < subscriptions.Channels().Count)
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void CheckSubscriptions()
         {
-            await Task.Delay(20, TestContext.Current.CancellationToken);
+            if (subscriptions.Confirmed().Count >= subscriptions.Channels().Count)
+            {
+                ready.TrySetResult();
+            }
         }
+
+        subscriptions.WhenConfirmed(CheckSubscriptions);
+        CheckSubscriptions();
+        await ready.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 }

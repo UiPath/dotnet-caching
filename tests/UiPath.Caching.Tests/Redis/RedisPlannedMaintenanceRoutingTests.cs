@@ -18,7 +18,8 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
 
     private readonly RecordingTelemetryProvider _telemetry = new();
     private readonly IRedisConnector _connector = Substitute.For<IRedisConnector>();
-    private readonly AdvanceableClock _clock = new(DateTimeOffset.UtcNow);
+    private readonly AdvanceableClock _clock = new(DateTimeOffset.UnixEpoch);
+    private readonly TaskCompletionSource _reconnected = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private IConnectionMultiplexer? _commandConnection;
 
     [Fact]
@@ -195,14 +196,20 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         var telemetry = new BlockingFirstRecordProvider();
         await StartedAsync(telemetry: telemetry);
         var first = Task.Run(() => RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating, sequenceId: 1), DeliveredBy("localhost:6379,maintRelaxedTimeout=1")), TestContext.Current.CancellationToken);
-        await telemetry.Blocked.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await telemetry.Blocked.WaitAsync(TestContext.Current.CancellationToken);
 
-        var second = Task.Run(() => RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver, sequenceId: 2), DeliveredBy("localhost:6379,maintRelaxedTimeout=60")), TestContext.Current.CancellationToken);
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        var entering = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = Task.Run(() =>
+        {
+            entering.SetResult();
+            RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver, sequenceId: 2), DeliveredBy("localhost:6379,maintRelaxedTimeout=60"));
+        },
+        TestContext.Current.CancellationToken);
+        await entering.Task;
 
         second.IsCompleted.Should().BeFalse("the second notice waits for the first to finish");
         telemetry.Release();
-        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await Task.WhenAll(first, second).WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -238,7 +245,7 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         await StartedAsync();
 
         RaiseOnCommandConnection(AzureEvent());
-        await Task.Delay(TimeSpan.FromSeconds(2.5), TestContext.Current.CancellationToken);
+        await AdvanceProbeAsync(TimeSpan.FromSeconds(2.5));
 
         _connector.DidNotReceive().ForceReconnect();
     }
@@ -251,10 +258,12 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         await StartedAsync();
 
         RaiseOnCommandConnection(AzureEvent());
-        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+        await AdvanceProbeAsync(TimeSpan.FromSeconds(1.5));
         _clock.Advance(TimeSpan.FromSeconds(11));
 
-        await WaitForAsync(() => _connector.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IRedisConnector.ForceReconnect)));
+        await _reconnected.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        _connector.Received().ForceReconnect();
     }
 
     [Fact]
@@ -266,7 +275,9 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
 
         RaiseOnCommandConnection(AzureEvent());
 
-        await WaitForAsync(() => _connector.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IRedisConnector.ForceReconnect)));
+        await _reconnected.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        _connector.Received().ForceReconnect();
     }
 
     [Fact]
@@ -279,7 +290,7 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         await StartedAsync();
 
         RaiseOnCommandConnection(AzureEvent());
-        await Task.Delay(TimeSpan.FromSeconds(2.5), TestContext.Current.CancellationToken);
+        await AdvanceProbeAsync(TimeSpan.FromSeconds(2.5));
 
         _connector.DidNotReceive().ForceReconnect();
     }
@@ -292,10 +303,12 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         await StartedAsync();
 
         RaiseOnCommandConnection(AzureEvent());
-        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+        await AdvanceProbeAsync(TimeSpan.FromSeconds(1.5));
         _clock.Advance(TimeSpan.FromSeconds(11));
 
-        await WaitForAsync(() => _connector.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IRedisConnector.ForceReconnect)));
+        await _reconnected.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        _connector.Received().ForceReconnect();
     }
 
     [Fact]
@@ -307,7 +320,8 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
 
         _clock.Advance(TimeSpan.FromMinutes(10));
 
-        await WaitForAsync(() => !sut.InProgress);
+        await sut.ProbeTask.WaitAsync(TestContext.Current.CancellationToken);
+        sut.InProgress.Should().BeFalse();
     }
 
     [Fact]
@@ -316,11 +330,12 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         HangProbes();
         var sut = await StartedAsync();
         RaiseOnCommandConnection(AzureEvent());
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await _clock.WaitForTimerAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         _clock.Advance(TimeSpan.FromMinutes(10));
 
-        await WaitForAsync(() => !sut.InProgress);
+        await sut.ProbeTask.WaitAsync(TestContext.Current.CancellationToken);
+        sut.InProgress.Should().BeFalse();
     }
 
     [Fact]
@@ -331,13 +346,14 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         FailProbes(ConnectionFailureType.UnableToResolvePhysicalConnection);
         var sut = await StartedAsync();
         RaiseOnCommandConnection(AzureEvent());
-        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+        await AdvanceProbeAsync(TimeSpan.FromSeconds(1.5));
         _clock.Advance(TimeSpan.FromMinutes(10));
-        await WaitForAsync(() => !sut.InProgress);
+        await sut.ProbeTask.WaitAsync(TestContext.Current.CancellationToken);
+        sut.InProgress.Should().BeFalse();
         _connector.ClearReceivedCalls();
 
         RaiseOnCommandConnection(AzureEvent("2026-09-19T01:00:00"));
-        await Task.Delay(TimeSpan.FromSeconds(2.5), TestContext.Current.CancellationToken);
+        await AdvanceProbeAsync(TimeSpan.FromSeconds(2.5));
 
         _connector.DidNotReceive().ForceReconnect();
     }
@@ -425,7 +441,8 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         RaiseOnCommandConnection(UnmodelledEvent("shorter bounds"), DeliveredBy("localhost:6379,maintRelaxedTimeout=1,maintPostEventRelaxed=0"));
 
         sut.InProgress.Should().BeFalse("1s is what the connection now relaxes to, and 5s have passed");
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "Redis.MaintenanceEnded"));
+        await sut.WindowTask.WaitAsync(TestContext.Current.CancellationToken);
+        _telemetry.Events.Should().Contain(e => e.Name == "Redis.MaintenanceEnded");
     }
 
     [Fact]
@@ -590,7 +607,8 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         _clock.Advance(TimeSpan.FromSeconds(16));
 
         sut.InProgress.Should().BeFalse();
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "Redis.MaintenanceEnded"));
+        await sut.WindowTask.WaitAsync(TestContext.Current.CancellationToken);
+        _telemetry.Events.Should().Contain(e => e.Name == "Redis.MaintenanceEnded");
     }
 
     [Fact]
@@ -765,7 +783,7 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         await WaitForRefusalAsync(telemetry);
 
         // Long enough for the run to have died here, had the refusal ended it.
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await _clock.WaitForTimerAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
 
         sut.InProgress.Should().BeTrue("a refused announcement must not end the probe run");
         telemetry.Events.Should().NotContain("Redis.MaintenanceEnded", "a start that was never announced has no end to announce");
@@ -778,10 +796,7 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         var sut = await StartedAsync(telemetry: telemetry);
 
         RaiseOnCommandConnection(AzureEvent());
-        for (var i = 0; i < 500 && !telemetry.Events.Contains("Redis.MaintenanceStarted"); i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await telemetry.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         telemetry.Events.Should().Contain("Redis.MaintenanceStarted", "the run announced its start, so it has an end to announce");
 
@@ -875,17 +890,6 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
             [$"NotificationType|NodeMaintenanceStarting|StartTimeInUTC|{startTime}|IsReplica|False|IPAddress|127.0.0.1|SSLPort|6380|NonSSLPort|6379"],
             null)!;
 
-    private static async Task WaitForAsync(Func<bool> condition)
-    {
-        // The delay continuation runs off the advancing thread.
-        for (var i = 0; i < 200 && !condition(); i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
-
-        condition().Should().BeTrue("the lapsed window must record its end, not just stop reporting");
-    }
-
     /// <summary>A notification from a source this library does not model, carrying the given payload.</summary>
     private static ServerMaintenanceEvent UnmodelledEvent(string rawMessage)
     {
@@ -924,11 +928,7 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
 
     private static async Task WaitForRefusalAsync(ThrowOnMaintenanceEventProvider telemetry)
     {
-        // The count rises inside the throw, before the catch has reported it.
-        for (var i = 0; i < 500 && (telemetry.RefusedAttempts == 0 || telemetry.Exceptions.Length == 0); i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await telemetry.Refused.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         telemetry.RefusedAttempts.Should().Be(1, "the announcement was attempted and refused");
     }
@@ -966,8 +966,16 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         _connector.Database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<bool>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(_ => Fail());
     }
 
+    private async Task AdvanceProbeAsync(TimeSpan by)
+    {
+        await _clock.WaitForTimerAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        _clock.Advance(by);
+        await _clock.WaitForTimerAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+    }
+
     private async Task<RedisPlannedMaintenance> StartedAsync(string connectionString = "localhost:6379", ICachingTelemetryProvider? telemetry = null)
     {
+        _connector.When(c => c.ForceReconnect()).Do(_ => _reconnected.TrySetResult());
         UseCommandConnection(connectionString);
         var sut = new RedisPlannedMaintenance(telemetry ?? _telemetry, _connector, _clock);
         _started.Add(sut);
@@ -992,7 +1000,7 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
             if (eventName == "Redis.Maintenance" && Interlocked.Increment(ref _records) == 1)
             {
                 _blocked.TrySetResult();
-                _release.Wait(TimeSpan.FromSeconds(10));
+                _release.Wait(TestContext.Current.CancellationToken);
             }
         }
 
@@ -1027,6 +1035,10 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
         /// <summary>Counts the attempts that were refused, so a test can wait for one without racing it.</summary>
         public int RefusedAttempts => Volatile.Read(ref _refused);
 
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Refused { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Exception[] Exceptions => Snapshot(_exceptions);
 
         public string[] Events => Snapshot(_events);
@@ -1043,6 +1055,10 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
             {
                 _events.Add(eventName);
             }
+            if (eventName == "Redis.MaintenanceStarted")
+            {
+                Started.TrySetResult();
+            }
         }
 
         public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
@@ -1056,6 +1072,7 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
             {
                 _exceptions.Add(ex);
             }
+            Refused.TrySetResult();
         }
 
         public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
@@ -1083,6 +1100,7 @@ public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
 internal sealed class AdvanceableClock(DateTimeOffset now) : TimeProvider
 {
     private readonly List<FakeTimer> _timers = [];
+    private readonly global::System.Threading.Channels.Channel<TimeSpan> _scheduled = global::System.Threading.Channels.Channel.CreateUnbounded<TimeSpan>();
     private DateTimeOffset _now = now;
     private TimeSpan _wallOffset;
 
@@ -1122,7 +1140,15 @@ internal sealed class AdvanceableClock(DateTimeOffset now) : TimeProvider
             _timers.Add(timer);
         }
 
+        _scheduled.Writer.TryWrite(dueTime);
         return timer;
+    }
+
+    public async Task WaitForTimerAsync(TimeSpan dueTime, CancellationToken token)
+    {
+        while (await _scheduled.Reader.ReadAsync(token) != dueTime)
+        {
+        }
     }
 
     public void Advance(TimeSpan by)

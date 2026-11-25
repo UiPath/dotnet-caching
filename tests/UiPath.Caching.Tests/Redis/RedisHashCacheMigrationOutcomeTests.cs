@@ -16,6 +16,7 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
     private static readonly HashCacheEntryOptions Replace = new(TimeToLive: TimeSpan.FromMinutes(5));
     private static readonly Dictionary<string, string?> Fields = new() { ["a"] = "x" };
 
+    private readonly ManualTimeProvider _time = new(DateTimeOffset.UnixEpoch);
     private readonly IDatabase _database = Substitute.For<IDatabase>();
     private readonly ITransaction _transaction = Substitute.For<ITransaction>();
 
@@ -77,7 +78,7 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
     [Fact]
     public async Task A_write_that_times_out_after_the_send_is_unknown_and_one_cancelled_in_flight_too()
     {
-        var sut = Create(new GivingUp(TimeSpan.FromMilliseconds(100)));
+        var sut = Create(new GivingUp(TimeSpan.FromMilliseconds(100), _time));
         Stub();
         var never = new TaskCompletionSource<bool>();
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(never.Task);
@@ -85,8 +86,9 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
         (await sut.WriteAsync("k", Fields, Replace, null, Token)).Should().Be(StoreOutcome.Unknown);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
-        (await Create(new GivingUp(TimeSpan.FromSeconds(30))).WriteAsync("k", Fields, Replace, null, cts.Token)).Should().Be(StoreOutcome.Unknown);
+        var write = Create(new GivingUp(TimeSpan.FromSeconds(30), _time)).WriteAsync("k", Fields, Replace, null, cts.Token);
+        await cts.CancelAsync();
+        (await write).Should().Be(StoreOutcome.Unknown);
     }
 
     [Fact]
@@ -124,7 +126,7 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
 
         var never = new TaskCompletionSource<bool>();
         _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(never.Task);
-        (await Create(new GivingUp(TimeSpan.FromMilliseconds(100))).DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.Unknown);
+        (await Create(new GivingUp(TimeSpan.FromMilliseconds(100), _time)).DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.Unknown);
 
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
@@ -145,8 +147,9 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
         var never = new TaskCompletionSource<long>();
         _database.HashDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>()).Returns(never.Task);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
-        (await sut.DeleteFieldsAsync<string>("k", ["a"], cts.Token)).Should().Be(StoreOutcome.Unknown);
+        var delete = sut.DeleteFieldsAsync<string>("k", ["a"], cts.Token);
+        await cts.CancelAsync();
+        (await delete).Should().Be(StoreOutcome.Unknown);
         (await sut.DeleteFieldsAsync<string>("k", ["_odd_"], Token)).Should().Be(StoreOutcome.NotSent);
     }
 
@@ -175,7 +178,7 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
         var never = new TaskCompletionSource<bool>();
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(never.Task);
 
-        (await Create(new GivingUp(TimeSpan.FromMilliseconds(100))).RenewAsync<string>("k", Replace, null, Token)).Should().Be(StoreOutcome.Unknown);
+        (await Create(new GivingUp(TimeSpan.FromMilliseconds(100), _time)).RenewAsync<string>("k", Replace, null, Token)).Should().Be(StoreOutcome.Unknown);
         (await Create(connected: false).RenewAsync<string>("k", Replace, null, Token)).Should().Be(StoreOutcome.NotSent);
     }
 
@@ -211,7 +214,7 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
 
         var never = new TaskCompletionSource<bool>();
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(never.Task);
-        (await Create(new GivingUp(TimeSpan.FromMilliseconds(100))).RenewExpiryAsync<string>("k", Replace, null, Token)).Should().Be(StoreOutcome.Unknown);
+        (await Create(new GivingUp(TimeSpan.FromMilliseconds(100), _time)).RenewExpiryAsync<string>("k", Replace, null, Token)).Should().Be(StoreOutcome.Unknown);
         (await Create(connected: false).RenewExpiryAsync<string>("k", Replace, null, Token)).Should().Be(StoreOutcome.NotSent);
     }
 
@@ -237,7 +240,7 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
         Stub();
         _database.KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(_ => LostRenameAsync());
         _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(false);
-        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(250);
+        var deadline = _time.GetUtcNow().AddMilliseconds(250);
 
         var outcome = await sut.WriteAsync("k", new Dictionary<string, string?> { ["a"] = "1", ["b"] = "2" }, new HashCacheEntryOptions(ExpireTime: deadline), null, Token);
 
@@ -254,7 +257,7 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
         _database.KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(_ => LostRenameAsync());
         _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
 
-        var outcome = await sut.WriteAsync("k", new Dictionary<string, string?> { ["a"] = "1", ["b"] = "2" }, new HashCacheEntryOptions(ExpireTime: DateTimeOffset.UtcNow.AddMilliseconds(250)), null, Token);
+        var outcome = await sut.WriteAsync("k", new Dictionary<string, string?> { ["a"] = "1", ["b"] = "2" }, new HashCacheEntryOptions(ExpireTime: _time.GetUtcNow().AddMilliseconds(250)), null, Token);
 
         outcome.Should().Be(StoreOutcome.Committed);
     }
@@ -321,10 +324,10 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
         await _database.Received(1).KeyTypeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
 
-    private static async Task<bool> LostRenameAsync()
+    private Task<bool> LostRenameAsync()
     {
-        await Task.Delay(400);
-        throw new TimeoutException("the answer of the rename was lost");
+        _time.Advance(TimeSpan.FromMilliseconds(400));
+        return Task.FromException<bool>(new TimeoutException("the answer of the rename was lost"));
     }
 
     private void Stub()
@@ -361,19 +364,21 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
             options,
             new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true },
             new DefaultCachePolicyFactory(null, null),
-            TimeProvider.System,
+            _time,
             NullLogger<RedisHashCache>.Instance);
     }
 
-    private sealed class GivingUp(TimeSpan timeout) : IResiliencePipeline
+    private sealed class GivingUp(TimeSpan timeout, ManualTimeProvider clock) : IResiliencePipeline
     {
         public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(timeout);
+            using var timer = clock.CreateTimer(_ => cts.Cancel(), null, timeout, Timeout.InfiniteTimeSpan);
             try
             {
-                return await callback(cts.Token).AsTask().WaitAsync(cts.Token);
+                var running = callback(cts.Token).AsTask();
+                clock.Advance(timeout);
+                return await running.WaitAsync(cts.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {

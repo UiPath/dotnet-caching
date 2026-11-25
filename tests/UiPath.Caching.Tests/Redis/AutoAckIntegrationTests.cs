@@ -9,6 +9,7 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class AutoAckIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
+    private readonly RedisTestSignals _signals = new();
     private readonly string _app = $"aa{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
 
@@ -52,21 +53,7 @@ public sealed class AutoAckIntegrationTests(RedisContainerFixture fixture) : IDi
         GC.SuppressFinalize(this);
     }
 
-    private static async Task<bool> EventuallyAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20, Ct);
-        }
-
-        return await condition();
-    }
+    private Task<bool> EventuallyAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
 
     private ICache Node(string source)
     {
@@ -85,6 +72,7 @@ public sealed class AutoAckIntegrationTests(RedisContainerFixture fixture) : IDi
                     o.AppShortName = _app;
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                 })
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         return provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);

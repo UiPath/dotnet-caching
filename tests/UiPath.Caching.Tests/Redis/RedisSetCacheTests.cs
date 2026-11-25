@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Internal;
+using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
@@ -18,7 +18,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     private SystemJsonByteSerializerProxy _serializer = default!;
     private ISystemClock _clock = default!;
     private RedisCacheOptions _redisCacheOptions = new();
-    private DateTimeOffset _now = DateTimeOffset.UtcNow;
+    private DateTimeOffset _now = DateTimeOffset.UnixEpoch;
     private IResiliencePipelineProvider _pipelineProvider = default!;
     private CacheKey _cacheKey = default!;
     private RedisKey _redisKey = default!;
