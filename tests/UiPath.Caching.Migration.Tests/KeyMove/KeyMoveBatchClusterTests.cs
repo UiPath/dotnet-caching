@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Net;
 using StackExchange.Redis;
 using UiPath.Caching.KeyMove;
 using UiPath.Caching.Migration.Tests.Support;
@@ -58,7 +60,9 @@ public sealed class KeyMoveBatchClusterTests(RedisFixture fixture)
     [InlineData(false)]
     public async Task A_batch_write_and_a_batch_delete_run_every_key_in_order_in_its_own_slot(bool scripts)
     {
-        await using var kit = await KeyMoveKit.CreateAsync(fixture, scripts, cluster: true);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var commands = new ConcurrentQueue<RedisKey>();
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, scripts, cluster: true, clock: clock, interceptDb: db => RecordWrites(db, commands));
         await kit.PrepareAsync(Keys);
         await kit.SetStateAsync("S3");
         foreach (var key in Keys)
@@ -66,20 +70,24 @@ public sealed class KeyMoveBatchClusterTests(RedisFixture fixture)
             await kit.Db.StringSetAsync(kit.L(key), "old");
         }
 
+        clock.Advance(TimeSpan.FromSeconds(1));
         var written = await kit.Client.SetManyAsync([.. Keys.Select(k => (k, new Item("new-" + k), (DateTimeOffset?)null))], Ct);
 
         written.Should().AllSatisfy(w => w.Outcome.Should().Be(WriteOutcome.Committed));
         foreach (var key in Keys)
         {
+            AssertWriteOrder(kit, key, commands);
             (await kit.GetAsync(kit.N(key))).Should().Be("new-" + key);
             (await kit.ExistsAsync(kit.L(key))).Should().BeFalse();
         }
 
+        commands.Clear();
         var removed = await kit.Client.RemoveManyAsync(Keys[..12], Ct);
 
         removed.Should().AllSatisfy(r => r.Outcome.Should().Be(WriteOutcome.Committed));
         foreach (var key in Keys[..12])
         {
+            AssertWriteOrder(kit, key, commands);
             (await kit.ExistsAsync(kit.N(key))).Should().BeFalse();
         }
 
@@ -89,29 +97,37 @@ public sealed class KeyMoveBatchClusterTests(RedisFixture fixture)
     [Fact]
     public async Task A_shard_that_fails_types_only_its_own_keys_of_a_batch_write_and_the_others_commit()
     {
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         ShardFailingDatabase? failing = null;
-        await using var kit = await KeyMoveKit.CreateAsync(fixture, cluster: true, interceptDb: db => ShardFailingDatabase.Over(db, out failing));
-        await kit.PrepareAsync(Keys);
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, cluster: true, clock: clock, interceptDb: db => ShardFailingDatabase.Over(db, out failing));
+        var down = ShardFailingDatabase.OwnerOf(kit.Mux, kit.L(Keys[0]))!;
+        var keys = Keys.Append(KeyWithOnlyDestinationDown(kit, down)).ToArray();
+        await kit.PrepareAsync(keys);
         await kit.SetStateAsync("S3");
-        foreach (var key in Keys)
+        foreach (var key in keys)
         {
             await kit.Db.StringSetAsync(kit.L(key), "old");
         }
 
-        // The shard of the first key's L goes down: its keys fail at their first step, and every key of another shard commits.
-        var down = ShardFailingDatabase.OwnerOf(kit.Mux, kit.L(Keys[0]))!;
         failing!.Failing = down;
-        var written = await kit.Client.SetManyAsync([.. Keys.Select(k => (k, new Item("new-" + k), (DateTimeOffset?)null))], Ct);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var written = await kit.Client.SetManyAsync([.. keys.Select(k => (k, new Item("new-" + k), (DateTimeOffset?)null))], Ct);
 
-        for (var i = 0; i < Keys.Length; i++)
+        for (var i = 0; i < keys.Length; i++)
         {
-            var key = Keys[i];
+            var key = keys[i];
             if (Equals(ShardFailingDatabase.OwnerOf(kit.Mux, kit.L(key)), down))
             {
                 written[i].Outcome.Should().NotBe(WriteOutcome.Committed, $"the shard of {key} is down");
                 (await kit.GetAsync(kit.L(key))).Should().Be("old", $"nothing of {key} was written");
             }
-            else if (!Equals(ShardFailingDatabase.OwnerOf(kit.Mux, kit.N(key)), down))
+            else if (Equals(ShardFailingDatabase.OwnerOf(kit.Mux, kit.N(key)), down))
+            {
+                written[i].Outcome.Should().NotBe(WriteOutcome.Committed, $"the destination shard of {key} is down");
+                (await kit.ExistsAsync(kit.N(key))).Should().BeFalse();
+                (await kit.ExistsAsync(kit.L(key))).Should().BeFalse($"the source delete of {key} ran first");
+            }
+            else
             {
                 written[i].Outcome.Should().Be(WriteOutcome.Committed, $"{key} lives on shards that are up");
                 (await kit.GetAsync(kit.N(key))).Should().Be("new-" + key);
@@ -125,8 +141,9 @@ public sealed class KeyMoveBatchClusterTests(RedisFixture fixture)
     [Fact]
     public async Task A_shard_that_fails_makes_only_its_own_keys_of_a_batch_read_unavailable()
     {
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         ShardFailingDatabase? failing = null;
-        await using var kit = await KeyMoveKit.CreateAsync(fixture, cluster: true, interceptDb: db => ShardFailingDatabase.Over(db, out failing));
+        await using var kit = await KeyMoveKit.CreateAsync(fixture, cluster: true, clock: clock, interceptDb: db => FailMultiGet(db, out failing));
         await kit.PrepareAsync(Keys);
         await kit.SetStateAsync("S3");
         foreach (var key in Keys)
@@ -136,13 +153,14 @@ public sealed class KeyMoveBatchClusterTests(RedisFixture fixture)
 
         var down = ShardFailingDatabase.OwnerOf(kit.Mux, kit.N(Keys[0]))!;
         failing!.Failing = down;
+        clock.Advance(TimeSpan.FromSeconds(1));
         var read = await kit.Client.ReadManyAsync(Keys, Ct);
 
         foreach (var key in Keys)
         {
             if (Equals(ShardFailingDatabase.OwnerOf(kit.Mux, kit.N(key)), down))
             {
-                read[key].Kind.Should().NotBe(ReadOutcome.Found, $"the shard of {key} is down");
+                read[key].Kind.Should().Be(ReadOutcome.Unavailable, $"the shard of {key} is down");
             }
             else
             {
@@ -186,4 +204,70 @@ public sealed class KeyMoveBatchClusterTests(RedisFixture fixture)
 
     private static HashSet<int> SlotsOf(KeyMoveKit kit, IEnumerable<string> keys) =>
         [.. keys.SelectMany(k => new[] { kit.Mux.HashSlot(kit.L(k)), kit.Mux.HashSlot(kit.N(k)) })];
+
+    private static string KeyWithOnlyDestinationDown(KeyMoveKit kit, EndPoint down)
+    {
+        var layout = kit.Mux.GetServers().First(server => server.IsConnected).ClusterConfiguration!;
+        var up = layout.Nodes.First(node => !node.IsReplica && node.Slots.Count > 0 && !Equals(node.EndPoint, down));
+        var tag = SlotTags.For(up.Slots[0].From);
+
+        // L hashes the explicit tag. N includes the varying prefix in its own tag.
+        return Enumerable.Range(0, HashSlot.Count)
+            .Select(i => $"{i}{{{tag}}}")
+            .First(key => Equals(ShardFailingDatabase.OwnerOf(kit.Mux, kit.N(key)), down));
+    }
+
+    private static IDatabase FailMultiGet(IDatabase db, out ShardFailingDatabase failing)
+    {
+        var shard = ShardFailingDatabase.Over(db, out failing);
+        return InterceptingProxy.Wrap(db, (method, args) => method.Name == nameof(IDatabase.StringGetAsync) && args[0] is RedisKey[] keys
+            ? shard.StringGetAsync(keys, (CommandFlags)args[1]!)
+            : InterceptingProxy.Proceed);
+    }
+
+    private static void AssertWriteOrder(KeyMoveKit kit, string key, ConcurrentQueue<RedisKey> commands)
+    {
+        RedisKey source = kit.L(key);
+        RedisKey destination = kit.N(key);
+        commands.Where(command => command == source || command == destination).Should().Equal(source, destination);
+    }
+
+    private static IDatabase RecordWrites(IDatabase db, ConcurrentQueue<RedisKey> commands) =>
+        InterceptingProxy.Wrap(db, (method, args) =>
+        {
+            if (method.Name == nameof(IDatabase.CreateTransaction))
+            {
+                return RecordTransaction(db.CreateTransaction(args[0]), commands);
+            }
+
+            if (method.Name == nameof(IDatabase.ScriptEvaluateAsync) && args[1] is RedisKey[] keys)
+            {
+                // SRCDEL takes the source first. BUMP takes the fence first and the destination second.
+                commands.Enqueue(keys.Length == 2 ? keys[0] : keys[1]);
+            }
+
+            return InterceptingProxy.Proceed;
+        });
+
+    private static ITransaction RecordTransaction(ITransaction transaction, ConcurrentQueue<RedisKey> commands)
+    {
+        var writes = new List<RedisKey>();
+        return InterceptingProxy.Wrap(transaction, (method, args) =>
+        {
+            if (method.Name is nameof(IDatabase.KeyDeleteAsync) or nameof(IDatabase.StringSetAsync))
+            {
+                writes.Add((RedisKey)args[0]!);
+            }
+
+            if (method.Name == nameof(ITransaction.ExecuteAsync))
+            {
+                foreach (var key in writes)
+                {
+                    commands.Enqueue(key);
+                }
+            }
+
+            return InterceptingProxy.Proceed;
+        });
+    }
 }
