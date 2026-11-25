@@ -2,7 +2,8 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.Migration.Tests.Support;
 
-// The faults of the kit do what the fault tests rely on.
+// The faults of the kit do what the fault tests rely on. They share the collection of the other fault tests, so a failover never runs under one of them.
+[Collection("RedisIntegration")]
 [Trait("Category", "Chaos")]
 public sealed class ClusterKitTests
 {

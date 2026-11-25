@@ -79,6 +79,43 @@ internal sealed class ClusterKit : IAsyncDisposable
         await WaitSettledAsync();
     }
 
+    /// <summary>Starts moving <paramref name="slot"/> to another master and migrates only <paramref name="keys"/> of it, so the slot is split between the two.</summary>
+    /// <returns>The migration, to finish with <see cref="FinishMigrationAsync"/>.</returns>
+    public async Task<SlotMigration> BeginMigrationAsync(int slot, params RedisKey[] keys)
+    {
+        var nodes = Nodes();
+        var source = nodes.Single(n => !n.IsReplica && n.Slots.Any(r => r.From <= slot && slot <= r.To));
+        var target = nodes.First(n => !n.IsReplica && n.Slots.Count > 0 && n.NodeId != source.NodeId);
+        var (from, to) = (Mux.GetServer(source.EndPoint!), Mux.GetServer(target.EndPoint!));
+        await to.ExecuteAsync("CLUSTER", "SETSLOT", slot, "IMPORTING", source.NodeId);
+        await from.ExecuteAsync("CLUSTER", "SETSLOT", slot, "MIGRATING", target.NodeId);
+        var migration = new SlotMigration(slot, from, to, source.NodeId, target.NodeId);
+        await MigrateAsync(migration, keys);
+        return migration;
+    }
+
+    /// <summary>Migrates the rest of the slot and gives it to the new master on every master.</summary>
+    public async Task FinishMigrationAsync(SlotMigration migration)
+    {
+        while (true)
+        {
+            var left = (RedisResult[]?)await migration.From.ExecuteAsync("CLUSTER", "GETKEYSINSLOT", migration.Slot, 100) ?? [];
+            if (left.Length == 0)
+            {
+                break;
+            }
+
+            await MigrateAsync(migration, [.. left.Select(k => (RedisKey)(string?)k)]);
+        }
+
+        foreach (var master in Nodes().Where(n => !n.IsReplica && n.Slots.Count > 0).Select(n => Mux.GetServer(n.EndPoint!)).Append(migration.To).Distinct())
+        {
+            await master.ExecuteAsync("CLUSTER", "SETSLOT", migration.Slot, "NODE", migration.TargetId);
+        }
+
+        await WaitSettledAsync();
+    }
+
     /// <summary>Waits until every master reports the cluster ok and every master has a linked replica.</summary>
     public Task WaitSettledAsync() => UntilAsync(async () =>
     {
@@ -136,6 +173,18 @@ internal sealed class ClusterKit : IAsyncDisposable
         }
     }
 
+    private static async Task MigrateAsync(SlotMigration migration, RedisKey[] keys)
+    {
+        if (keys.Length == 0)
+        {
+            return;
+        }
+
+        var target = (IPEndPoint)migration.To.EndPoint;
+        object[] args = ["MIGRATE", target.Address.ToString(), target.Port, string.Empty, 0, 5000, "KEYS", .. keys.Select(k => (object)k.ToString())];
+        await migration.From.ExecuteAsync((string)args[0], args[1..]);
+    }
+
     private async Task<EndPoint?> ServingAsync(RedisKey key)
     {
         await Mux.ConfigureAsync();
@@ -146,3 +195,6 @@ internal sealed class ClusterKit : IAsyncDisposable
     private ICollection<ClusterNode> Nodes() =>
         Mux.GetServers().First(s => s.IsConnected).ClusterConfiguration?.Nodes ?? throw new InvalidOperationException("The servers are not a cluster.");
 }
+
+// A slot on its way from one master to another.
+internal sealed record SlotMigration(int Slot, IServer From, IServer To, string SourceId, string TargetId);
