@@ -28,23 +28,33 @@ public sealed class KeyMoveInterleavingTests(RedisFixture fixture)
         new("two promoters against a write", "S3", false, "v0", null, c => [c.Read(), c.Read(), c.Write("v1")], 150, true),
     ];
 
-    public static TheoryData<int, bool, bool> Cases()
+    public static TheoryData<int, string, bool> Cases()
     {
-        var data = new TheoryData<int, bool, bool>();
+        var data = new TheoryData<int, string, bool>();
         for (var i = 0; i < Scenarios.Length; i++)
         {
-            data.Add(i, false, true);
+            data.Add(i, Placement.One, true);
         }
 
-        // The fallback on one server, and the scenarios that cross slots on a cluster.
+        // The fallback on one server, the scenarios that cross slots on a cluster, and L and N on two servers.
         foreach (var i in new[] { 0, 1, 2, 3, 5 })
         {
-            data.Add(i, false, false);
+            data.Add(i, Placement.One, false);
         }
 
         foreach (var i in new[] { 0, 1, 2, 6 })
         {
-            data.Add(i, true, true);
+            data.Add(i, Placement.Cluster, true);
+        }
+
+        foreach (var i in new[] { 0, 1, 2, 3, 6, 7, 8, 11 })
+        {
+            data.Add(i, Placement.Two, true);
+        }
+
+        foreach (var i in new[] { 0, 1, 5 })
+        {
+            data.Add(i, Placement.Two, false);
         }
 
         return data;
@@ -52,15 +62,16 @@ public sealed class KeyMoveInterleavingTests(RedisFixture fixture)
 
     [Theory]
     [MemberData(nameof(Cases))]
-    public async Task No_schedule_of_the_scenario_breaks_the_invariants_of_the_history(int scenarioIndex, bool cluster, bool scripts)
+    public async Task No_schedule_of_the_scenario_breaks_the_invariants_of_the_history(int scenarioIndex, string placement, bool scripts)
     {
         var scenario = Scenarios[scenarioIndex];
-        await using var kit = await KeyMoveKit.CreateAsync(fixture, scripts, scenario.NoOrigin, cluster);
+        await using var sides = await Placement.OpenAsync(fixture, placement, scripts, scenario.NoOrigin);
+        var kit = sides.Kit;
         var scheduler = new StepScheduler();
         kit.Schedule.Hook = (_, _) => scheduler.ParkAsync();
         await kit.PrepareAsync("k");
 
-        var (runs, violations) = await Interleaver.ExploreAsync(choose => RunAsync(kit, scenario, scheduler, choose), scenario.MaxRuns, scenario.Random);
+        var (runs, violations) = await Interleaver.ExploreAsync(choose => RunAsync(sides, scenario, scheduler, choose), scenario.MaxRuns, scenario.Random);
 
         runs.Should().BeGreaterThan(1, scenario.Name);
         violations.Should().BeEmpty(scenario.Name);
@@ -69,7 +80,8 @@ public sealed class KeyMoveInterleavingTests(RedisFixture fixture)
     [Fact]
     public async Task Two_creators_of_a_NoOrigin_claim_have_exactly_one_winner_in_every_schedule()
     {
-        await using var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: true);
+        await using var sides = await Placement.OpenAsync(fixture, Placement.One, true, noOrigin: true);
+        var kit = sides.Kit;
         var scheduler = new StepScheduler();
         kit.Schedule.Hook = (_, _) => scheduler.ParkAsync();
         await kit.PrepareAsync("k");
@@ -79,7 +91,7 @@ public sealed class KeyMoveInterleavingTests(RedisFixture fixture)
         var (runs, violations) = await Interleaver.ExploreAsync(
             async choose =>
             {
-                var result = await RunAsync(kit, scenario, scheduler, choose, context => winners.Add(context.Created));
+                var result = await RunAsync(sides, scenario, scheduler, choose, context => winners.Add(context.Created));
                 return result;
             },
             scenario.MaxRuns,
@@ -88,6 +100,30 @@ public sealed class KeyMoveInterleavingTests(RedisFixture fixture)
         runs.Should().BeGreaterThan(1);
         violations.Should().BeEmpty();
         winners.Should().OnlyContain(w => w == 1);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_source_write_requires_the_current_control_record_on_the_source_server(bool scripts)
+    {
+        await using var sides = await Placement.OpenAsync(fixture, Placement.Two, scripts, noOrigin: false);
+        var kit = sides.Kit;
+        await kit.PrepareAsync("k");
+        await kit.SetStateAsync("S1", nPop: 0);
+        await sides.SyncAsync("k");
+
+        (await kit.Client.SetAsync("k", new Item("v1"), null, CancellationToken.None)).Outcome.Should().Be(WriteOutcome.Committed);
+        ((string?)await sides.LDb.StringGetAsync(kit.L("k"))).Should().Be("v1");
+
+        await kit.SetStateAsync("S1", nPop: 0);
+        (await kit.Client.SetAsync("k", new Item("v2"), null, CancellationToken.None)).Outcome.Should().Be(WriteOutcome.NotSent);
+        ((string?)await sides.LDb.StringGetAsync(kit.L("k"))).Should().Be("v1");
+
+        await sides.SyncAsync("k");
+        (await kit.Client.SetAsync("k", new Item("v2"), null, CancellationToken.None)).Outcome.Should().Be(WriteOutcome.Committed);
+        ((string?)await sides.LDb.StringGetAsync(kit.L("k"))).Should().Be("v2");
+        (await kit.Db.KeyExistsAsync(kit.L("k"))).Should().BeFalse();
     }
 
     [Fact]
@@ -104,9 +140,10 @@ public sealed class KeyMoveInterleavingTests(RedisFixture fixture)
         miss!.Kind.Should().Be(OracleViolations.FalseMiss);
     }
 
-    private static async Task<InterleavingRun> RunAsync(KeyMoveKit kit, InterleavingScenario scenario, StepScheduler scheduler, Func<int, int, int> choose, Action<InterleavingContext>? after = null)
+    private static async Task<InterleavingRun> RunAsync(Placement sides, InterleavingScenario scenario, StepScheduler scheduler, Func<int, int, int> choose, Action<InterleavingContext>? after = null)
     {
-        await ResetAsync(kit, scenario);
+        var kit = sides.Kit;
+        await ResetAsync(sides, scenario);
 
         var oracle = new HistoryOracle(ImmutableArray.Create(new OracleKey("k", scenario.NoOrigin, scenario.InitialL, scenario.InitialN)));
         var violations = new List<string>();
@@ -130,16 +167,18 @@ public sealed class KeyMoveInterleavingTests(RedisFixture fixture)
         return new InterleavingRun(trace, violations);
     }
 
-    private static async Task ResetAsync(KeyMoveKit kit, InterleavingScenario scenario)
+    private static async Task ResetAsync(Placement sides, InterleavingScenario scenario)
     {
-        foreach (var key in new[] { kit.L("k"), kit.N("k"), kit.Names.ForwardFence(kit.N("k")).ToString() })
+        var kit = sides.Kit;
+        await sides.LDb.KeyDeleteAsync(kit.L("k"));
+        foreach (var key in new[] { kit.N("k"), kit.Names.ForwardFence(kit.N("k")).ToString() })
         {
             await kit.Db.KeyDeleteAsync(key);
         }
 
         if (scenario.InitialL is { } l)
         {
-            await kit.Db.StringSetAsync(kit.L("k"), l);
+            await sides.LDb.StringSetAsync(kit.L("k"), l);
         }
 
         if (scenario.InitialN is { } n)
@@ -148,6 +187,7 @@ public sealed class KeyMoveInterleavingTests(RedisFixture fixture)
         }
 
         await kit.SetStateAsync(scenario.State);
+        await sides.SyncAsync("k");
         kit.Client.Gap();
     }
 }

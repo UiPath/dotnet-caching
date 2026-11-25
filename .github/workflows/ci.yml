@@ -93,7 +93,8 @@ jobs:
           ./tests/UiPath.Caching.Tests/bin/Release/net10.0/UiPath.Caching.Tests $core
           ./tests/UiPath.Caching.Migration.Tests/bin/Release/net10.0/UiPath.Caching.Migration.Tests \
             -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveHashClusterTests -class UiPath.Caching.Migration.Tests.KeyMove.MoverLeaseTests \
-            -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveBatchClusterTests
+            -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveBatchClusterTests \
+            -class UiPath.Caching.Migration.Tests.KeyMove.KeyMoveInterleavingTests
 
       - name: Stop Redis cluster and replica kit
         if: always()

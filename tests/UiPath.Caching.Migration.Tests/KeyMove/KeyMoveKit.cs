@@ -92,8 +92,17 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         }
 
         var mux = await ConnectionMultiplexer.ConnectAsync(connection + ",allowAdmin=true" + (database is { } db ? $",defaultDatabase={db}" : string.Empty));
-        var version = mux.GetServers().Where(s => !s.IsReplica).Select(s => s.Version).Min() ?? new Version(7, 0);
-        return new KeyMoveKit(mux, useScripts, noOrigin, clock ?? TimeProvider.System, options ?? new KeyMoveOptions(), Guid.NewGuid().ToString("N")[..10], version, source, interceptDb, inPlace, native, nativePrefix);
+        var unique = Guid.NewGuid().ToString("N")[..10];
+        try
+        {
+            var version = mux.GetServers().Where(s => !s.IsReplica).Select(s => s.Version).Min() ?? new Version(7, 0);
+            return new KeyMoveKit(mux, useScripts, noOrigin, clock ?? TimeProvider.System, options ?? new KeyMoveOptions(), unique, version, source, interceptDb, inPlace, native, nativePrefix);
+        }
+        catch
+        {
+            await CleanUpConnectionAsync(mux, unique);
+            throw;
+        }
     }
 
     public string L(string key) => $"km4:{Unique}:L:{key}";
@@ -158,6 +167,9 @@ internal sealed class KeyMoveKit : IAsyncDisposable
         }
     }
 
+    /// <summary>The control record of the identity in force, as the kit writes it, for a side that lives on another server.</summary>
+    public ControlRecord CurrentRecord() => Record(_ep, Id);
+
     // The rules of a state the records have not reached yet, or the other way round.
     public async Task AdvanceRecordsAsync(string key, long ep, string id)
     {
@@ -186,19 +198,39 @@ internal sealed class KeyMoveKit : IAsyncDisposable
     {
         try
         {
-            foreach (var server in Mux.GetServers().Where(s => !s.IsReplica))
-            {
-                var keys = server.Keys(pattern: $"*{Unique}*").ToArray();
-                foreach (var key in keys)
-                {
-                    await Mux.GetDatabase().KeyDeleteAsync(key);
-                }
-            }
+            await DeleteKeysAsync(Mux, Unique);
         }
         finally
         {
             Client.Dispose();
             await Mux.DisposeAsync();
+        }
+    }
+
+    internal static async ValueTask CleanUpConnectionAsync(ConnectionMultiplexer mux, string? unique)
+    {
+        try
+        {
+            if (unique is not null)
+            {
+                await DeleteKeysAsync(mux, unique);
+            }
+        }
+        finally
+        {
+            await mux.DisposeAsync();
+        }
+    }
+
+    private static async Task DeleteKeysAsync(ConnectionMultiplexer mux, string unique)
+    {
+        foreach (var server in mux.GetServers().Where(s => !s.IsReplica))
+        {
+            var keys = server.Keys(pattern: $"*{unique}*").ToArray();
+            foreach (var key in keys)
+            {
+                await mux.GetDatabase().KeyDeleteAsync(key);
+            }
         }
     }
 
