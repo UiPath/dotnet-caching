@@ -271,20 +271,22 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
     }
 
     [Theory]
-    [InlineData("S2", "fwd", true)]
-    [InlineData("S3", "rev", true)]
-    [InlineData("S3", "fwd", false)]
-    public async Task A_matching_pass_record_requires_an_acknowledged_forward_move_identity(string state, string direction, bool acked)
+    [InlineData("S2", "fwd", true, "fwd", false)]
+    [InlineData("S3", "fwd", false, "fwd", false)]
+    [InlineData("S3", "fwd", true, "fwd", true)]
+    [InlineData("S3", "rev", true, "fwd", false)]
+    [InlineData("S3", "rev", true, "rev", true)]
+    public async Task A_matching_pass_record_requires_an_acknowledged_move_identity_and_direction(string state, string direction, bool acked, string askedDirection, bool expected)
     {
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedAsync("k");
-        var record = kit.State(state, acked) with { Direction = direction };
+        var record = kit.State(state, acked, direction);
         var passes = new MoverPasses(kit.Units, kit.Db, kit.Kit.Names, (_, _) => Task.FromResult<StateRecord?>(record));
         var unit = (await kit.UnitIdsAsync()).Single();
 
-        (await passes.FinishedAfterAckAsync(kit.Kit.Group, direction, TestContext.Current.CancellationToken)).Should().BeFalse("no pass has finished yet");
-        await kit.Db.StringSetAsync(kit.Kit.Names.UnitPass(kit.Kit.Group, unit, direction, MoverKit.MoveId), $"{kit.Kit.Id}|{MoverKit.MoveId}|1");
-        (await passes.FinishedAfterAckAsync(kit.Kit.Group, direction, TestContext.Current.CancellationToken)).Should().BeFalse();
+        (await passes.FinishedAfterAckAsync(kit.Kit.Group, askedDirection, TestContext.Current.CancellationToken)).Should().BeFalse("no pass has finished yet");
+        await kit.Db.StringSetAsync(kit.Kit.Names.UnitPass(kit.Kit.Group, unit, askedDirection, MoverKit.MoveId), PassRecord.Text(record.Id, MoverKit.MoveId, 1, 0, unit));
+        (await passes.FinishedAfterAckAsync(kit.Kit.Group, askedDirection, TestContext.Current.CancellationToken)).Should().Be(expected);
     }
 
     [Fact]

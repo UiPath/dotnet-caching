@@ -25,7 +25,7 @@ internal sealed class MoverHost
     private CancellationTokenSource? _stop;
     private Task? _loop;
     private bool _stopping;
-    private (long MoveId, string Identity)? _runningKey;
+    private (long MoveId, string Identity, string Direction)? _runningKey;
 
     /// <param name="readState">The stored state of the group, as the node's state store reads it.</param>
     /// <param name="rate">The one rate of the process (a singleton), which every host takes, so that the node's cap holds across groups.</param>
@@ -87,14 +87,14 @@ internal sealed class MoverHost
         await CancelAndDisposeWhenDoneAsync(stop, loop).ConfigureAwait(false);
     }
 
-    // A forward S3 with dur=1 whose id every fresh node acknowledged (allAck equals the id), and only while this node acts under it.
-    private static (long MoveId, string Identity)? Allowed(StateRecord? state, GroupRules rules) =>
-        state is { State: "S3", Direction: MoverPasses.Forward, Durable: true, MoveId: { } id } && state.AllAck == state.Id
-        && rules is { Relevant: true, Acting: { Direction: MoverPasses.Forward } acting } && acting.Id == state.Id
-            ? (id, state.Id)
+    // An S3 of either direction with dur=1 whose id every fresh node acknowledged (allAck equals the id), and only while this node acts under it.
+    private static (long MoveId, string Identity, string Direction)? Allowed(StateRecord? state, GroupRules rules) =>
+        state is { State: "S3", Direction: MoverPasses.Forward or MoverPasses.Reverse, Durable: true, MoveId: { } id } && state.AllAck == state.Id
+        && rules is { Relevant: true, Acting: { } acting } && acting.Id == state.Id && acting.Direction == state.Direction
+            ? (id, state.Id, state.Direction)
             : null;
 
-    private static bool ActsForward(GroupRules rules) => rules is { Relevant: true, Acting.Direction: MoverPasses.Forward };
+    private static bool ActsMoving(GroupRules rules) => rules is { Relevant: true, Acting.Direction: MoverPasses.Forward or MoverPasses.Reverse };
 
     private static async Task RunUnitAsync(MoverUnitRunner runner, CancellationToken cancellationToken)
     {
@@ -184,8 +184,8 @@ internal sealed class MoverHost
     {
         var rules = _plane.RulesFor(_group);
 
-        // The stored state is read only while the node's rules say a forward move acts, so a group with no move costs the server nothing.
-        var state = ActsForward(rules) ? await _readState(cancellationToken).ConfigureAwait(false) : null;
+        // The stored state is read only while the node's rules say a move acts, so a group with no move costs the server nothing.
+        var state = ActsMoving(rules) ? await _readState(cancellationToken).ConfigureAwait(false) : null;
         var key = Allowed(state, rules);
         if (key != _runningKey)
         {
@@ -203,7 +203,7 @@ internal sealed class MoverHost
         await StopUnitsAsync([.. _running.Where(r => !current.Contains(r.Key) || r.Value.Task.IsCompleted).Select(r => r.Key)]).ConfigureAwait(false);
         foreach (var unit in units.Where(u => !_running.ContainsKey(u.Id)))
         {
-            var runner = new MoverUnitRunner(_group, unit, running.MoveId, running.Identity, ct => StillAsync(running, ct), _plane, _space, _targets, _connectorPrefix, _options, _rate, _time, _alerts);
+            var runner = new MoverUnitRunner(_group, unit, running.MoveId, running.Identity, ct => StillAsync(running, ct), _plane, _space, _targets, _connectorPrefix, _options, _rate, _time, _alerts, running.Direction);
             var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var task = Task.Run(() => RunUnitAsync(runner, stop.Token), CancellationToken.None);
             lock (_running)
@@ -213,7 +213,7 @@ internal sealed class MoverHost
         }
     }
 
-    private async Task<bool> StillAsync((long MoveId, string Identity) key, CancellationToken cancellationToken) =>
+    private async Task<bool> StillAsync((long MoveId, string Identity, string Direction) key, CancellationToken cancellationToken) =>
         Allowed(await _readState(cancellationToken).ConfigureAwait(false), _plane.RulesFor(_group)) == key;
 
     private async Task StopUnitsAsync(string[] ids)

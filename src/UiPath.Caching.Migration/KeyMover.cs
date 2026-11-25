@@ -9,6 +9,7 @@ internal sealed class KeyMover<T> : IMoveTarget
 {
     private readonly KeyMoveClientParts<T> _p;
     private readonly KeyPromotion<T> _promotion;
+    private readonly KeyPromotion<T> _reversePromotion;
     private readonly ISupersessionHandler _supersession;
 
     public KeyMover(KeyMoveClientParts<T> parts, ISupersessionHandler? supersession = null)
@@ -17,6 +18,10 @@ internal sealed class KeyMover<T> : IMoveTarget
         _supersession = supersession ?? SkipSupersession.Instance;
         var source = parts.Source ?? new InPlaceMoveSide<T>(parts.Plane, parts.Group, parts.InPlaceKey, parts.InPlace, parts.Mappable, parts.Clock);
         _promotion = new KeyPromotion<T>(parts, source);
+
+        // The same side class reaches N with the native key and codec, the source of the reverse mover.
+        var native = new InPlaceMoveSide<T>(parts.Plane, parts.Group, parts.NativeKey, parts.Native, parts.Mappable, parts.Clock);
+        _reversePromotion = new KeyPromotion<T>(parts, native, reverse: true);
     }
 
     public string CacheId => _p.CacheId;
@@ -25,34 +30,16 @@ internal sealed class KeyMover<T> : IMoveTarget
 
     internal ISupersessionHandler Supersession => _supersession;
 
-    public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
-    {
+    public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken) =>
         // A NoOrigin cache is moved in full, whatever the minimum says.
-        var flavor = new MoverFlavor(_p.NoOrigin ? TimeSpan.Zero : minTtl, _supersession);
-        var attempt = 0;
-        var retried = false;
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var (result, skipped) = await PromoteOnceAsync(key, flavor, identity, attempt, ownership, cancellationToken).ConfigureAwait(false);
-            if (skipped is { } skip)
-            {
-                return skip;
-            }
+        MoveWithAsync(_promotion, key, new MoverFlavor(_p.NoOrigin ? TimeSpan.Zero : minTtl, _supersession), identity, ownership, cancellationToken);
 
-            if (result.Kind == PromotionKind.Restart)
-            {
-                attempt++;
-            }
-            else if (result.Kind == PromotionKind.SupersededRetry && !retried)
-            {
-                retried = true;
-            }
-            else
-            {
-                return ResultOf(result);
-            }
-        }
+    public ValueTask<MoveResult> MoveBackAsync(string key, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return NoOrigin
+            ? ValueTask.FromResult(MoveResult.Skip("no_reverse"))
+            : MoveWithAsync(_reversePromotion, key, new MoverFlavor(TimeSpan.Zero, SkipSupersession.Instance), identity, ownership, cancellationToken);
     }
 
     public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) =>
@@ -89,8 +76,36 @@ internal sealed class KeyMover<T> : IMoveTarget
         _ => "refused",
     };
 
+    private async ValueTask<MoveResult> MoveWithAsync(KeyPromotion<T> promotion, string key, MoverFlavor flavor, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+    {
+        var attempt = 0;
+        var retried = false;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (result, skipped) = await PromoteOnceAsync(promotion, key, flavor, identity, attempt, ownership, cancellationToken).ConfigureAwait(false);
+            if (skipped is { } skip)
+            {
+                return skip;
+            }
+
+            if (result.Kind == PromotionKind.Restart)
+            {
+                attempt++;
+            }
+            else if (result.Kind == PromotionKind.SupersededRetry && !retried)
+            {
+                retried = true;
+            }
+            else
+            {
+                return ResultOf(result);
+            }
+        }
+    }
+
     // One admitted run of the promotion; the skip is set when the key cannot be promoted under this runner's identity now.
-    private async ValueTask<(PromotionResult<T> Result, MoveResult? Skipped)> PromoteOnceAsync(string key, MoverFlavor flavor, string identity, int attempt, IMoveOwnership ownership, CancellationToken cancellationToken)
+    private async ValueTask<(PromotionResult<T> Result, MoveResult? Skipped)> PromoteOnceAsync(KeyPromotion<T> promotion, string key, MoverFlavor flavor, string identity, int attempt, IMoveOwnership ownership, CancellationToken cancellationToken)
     {
         using var unit = _p.Plane.Enter(_p.Group, promotion: true);
         if (unit is null)
@@ -111,7 +126,7 @@ internal sealed class KeyMover<T> : IMoveTarget
 
         try
         {
-            return (await _promotion.RunAsync(key, flavor, unit, data, attempt, ownership, cancellationToken).ConfigureAwait(false), null);
+            return (await promotion.RunAsync(key, flavor, unit, data, attempt, ownership, cancellationToken).ConfigureAwait(false), null);
         }
         catch (RedisServerException ex) when (ex.Message.Contains("OOM ", StringComparison.Ordinal))
         {

@@ -8,10 +8,12 @@ internal sealed class MoverPasses(IScanUnits units, IDatabase database, MoveKeyN
 {
     public const string Forward = "fwd";
 
+    public const string Reverse = "rev";
+
     /// <summary>The alert code and reason of the one check that fails the drain check for a group with a hash cache.</summary>
     public const string NoHashPromotion = "no_hash_promotion";
 
-    /// <summary>True only for a forward S3 with <c>dur=1</c> and <c>allAck</c> equal to its id, whose units all recorded a clean pass under that identity and move id.</summary>
+    /// <summary>True only for an S3 of the given direction with <c>dur=1</c> and <c>allAck</c> equal to its id, whose units all recorded a clean pass under that identity and move id.</summary>
     public async Task<bool> FinishedAfterAckAsync(string group, string direction, CancellationToken cancellationToken) =>
         await EvidenceAsync(group, direction, cancellationToken).ConfigureAwait(false) is not null;
 
@@ -48,7 +50,7 @@ internal sealed class MoverPasses(IScanUnits units, IDatabase database, MoveKeyN
 
     private async Task<string?> EvaluateAsync(string group, string direction, CancellationToken cancellationToken)
     {
-        if (direction != Forward || await readState(group, cancellationToken).ConfigureAwait(false) is not { } state)
+        if (direction is not (Forward or Reverse) || await readState(group, cancellationToken).ConfigureAwait(false) is not { } state)
         {
             return null;
         }

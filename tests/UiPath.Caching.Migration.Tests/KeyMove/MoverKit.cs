@@ -71,9 +71,10 @@ internal sealed class MoverKit : IAsyncDisposable
         ISchedulePoint? schedule = null,
         TimeProvider? clock = null,
         KeyMoveOptions? moveOptions = null,
-        IKeyMoveCodec<Item>? nativeCodec = null)
+        IKeyMoveCodec<Item>? nativeCodec = null,
+        bool useScripts = true)
     {
-        var kit = await KeyMoveKit.CreateAsync(fixture, noOrigin: noOrigin, cluster: cluster, interceptDb: interceptDb, database: database, clock: clock);
+        var kit = await KeyMoveKit.CreateAsync(fixture, useScripts: useScripts, noOrigin: noOrigin, cluster: cluster, interceptDb: interceptDb, database: database, clock: clock);
         try
         {
             var made = new MoverKit(kit, twoOwners, hashCache, noOrigin, groupMin, cacheMin, excluded?.Replace("{U}", kit.Unique, StringComparison.Ordinal), supersession, source, schedule, moveOptions, nativeCodec);
@@ -120,6 +121,24 @@ internal sealed class MoverKit : IAsyncDisposable
 
     public Task SeedAsync(params string[] keys) => SeedAsync(keys.ToDictionary(k => k, k => ("v-" + k, (TimeSpan?)null)));
 
+    /// <summary>Values by key in N; the keys get control records, then the group goes to S3(rev).</summary>
+    public async Task SeedNativeAsync(IReadOnlyDictionary<string, (string Value, TimeSpan? Ttl)> keys)
+    {
+        await Kit.PrepareAsync([.. keys.Keys]);
+        await Kit.SetStateAsync("S3", direction: "rev");
+        foreach (var (key, (value, ttl)) in keys)
+        {
+            if (ttl is { } life)
+            {
+                await Db.StringSetAsync(Kit.N(key), value, life);
+            }
+            else
+            {
+                await Db.StringSetAsync(Kit.N(key), value);
+            }
+        }
+    }
+
     public MoverHost Host(MoverOptions? options = null, Func<IMoveTarget, IMoveTarget>? wrap = null, Func<StateRecord?>? state = null, IKeyMovePlane? plane = null, IScanUnits? units = null, Func<CancellationToken, Task<StateRecord?>>? readState = null, IMoveRate? rate = null)
     {
         IMoveTarget target = Target;
@@ -136,9 +155,9 @@ internal sealed class MoverKit : IAsyncDisposable
             options ?? Quick);
     }
 
-    public StateRecord State(string state = "S3", bool acked = true) => new(
+    public StateRecord State(string state = "S3", bool acked = true, string direction = "fwd") => new(
         state,
-        "fwd",
+        direction,
         Kit.Ep,
         Kit.Id,
         true,
@@ -164,12 +183,12 @@ internal sealed class MoverKit : IAsyncDisposable
     public async Task<string[]> UnitIdsAsync() => [.. (await Units.ListAsync(CancellationToken.None)).Select(u => u.Id)];
 
     /// <summary>Starts the host, waits until every unit has a finished-pass record, and stops it.</summary>
-    public async Task RunOnePassAsync(MoverHost host)
+    public async Task RunOnePassAsync(MoverHost host, string direction = "fwd")
     {
         host.Start();
         try
         {
-            await WaitAsync(async () => await PassedAsync());
+            await WaitAsync(async () => await PassedAsync(direction));
         }
         finally
         {
@@ -177,11 +196,13 @@ internal sealed class MoverKit : IAsyncDisposable
         }
     }
 
-    public async Task<bool> PassedAsync()
+    public Task<bool> PassedAsync() => PassedAsync("fwd");
+
+    public async Task<bool> PassedAsync(string direction)
     {
         foreach (var id in await UnitIdsAsync())
         {
-            if (!await Db.KeyExistsAsync(Kit.Names.UnitPass(Kit.Group, id, "fwd", MoveId)))
+            if (!await Db.KeyExistsAsync(Kit.Names.UnitPass(Kit.Group, id, direction, MoveId)))
             {
                 return false;
             }
