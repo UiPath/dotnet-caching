@@ -381,11 +381,11 @@ public sealed class KeyMoveHashRefreshTests(RedisFixture fixture)
     }
 
     [Fact]
-    public async Task A_reverse_state_closes_the_refresh()
+    public async Task A_reverse_state_with_no_write_form_closes_the_refresh()
     {
         await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
         await kit.Kit.PrepareAsync("k");
-        await kit.Kit.SetStateAsync("S3", direction: "rev");
+        await kit.Kit.SetStateAsync("S2", direction: "rev");
         await kit.SetAsync(kit.L("k"), Original, TimeSpan.FromMinutes(1));
 
         var refresh = async () => await kit.Client.RefreshAsync("k", Hours(2), Ct);

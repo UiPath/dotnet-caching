@@ -14,7 +14,7 @@ internal sealed partial class KeyMoveHashClient<T>
             return _p.Plain.FillAsync(key, fields, options, stored, cancellationToken);
         }
 
-        ThrowIfMetadataRefused(options.Metadata, plan.Mode);
+        ThrowIfFillRefused(options.Metadata, plan.Mode);
 
         return FillManagedAsync(key, fields, options, stored, plan, cancellationToken);
     }
@@ -41,9 +41,9 @@ internal sealed partial class KeyMoveHashClient<T>
             }
 
             // The state can have changed under a wait or a new plan: the capability of L is judged again before anything is encoded or sent.
-            ThrowIfMetadataRefused(options.Metadata, plan.Mode);
+            ThrowIfFillRefused(options.Metadata, plan.Mode);
 
-            ThrowIfNoManagedWrite(plan);
+            ThrowIfNoManagedWrite(plan.Mode);
             var (admitted, replan) = Admit(promotion: false, plan.Act?.Id);
             if (replan)
             {
@@ -79,10 +79,19 @@ internal sealed partial class KeyMoveHashClient<T>
         return (long)Math.Ceiling((at - _p.Clock.GetUtcNow()).TotalMilliseconds) < 1 ? null : at.ToUnixTimeMilliseconds();
     }
 
-    // No state in which a managed write can run: closed, a union read, a reverse state, or a cache with no origin before its keys move.
-    private void ThrowIfNoManagedWrite(KeyMovePlan plan)
+    private void ThrowIfFillRefused(IDictionary<string, string?>? metadata, KeyMoveMode mode)
     {
-        if (plan.Mode is KeyMoveMode.Closed or KeyMoveMode.Union || KeyMovePlanning.IsReverseWrite(plan.Mode) || (plan.Mode == KeyMoveMode.S2 && _p.NoOrigin))
+        if (KeyMovePlanning.IsReverseWrite(mode))
+        {
+            throw Unavailable();
+        }
+
+        ThrowIfMetadataRefused(metadata, mode);
+    }
+
+    private void ThrowIfNoManagedWrite(KeyMoveMode mode)
+    {
+        if (mode is KeyMoveMode.Closed or KeyMoveMode.Union || (mode == KeyMoveMode.S2 && _p.NoOrigin) || IsNoOriginReverseWrite(mode))
         {
             throw Unavailable();
         }
