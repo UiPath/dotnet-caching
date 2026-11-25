@@ -103,6 +103,62 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         (await kit.ProgressAsync()).Should().NotContainKey("skipped:duplicate");
     }
 
+    // The holder runs on a connection of its own, which is closed in the middle of a batch as the connection of a killed process is.
+    [Fact]
+    public async Task A_holder_whose_own_connection_is_closed_in_the_middle_of_a_batch_is_replaced_and_every_key_moves_once()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var pass = new MoverPassCompletion();
+        await using var kit = await MoverKit.CreateAsync(fixture, clock: clock, interceptDb: pass.Observe);
+        var keys = Enumerable.Range(0, 40).Select(i => $"k{i}").ToArray();
+        await kit.SeedAsync(keys);
+        var moves = new CountingTarget(kit.Target);
+        var unit = (await kit.UnitIdsAsync()).Single();
+        var lease = kit.Kit.Names.UnitLease(kit.Kit.Group, unit);
+        await using (var own = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString))
+        {
+            var data = kit.Kit.Plane.Data!;
+            var db = own.GetDatabase();
+            var planeA = new StubPlane(kit.Kit.Group, kit.Kit.Gate)
+            {
+                Data = data with { Db = db, Scripts = new MoveScripts(db, true, new Version(7, 0)), IsConnected = () => own.IsConnected },
+                Rules = kit.Kit.Plane.Rules,
+            };
+            var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var crash = new CrashTarget(moves, 15, async () =>
+            {
+                await own.CloseAsync(allowCommandsToComplete: false);
+                closed.SetResult();
+            });
+            var holder = kit.Host(Small, _ => crash, plane: planeA);
+
+            holder.Start();
+            try
+            {
+                await closed.Task.WaitAsync(TestContext.Current.CancellationToken);
+                (await kit.Db.KeyExistsAsync(lease)).Should().BeTrue("the closed connection released nothing");
+            }
+            finally
+            {
+                await holder.StopAsync();
+            }
+        }
+
+        // Redis owns the lease TTL, so delete the lease when the test clock expires it.
+        clock.Advance(Small.LeaseTtl);
+        await kit.Db.KeyDeleteAsync(lease);
+        await pass.RunAsync(kit, kit.Host(Small, _ => moves), TestContext.Current.CancellationToken);
+
+        foreach (var key in keys)
+        {
+            (await kit.Kit.GetAsync(kit.Kit.N(key))).Should().Be("v-" + key);
+            (await kit.Kit.ExistsAsync(kit.Kit.L(key))).Should().BeFalse(key);
+            moves.Moved(key).Should().Be(1, key);
+        }
+
+        (await kit.ProgressAsync())["lease_takeovers"].Should().Be(1);
+    }
+
     [Fact]
     public async Task A_holder_that_is_paused_past_its_lease_promotes_nothing_when_it_resumes_after_another_runner_took_the_unit()
     {

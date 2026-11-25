@@ -1,5 +1,6 @@
 using StackExchange.Redis;
 using UiPath.Caching.KeyMove;
+using UiPath.Caching.Migration.Tests.Support;
 
 namespace UiPath.Caching.Migration.Tests.KeyMove;
 
@@ -41,6 +42,48 @@ internal sealed class CountingTarget(IMoveTarget inner) : IMoveTarget
 
         return result;
     }
+}
+
+// Observes an acknowledged pass record as the mover writes it.
+internal sealed class MoverPassCompletion
+{
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<RedisKey, TaskCompletionSource> _passes = new();
+
+    public IDatabase Observe(IDatabase database) => InterceptingProxy.Wrap(database, (method, args) =>
+        method.Name == nameof(IDatabase.ScriptEvaluateAsync) &&
+        args is [string script, RedisKey[] { Length: 3 } keys, RedisValue[] { Length: 6 } values, CommandFlags flags] &&
+        values[3].HasValue && _passes.TryGetValue(keys[2], out var completion)
+            ? RecordAsync(database.ScriptEvaluateAsync(script, keys, values, flags), completion)
+            : InterceptingProxy.Proceed);
+
+    public async Task RunAsync(MoverKit kit, MoverHost host, CancellationToken cancellationToken)
+    {
+        var units = await kit.Units.ListAsync(cancellationToken);
+        var passes = units.Select(unit => Watch(kit.Kit.Names.UnitPass(kit.Kit.Group, unit.Id, MoverPasses.Forward, MoverKit.MoveId))).ToArray();
+        host.Start();
+        try
+        {
+            await Task.WhenAll(passes).WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            await host.StopAsync();
+        }
+    }
+
+    private static async Task<RedisResult> RecordAsync(Task<RedisResult> command, TaskCompletionSource completion)
+    {
+        var result = await command;
+        if ((long)result == MoveScripts.UnitStepWritten)
+        {
+            completion.TrySetResult();
+        }
+
+        return result;
+    }
+
+    private Task Watch(RedisKey key) =>
+        _passes.GetOrAdd(key, static _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
 }
 
 // Serves the real units with their servers replaced, so a test can record or break the scans.

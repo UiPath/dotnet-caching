@@ -6,7 +6,11 @@ namespace UiPath.Caching.Migration.Tests.Support;
 // The faults of a replica-backed cluster that eng/keymove-kit.sh started, made with Redis commands only: a failover, a restart and a pause.
 internal sealed class ClusterKit : IAsyncDisposable
 {
+    private const string PasswordSetting = "requirepass";
+
     private static readonly TimeSpan Settle = TimeSpan.FromSeconds(30);
+
+    private static readonly string LostWritePassword = "lost-" + Guid.NewGuid().ToString("N");
 
     private ClusterKit(ConnectionMultiplexer mux) => Mux = mux;
 
@@ -66,6 +70,15 @@ internal sealed class ClusterKit : IAsyncDisposable
 
         await UntilAsync(async () => await ReadRunIdAsync(server) != runId);
         await WaitSettledAsync();
+    }
+
+    /// <summary>Runs <paramref name="writes"/> on the master of <paramref name="key"/> while its replica cannot follow, then lets the replica take over,
+    /// so every write of that shard made in <paramref name="writes"/> is acknowledged and then lost, as in a failover that drops what it had not replicated.</summary>
+    /// <returns>The new master.</returns>
+    public Task<IServer> LoseWritesAsync(RedisKey key, Func<Task> writes)
+    {
+        var master = MasterOf(key);
+        return LoseWritesAsync(master, ReplicaOf(master), writes);
     }
 
     /// <summary>Starts moving <paramref name="slot"/> to another master and migrates only <paramref name="keys"/> of it, so the slot is split between the two.</summary>
@@ -181,6 +194,51 @@ internal sealed class ClusterKit : IAsyncDisposable
 
             await Task.Delay(TimeSpan.FromMilliseconds(200), TimeProvider.System);
         }
+    }
+
+    internal async Task<IServer> LoseWritesAsync(IServer master, IServer replica, Func<Task> writes)
+    {
+        var endpoint = master.EndPoint;
+        try
+        {
+            // Existing clients stay authenticated. Redis rejects the replica's next connection.
+            await master.ConfigSetAsync(PasswordSetting, LostWritePassword);
+            await master.ExecuteAsync("CLIENT", "KILL", "TYPE", "replica");
+            await writes();
+            await replica.ExecuteAsync("CLUSTER", "FAILOVER", "TAKEOVER");
+            await UntilAsync(async () => await RoleAsync(replica) == "master");
+        }
+        finally
+        {
+            await ResetPasswordAsync(master, endpoint);
+        }
+
+        await WaitSettledAsync();
+
+        // The old master serves reads as a replica only once it has synced from the new one and dropped what it alone held.
+        await UntilAsync(async () => await RoleAsync(master) == "slave" && await ReplicaIsReadyAsync(master));
+        return replica;
+    }
+
+    private static async Task ResetPasswordAsync(IServer master, EndPoint endpoint)
+    {
+        if (master.IsConnected)
+        {
+            try
+            {
+                await master.ConfigSetAsync(PasswordSetting, string.Empty);
+                return;
+            }
+            catch (Exception ex) when (ex is RedisException or RedisTimeoutException or ObjectDisposedException)
+            {
+                // A reconnected client needs the temporary password.
+            }
+        }
+
+        var options = new ConfigurationOptions { AllowAdmin = true, Password = LostWritePassword };
+        options.EndPoints.Add(endpoint);
+        await using var connection = await ConnectionMultiplexer.ConnectAsync(options);
+        await connection.GetServer(endpoint).ConfigSetAsync(PasswordSetting, string.Empty);
     }
 
     private static async Task<bool> ReplicaIsReadyAsync(IServer server)
