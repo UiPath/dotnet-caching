@@ -73,12 +73,13 @@ public class KeyInventoryHashTests(RedisContainerFixture fixture)
         kit.Space.Kinds["b"] = KeyMoveKind.Hash;
         var state = await kit.StateAsync();
         await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+        state = await kit.StateAsync();
         var key = await SetHashAsync(kit, "b", "mv-over", Cap + 2);
         var origin = new InventoryMoverStatus(new KeyInventory(kit.Scanner, kit.Space, kit.Kit.Store, kit.Kit.Db, kit.Prefix, kit.Kit.Time, values: new Cap3([], noOrigin: false)), kit.Kit.Time, (_, _, _) => Task.FromResult(true));
         var noOrigin = new InventoryMoverStatus(new KeyInventory(kit.Scanner, kit.Space, kit.Kit.Store, kit.Kit.Db, kit.Prefix, kit.Kit.Time, values: new Cap3([], noOrigin: true)), kit.Kit.Time, (_, _, _) => Task.FromResult(true));
 
-        (await origin.DrainAsync(kit.Group, "fwd", Ct))!.Should().Match<DrainReport>(r => r.Passed && r.Residue["b"] == 1);
-        (await noOrigin.DrainAsync(kit.Group, "fwd", Ct))!.Passed.Should().BeFalse("without an origin the hash is the only copy: it stays, counts as movable and blocks DRAINED");
+        (await origin.DrainAsync(kit.Group, state, Ct))!.Should().Match<DrainReport>(r => r.Passed && r.Residue["b"] == 1);
+        (await noOrigin.DrainAsync(kit.Group, state, Ct))!.Passed.Should().BeFalse("without an origin the hash is the only copy: it stays, counts as movable and blocks DRAINED");
         await DeleteAsync(kit, [key]);
     }
 

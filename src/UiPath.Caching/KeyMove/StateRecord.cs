@@ -31,6 +31,10 @@ internal sealed record StateRecord(
 
     public string Identity => $"{Ep}:{Id}";
 
+    /// <summary>The S3 acknowledgement time in Unix milliseconds, when it belongs to this state ID.</summary>
+    public long? S3AckedAt =>
+        AllAck == Id && long.TryParse(Field(StateFields.T3At), NumberStyles.None, CultureInfo.InvariantCulture, out var at) ? at : null;
+
     /// <summary>The forward generation the markers of this run are bound to; empty before the start and after the way back began.</summary>
     public string ForwardGeneration => Field(StateFields.Fg);
 

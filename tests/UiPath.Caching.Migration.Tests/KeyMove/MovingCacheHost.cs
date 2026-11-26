@@ -363,7 +363,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             _facts,
             approved => new PreflightChecker(Topology, _stateOptions).CheckAsync(approved, Ct),
             () => Runtime.Data.CountNativeAsync(Group, Ct),
-            () => mover.DrainAsync(Group, state.Direction, Ct),
+            () => mover.DrainAsync(Group, state, Ct),
             () => mover.ResidueInventoryAsync(Group, Ct),
             () => throw new InvalidOperationException("This test only interrupts forward transitions."));
         var plan = await StepPlanner.DecideAsync(input, _driverOptions);
