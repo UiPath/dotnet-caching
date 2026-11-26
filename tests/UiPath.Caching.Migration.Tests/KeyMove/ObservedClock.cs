@@ -50,5 +50,15 @@ internal sealed class ObservedClock(ManualTimeProvider manual) : TimeProvider
     public async Task AdvanceNextTimerAsync(CancellationToken cancellationToken) =>
         Advance(await NextTimerAsync(cancellationToken));
 
+    public Task<TimeSpan> NextTimerWhileRunningAsync(Task operation, CancellationToken cancellationToken) =>
+        TimerSignal.ReadWhileRunningAsync(token => NextTimerAsync(token).AsTask(), operation, cancellationToken);
+
+    public Task<TimeSpan> NextTimerWhileRunningAsync(
+        Func<TimeSpan, bool> matches, Task operation, CancellationToken cancellationToken) =>
+        TimerSignal.ReadWhileRunningAsync(token => NextTimerAsync(matches, token), operation, cancellationToken);
+
+    public async Task AdvanceNextTimerWhileRunningAsync(Task operation, CancellationToken cancellationToken) =>
+        Advance(await NextTimerWhileRunningAsync(operation, cancellationToken));
+
     public void Advance(TimeSpan elapsed) => Manual.Advance(elapsed);
 }

@@ -106,7 +106,7 @@ public sealed class ModeBoundsTests : RouterTestBase
         Bus.Subscribed = false;
 
         var leave = node.Router.LeaveBypassAsync(Ct);
-        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(5), Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(TimeSpan.FromSeconds(5), leave, Ct);
         Clock.Advance(TimeSpan.FromSeconds(5));
 
         await Assert.ThrowsAsync<TimeoutException>(() => leave);
@@ -297,8 +297,8 @@ public sealed class ModeBoundsTests : RouterTestBase
 
         var dispose = node.StartDispose();
         var bound = TimeSpan.FromMilliseconds(300);
-        await node.Time.WaitForTimerAsync(bound, Ct);
-        await node.Time.WaitForTimerAsync(bound, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(bound, dispose, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(bound, dispose, Ct);
         Clock.Advance(bound);
         await dispose.WaitAsync(Ct);
 

@@ -312,9 +312,14 @@ public sealed class DryRunTests(RedisFixture fixture)
         var run = Runner(kit, rate: rate, units: units).RunAsync(Ct);
         for (var i = 0; i < pauses + 3; i++)
         {
-            var delay = await clock.NextTimerAsync(Ct);
+            var delay = await clock.NextTimerWhileRunningAsync(run, Ct);
             delay.Should().Be(i < pauses ? MoverKit.Quick.PollInterval : TimeSpan.FromMilliseconds(50));
-            run.IsCompleted.Should().BeFalse();
+            if (run.IsCompleted)
+            {
+                await run;
+                Assert.Fail("The dry run completed before the expected timer elapsed.");
+            }
+
             clock.Advance(delay);
         }
         var report = await run;
@@ -379,9 +384,7 @@ public sealed class DryRunTests(RedisFixture fixture)
         var pending = rate.Reserve(unit, 50, 0);
 
         var run = Runner(kit, rate: rate).RunAsync(Ct);
-        var reservation = kit.Kit.Time.NextTimerAsync(Ct).AsTask();
-        (await Task.WhenAny(run, reservation)).Should().BeSameAs(reservation);
-        kit.Kit.Time.Advance(await reservation);
+        await kit.Kit.Time.AdvanceNextTimerWhileRunningAsync(run, Ct);
         await run;
 
         rate.Remaining(unit).Should().Be(pending);
@@ -415,11 +418,10 @@ public sealed class DryRunTests(RedisFixture fixture)
         kit.Kit.Connected = false;
 
         var run = Runner(kit).RunAsync(Ct);
-        var poll = kit.Kit.Time.NextTimerAsync(Ct).AsTask();
-        (await Task.WhenAny(run, poll)).Should().BeSameAs(poll);
+        var poll = await kit.Kit.Time.NextTimerWhileRunningAsync(run, Ct);
         run.IsCompleted.Should().BeFalse();
         kit.Kit.Connected = true;
-        kit.Kit.Time.Advance(await poll);
+        kit.Kit.Time.Advance(poll);
 
         (await run).Caches[kit.Kit.Cid].Movable.Should().Be(1);
     }

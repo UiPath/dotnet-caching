@@ -26,7 +26,7 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         // The gate and the records already hold the S3 identity; the rules of the node do not, yet.
         await kit.MoveGateAsync();
         var write = kit.Client.SetAsync("k", new Item("v1"), null, Ct).AsTask();
-        var admission = await kit.Time.NextTimerAsync(Ct);
+        var admission = await kit.Time.NextTimerWhileRunningAsync(write, Ct);
         write.IsCompleted.Should().BeFalse("the plan of S1 is not run with the identity of S3");
         kit.ApplyRules("S3");
         kit.Time.Advance(admission);
@@ -50,7 +50,7 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         var write = kit.Client.SetAsync("k", new Item("v1"), null, Ct).AsTask();
         for (var rerun = 0; rerun < 3; rerun++)
         {
-            await kit.Time.AdvanceNextTimerAsync(Ct);
+            await kit.Time.AdvanceNextTimerWhileRunningAsync(write, Ct);
         }
 
         await Assert.ThrowsAsync<CacheUnavailableException>(() => write);
@@ -690,7 +690,7 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
     private static async Task ReachStopBoundAsync(Task stop, ObservedClock clock)
     {
         var bound = TimeSpan.FromSeconds(5);
-        clock.Advance(await clock.NextTimerAsync(delay => delay == bound, Ct));
+        clock.Advance(await clock.NextTimerWhileRunningAsync(delay => delay == bound, stop, Ct));
         await stop.WaitAsync(Ct);
     }
 

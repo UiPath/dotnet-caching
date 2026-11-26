@@ -97,8 +97,8 @@ public sealed class KeyMoveHashOutcomeTests(RedisFixture fixture)
         await kit.Kit.MoveGateAsync();
 
         var refused = kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(), Ct).AsTask();
-        await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
-        await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
+        await kit.Kit.Time.AdvanceNextTimerWhileRunningAsync(refused, Ct);
+        await kit.Kit.Time.AdvanceNextTimerWhileRunningAsync(refused, Ct);
         await Assert.ThrowsAsync<CacheUnavailableException>(() => refused);
 
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse("nothing was sent under rules that are not the gate's");
@@ -113,7 +113,7 @@ public sealed class KeyMoveHashOutcomeTests(RedisFixture fixture)
         await kit.Kit.MoveGateAsync();
 
         var write = kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(), Ct).AsTask();
-        var admission = await kit.Kit.Time.NextTimerAsync(Ct);
+        var admission = await kit.Kit.Time.NextTimerWhileRunningAsync(write, Ct);
         write.IsCompleted.Should().BeFalse("the write waits for the rules to follow the gate");
         kit.Kit.ApplyRules("S3");
         kit.Kit.Time.Advance(admission);
