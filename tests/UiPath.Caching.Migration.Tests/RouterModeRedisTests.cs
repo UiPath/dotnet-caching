@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 using UiPath.Caching.Broadcast;
 using UiPath.Caching.Config;
@@ -114,7 +115,8 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
         var bypass = true;
-        var node = NewNode("flagged", bypassFlag: () => bypass);
+        var started = new LibraryStartedSignal();
+        var node = NewNode("flagged", bypassFlag: () => bypass, logs: started);
         var router = node.GetRequiredService<IRouter>();
         var cache = Cache(node);
         router.Mode.Should().Be(RouterMode.BypassLibrary);
@@ -128,6 +130,8 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
         var delay = TimeSpan.FromSeconds(1);
         await clock.WaitForTimerAsync(delay, Ct);
         clock.Advance(delay);
+        // The consumer group is created while the library attaches, before the router publishes it, so the group alone does not mean the library is there.
+        await started.Task.WaitAsync(Ct);
         await ReadyAsync(node);
         await PublishedAsync(node, node);
         var left = RouterTestBase.WaitForLibraryAsync(router, Ct);
@@ -173,7 +177,7 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
 
     private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
 
-    private ServiceProvider NewNode(string name, Func<bool>? bypassFlag = null, string transport = KnownTopicNames.RedisStreams)
+    private ServiceProvider NewNode(string name, Func<bool>? bypassFlag = null, string transport = KnownTopicNames.RedisStreams, ILoggerProvider? logs = null)
     {
         var pubSub = transport == KnownTopicNames.RedisPubSub;
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -189,7 +193,13 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
             ["Caching:Broadcast:RedisStreams:Enabled"] = pubSub ? "false" : "true",
         }).Build();
         var source = new LegacySource(_redis!, _cacheName);
-        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(new SignalingTimeProvider(_serverTime));
+        var services = new ServiceCollection().AddLogging(builder =>
+        {
+            if (logs is not null)
+            {
+                builder.AddProvider(logs);
+            }
+        }).AddSingleton<TimeProvider>(new SignalingTimeProvider(_serverTime));
         RedisTopicSignals.Add(services, "router:lists", streams: !pubSub);
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(
@@ -235,5 +245,32 @@ public sealed class RouterModeRedisTests(RedisFixture fixture) : IAsyncLifetime
         }
 
         return groups;
+    }
+
+    /// <summary>Completes once the router logs that its library stack started, which it does after the library is published.</summary>
+    private sealed class LibraryStartedSignal : ILoggerProvider, ILogger
+    {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Task => _started.Task;
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (formatter(state, exception) == "The library stack started.")
+            {
+                _started.TrySetResult();
+            }
+        }
+
+        public void Dispose()
+        {
+        }
     }
 }

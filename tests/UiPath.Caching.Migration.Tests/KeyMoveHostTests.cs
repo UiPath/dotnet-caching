@@ -417,6 +417,8 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
                             ExpectedReplicasPerMaster = 0,
                             LeaseRenewInterval = clock is null ? LeaseInterval : DriverTestClock.StartupInterval,
                             PollInterval = clock is null ? PollInterval : DriverTestClock.StartupInterval,
+                            // A snapshot read over a connection the node has not rewired yet fails; its retry keeps the poll cadence the tests advance, as the defaults do.
+                            RetryInterval = clock is null ? PollInterval : new KeyMoveStateOptions().RetryInterval,
                         },
                         Alert = _alerts.Enqueue,
                         SnapshotPollScheduled = _snapshots.Scheduled,
