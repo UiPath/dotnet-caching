@@ -244,7 +244,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, Generator, expiration: DateTimeOffset.UtcNow.AddMinutes(5), setOption: hashCacheSetOption, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, Generator, expiration: _clock.UtcNow.AddMinutes(5), setOption: hashCacheSetOption, token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeFalse();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -267,7 +267,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, Generator, DateTimeOffset.UtcNow.AddMinutes(5), (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, Generator, _clock.UtcNow.AddMinutes(5), (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeFalse();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -363,7 +363,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         {
             Value = new Dictionary<string, string?>(),
             Found = true,
-            Expiration = DateTimeOffset.UtcNow.AddMinutes(5),
+            Expiration = _clock.UtcNow.AddMinutes(5),
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(emptyEntry);
@@ -555,7 +555,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var actual = await Sut.SetAsync(_cacheKey, expected, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
 
-        actual = await Sut.SetAsync(_cacheKey, expected, DateTimeOffset.UtcNow.AddMinutes(5), token: testContextAccessor.Current.CancellationToken);
+        actual = await Sut.SetAsync(_cacheKey, expected, _clock.UtcNow.AddMinutes(5), token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
     }
 
@@ -588,6 +588,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -615,6 +616,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -645,6 +647,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -691,6 +694,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -733,6 +737,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -779,10 +784,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _clock = _fixture.Freeze<ISystemClock>();
         _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -830,7 +836,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     [Fact]
     public async Task Refresh_value_DateTimeOffset()
     {
-        var expiration = DateTimeOffset.UtcNow.AddDays(1);
+        var expiration = _clock.UtcNow.AddDays(1);
         await Sut.RefreshAsync<string>(_cacheKey, expiration, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.Received(1).Remove(_innerCacheKey.Name);
         await _innerCache.Received(1).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
@@ -858,7 +864,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     [InlineData(true)]
     public async Task Refresh_inner_cache_exception_DateTimeOffset(bool eventFired)
     {
-        var expiration = DateTimeOffset.UtcNow.AddDays(1);
+        var expiration = _clock.UtcNow.AddDays(1);
         _innerCache.RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new Exception());
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
@@ -926,10 +932,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _clock = _fixture.Freeze<ISystemClock>();
         _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>())
             .Returns(c => _memoryCache);
@@ -957,10 +964,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _clock = _fixture.Freeze<ISystemClock>();
         _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>())
             .Returns(c => _memoryCache);
@@ -1461,7 +1469,8 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
         _innerCache = _fixture.Freeze<IHashCache>();
-        _clock = new SystemClock();
+        _clock = new TimeProviderClock(new ManualTimeProvider());
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
 
         _options = new()
         {

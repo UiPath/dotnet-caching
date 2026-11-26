@@ -242,7 +242,7 @@ public class MultilayerSetCacheTests
         await l2.ReceivedWithAnyArgs(1).AddAsync<string>(default, default(string)!, default, Ct);
     }
 
-    private static MemoryCacheFactory MemoryFactory() => new(TimeProvider.System, NullLoggerFactory.Instance);
+    private static MemoryCacheFactory MemoryFactory() => new(new ManualTimeProvider(), NullLoggerFactory.Instance);
 
     // The inner (L2) is always a real store; the InMemory and InMemoryRedis providers differ only in
     // what they pass as L2. A substitute stands in for it here.
@@ -255,7 +255,7 @@ public class MultilayerSetCacheTests
             MemoryFactory(),
             new SystemJsonByteSerializerProxy(),
             new InMemoryRedisQueueCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(5) },
-            TimeProvider.System);
+            new ManualTimeProvider());
         return (sut, l2);
     }
 
@@ -285,7 +285,7 @@ public class MultilayerSetCacheTests
             MemoryFactory(),
             new SystemJsonByteSerializerProxy(),
             options,
-            TimeProvider.System);
+            new ManualTimeProvider());
         return (sut, l2);
     }
 }

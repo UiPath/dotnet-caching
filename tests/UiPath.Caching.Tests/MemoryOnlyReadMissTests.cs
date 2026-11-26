@@ -48,7 +48,7 @@ public class MemoryOnlyReadMissTests
         return new MultilayerCache(
             KnownCacheProviderNames.InMemory,
             NullCache.Instance,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(new ManualTimeProvider(), NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -58,7 +58,7 @@ public class MemoryOnlyReadMissTests
             cacheOptions,
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
-            clock: TimeProvider.System,
+            clock: new ManualTimeProvider(),
             logger: NullLogger.Instance);
     }
 }

@@ -143,7 +143,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     [Fact]
     public async Task TryAdd_rejects_an_expiration_that_has_already_passed()
     {
-        var act = async () => await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), DateTimeOffset.UtcNow.AddMinutes(-5), token: Ct);
+        var act = async () => await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), new ManualTimeProvider().GetUtcNow().AddMinutes(-5), token: Ct);
 
         (await act.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
         await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
@@ -291,7 +291,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         await _innerCache.Received(1).TryAddAsync<string?>(
             _cacheKey,
             Arg.Any<string?>(),
-            Arg.Is<DateTimeOffset>(e => e > DateTimeOffset.UtcNow),
+            Arg.Is<DateTimeOffset>(e => e > new ManualTimeProvider().GetUtcNow()),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -374,7 +374,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         return new MultilayerCache(
             KnownCacheProviderNames.InMemory,
             NullCache.Instance,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(new ManualTimeProvider(), NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -384,7 +384,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
             cacheOptions,
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
-            clock: TimeProvider.System,
+            clock: new ManualTimeProvider(),
             logger: NullLogger.Instance);
     }
 }
@@ -491,7 +491,7 @@ public class InMemoryCacheTryAddTests
         }
 
         var holder = sut.GetOrAddAsync<string>("k", Hold, policy: null, token: Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
 
         var added = await sut.TryAddAsync("k", "first", policy: null, token: Ct);
 
@@ -527,7 +527,7 @@ public class InMemoryCacheTryAddTests
     public async Task An_expiration_that_has_already_passed_is_rejected()
     {
         using var sut = CreateSut();
-        var past = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var past = new ManualTimeProvider().GetUtcNow().AddMinutes(-5);
 
         var act = async () => await sut.TryAddAsync("k", "first", past, token: Ct);
 
@@ -543,7 +543,7 @@ public class InMemoryCacheTryAddTests
         return new MultilayerCache(
             KnownCacheProviderNames.InMemory,
             NullCache.Instance,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(new ManualTimeProvider(), NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -553,7 +553,7 @@ public class InMemoryCacheTryAddTests
             cacheOptions,
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
-            clock: TimeProvider.System,
+            clock: new ManualTimeProvider(),
             logger: NullLogger.Instance);
     }
 

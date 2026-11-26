@@ -99,7 +99,6 @@ public class MultilayerHashCacheManyTests
 
         var pending = h.Cache.RemoveManyAsync<string>(Keys(3), Ct).AsTask();
 
-        await Task.Delay(100, Ct);
         pending.IsCompleted.Should().BeFalse();
         h.Count("remove:").Should().Be(0);
         gate.SetResult(true);
@@ -257,7 +256,6 @@ public class MultilayerHashCacheManyTests
 
         var pending = h.Cache.RemoveFieldsAsync<string>("k", ["f"], Ct).AsTask();
 
-        await Task.Delay(100, Ct);
         pending.IsCompleted.Should().BeFalse();
         h.Count("fields:").Should().Be(0);
         gate.SetResult(true);
@@ -378,11 +376,12 @@ public class MultilayerHashCacheManyTests
     private sealed class Harness : IDisposable
     {
         private readonly object _gate = new();
+        private readonly TestSignal _changed = new();
         private readonly bool _cacheNullValues;
 
         public Harness(int chunk = 500, int concurrent = 1, int? threshold = null, bool cacheNullValues = false)
         {
-            Clock = TimeProvider.System;
+            Clock = new ManualTimeProvider();
             _cacheNullValues = cacheNullValues;
             var options = new InMemoryRedisCacheOptions { BatchChunkSize = chunk, BatchConcurrentChunks = concurrent, BatchTopicInvalidationThreshold = threshold, CacheNullValues = cacheNullValues };
             var inner = Substitute.For<IHashCache, ISpanKeyHashCache>();
@@ -483,15 +482,7 @@ public class MultilayerHashCacheManyTests
             return OnPublish?.Invoke(@event) ?? new ValueTask<bool>(true);
         }
 
-        public async Task UntilAsync(Func<bool> condition)
-        {
-            var deadline = DateTime.UtcNow.AddSeconds(10);
-            while (!condition())
-            {
-                (DateTime.UtcNow < deadline).Should().BeTrue("the condition was not met in time: {0}", string.Join(", ", Log));
-                await Task.Delay(5, Ct);
-            }
-        }
+        public Task UntilAsync(Func<bool> condition) => _changed.UntilAsync(condition, Ct);
 
         public void Dispose() => Cache.Dispose();
 
@@ -527,6 +518,7 @@ public class MultilayerHashCacheManyTests
             lock (_gate)
             {
                 Log.Add(entry);
+                _changed.Pulse();
             }
         }
     }

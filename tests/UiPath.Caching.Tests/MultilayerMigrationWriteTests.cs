@@ -4,9 +4,10 @@ namespace UiPath.Caching.Tests;
 
 public sealed class MultilayerMigrationWriteTests(ITestContextAccessor testContextAccessor) : IDisposable
 {
-    private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(10);
+    private static readonly ManualTimeProvider Clock = new();
+    private static readonly DateTimeOffset Deadline = Clock.GetUtcNow().AddMinutes(10);
 
-    private readonly CachePeers _peers = new();
+    private readonly CachePeers _peers = new(Clock);
 
     private CancellationToken Ct => testContextAccessor.Current.CancellationToken;
 
@@ -63,7 +64,6 @@ public sealed class MultilayerMigrationWriteTests(ITestContextAccessor testConte
         var policy = new CachePolicy { BackgroundDistributedWrite = true };
 
         var writing = node.Cache.AsMigrationCache().WriteAsync("k", "v", Deadline, policy, Ct).AsTask();
-        await Task.Delay(300, Ct);
         writing.IsCompleted.Should().BeFalse("the store has not answered, and a background acceptance is not a commit");
         gate.SetResult();
 

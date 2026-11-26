@@ -195,7 +195,6 @@ public class MultilayerCacheManyTests
         var pending = h.Cache.RemoveManyAsync<string>(Keys(10), Ct).AsTask();
 
         await h.UntilAsync(() => h.Count("remove:") == 4);
-        await Task.Delay(100, Ct);
         h.Count("remove:").Should().Be(4);
         gate.SetResult(true);
         (await pending).Should().BeEmpty();
@@ -213,7 +212,6 @@ public class MultilayerCacheManyTests
 
         var pending = h.Cache.RemoveManyAsync<string>(Keys(3), Ct).AsTask();
 
-        await Task.Delay(100, Ct);
         pending.IsCompleted.Should().BeFalse();
         h.Count("remove:").Should().Be(0);
         gate.SetResult(true);
@@ -226,7 +224,7 @@ public class MultilayerCacheManyTests
     {
         using var h = new Harness(chunk: 4);
         await h.Cache.SetAsync<string>("other", "v", new CachePolicy { BackgroundDistributedWrite = true }, Ct);
-        await h.UntilAsync(() => h.Cache.RunsInFlight == 0);
+        await CacheWork.CompleteAsync(h.Cache);
 
         (await h.Cache.RemoveManyAsync<string>(Keys(3), Ct)).Should().BeEmpty();
     }
@@ -698,10 +696,11 @@ public class MultilayerCacheManyTests
     private sealed class Harness : IDisposable
     {
         private readonly object _gate = new();
+        private readonly TestSignal _changed = new();
 
         public Harness(int chunk = 500, int concurrent = 1, int? threshold = null)
         {
-            Clock = TimeProvider.System;
+            Clock = new ManualTimeProvider();
             var options = new InMemoryRedisCacheOptions { BatchChunkSize = chunk, BatchConcurrentChunks = concurrent, BatchTopicInvalidationThreshold = threshold };
             var inner = Substitute.For<ICache>();
             Telemetry = Substitute.For<ICachingTelemetryProvider>();
@@ -784,15 +783,7 @@ public class MultilayerCacheManyTests
             return OnPublish?.Invoke(@event) ?? new ValueTask<bool>(true);
         }
 
-        public async Task UntilAsync(Func<bool> condition)
-        {
-            var deadline = DateTime.UtcNow.AddSeconds(10);
-            while (!condition())
-            {
-                (DateTime.UtcNow < deadline).Should().BeTrue("the condition was not met in time: {0}", string.Join(", ", Log));
-                await Task.Delay(5, Ct);
-            }
-        }
+        public Task UntilAsync(Func<bool> condition) => _changed.UntilAsync(condition, Ct);
 
         public void Dispose() => Cache.Dispose();
 
@@ -801,6 +792,7 @@ public class MultilayerCacheManyTests
             lock (_gate)
             {
                 Log.Add(entry);
+                _changed.Pulse();
             }
         }
     }

@@ -1,4 +1,5 @@
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Telemetry;
 
@@ -10,6 +11,8 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
     private readonly List<MetricRecord> _metrics = [];
     private readonly List<DependencyRecord> _dependencies = [];
     private readonly List<ExceptionRecord> _exceptions = [];
+
+    public TestSignal Signal { get; } = new();
 
     public IReadOnlyList<EventRecord> Events => Snapshot(_events);
     public IReadOnlyList<MetricRecord> Metrics => Snapshot(_metrics);
@@ -40,6 +43,7 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
         lock (_gate)
         {
             target.Add(record);
+            Signal.Pulse();
         }
     }
 

@@ -433,6 +433,8 @@ internal sealed class PeerCluster : IDisposable
 
         public PeerFieldLimits Limits { get; set; }
 
+        public TestSignal Changed { get; } = new();
+
         public int Reads => Volatile.Read(ref _reads);
 
         public int CountedWrites => Volatile.Read(ref _countedWrites);
@@ -564,6 +566,7 @@ internal sealed class PeerCluster : IDisposable
         {
             Interlocked.Increment(ref _reads);
             var entry = ReadHold is { } hold ? ReadAfterAsync(hold, cacheKey.Name) : Task.FromResult(Store.Read(cacheKey.Name));
+            Changed.Pulse();
             return new(entry.ContinueWith(static read => (ICacheEntry<IDictionary<string, T?>>)(object)read.Result, TaskScheduler.Default));
         }
 
@@ -577,6 +580,7 @@ internal sealed class PeerCluster : IDisposable
                     return null;
                 case nameof(IHashCache.GetCacheEntryAsync):
                     Interlocked.Increment(ref _reads);
+                    Changed.Pulse();
                     var key = ((CacheKey)args![0]!).Name;
                     return ReadHold is { } hold
                         ? new ValueTask<ICacheEntry<IDictionary<string, string?>>>(ReadAfterAsync(hold, key))

@@ -70,7 +70,7 @@ public class CacheOfTTryAddTests(ITestContextAccessor testContextAccessor)
         var inner = Substitute.For<ICache>();
         var sut = new Cache<string>(inner, cacheKeyStrategy: null, policy);
         var ttl = TimeSpan.FromMinutes(3);
-        var absolute = DateTimeOffset.UtcNow.AddMinutes(3);
+        var absolute = new ManualTimeProvider().GetUtcNow().AddMinutes(3);
 
         await sut.TryAddAsync("k", "v", ttl, Ct);
         await sut.TryAddAsync("k", "v", absolute, Ct);

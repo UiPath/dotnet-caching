@@ -11,10 +11,13 @@ namespace UiPath.Caching.Tests;
 /// </summary>
 public class MemoryCacheSetterTokenReleaseTests
 {
+
     private const string Key = "hot";
 
+    private static readonly ManualTimeProvider Clock = new();
+
     private readonly CountingTopic _topic = new();
-    private readonly MemoryCache _cache = new(new MemoryCacheOptions());
+    private readonly MemoryCache _cache = new(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
 
     [Fact]
     public void A_rewritten_key_keeps_one_subscription()
@@ -67,7 +70,7 @@ public class MemoryCacheSetterTokenReleaseTests
 
     private static bool Set(LocalMemorySetter sut, int value) =>
         sut.Set(
-            new CacheEntryOptions { CacheKey = Key, TopicKey = "t", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) },
+            new CacheEntryOptions { CacheKey = Key, TopicKey = "t", Expiration = Clock.GetUtcNow().AddMinutes(5) },
             new TestCacheEntry<int> { Value = value },
             typeof(int),
             maxExpiration: null);
@@ -75,7 +78,7 @@ public class MemoryCacheSetterTokenReleaseTests
     private LocalMemorySetter Build(InMemoryCacheOptions options, IMemoryCache? cache = null)
     {
         var tokens = new ChangeTokenFactory<byte[]>(Options.Create(new CacheOptions()), Substitute.For<ISerializerProxy<byte[]>>(), NullLoggerFactory.Instance, NullTelemetryProvider.Instance);
-        return new LocalMemorySetter(KnownCacheProviderNames.InMemoryRedis, tokens, new SingleTopicProvider(_topic), cache ?? _cache, NullLogger.Instance, TimeProvider.System, options, options, NullTelemetryProvider.Instance);
+        return new LocalMemorySetter(KnownCacheProviderNames.InMemoryRedis, tokens, new SingleTopicProvider(_topic), cache ?? _cache, NullLogger.Instance, Clock, options, options, NullTelemetryProvider.Instance);
     }
 
     private sealed class ThrowingSizeProvider : ICacheEntrySizeProvider

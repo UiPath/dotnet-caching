@@ -17,7 +17,7 @@ public class HandlerKeyHashCacheTests
     internal static readonly HashCacheEntryOptions Options = new();
     internal static readonly CachePolicy? Policy = null;
     internal static readonly TimeSpan Minute = TimeSpan.FromMinutes(1);
-    internal static readonly DateTimeOffset Later = DateTimeOffset.UtcNow.AddHours(1);
+    internal static readonly DateTimeOffset Later = new ManualTimeProvider().GetUtcNow().AddHours(1);
 
     internal static readonly (string Tag, bool SpanPath, Func<IHashCache, string, int, Task> Call)[] UntypedCases =
     [

@@ -376,6 +376,14 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
     internal static int Stripe(string key) => (int)((uint)StringComparer.Ordinal.GetHashCode(key) % Stripes);
 
+    internal Task[] Completions()
+    {
+        lock (_gate)
+        {
+            return [.. _tails.Values.Where(t => t.Background is not null).Select(t => t.Background!.Task)];
+        }
+    }
+
     /// <summary>Tells the key's writes in flight which version this one took: a write of the key that returns after it, with a lower version, took its place in the hash earlier.</summary>
     internal void RecordReturned(string key, long version)
     {

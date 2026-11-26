@@ -147,15 +147,17 @@ public class FillWatchWritesTests
         writes.Activate();
         var token = writes.BeginFill("k");
 
+        writes.TryReserve().Should().BeTrue();
         writes.RunWithoutEvent("k", 0, static _ => true, static (_, _) => ValueTask.CompletedTask);
         writes.FillIntact("k", token).Should().BeTrue("a background fill sends no event and is not a change");
 
+        writes.TryReserve().Should().BeTrue();
         writes.Run("k", 0, static _ => true, static (_, _) => ValueTask.CompletedTask);
         writes.FillIntact("k", token).Should().BeFalse();
         await writes.DrainAsync();
     }
 
-    private static BackgroundWrites Writes() => new(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), TimeProvider.System);
+    private static BackgroundWrites Writes() => new(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), new ManualTimeProvider());
 }
 /// <summary>A write or event that nobody fills for allocates nothing, with a fill of another key in progress.</summary>
 [Collection(AllocationCollection.Name)]
@@ -164,7 +166,7 @@ public class FillWatchesAllocationTests
     [Fact]
     public void Changes_and_batch_entries_allocate_nothing_while_other_keys_are_being_filled()
     {
-        var writes = new BackgroundWrites(0, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), TimeProvider.System);
+        var writes = new BackgroundWrites(0, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), new ManualTimeProvider());
         writes.BeginFill("filled");
         string[] keys = ["a", "b", "c"];
         writes.Enter(keys);
@@ -186,7 +188,7 @@ public class FillWatchesAllocationTests
     [Fact]
     public void A_batch_entry_with_nothing_to_watch_does_not_copy_its_keys()
     {
-        var writes = new BackgroundWrites(0, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), TimeProvider.System);
+        var writes = new BackgroundWrites(0, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), new ManualTimeProvider());
         List<string> keys = ["a", "b", "c"];
         writes.Enter(keys);
 

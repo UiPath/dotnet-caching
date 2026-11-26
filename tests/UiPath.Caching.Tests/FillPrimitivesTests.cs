@@ -9,6 +9,8 @@ namespace UiPath.Caching.Tests;
 
 public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
 {
+    private static readonly ManualTimeProvider Clock = new();
+
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
 
     public enum FillStoreFault
@@ -95,12 +97,12 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        (await cache.WriteAsync("k", "v", DateTimeOffset.UtcNow + Ttl, null, Ct)).Should().Be(StoreOutcome.Committed);
+        (await cache.WriteAsync("k", "v", Clock.GetUtcNow() + Ttl, null, Ct)).Should().Be(StoreOutcome.Committed);
         (await cache.ReadSnapshotAsync<string>("k", null, Ct)).Outcome.Should().Be(SnapshotOutcome.Found);
         (await cache.DeleteAsync<string>("k", cts.Token)).Should().Be(StoreOutcome.NotSent);
         (await cache.DeleteAsync<string>("k", Ct)).Should().Be(StoreOutcome.Committed);
         (await cache.ReadSnapshotAsync<string>("k", null, Ct)).Outcome.Should().Be(SnapshotOutcome.Absent);
-        (await cache.WriteAsync("k", "v", DateTimeOffset.UtcNow + Ttl, null, cts.Token)).Should().Be(StoreOutcome.NotSent);
+        (await cache.WriteAsync("k", "v", Clock.GetUtcNow() + Ttl, null, cts.Token)).Should().Be(StoreOutcome.NotSent);
     }
 
     [Fact]
@@ -127,7 +129,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
 
         entry.Found.Should().BeTrue();
         entry.Value.Should().Be("v");
-        entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Ttl, TimeSpan.FromSeconds(10));
+        entry.Expiration.Should().BeCloseTo(Clock.GetUtcNow() + Ttl, TimeSpan.FromSeconds(10));
     }
 
     [Fact]
@@ -196,7 +198,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         await sut.SetAsync("k", "old", Ttl, null, Ct);
         shared.CreateOutcome = inner;
 
-        var outcome = await sut.AsMigrationCache().TryCreateAsync("k", "new", DateTimeOffset.UtcNow.Add(Ttl), null, Ct);
+        var outcome = await sut.AsMigrationCache().TryCreateAsync("k", "new", Clock.GetUtcNow().Add(Ttl), null, Ct);
 
         outcome.Should().Be(inner, "a lost reply must not read as an existing value");
         shared.CreateOutcome = null;
@@ -211,7 +213,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         using var sut = Layered(shared);
         await sut.SetAsync("k", "old", Ttl, null, Ct);
 
-        (await sut.AsMigrationCache().TryCreateAsync("k", "new", DateTimeOffset.UtcNow.Add(Ttl), null, Ct)).Should().Be(AddOutcome.Exists);
+        (await sut.AsMigrationCache().TryCreateAsync("k", "new", Clock.GetUtcNow().Add(Ttl), null, Ct)).Should().Be(AddOutcome.Exists);
         (await shared.GetAsync<string>("k", null, Ct)).Should().Be("old");
     }
 
@@ -265,7 +267,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         var keyStrategy = Substitute.For<ICacheKeyStrategy>();
         keyStrategy.GetCacheKey<string>(Arg.Any<CacheKey>()).Returns((CacheKey)"ns:k");
         var sut = new Cache<string>(inner, keyStrategy, policy);
-        var absolute = DateTimeOffset.UtcNow.AddMinutes(3);
+        var absolute = Clock.GetUtcNow().AddMinutes(3);
 
         await sut.TryFillAsync("k", "v", Ttl, Ct);
         await sut.TryFillAsync("k", "v", absolute, Ct);
@@ -282,10 +284,13 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     public void Concurrent_local_fills_of_one_key_report_one_Added()
     {
         var gate = new GatedChangeTokenFactory();
-        using var sut = InMemoryMultilayer.Cache(tokens: gate);
+        using var secondEntered = new ManualResetEventSlim();
+        var options = new InMemoryCacheOptions { CacheKeyStrategy = new SignalingKeyStrategy(secondEntered) };
+        using var sut = InMemoryMultilayer.Cache(options, tokens: gate, clock: Clock);
 
         var (first, second) = RunBlockedPair(
             gate,
+            secondEntered,
             () => sut.TryFillAsync("k", "a", Ttl, Ct).AsTask().GetAwaiter().GetResult().Outcome,
             () => sut.TryFillAsync("k", "b", Ttl, Ct).AsTask().GetAwaiter().GetResult().Outcome);
 
@@ -296,10 +301,13 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     public void Concurrent_local_changes_of_one_absent_key_report_one_Filled()
     {
         var gate = new GatedChangeTokenFactory();
-        using var sut = InMemoryMultilayer.Cache(tokens: gate);
+        using var secondEntered = new ManualResetEventSlim();
+        var options = new InMemoryCacheOptions { CacheKeyStrategy = new SignalingKeyStrategy(secondEntered) };
+        using var sut = InMemoryMultilayer.Cache(options, tokens: gate, clock: Clock);
 
         var (first, second) = RunBlockedPair(
             gate,
+            secondEntered,
             () => sut.SetIfChangedAsync("k", "a", StringComparer.Ordinal, Ttl, Ct).AsTask().GetAwaiter().GetResult().Outcome,
             () => sut.SetIfChangedAsync("k", "b", StringComparer.Ordinal, Ttl, Ct).AsTask().GetAwaiter().GetResult().Outcome);
 
@@ -309,7 +317,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task A_local_fill_that_expires_sooner_than_asked_reports_the_local_deadline()
     {
-        using var sut = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(1) });
+        using var sut = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(1) }, clock: Clock);
 
         await sut.TryFillAsync("a", "v", TimeSpan.FromHours(1), Ct);
         await sut.SetIfChangedAsync("b", "v", StringComparer.Ordinal, TimeSpan.FromHours(1), Ct);
@@ -317,14 +325,14 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
 
         foreach (var key in new[] { "a", "b" })
         {
-            (await sut.AsMigrationCache().ReadSnapshotAsync<string>(key, null, Ct)).Entry!.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10));
+            (await sut.AsMigrationCache().ReadSnapshotAsync<string>(key, null, Ct)).Entry!.Expiration.Should().BeCloseTo(Clock.GetUtcNow() + TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10));
         }
     }
 
     [Fact]
     public async Task A_null_is_equal_only_to_a_null_and_the_comparer_is_never_asked_about_one()
     {
-        using var sut = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheNullValues = true });
+        using var sut = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheNullValues = true }, clock: Clock);
         var comparer = new NonNullComparer();
 
         (await sut.SetIfChangedAsync<string>("k", null, comparer, Ttl, Ct)).Outcome.Should().Be(ChangeOutcome.Filled);
@@ -540,9 +548,9 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         };
 
         var a = sut.SetIfChangedAsync("k", "a", StringComparer.Ordinal, Ttl, Ct).AsTask();
-        await committed["a"].Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await committed["a"].Task.WaitAsync(Ct);
         var b = sut.SetIfChangedAsync("k", "b", StringComparer.Ordinal, Ttl, Ct).AsTask();
-        await committed["b"].Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await committed["b"].Task.WaitAsync(Ct);
         release["b"].SetResult();
         (await b).Outcome.Should().Be(ChangeOutcome.Replaced);
         release["a"].SetResult();
@@ -568,7 +576,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         };
 
         var read = sut.GetAsync<string>("k", Ct).AsTask();
-        await reading.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await reading.Task.WaitAsync(Ct);
         shared.ReadGate = null;
         (await sut.SetIfChangedAsync("k", "new", StringComparer.Ordinal, Ttl, Ct)).Outcome.Should().Be(ChangeOutcome.Replaced);
         hold.SetResult();
@@ -580,7 +588,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task A_local_change_whose_comparer_outlasts_the_deadline_fails_without_a_write()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         using var sut = InMemoryMultilayer.Cache(clock: clock);
         await sut.SetAsync("k", "a", TimeSpan.FromMinutes(30), null, Ct);
         var slow = new DelegateComparer(() =>
@@ -598,7 +606,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task A_local_change_whose_comparer_outlasts_the_local_cap_fails_without_a_write()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         using var sut = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(1) }, clock: clock);
         await sut.SetAsync("k", "a", TimeSpan.FromMinutes(30), null, Ct);
         var slow = new DelegateComparer(() =>
@@ -654,7 +662,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task A_local_comparer_never_runs_while_the_key_is_locked()
     {
-        using var sut = InMemoryMultilayer.Cache();
+        using var sut = InMemoryMultilayer.Cache(clock: Clock);
         await sut.SetAsync("k", "base", Ttl, null, Ct);
         var calls = 0;
         var comparer = new DelegateComparer(() =>
@@ -676,7 +684,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     [InlineData(FillStoreFault.LapsedThrow)]
     public async Task A_deadline_that_passed_during_the_call_keeps_nothing_locally(FillStoreFault fault)
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var shared = new FillStore { Fault = fault, During = () => clock.Advance(TimeSpan.FromMinutes(2)) };
         using var sut = Layered(shared, clock);
         var policy = new CachePolicy { FailSafeEnabled = true };
@@ -689,23 +697,18 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         (await sut.GetAsync<string>("a", Ct)).Should().BeNull();
         (await sut.GetAsync<string>("b", Ct)).Should().BeNull();
     }
-    private static (T First, T Second) RunBlockedPair<T>(GatedChangeTokenFactory gate, Func<T> first, Func<T> second)
+    private static (T First, T Second) RunBlockedPair<T>(GatedChangeTokenFactory gate, ManualResetEventSlim secondEntered, Func<T> first, Func<T> second)
     {
         T? firstResult = default;
         T? secondResult = default;
         var a = new Thread(() => firstResult = first());
-        using var started = new ManualResetEventSlim();
-        var b = new Thread(() =>
-        {
-            started.Set();
-            secondResult = second();
-        });
+        var b = new Thread(() => secondResult = second());
         a.Start();
         gate.WaitUntilEntered(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).Should().BeTrue("the first write is inside the local tier");
         b.Start();
-        started.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        secondEntered.Wait(TestContext.Current.CancellationToken);
 
-        SpinWait.SpinUntil(() => (b.ThreadState & ThreadState.WaitSleepJoin) != 0, TimeSpan.FromSeconds(10)).Should().BeTrue();
+        b.IsAlive.Should().BeTrue();
         gate.Release();
         a.Join();
         b.Join();
@@ -730,7 +733,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         new(
             KnownCacheProviderNames.InMemory,
             inner,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(clock ?? Clock, NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -740,8 +743,23 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
             new CacheOptions { AppShortName = "test" },
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
-            clock: clock ?? TimeProvider.System,
+            clock: clock ?? Clock,
             logger: NullLogger.Instance);
+
+    private sealed class SignalingKeyStrategy(ManualResetEventSlim secondEntered) : ICacheKeyStrategy
+    {
+        private int _calls;
+
+        public CacheKey GetCacheKey<T>(CacheKey key)
+        {
+            if (Interlocked.Increment(ref _calls) == 2)
+            {
+                secondEntered.Set();
+            }
+
+            return key;
+        }
+    }
 
     private sealed class DelegateComparer(Func<bool> equal) : IEqualityComparer<string>
     {
@@ -876,6 +894,6 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         }
 
         private TestCacheEntry<T?> Held<T>(CacheKey cacheKey) =>
-            new() { Value = Read<T>(cacheKey), Expiration = DateTimeOffset.UtcNow + HeldFor, Found = true };
+            new() { Value = Read<T>(cacheKey), Expiration = Clock.GetUtcNow() + HeldFor, Found = true };
     }
 }

@@ -27,7 +27,7 @@ public class MemoryCacheFactoryTests
         memoryCache.Should().NotBeNull();
         var act = () => memoryCache.Set("testKey", "testValue",new MemoryCacheEntryOptions
         {
-            AbsoluteExpiration = DateTimeOffset.UtcNow.AddMinutes(5),
+            AbsoluteExpiration = clock.UtcNow.AddMinutes(5),
         });
         act.Should().Throw<InvalidOperationException>();
     }
@@ -48,7 +48,7 @@ public class MemoryCacheFactoryTests
         memoryCache.Should().NotBeNull();
         var act = () => memoryCache.Set("testKey", "testValue", new MemoryCacheEntryOptions
         {
-            AbsoluteExpiration = DateTimeOffset.UtcNow.AddMinutes(5),
+            AbsoluteExpiration = clock.UtcNow.AddMinutes(5),
             Size = 1,
         });
         act.Should().NotThrow();
@@ -68,7 +68,7 @@ public class MemoryCacheFactoryTests
         memoryCache.Should().NotBeNull();
         var act = () => memoryCache.Set("testKey", "testValue", new MemoryCacheEntryOptions
         {
-            AbsoluteExpiration = DateTimeOffset.UtcNow.AddMinutes(5),
+            AbsoluteExpiration = clock.UtcNow.AddMinutes(5),
         });
         act.Should().NotThrow();
     }

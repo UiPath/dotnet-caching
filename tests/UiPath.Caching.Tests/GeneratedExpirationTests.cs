@@ -4,13 +4,15 @@ namespace UiPath.Caching.Tests;
 
 public class GeneratedExpirationTests
 {
+    private static readonly ManualTimeProvider Clock = new();
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task A_miss_stores_the_value_until_the_expiration_the_generator_returns()
     {
-        using var cache = InMemoryMultilayer.Cache();
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
+        var deadline = Clock.GetUtcNow().AddMinutes(7);
         var calls = 0;
 
         var first = await cache.GetOrAddWithExpirationAsync<string>("token", _ => { calls++; return Task.FromResult(new GeneratedValue<string>("jwt", deadline)); }, Ct);
@@ -25,23 +27,23 @@ public class GeneratedExpirationTests
     [Fact]
     public async Task A_value_without_an_expiration_takes_the_policy_lifetime()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var policy = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(20) };
 
         await cache.GetOrAddWithExpirationAsync<string>("token", _ => Task.FromResult(new GeneratedValue<string>("jwt")), policy, Ct);
 
-        (await cache.GetCacheEntryAsync<string>("token", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(20), TimeSpan.FromSeconds(30));
+        (await cache.GetCacheEntryAsync<string>("token", policy: null, Ct)).Expiration.Should().BeCloseTo(Clock.GetUtcNow().AddMinutes(20), TimeSpan.FromSeconds(30));
     }
 
     [Fact]
     public async Task A_value_that_has_already_expired_is_returned_and_not_stored()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var calls = 0;
         Task<GeneratedValue<string>> Generate(CancellationToken _)
         {
             calls++;
-            return Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(-1)));
+            return Task.FromResult(new GeneratedValue<string>("jwt", Clock.GetUtcNow().AddMinutes(-1)));
         }
 
         (await cache.GetOrAddWithExpirationAsync<string>("token", Generate, Ct)).Should().Be("jwt");
@@ -58,11 +60,11 @@ public class GeneratedExpirationTests
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue });
         inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(new FillResult<string>(FillOutcome.Added, null));
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: Clock);
+        var deadline = Clock.GetUtcNow().AddMinutes(7);
 
         await cache.GetOrAddWithExpirationAsync<string>("live", _ => Task.FromResult(new GeneratedValue<string>("jwt", deadline)), Ct);
-        await cache.GetOrAddWithExpirationAsync<string>("stale", _ => Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(-1))), Ct);
+        await cache.GetOrAddWithExpirationAsync<string>("stale", _ => Task.FromResult(new GeneratedValue<string>("jwt", Clock.GetUtcNow().AddMinutes(-1))), Ct);
 
         await inner.Received(1).TryFillAsync<string>(new CacheKey("live"), "jwt", deadline, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         await inner.DidNotReceive().TryFillAsync<string>(new CacheKey("stale"), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
@@ -71,9 +73,9 @@ public class GeneratedExpirationTests
     [Fact]
     public async Task A_null_value_is_stored_only_when_null_values_are_cached()
     {
-        using var skipping = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheNullValues = false });
-        using var caching = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheNullValues = true });
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+        using var skipping = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheNullValues = false }, clock: Clock);
+        using var caching = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheNullValues = true }, clock: Clock);
+        var deadline = Clock.GetUtcNow().AddMinutes(7);
 
         (await skipping.GetOrAddWithExpirationAsync<string>("k", _ => Task.FromResult(new GeneratedValue<string>(null, deadline)), Ct)).Should().BeNull();
         (await caching.GetOrAddWithExpirationAsync<string>("k", _ => Task.FromResult(new GeneratedValue<string>(null, deadline)), Ct)).Should().BeNull();
@@ -86,10 +88,10 @@ public class GeneratedExpirationTests
     [Fact]
     public async Task Concurrent_misses_run_the_generator_once()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+        var deadline = Clock.GetUtcNow().AddMinutes(7);
 
         async Task<GeneratedValue<string>> Generate(CancellationToken _)
         {
@@ -99,7 +101,7 @@ public class GeneratedExpirationTests
         }
 
         var reads = Enumerable.Range(0, 5).Select(_ => cache.GetOrAddWithExpirationAsync<string>("token", Generate, Ct).AsTask()).ToArray();
-        await Task.Delay(100, Ct);
+        reads.Should().OnlyContain(read => !read.IsCompleted);
         release.SetResult();
 
         (await Task.WhenAll(reads)).Should().AllBe("jwt");
@@ -109,16 +111,19 @@ public class GeneratedExpirationTests
     [Fact]
     public async Task A_generator_that_outlasts_the_factory_timeout_times_out()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        var clock = new ManualTimeProvider();
+        using var cache = InMemoryMultilayer.Cache(clock: clock);
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
 
-        var act = async () => await cache.GetOrAddWithExpirationAsync("token", Slow, policy, Ct);
+        var pending = cache.GetOrAddWithExpirationAsync("token", Slow, policy, Ct).AsTask();
+        clock.Advance(policy.FactoryTimeout.Value);
+        var act = async () => await pending;
 
         await act.Should().ThrowAsync<TimeoutException>();
 
         static async Task<GeneratedValue<string>> Slow(CancellationToken ct)
         {
-            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(ct);
             return new GeneratedValue<string>("never");
         }
     }
@@ -126,9 +131,9 @@ public class GeneratedExpirationTests
     [Fact]
     public async Task A_typed_cache_stores_under_its_own_key_strategy()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+        var deadline = Clock.GetUtcNow().AddMinutes(7);
 
         (await typed.GetOrAddWithExpirationAsync("token", _ => Task.FromResult(new GeneratedValue<string>("jwt", deadline)), Ct)).Should().Be("jwt");
 
@@ -138,7 +143,7 @@ public class GeneratedExpirationTests
     [Fact]
     public async Task A_generator_must_not_be_null()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         var act = async () => await cache.GetOrAddWithExpirationAsync<string>("token", null!, Ct);
 
@@ -170,7 +175,7 @@ public class GeneratedExpirationTests
     [Fact]
     public async Task The_null_cache_returns_the_generated_value()
     {
-        (await NullCache.Instance.GetOrAddWithExpirationAsync<string>("token", _ => Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(1))), Ct)).Should().Be("jwt");
+        (await NullCache.Instance.GetOrAddWithExpirationAsync<string>("token", _ => Task.FromResult(new GeneratedValue<string>("jwt", Clock.GetUtcNow().AddMinutes(1))), Ct)).Should().Be("jwt");
     }
 
     [Fact]

@@ -12,7 +12,7 @@ using UiPath.Caching.Tests.Telemetry;
 namespace UiPath.Caching.Tests.Fakes;
 
 /// <summary>Real multilayer caches, one per node, over one shared stand-in for Redis, with a bus that carries their events as JSON, as the wire does.</summary>
-internal sealed class CachePeers : IDisposable
+internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposable
 {
     private static readonly FieldInfo BackgroundField = typeof(MultilayerCacheBase).GetField("_background", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
@@ -31,7 +31,7 @@ internal sealed class CachePeers : IDisposable
     /// <param name="localClock">The local tier's clock, for its expirations; the system clock when null.</param>
     public Node Add(string name, InMemoryRedisCacheOptions? options = null, RecordingTelemetryProvider? telemetry = null, TimeProvider? clock = null, TimeProvider? localClock = null, ICachePolicyFactory? policies = null)
     {
-        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry, clock ?? TimeProvider.System, localClock ?? TimeProvider.System, policies);
+        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry, clock ?? defaultClock ?? TimeProvider.System, localClock ?? defaultClock ?? TimeProvider.System, policies);
         _nodes.Add(node);
         return node;
     }
@@ -136,6 +136,7 @@ internal sealed class CachePeers : IDisposable
             var inner = DispatchProxy.Create<ICache, NodeInner>();
             Inner = (NodeInner)(object)inner;
             Inner.Store = peers.Store;
+            Inner.Clock = clock;
             Inner.Fenced = peers.Fenced;
 
             var events = new CacheEventFactory(Options.Create(cacheOptions));
@@ -433,6 +434,10 @@ internal sealed class CachePeers : IDisposable
 
         bool IFencedFillTier.IsFenced => Fenced;
 
+        public TimeProvider Clock { get; set; } = TimeProvider.System;
+
+        public TestSignal Changed { get; } = new();
+
         public int SingleReads => Volatile.Read(ref _singleReads);
 
         public int BatchReads => Volatile.Read(ref _batchReads);
@@ -643,7 +648,7 @@ internal sealed class CachePeers : IDisposable
             }
         }
 
-        private static TestCacheEntry<T?> EntryFor<T>(SharedStore store, CacheKey key)
+        private TestCacheEntry<T?> EntryFor<T>(SharedStore store, CacheKey key)
         {
             if (!store.Values.TryGetValue(key.Name, out var value) || ReferenceEquals(value, SharedStore.Unreadable))
             {
@@ -651,7 +656,7 @@ internal sealed class CachePeers : IDisposable
             }
 
             var remaining = store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
-            return new TestCacheEntry<T?> { Value = (T?)value, Expiration = DateTimeOffset.UtcNow + remaining, Found = true };
+            return new TestCacheEntry<T?> { Value = (T?)value, Expiration = Clock.GetUtcNow() + remaining, Found = true };
         }
 
         private ValueTask<FillResult<string>> FillString(CacheKey key, string? value)
@@ -665,7 +670,7 @@ internal sealed class CachePeers : IDisposable
                 }
 
                 var remaining = Store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
-                return new(new FillResult<string>(FillOutcome.Existed, (string?)Store.Values[key.Name], DateTimeOffset.UtcNow + remaining));
+                return new(new FillResult<string>(FillOutcome.Existed, (string?)Store.Values[key.Name], Clock.GetUtcNow() + remaining));
             }
 
             return AfterWrite is { } after
@@ -685,7 +690,7 @@ internal sealed class CachePeers : IDisposable
                 }
 
                 var remaining = Store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
-                return new(new FillResult<T>(FillOutcome.Existed, (T?)Store.Values[key.Name], DateTimeOffset.UtcNow + remaining));
+                return new(new FillResult<T>(FillOutcome.Existed, (T?)Store.Values[key.Name], Clock.GetUtcNow() + remaining));
             }
 
             var added = new FillResult<T>(FillOutcome.Added, default);
@@ -721,9 +726,11 @@ internal sealed class CachePeers : IDisposable
             // The hold is chosen before the count a test waits on.
             var (hold, ignoresCancellation) = (Hold, HoldIgnoresCancellation);
             Interlocked.Increment(ref _singleReads);
+            Changed.Pulse();
             await BeforeReadAsync(hold, ignoresCancellation, token);
             var entry = EntryFor<T>(Store, key);
             Store.Values.TryGetValue(key.Name, out var held);
+            Changed.Pulse();
             if (Interlocked.Exchange(ref _afterNextRead, null) is { } afterRead)
             {
                 await afterRead;

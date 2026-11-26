@@ -5,14 +5,17 @@ namespace UiPath.Caching.Tests;
 /// <summary>Writers of one key exclude each other: the set is replaced as a whole, so a lost update shows as a missing or duplicated member.</summary>
 public class MemorySetCacheConcurrencyTests
 {
+
     private const string Key = "k";
+
+    private static readonly ManualTimeProvider Clock = new();
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task Parallel_adds_of_distinct_items_keep_every_item_and_count_each_once()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = new MemoryCache(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
         var sut = Create(memory);
         const int Items = 400;
 
@@ -26,7 +29,7 @@ public class MemorySetCacheConcurrencyTests
     [Fact]
     public async Task Parallel_adds_of_the_same_item_count_one_win()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = new MemoryCache(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
         var sut = Create(memory);
 
         var added = await Task.WhenAll(Enumerable.Range(0, 64).Select(_ => Task.Run(async () => await sut.AddAsync(Key, [7], null, Ct), Ct)));
@@ -37,7 +40,7 @@ public class MemorySetCacheConcurrencyTests
     [Fact]
     public async Task Parallel_pops_return_every_member_exactly_once_between_them()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = new MemoryCache(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
         var sut = Create(memory);
         const int Items = 600;
         await sut.ReplaceAsync(Key, Enumerable.Range(0, Items), null, Ct);
@@ -66,7 +69,7 @@ public class MemorySetCacheConcurrencyTests
     [Fact]
     public async Task Adds_and_removes_interleaved_end_with_exactly_what_was_left()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = new MemoryCache(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
         var sut = Create(memory);
         await sut.ReplaceAsync(Key, Enumerable.Range(0, 200), null, Ct);
 
@@ -82,7 +85,7 @@ public class MemorySetCacheConcurrencyTests
     [Fact]
     public async Task Removing_the_key_while_adding_never_resurrects_a_member_that_the_remove_saw()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = new MemoryCache(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
         var sut = Create(memory);
 
         for (var round = 0; round < 50; round++)
@@ -104,7 +107,7 @@ public class MemorySetCacheConcurrencyTests
     [Fact]
     public async Task Different_keys_proceed_while_one_key_is_busy()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = new MemoryCache(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
         var sut = Create(memory);
 
         var added = await Task.WhenAll(Enumerable.Range(0, 300).Select(i => Task.Run(async () => await sut.AddAsync("key-" + i, [i], null, Ct), Ct)));
@@ -120,7 +123,7 @@ public class MemorySetCacheConcurrencyTests
     [Fact]
     public async Task A_cancelled_call_changes_nothing_and_reports_its_cancellation()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = new MemoryCache(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
         var sut = Create(memory);
         await sut.AddAsync(Key, [1], null, Ct);
         using var cancelled = new CancellationTokenSource();
@@ -140,13 +143,13 @@ public class MemorySetCacheConcurrencyTests
     [Fact]
     public async Task Calls_with_nothing_to_do_return_at_once_and_change_nothing()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = new MemoryCache(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
         var sut = Create(memory);
         await sut.AddAsync(Key, [1], null, Ct);
 
         await sut.AddAsync(Key, Array.Empty<int>(), Ct);
         (await sut.AddAsync(Key, Array.Empty<int>(), null, Ct)).Should().Be(0);
-        (await sut.AddAsync(Key, [2], DateTimeOffset.UtcNow.AddMinutes(-1), Ct)).Should().Be(0, "a deadline already past stores nothing and drops the key");
+        (await sut.AddAsync(Key, [2], Clock.GetUtcNow().AddMinutes(-1), Ct)).Should().Be(0, "a deadline already past stores nothing and drops the key");
         (await sut.RemoveAsync(Key, Array.Empty<int>(), Ct)).Should().Be(0);
         (await sut.RemoveAsync("missing", [1], Ct)).Should().Be(0);
         (await sut.PopAsync<int>(Key, 0, Ct)).Should().BeEmpty();
@@ -156,5 +159,5 @@ public class MemorySetCacheConcurrencyTests
     }
 
     private static MemorySetCache Create(IMemoryCache memory) =>
-        new(memory, new SystemJsonByteSerializerProxy(), new InMemoryQueueCacheOptions(), TimeProvider.System);
+        new(memory, new SystemJsonByteSerializerProxy(), new InMemoryQueueCacheOptions(), Clock);
 }

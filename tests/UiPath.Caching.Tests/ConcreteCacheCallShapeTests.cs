@@ -4,7 +4,7 @@ namespace UiPath.Caching.Tests;
 public class ConcreteCacheCallShapeTests
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
-    private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+    private static readonly DateTimeOffset Deadline = new ManualTimeProvider().GetUtcNow().AddMinutes(5);
     private static readonly Func<CancellationToken, Task<string?>> Load = static _ => Task.FromResult<string?>("v");
     private static readonly Func<int, CancellationToken, Task<string?>> LoadState = static (n, _) => Task.FromResult<string?>($"v{n}");
     private static readonly Func<CancellationToken, Task<GeneratedValue<string>>> LoadGenerated = static _ => Task.FromResult(new GeneratedValue<string>("g", Deadline));

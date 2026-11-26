@@ -29,11 +29,13 @@ public static class AutoFixtureCreator
     }
 }
 
-/// <summary>Defaults <see cref="TimeProvider"/> to the system clock; a test that fixes time injects its own, which outranks this.</summary>
+/// <summary>Shares a manual clock within each fixture unless a test injects its own.</summary>
 public class TimeProviderCustomization : ISpecimenBuilder
 {
+    private readonly ManualTimeProvider _clock = new();
+
     public object Create(object request, ISpecimenContext context) =>
-        request is Type type && type == typeof(TimeProvider) ? TimeProvider.System : new NoSpecimen();
+        request is Type type && type == typeof(TimeProvider) ? _clock : new NoSpecimen();
 }
 
 public class TelemetryProviderCustomization : ISpecimenBuilder

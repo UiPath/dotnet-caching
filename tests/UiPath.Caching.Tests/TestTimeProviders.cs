@@ -23,11 +23,14 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
 {
     private readonly object _gate = new();
     private readonly List<ManualTimer> _timers = [];
+    private readonly Fakes.TestSignal _timerCreated = new();
     private TimeSpan _elapsed;
     private int _created;
     private TaskCompletionSource _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public event Action? TimerScheduled;
+
+    public ManualTimeProvider() : this(DateTimeOffset.UnixEpoch) { }
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
@@ -102,8 +105,12 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         }
 
         TimerScheduled?.Invoke();
+        _timerCreated.Pulse();
         return timer;
     }
+
+    public Task WhenTimerScheduledAsync() =>
+        _timerCreated.UntilAsync(() => HasTimers, TestContext.Current.CancellationToken);
 
     public void Advance(TimeSpan by)
     {
@@ -208,4 +215,9 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
             return ValueTask.CompletedTask;
         }
     }
+}
+
+internal sealed class TimeProviderClock(TimeProvider clock) : ISystemClock
+{
+    public DateTimeOffset UtcNow => clock.GetUtcNow();
 }

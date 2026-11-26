@@ -18,6 +18,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
     private static readonly string?[] AAndB = ["A", "B"];
 
     private static readonly TimeSpan Duration = TimeSpan.FromMinutes(10);
+    private readonly ManualTimeProvider _clock = new();
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private readonly ConcurrentDictionary<CacheKey, string?> _stored = new();
@@ -78,8 +79,8 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             token);
 
         result.Single().Value.Should().Be("old");
-        var visibleToPeer = await atPublish.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
-        await written.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        var visibleToPeer = await atPublish.Task.WaitAsync(token);
+        await written.Task.WaitAsync(token);
         _stored[(CacheKey)"a"].Should().Be("fresh");
         visibleToPeer.Should().Be("fresh", "the invalidation must follow the L2 write so a peer cannot refill the old value");
     }
@@ -103,7 +104,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => announced.Count == 2, TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => announced.Count == 2, token);
         _stored[(CacheKey)"a"].Should().Be("fresh1");
         _stored[(CacheKey)"b"].Should().Be("fresh2");
     }
@@ -127,12 +128,12 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), token);
         var calls = Snapshot(rehydrateCalls);
         calls.Should().HaveCount(1);
         calls[0].Should().BeEquivalentTo(States2);
         _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.adopted");
-        await WaitForAsync(() => _stored.TryGetValue((CacheKey)"b", out var v) && v == "fresh:2", TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _stored.TryGetValue((CacheKey)"b", out var v) && v == "fresh:2", token);
         _innerSetCalls.ToArray().Single().Should().Equal((CacheKey)"b");
         _memoryCache.TryGetValue("a", out ICacheEntry<string?>? local).Should().BeTrue();
         local!.Value.Should().Be("A-by-peer");
@@ -158,8 +159,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), TimeSpan.FromSeconds(10), token);
-        await Task.Delay(100, token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), token);
         generatorCalls.Should().Be(0);
         _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.succeeded");
         _innerSetCalls.Should().BeEmpty();
@@ -193,12 +193,12 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             },
             RehydratePolicy(),
             token);
-        await reading.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await reading.Task.WaitAsync(token);
 
         // The read in flight holds both refreshed values when "a" is removed.
         await Sut.RemoveAsync<string>((CacheKey)"a", token);
         release.SetResult();
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), token);
 
         var calls = Snapshot(rehydrateCalls);
         calls.Should().HaveCount(1);
@@ -229,7 +229,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), token);
         var calls = Snapshot(rehydrateCalls);
         calls.Should().HaveCount(1);
         calls[0].Should().BeEquivalentTo(States1And2);
@@ -243,7 +243,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
         var token = testContextAccessor.Current.CancellationToken;
         _agedRemaining = TimeSpan.FromMilliseconds(400);
         SeedAged("a", "A");
-        _duringRehydrateRead = readToken => Task.Delay(Timeout.Infinite, readToken);
+        _duringRehydrateRead = readToken => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(readToken);
         var generatorCalls = 0;
 
         await Sut.GetOrAddAsync<string, long>(
@@ -256,7 +256,8 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(duration: TimeSpan.FromSeconds(2)),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(10), token);
+        _clock.Advance(TimeSpan.FromMilliseconds(250));
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), token);
         generatorCalls.Should().Be(1);
         _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.timed_out");
     }
@@ -286,11 +287,11 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
                 RehydratePolicy(duration: TimeSpan.FromSeconds(2)),
                 token);
 
-            await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(10), token);
+            _clock.Advance(TimeSpan.FromMilliseconds(250));
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), token);
             generatorCalls.Should().Be(1);
 
             late.SetResult();
-            await Task.Delay(200, token);
 
             _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.adopted");
             _memoryCache.TryGetValue("a", out ICacheEntry<string?>? held);
@@ -314,9 +315,9 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
         SeedAged("b", "B");
         // The plain batch read always shows the aged copies, so only the snapshot reads can tell a peer refreshed them.
         inner.Answer = (name, args) => name == nameof(ICache.GetCacheEntriesAsync)
-            ? ((CacheKey[])args[0]!).Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, new TestCacheEntry<string?> { Value = k.Name.ToUpperInvariant(), Expiration = DateTimeOffset.UtcNow.AddMinutes(2), Found = true })).ToArray()
+            ? ((CacheKey[])args[0]!).Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, new TestCacheEntry<string?> { Value = k.Name.ToUpperInvariant(), Expiration = _clock.GetUtcNow().AddMinutes(2), Found = true })).ToArray()
             : throw new NotSupportedException(name);
-        inner.Adoption = key => new TestCacheEntry<string?> { Value = key.Name + "-by-peer", Expiration = DateTimeOffset.UtcNow.AddMinutes(9), Found = true };
+        inner.Adoption = key => new TestCacheEntry<string?> { Value = key.Name + "-by-peer", Expiration = _clock.GetUtcNow().AddMinutes(9), Found = true };
         var generatorCalls = 0;
 
         await Sut.GetOrAddAsync<string, long>(
@@ -329,7 +330,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), token);
         generatorCalls.Should().Be(0);
         inner.Calls.Should().BeEquivalentTo(nameof(ICache.GetCacheEntriesAsync), "ReadSnapshotAsync:a", "ReadSnapshotAsync:b");
     }
@@ -344,11 +345,11 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
         SeedAged("a", "A");
         SeedAged("b", "B");
         inner.Answer = (name, args) => name == nameof(ICache.GetCacheEntriesAsync)
-            ? ((CacheKey[])args[0]!).Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, new TestCacheEntry<string?> { Value = k.Name.ToUpperInvariant(), Expiration = DateTimeOffset.UtcNow.AddMinutes(2), Found = true })).ToArray()
+            ? ((CacheKey[])args[0]!).Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, new TestCacheEntry<string?> { Value = k.Name.ToUpperInvariant(), Expiration = _clock.GetUtcNow().AddMinutes(2), Found = true })).ToArray()
             : name == nameof(ICache.SetAsync) ? true : throw new NotSupportedException(name);
         inner.Adoption = key => key.Name == "a"
             ? SnapshotOutcome.Unreadable
-            : new TestCacheEntry<string?> { Value = key.Name + "-by-peer", Expiration = DateTimeOffset.UtcNow.AddMinutes(9), Found = true };
+            : new TestCacheEntry<string?> { Value = key.Name + "-by-peer", Expiration = _clock.GetUtcNow().AddMinutes(9), Found = true };
         var generated = new List<long>();
 
         await Sut.GetOrAddAsync<string, long>(
@@ -365,7 +366,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name is "cache.rehydrate.adopted" or "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name is "cache.rehydrate.adopted" or "cache.rehydrate.succeeded"), token);
         generated.Should().Equal(1L);
         _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.adopt_read_failed");
     }
@@ -389,7 +390,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"), token);
         Snapshot(rehydrateCalls).Should().ContainSingle().Which.Should().BeEquivalentTo(States1);
         _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.adopted" || e.Name == "cache.rehydrate.adopt_read_failed");
         await _innerCache.Received(1).GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
@@ -415,8 +416,8 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), TimeSpan.FromSeconds(10), token);
-        await WaitForAsync(() => _memoryCache.TryGetValue("a", out ICacheEntry<string?>? marker) && marker!.Value is null, TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), token);
+        await WaitForAsync(() => _memoryCache.TryGetValue("a", out ICacheEntry<string?>? marker) && marker!.Value is null, token);
         generatorCalls.Should().Be(0);
         _memoryCache.TryGetValue("b", out ICacheEntry<string?>? value).Should().BeTrue();
         value!.Value.Should().Be("B-by-peer");
@@ -436,7 +437,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.failed"), TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.failed"), token);
         var failed = _telemetry.Events.Single(e => e.Name == "cache.rehydrate.failed");
         failed.Properties!["adopted"].Should().Be("1");
         failed.Properties["exception_type"].Should().Be(nameof(InvalidOperationException));
@@ -465,12 +466,11 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             token);
 
         result.Select(r => r.Value).Should().Equal(AAndB, "the cached values are returned; rehydration is in the background");
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
-        await Task.Delay(200, token);
+        await done.Task.WaitAsync(token);
         var calls = Snapshot(rehydrateCalls);
         calls.Should().HaveCount(1, "all states past threshold must coalesce into one generator call");
         calls[0].Should().BeEquivalentTo(States1And2);
-        await WaitForAsync(() => _stored.TryGetValue((CacheKey)"b", out var v) && v == "fresh:2", TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => _stored.TryGetValue((CacheKey)"b", out var v) && v == "fresh:2", token);
         _innerSetCalls.ToArray().Single().Should().BeEquivalentTo(
             new[] { (CacheKey)"a", (CacheKey)"b" },
             "both refreshed keys share one expiration, so they must land in a single L2 write");
@@ -496,7 +496,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await done.Task.WaitAsync(token);
         Snapshot(rehydrateCalls).Single().Should().Equal(States1, "b is nowhere near its rehydrate threshold");
     }
 
@@ -515,7 +515,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await done.Task.WaitAsync(token);
         Snapshot(calls).Single().Should().Equal(States1, "only the aged entry's state is rehydrated, translated from the reserved key");
     }
 
@@ -539,7 +539,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await done.Task.WaitAsync(token);
         Snapshot(rehydrateCalls).Single().Should().Equal(States2, "the cached-null guard is applied per key, and must not suppress the rest of the set");
     }
 
@@ -556,7 +556,6 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             (CachePolicy?)null,
             token);
 
-        await Task.Delay(200, token);
         Volatile.Read(ref rehydrateCalls).Should().Be(0);
         await _distributedLock.DidNotReceiveWithAnyArgs().TryAcquireAsync(default!, default, Arg.Any<CancellationToken>());
     }
@@ -575,7 +574,6 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await Task.Delay(200, token);
         Volatile.Read(ref rehydrateCalls).Should().Be(0, "soft-TTL math must use the caller's explicit TimeSpan, not the policy's DistributedExpiration");
         await _distributedLock.DidNotReceiveWithAnyArgs().TryAcquireAsync(default!, default, Arg.Any<CancellationToken>());
     }
@@ -594,14 +592,14 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
         {
             lock (rehydrateCalls) { rehydrateCalls.Add(ids); }
             entered.TrySetResult();
-            await release.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            await release.Task.WaitAsync(ct);
             return ids.Select(id => new KeyValuePair<long, string?>(id, "fresh")).ToArray();
         }
 
         await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L)], Generator, RehydratePolicy(), token);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await entered.Task.WaitAsync(token);
         await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Generator, RehydratePolicy(), token);
-        await WaitForAsync(() => Snapshot(rehydrateCalls).Count == 2, TimeSpan.FromSeconds(10), token);
+        await WaitForAsync(() => Snapshot(rehydrateCalls).Count == 2, token);
         release.TrySetResult();
 
         var calls = Snapshot(rehydrateCalls);
@@ -628,14 +626,14 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
-        await WaitForAsync(() => _stored.TryGetValue((CacheKey)"a", out var v) && v == "fresh", TimeSpan.FromSeconds(10), token);
+        await done.Task.WaitAsync(token);
+        await WaitForAsync(() => _stored.TryGetValue((CacheKey)"a", out var v) && v == "fresh", token);
         _innerSetCalls.ToArray().Single().Should().Equal(new[] { (CacheKey)"a" }, "the only inner write in this test comes from the rehydrate");
         var expirations = _innerSetExpirations.ToArray();
         expirations.Should().HaveCount(1);
         expirations[0].Should().NotBeNull();
         expirations[0]!.Value.Should().BeCloseTo(
-            DateTimeOffset.UtcNow.Add(Duration),
+            _clock.GetUtcNow().Add(Duration),
             TimeSpan.FromMinutes(1),
             "a rehydrated non-null value gets a full fresh TTL window, not the aged entry's remaining 2 minutes");
     }
@@ -670,8 +668,8 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             token);
 
         result.Select(r => r.Key).Should().Equal(States1, "the caller gets its own state back");
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
-        await WaitForAsync(() => !lockKeys.IsEmpty, TimeSpan.FromSeconds(10), token);
+        await done.Task.WaitAsync(token);
+        await WaitForAsync(() => !lockKeys.IsEmpty, token);
         lockKeys.ToArray().Should().Equal(
             new[] { "rehydrate:" + lockKeyStrategy.GetLockKey((CacheKey)"a") },
             "a single-candidate batch rehydrate must dedupe against single-key rehydration of that key, which locks on the caller key");
@@ -707,8 +705,8 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
-        await WaitForAsync(() => !lockKeys.IsEmpty, TimeSpan.FromSeconds(10), token);
+        await done.Task.WaitAsync(token);
+        await WaitForAsync(() => !lockKeys.IsEmpty, token);
         lockKeys.ToArray().Should().Equal(
             new[] { "rehydrate:" + lockKeyStrategy.GetLockKey((CacheKey)"a") },
             "the group key must be derived from the RESERVED set, so a batch that refreshes only `a` takes the same lock single-key rehydration of `a` takes");
@@ -733,10 +731,9 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             RehydratePolicy(),
             token);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await done.Task.WaitAsync(token);
         await WaitForAsync(
             () => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"),
-            TimeSpan.FromSeconds(10),
             token);
         var sizes = _telemetry.Events
             .Where(e => e.Properties is not null && e.Properties.ContainsKey("batch.size"))
@@ -748,11 +745,12 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
 
     public ValueTask InitializeAsync()
     {
+        _fixture.Inject<TimeProvider>(_clock);
         _topicKey = _fixture.Create<string>();
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(_ => new TestChangeToken { ActiveChangeCallbacks = true, HasChanged = false });
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions { Clock = new TimeProviderClock(_clock) }));
         _innerCache = _fixture.Freeze<ICache>();
         _fixture.Inject(AdoptionProxy.Over(_innerCache, batchBacked: true));
         _telemetry = new RecordingTelemetryProvider();
@@ -839,19 +837,8 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
         lock (calls) { return [.. calls]; }
     }
 
-    private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            if (predicate())
-            {
-                return;
-            }
-            await Task.Delay(10, token);
-        }
-        throw new TimeoutException($"WaitForAsync timed out after {timeout} — predicate never became true. Background batch rehydrate likely never ran.");
-    }
+    private Task WaitForAsync(Func<bool> predicate, CancellationToken token) =>
+        _telemetry.Signal.UntilAsync(predicate, token);
 
     /// <summary>Once a rehydrate lock was won, a peer has refreshed the keys it listed; a read in flight answers what it took when it began, after <see cref="_duringRehydrateRead"/>.</summary>
     private async Task<KeyValuePair<CacheKey, ICacheEntry<string?>>[]> ReadInnerAsync(CacheKey[] keys, CancellationToken token)
@@ -873,7 +860,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
                         ? new TestCacheEntry<string?>
                         {
                             Value = v,
-                            Expiration = DateTimeOffset.UtcNow + remaining,
+                            Expiration = _clock.GetUtcNow() + remaining,
                             Found = true,
                         }
                         : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue });

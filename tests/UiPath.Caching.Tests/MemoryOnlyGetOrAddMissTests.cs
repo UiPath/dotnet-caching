@@ -5,6 +5,8 @@ namespace UiPath.Caching.Tests;
 
 public class MemoryOnlyGetOrAddMissTests
 {
+    private static readonly ManualTimeProvider Clock = new();
+
     public static TheoryData<string> Shapes =>
     [
         "key", "key ttl", "span", "span ttl", "state key", "state span", "generated key", "generated span", "generated state key", "generated state span", "result key", "result span", "result state span",
@@ -16,7 +18,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_miss_generates_once_and_keeps_the_value_locally(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var generated = 0;
         Task<string?> Generate(CancellationToken token)
         {
@@ -35,7 +37,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_miss_neither_reads_nor_writes_the_inner_cache(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var inner = ReplaceInner(cache);
 
         (await Call(shape, cache, "k", _ => Task.FromResult<string?>("generated"), null, Ct)).Should().Be("generated");
@@ -46,7 +48,7 @@ public class MemoryOnlyGetOrAddMissTests
     [Fact]
     public async Task A_result_miss_reports_that_it_generated()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         var first = await cache.GetOrAddResultAsync<string>("k".ToCharArray().AsSpan(), _ => Task.FromResult<string?>("generated"), policy: null, token: Ct);
         var second = await cache.GetOrAddResultAsync<string>("k".ToCharArray().AsSpan(), _ => Task.FromResult<string?>("other"), policy: null, token: Ct);
@@ -59,7 +61,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task Concurrent_misses_share_one_run(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var generated = 0;
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<string?> Generate(CancellationToken token)
@@ -80,7 +82,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_set_after_the_miss_and_before_the_run_is_returned_not_generated(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         ReplaceGenerations(cache, PauseOnce(atReservation, proceed));
@@ -104,7 +106,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_remove_after_the_miss_and_before_the_run_still_generates(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         ReplaceGenerations(cache, PauseOnce(atReservation, proceed));
@@ -122,7 +124,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_set_while_the_generator_runs_is_replaced_by_the_generated_value(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<string?> Generate(CancellationToken token)
@@ -145,7 +147,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_remove_while_the_generator_runs_is_followed_by_the_generated_value(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<string?> Generate(CancellationToken token)
@@ -167,7 +169,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_cancelled_token_cancels_the_call_and_keeps_nothing(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
         var generated = 0;
@@ -182,13 +184,13 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_token_cancelled_while_the_generator_runs_cancels_the_call_and_keeps_nothing(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Generate(CancellationToken token)
         {
             started.SetResult();
-            await Task.Delay(Timeout.Infinite, token);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token);
             return "generated";
         }
 
@@ -204,7 +206,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_starter_that_cancels_leaves_the_run_going_for_a_joiner_which_gets_the_value(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         using var leaving = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -234,7 +236,7 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_failing_generator_fails_every_caller_keeps_nothing_and_the_next_call_generates(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var calls = Enumerable.Range(0, 4).Select(_ => Call(shape, cache, "k", _ => release.Task, null, Ct).AsTask()).ToArray();
@@ -254,15 +256,18 @@ public class MemoryOnlyGetOrAddMissTests
     [MemberData(nameof(Shapes))]
     public async Task A_generator_past_the_factory_timeout_fails_with_a_timeout(string shape)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        var clock = new ManualTimeProvider();
+        using var cache = InMemoryMultilayer.Cache(clock: clock);
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
         async Task<string?> Generate(CancellationToken token)
         {
-            await Task.Delay(Timeout.Infinite, token);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token);
             return "generated";
         }
 
-        await Throws<TimeoutException>(Call(shape, cache, "k", Generate, policy, Ct).AsTask());
+        var pending = Call(shape, cache, "k", Generate, policy, Ct).AsTask();
+        clock.Advance(policy.FactoryTimeout.Value);
+        await Throws<TimeoutException>(pending);
         (await cache.GetAsync<string>("k", Ct)).Should().BeNull();
     }
 
@@ -274,10 +279,10 @@ public class MemoryOnlyGetOrAddMissTests
         "span ttl" => cache.GetOrAddAsync<string>(key.ToCharArray().AsSpan(), generate, TimeSpan.FromMinutes(5), policy, token),
         "state key" => cache.GetOrAddAsync<string, Func<CancellationToken, Task<string?>>>((CacheKey)key, generate, static (g, ct) => g(ct), policy, token),
         "state span" => cache.GetOrAddAsync<string, Func<CancellationToken, Task<string?>>>(key.ToCharArray().AsSpan(), generate, static (g, ct) => g(ct), policy, token),
-        "generated key" => cache.GetOrAddWithExpirationAsync<string>((CacheKey)key, async ct => new GeneratedValue<string>(await generate(ct), DateTimeOffset.UtcNow.AddMinutes(5)), policy, token),
-        "generated state key" => cache.GetOrAddWithExpirationAsync<string, Func<CancellationToken, Task<string?>>>((CacheKey)key, generate, static async (g, ct) => new GeneratedValue<string>(await g(ct), DateTimeOffset.UtcNow.AddMinutes(5)), policy, token),
-        "generated span" => cache.GetOrAddWithExpirationAsync<string>(key.ToCharArray().AsSpan(), async ct => new GeneratedValue<string>(await generate(ct), DateTimeOffset.UtcNow.AddMinutes(5)), policy, token),
-        "generated state span" => cache.GetOrAddWithExpirationAsync<string, Func<CancellationToken, Task<string?>>>(key.ToCharArray().AsSpan(), generate, static async (g, ct) => new GeneratedValue<string>(await g(ct), DateTimeOffset.UtcNow.AddMinutes(5)), policy, token),
+        "generated key" => cache.GetOrAddWithExpirationAsync<string>((CacheKey)key, async ct => new GeneratedValue<string>(await generate(ct), Clock.GetUtcNow().AddMinutes(5)), policy, token),
+        "generated state key" => cache.GetOrAddWithExpirationAsync<string, Func<CancellationToken, Task<string?>>>((CacheKey)key, generate, static async (g, ct) => new GeneratedValue<string>(await g(ct), Clock.GetUtcNow().AddMinutes(5)), policy, token),
+        "generated span" => cache.GetOrAddWithExpirationAsync<string>(key.ToCharArray().AsSpan(), async ct => new GeneratedValue<string>(await generate(ct), Clock.GetUtcNow().AddMinutes(5)), policy, token),
+        "generated state span" => cache.GetOrAddWithExpirationAsync<string, Func<CancellationToken, Task<string?>>>(key.ToCharArray().AsSpan(), generate, static async (g, ct) => new GeneratedValue<string>(await g(ct), Clock.GetUtcNow().AddMinutes(5)), policy, token),
         "result key" => ValueOf(cache.GetOrAddResultAsync<string>((CacheKey)key, generate, policy, token)),
         "result span" => ValueOf(cache.GetOrAddResultAsync<string>(key.ToCharArray().AsSpan(), generate, policy, token)),
         "result state span" => ValueOf(cache.GetOrAddResultAsync<string, Func<CancellationToken, Task<string?>>>(key.ToCharArray().AsSpan(), generate, static (g, ct) => g(ct), policy, token)),

@@ -12,6 +12,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     private static readonly TimeSpan Duration = TimeSpan.FromMinutes(10);
     private static readonly IDictionary<string, string?> CachedDict = new Dictionary<string, string?> { ["f"] = "cached" };
     private static readonly IDictionary<string, string?> RefreshedDict = new Dictionary<string, string?> { ["f"] = "rehydrated" };
+    private readonly ManualTimeProvider _clock = new();
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private IHashCache _innerCache = default!;
@@ -35,7 +36,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     public async Task Hit_before_threshold_does_not_trigger_rehydrate()
     {
         var token = testContextAccessor.Current.CancellationToken;
-        var fresh = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(Duration) };
+        var fresh = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = _clock.GetUtcNow().Add(Duration) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(fresh);
 
         var generatorCalls = 0;
@@ -48,7 +49,6 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         var result = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
         result.Should().BeEquivalentTo(CachedDict);
-        await Task.Delay(50, TestContext.Current.CancellationToken);
         generatorCalls.Should().Be(0);
         await _distributedLock.DidNotReceiveWithAnyArgs().TryAcquireAsync(default!, default, Arg.Any<CancellationToken>());
     }
@@ -58,13 +58,14 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     {
         var token = testContextAccessor.Current.CancellationToken;
         var ttl = TimeSpan.FromMinutes(2);
-        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
+        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = _clock.GetUtcNow().Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         var generatorTcs = new TaskCompletionSource<IDictionary<string, string?>>(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<IDictionary<string, string?>> Generator(CancellationToken _) => generatorTcs.Task;
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
+        acquiredLock.DisposeAsync().Returns(_ => { _telemetry.Signal.Pulse(); return ValueTask.CompletedTask; });
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(acquiredLock);
 
@@ -72,7 +73,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         result.Should().BeEquivalentTo(CachedDict);
 
-        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
+        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), token);
         await _distributedLock.ReceivedWithAnyArgs(1).TryAcquireAsync(default!, default, Arg.Any<CancellationToken>());
         generatorTcs.TrySetResult(RefreshedDict);
     }
@@ -82,12 +83,13 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     {
         var token = testContextAccessor.Current.CancellationToken;
         var ttl = TimeSpan.FromMinutes(2);
-        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
+        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = _clock.GetUtcNow().Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         Task<IDictionary<string, string?>> Generator(CancellationToken _) => Task.FromResult(RefreshedDict);
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
+        acquiredLock.DisposeAsync().Returns(_ => { _telemetry.Signal.Pulse(); return ValueTask.CompletedTask; });
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(acquiredLock);
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -95,7 +97,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), TimeSpan.FromSeconds(5), token);
+        await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), token);
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             Arg.Is<IDictionary<string, string?>>(d => d != null && d["f"] == "rehydrated"),
@@ -109,9 +111,10 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     public async Task Rehydrate_adopts_a_fresh_inner_value_and_skips_the_generator()
     {
         var token = testContextAccessor.Current.CancellationToken;
-        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.AddMinutes(2) };
-        var refreshed = new TestCacheEntry<IDictionary<string, string?>> { Value = RefreshedDict, Expiration = DateTimeOffset.UtcNow.AddMinutes(9) };
+        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = _clock.GetUtcNow().AddMinutes(2) };
+        var refreshed = new TestCacheEntry<IDictionary<string, string?>> { Value = RefreshedDict, Expiration = _clock.GetUtcNow().AddMinutes(9) };
         var acquiredLock = Substitute.For<IAsyncDisposable>();
+        acquiredLock.DisposeAsync().Returns(_ => { _telemetry.Signal.Pulse(); return ValueTask.CompletedTask; });
         var locked = 0;
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns<IAsyncDisposable?>(_ =>
@@ -130,8 +133,8 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, Generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), TimeSpan.FromSeconds(5), token);
-        await WaitForAsync(() => acquiredLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), token);
+        await WaitForAsync(() => acquiredLock.ReceivedCalls().Any(), token);
         generatorCalls.Should().Be(0);
         _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.succeeded");
         await acquiredLock.Received(1).DisposeAsync();
@@ -146,9 +149,9 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _fixture.Inject(proxy);
         // The plain read always shows the aged copy, so only the snapshot read can tell a peer refreshed it.
         inner.Answer = (name, _) => name == nameof(IHashCache.GetCacheEntryAsync)
-            ? new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.AddMinutes(2) }
+            ? new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = _clock.GetUtcNow().AddMinutes(2) }
             : throw new NotSupportedException(name);
-        inner.Adoption = _ => new TestCacheEntry<IDictionary<string, string?>> { Value = RefreshedDict, Expiration = DateTimeOffset.UtcNow.AddMinutes(9) };
+        inner.Adoption = _ => new TestCacheEntry<IDictionary<string, string?>> { Value = RefreshedDict, Expiration = _clock.GetUtcNow().AddMinutes(9) };
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(Substitute.For<IAsyncDisposable>());
         var generatorCalls = 0;
 
@@ -162,7 +165,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
             RehydratePolicy(),
             token);
 
-        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), TimeSpan.FromSeconds(5), token);
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), token);
         generatorCalls.Should().Be(0);
         inner.Count("ReadForAdoptionAsync:" + _cacheKey.Name).Should().Be(1);
     }
@@ -172,7 +175,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     {
         var token = testContextAccessor.Current.CancellationToken;
         var ttl = TimeSpan.FromMinutes(2);
-        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
+        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = _clock.GetUtcNow().Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         var generatorCalls = 0;
@@ -187,8 +190,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), token);
         generatorCalls.Should().Be(0);
         await _innerCache.DidNotReceive().SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
@@ -198,19 +200,19 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     {
         var token = testContextAccessor.Current.CancellationToken;
         var ttl = TimeSpan.FromMinutes(2);
-        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
+        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = _clock.GetUtcNow().Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         Task<IDictionary<string, string?>> Generator(CancellationToken _) => throw new InvalidOperationException("boom");
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
+        acquiredLock.DisposeAsync().Returns(_ => { _telemetry.Signal.Pulse(); return ValueTask.CompletedTask; });
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(acquiredLock);
 
         await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), token);
         await acquiredLock.DidNotReceive().DisposeAsync();
         await _innerCache.DidNotReceive().SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
@@ -220,7 +222,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     {
         var token = testContextAccessor.Current.CancellationToken;
         var ttl = TimeSpan.FromMinutes(2);
-        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
+        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = _clock.GetUtcNow().Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         var generatorCalls = 0;
@@ -239,7 +241,6 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, policy, token);
 
-        await Task.Delay(50, TestContext.Current.CancellationToken);
         generatorCalls.Should().Be(0);
         await _distributedLock.DidNotReceiveWithAnyArgs().TryAcquireAsync(default!, default, Arg.Any<CancellationToken>());
     }
@@ -267,8 +268,8 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
             Arg.Any<IDictionary<string, string?>>(),
             Arg.Is<HashCacheEntryOptions>(o =>
                 o.ExpireTime.HasValue
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow > policyTtl - TimeSpan.FromSeconds(5)
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)),
+                && o.ExpireTime.Value - _clock.GetUtcNow() > policyTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - _clock.GetUtcNow() < policyTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -280,12 +281,13 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         // expiry. The rehydrate write must publish a CacheSet event the same way a normal SetAsync does.
         var token = testContextAccessor.Current.CancellationToken;
         var ttl = TimeSpan.FromMinutes(2);
-        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
+        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = _clock.GetUtcNow().Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         Task<IDictionary<string, string?>> Generator(CancellationToken _) => Task.FromResult(RefreshedDict);
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
+        acquiredLock.DisposeAsync().Returns(_ => { _telemetry.Signal.Pulse(); return ValueTask.CompletedTask; });
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(acquiredLock);
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -293,7 +295,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _topic.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ITopic<ICacheEvent>.PublishAsync)), TimeSpan.FromSeconds(5), token);
+        await WaitForAsync(() => _topic.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ITopic<ICacheEvent>.PublishAsync)), token);
         await _topic.ReceivedWithAnyArgs(1).PublishAsync(default!, token);
     }
 
@@ -307,7 +309,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         var token = testContextAccessor.Current.CancellationToken;
         var ttl = TimeSpan.FromMinutes(2);
         var empty = new Dictionary<string, string?>();
-        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = empty, Found = true, Expiration = DateTimeOffset.UtcNow.Add(ttl) };
+        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = empty, Found = true, Expiration = _clock.GetUtcNow().Add(ttl) };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         var generatorCalls = 0;
@@ -319,7 +321,6 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
-        await Task.Delay(50, TestContext.Current.CancellationToken);
         generatorCalls.Should().Be(0);
         await _distributedLock.DidNotReceiveWithAnyArgs().TryAcquireAsync(default!, default, Arg.Any<CancellationToken>());
     }
@@ -333,13 +334,14 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _options.CacheNullValues = true;
         var token = testContextAccessor.Current.CancellationToken;
         var ttl = TimeSpan.FromMinutes(2);
-        var originalDeadline = DateTimeOffset.UtcNow.Add(ttl);
+        var originalDeadline = _clock.GetUtcNow().Add(ttl);
         var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = originalDeadline };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
 
         Task<IDictionary<string, string?>> Generator(CancellationToken _) => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>());
 
         var acquiredLock = Substitute.For<IAsyncDisposable>();
+        acquiredLock.DisposeAsync().Returns(_ => { _telemetry.Signal.Pulse(); return ValueTask.CompletedTask; });
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(acquiredLock);
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -347,7 +349,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<IDictionary<string, string?>>>)Generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), TimeSpan.FromSeconds(5), token);
+        await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), token);
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             Arg.Any<IDictionary<string, string?>>(),
@@ -379,6 +381,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
     public ValueTask InitializeAsync()
     {
+        _fixture.Inject<TimeProvider>(_clock);
         _cacheKey = _fixture.Create<string>();
         _topicKey = _fixture.Create<string>();
         _innerCache = _fixture.Freeze<IHashCache>();
@@ -428,17 +431,6 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         },
     };
 
-    private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            if (predicate())
-            {
-                return;
-            }
-            await Task.Delay(10, token);
-        }
-        throw new TimeoutException($"WaitForAsync timed out after {timeout} — predicate never became true. Background rehydrate path likely never ran.");
-    }
+    private Task WaitForAsync(Func<bool> predicate, CancellationToken token) =>
+        _telemetry.Signal.UntilAsync(predicate, token);
 }

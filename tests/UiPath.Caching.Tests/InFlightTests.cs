@@ -111,7 +111,7 @@ public class InFlightTests
         await abandoned.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
         release.SetResult();
 
-        (await committed.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct)).Should().BeFalse();
+        (await committed.Task.WaitAsync(Ct)).Should().BeFalse();
     }
 
     [Fact]
@@ -171,11 +171,10 @@ public class InFlightTests
         using var second = new CancellationTokenSource();
         static async ValueTask<int> UntilCancelled(TaskCompletionSource seen, IInFlightRun run)
         {
-            await using (run.Token.Register(() => seen.TrySetResult()))
-            {
-                await Task.Delay(Timeout.Infinite, run.Token);
-                return 0;
-            }
+            using var registration = run.Token.Register(() => seen.TrySetResult());
+            await seen.Task;
+            run.Token.ThrowIfCancellationRequested();
+            return 0;
         }
 
         var aRun = flights.RunAsync("k", cancelled, UntilCancelled, first.Token);
@@ -185,7 +184,7 @@ public class InFlightTests
         cancelled.Task.IsCompleted.Should().BeFalse("one caller is still waiting");
         await second.CancelAsync();
 
-        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        await cancelled.Task.WaitAsync(Ct);
         await a.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
         await b.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
     }
@@ -213,7 +212,7 @@ public class InFlightTests
         async ValueTask<int> Hang(int _, IInFlightRun run)
         {
             Interlocked.Increment(ref runs);
-            await Task.Delay(Timeout.Infinite, run.Token);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(run.Token);
             return 0;
         }
 
@@ -331,21 +330,7 @@ public class InFlightTests
                 Volatile.Write(ref resumedOn, Environment.CurrentManagedThreadId);
             }
 
-            var starter = Task.Run(Resume, Ct);
-            var waiting = System.Diagnostics.Stopwatch.StartNew();
-            while (flights.Count == 0)
-            {
-                // Bounded, so a round whose starter never runs fails here instead of holding the job.
-                if (waiting.Elapsed > TimeSpan.FromSeconds(5))
-                {
-                    throw new TimeoutException($"Round {i}: the starter did not reserve its run within 5 s.");
-                }
-
-                Ct.ThrowIfCancellationRequested();
-                await Task.Yield();
-            }
-
-            await Task.Delay(10, Ct);
+            var starter = Resume();
             var endedOn = Environment.CurrentManagedThreadId;
             release.SetResult(1);
             inline += Volatile.Read(ref resumedOn) == endedOn ? 1 : 0;
@@ -517,8 +502,9 @@ public class InFlightTests
         var abandoned = abandonedRun.AsTask();
         await leaving.CancelAsync();
         await abandoned.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
+        var completions = flights.Completions();
         release.SetResult();
         await failing.Task;
-        await Task.Delay(100, Ct);
+        await Task.WhenAll(completions.Select(t => t.ContinueWith(_ => { }, TaskScheduler.Default)));
     }
 }

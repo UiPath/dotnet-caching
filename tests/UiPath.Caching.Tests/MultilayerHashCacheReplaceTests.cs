@@ -202,7 +202,7 @@ public class MultilayerHashCacheReplaceTests
                 _ =>
                 {
                     Interlocked.Increment(ref _innerReads);
-                    return new ValueTask<ICacheEntry<IDictionary<string, string?>>>(new TestCacheEntry<IDictionary<string, string?>> { Value = Stored, Expiration = DateTimeOffset.UtcNow.AddMinutes(5) });
+                    return new ValueTask<ICacheEntry<IDictionary<string, string?>>>(new TestCacheEntry<IDictionary<string, string?>> { Value = Stored, Expiration = new ManualTimeProvider().GetUtcNow().AddMinutes(5) });
                 });
             var events = Substitute.For<ICacheEventFactory>();
             events.Create(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
@@ -219,7 +219,7 @@ public class MultilayerHashCacheReplaceTests
             Cache = RunTables.Track(new MultilayerHashCache(
                 KnownCacheProviderNames.InMemoryRedis,
                 memoryOnly ? NullHashCache.Instance : inner,
-                new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+                new MemoryCacheFactory(new ManualTimeProvider(), NullLoggerFactory.Instance),
                 NullChangeTokenFactory.Instance,
                 topics,
                 events,
@@ -229,7 +229,7 @@ public class MultilayerHashCacheReplaceTests
                 new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = false },
                 NullDistributedLock.Instance,
                 NullCachePolicyFactory.Instance,
-                TimeProvider.System,
+                new ManualTimeProvider(),
                 NullLogger.Instance));
         }
 
@@ -239,14 +239,7 @@ public class MultilayerHashCacheReplaceTests
 
         public int InnerReads => Volatile.Read(ref _innerReads);
 
-        public async Task Settled()
-        {
-            var until = DateTime.UtcNow.AddSeconds(10);
-            while (Cache.RunsInFlight != 0 && DateTime.UtcNow < until)
-            {
-                await Task.Delay(5, Ct);
-            }
-        }
+        public Task Settled() => CacheWork.CompleteAsync(Cache);
 
         public void Dispose() => Cache.Dispose();
     }

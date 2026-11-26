@@ -314,8 +314,8 @@ internal sealed partial class MultilayerCache
         {
             await shutdown.DisposeAsync().ConfigureAwait(false);
             own.Dispose();
-            Telemetry.TryTrackEvent(FailSafeBackgroundEvent, [new(FailSafeTagCacheName, Name), new(FailSafeTagOutcome, outcome)]);
             Interlocked.Decrement(ref _lateGenerations);
+            Telemetry.TryTrackEvent(FailSafeBackgroundEvent, [new(FailSafeTagCacheName, Name), new(FailSafeTagOutcome, outcome)]);
         }
     }
 

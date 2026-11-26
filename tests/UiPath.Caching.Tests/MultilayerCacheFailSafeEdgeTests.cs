@@ -101,14 +101,14 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
             Lifetime,
             policy,
             caller.Token).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         await caller.CancelAsync();
 
         // Bounded: with the shared run off the call ends only when its generator does.
-        var act = () => pending.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        var act = () => pending.WaitAsync(Ct);
         await act.Should().ThrowAsync<OperationCanceledException>();
         seen.IsCancellationRequested.Should().BeTrue();
-        await CachePeers.Until(() => _cache.RunsInFlight == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.RunsInFlight == 0, Ct);
         _cache.LateGenerations.Should().Be(0);
     }
 
@@ -123,16 +123,17 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         using var caller = new CancellationTokenSource();
 
         var pending = _cache.GetOrAddAsync(Key, ct => release.Task.WaitAsync(ct), Lifetime, policy, caller.Token).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(SoftTimeout);
         (await pending).Should().Be("v1");
 
         // The request that got the kept value ends.
         await caller.CancelAsync();
         release.SetResult("late");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
 
         (await _cache.GetAsync<string>(Key, policy, Ct)).Should().Be("late");
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "stored");
     }
 
@@ -155,7 +156,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
             Lifetime,
             Soft,
             caller.Token).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(SoftTimeout);
         (await pending).Should().Be("v1");
 
@@ -165,10 +166,11 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var warnings = logger.Warnings;
 
         await cache.DisposeAsync();
-        await CachePeers.Until(() => cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => cache.LateGenerations == 0, Ct);
 
         seen.IsCancellationRequested.Should().BeTrue();
         logger.Warnings.Should().Be(warnings, "a generator the disposal ended did not fail");
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "discarded");
     }
 
@@ -185,12 +187,14 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         memory.Disposing = () =>
         {
             release.SetResult("late");
-            SpinWait.SpinUntil(() => cache.LateGenerations == 0, TimeSpan.FromSeconds(5));
+            _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct).GetAwaiter().GetResult();
+            cache.LateGenerations.Should().Be(0);
         };
         await cache.DisposeAsync();
 
         cache.LateGenerations.Should().Be(0);
         logger.Warnings.Should().Be(warnings, "a late generator that ends during dispose is not a failure");
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "discarded");
     }
 
@@ -201,7 +205,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = Source();
         var optedValue = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, Soft, Ct);
         var opted = optedValue.AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         using var joiner = new CancellationTokenSource();
         var plain = _cache.GetOrAddAsync(Key, Producing("own"), Lifetime, new CachePolicy(), joiner.Token).AsTask();
         _clock.Advance(SoftTimeout);
@@ -209,11 +213,11 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
 
         await joiner.CancelAsync();
 
-        var act = () => plain.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        var act = () => plain.WaitAsync(Ct);
         await act.Should().ThrowAsync<OperationCanceledException>();
         _calls.Should().Be(1, "the call joined the run: only the warm-up ran a counted generator");
         release.SetResult("late");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
     }
 
     [Fact]
@@ -223,7 +227,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = Source();
         var optedValue = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, Soft, Ct);
         var opted = optedValue.AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         using var joiner = new CancellationTokenSource();
         var batch = _cache.GetOrAddAsync<string, long>([new(Key, 1L)], static (_, _) => Task.FromException<KeyValuePair<long, string?>[]>(new InvalidOperationException("batch down")), Soft, joiner.Token).AsTask();
         _clock.Advance(SoftTimeout);
@@ -231,10 +235,10 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
 
         await joiner.CancelAsync();
 
-        var act = () => batch.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        var act = () => batch.WaitAsync(Ct);
         await act.Should().ThrowAsync<OperationCanceledException>();
         release.SetResult("late");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
     }
 
     [Theory]
@@ -247,7 +251,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = Source();
 
         var pending = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers || pending.IsCompleted);
+        await Task.WhenAny(_clock.WhenTimerScheduledAsync(), pending);
         release.SetException(new InvalidOperationException("down"));
 
         (await pending).Should().Be("v1");
@@ -261,7 +265,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = Source();
         var plainValue = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, new CachePolicy(), Ct);
         var plain = plainValue.AsTask();
-        await CachePeers.Until(() => _cache.RunsInFlight == 1);
+        _cache.RunsInFlight.Should().Be(1);
         var opted = _cache.GetOrAddAsync(Key, Producing("unused"), Lifetime, FailSafe, Ct).AsTask();
 
         release.SetException(new InvalidOperationException("down"));
@@ -281,7 +285,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = Source();
         var plainValue = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, new CachePolicy(), Ct);
         var plain = plainValue.AsTask();
-        await CachePeers.Until(() => _cache.RunsInFlight == 1);
+        _cache.RunsInFlight.Should().Be(1);
         var opted = _cache.GetOrAddAsync(Key, Producing("unused"), Lifetime, FailSafe, Ct).AsTask();
 
         release.SetException(new InvalidOperationException("down"));
@@ -297,7 +301,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = Source();
         var plainValue = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, new CachePolicy(), Ct);
         var plain = plainValue.AsTask();
-        await CachePeers.Until(() => _cache.RunsInFlight == 1);
+        _cache.RunsInFlight.Should().Be(1);
         using var joiner = new CancellationTokenSource();
         var opted = _cache.GetOrAddAsync(Key, Producing("unused"), Lifetime, FailSafe, joiner.Token).AsTask();
 
@@ -377,7 +381,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = Source();
         var starterValue = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, FailSafe, Ct);
         var starter = starterValue.AsTask();
-        await CachePeers.Until(() => _cache.RunsInFlight == 1);
+        _cache.RunsInFlight.Should().Be(1);
         var joiner = _cache.GetOrAddAsync(Key, Producing("unused"), Lifetime, Strict, Ct).AsTask();
 
         release.SetException(new InvalidOperationException("down"));
@@ -394,7 +398,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = Source();
         var plainValue = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, new CachePolicy(), Ct);
         var plain = plainValue.AsTask();
-        await CachePeers.Until(() => _cache.RunsInFlight == 1);
+        _cache.RunsInFlight.Should().Be(1);
         var joiner = _cache.GetOrAddAsync(Key, Producing("unused"), Lifetime, Strict, Ct).AsTask();
 
         release.SetException(new InvalidOperationException("down"));
@@ -423,7 +427,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
             Lifetime,
             Soft,
             Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(SoftTimeout);
 
         (await pending).Should().Be("v1");
@@ -431,7 +435,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         cache.LateGenerations.Should().Be(1, "the generator ignores its token and still runs");
 
         release.SetResult("late");
-        await CachePeers.Until(() => cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => cache.LateGenerations == 0, Ct);
         var handle = () => seen.WaitHandle;
         handle.Should().Throw<ObjectDisposedException>("the generator's source went with it");
     }
@@ -443,7 +447,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = new TaskCompletionSource<GeneratedValue<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
         var optedValue = _cache.GetOrAddWithExpirationAsync(Key, _ => release.Task, Soft, Ct);
         var opted = optedValue.AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         var plain = _cache.GetOrAddResultAsync(Key, Producing("own"), Lifetime, new CachePolicy(), Ct).AsTask();
         _clock.Advance(SoftTimeout);
         (await opted).Should().Be("v1");
@@ -452,7 +456,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         release.SetResult(new GeneratedValue<string>("late", named));
 
         (await plain).Should().Be(new CacheResult<string>("late", named, false));
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
     }
 
     [Fact]
@@ -479,7 +483,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var opted = optedValue.AsTask();
         var plain = _cache.GetOrAddAsync(Key, Producing("own"), Lifetime, new CachePolicy(), Ct).AsTask();
         first.SetResult("from-before-the-removal");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
         second.SetResult("v3");
 
         (await opted).Should().Be("v3");
@@ -497,14 +501,14 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = new TaskCompletionSource<GeneratedValue<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
         var pendingValue = _cache.GetOrAddWithExpirationAsync(Key, _ => release.Task, Soft, Ct);
         var pending = pendingValue.AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(SoftTimeout);
         (await pending).Should().Be("v1");
 
         // The write lands after the late generator saw its value current and before its answer is handled.
         _cache.LateStoreStarting = () => _cache.SetAsync(Key, "newer", Lifetime, Soft, Ct).AsTask().GetAwaiter().GetResult();
         release.SetResult(expired ? new GeneratedValue<string>("past", _clock.GetUtcNow() - TimeSpan.FromSeconds(1)) : new GeneratedValue<string>(null));
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
 
         (await _cache.GetAsync<string>(Key, Soft, Ct)).Should().Be("newer");
         _clock.Advance(Lifetime * 2);
@@ -539,7 +543,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         await WarmAsync(_cache, Soft);
         var release = Source();
         var pending = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, Soft, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
 
         // Before the soft timeout: the value the generator started against goes, and a newer one comes.
         await _cache.RemoveAsync<string>(Key, Ct);
@@ -548,9 +552,10 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
 
         (await pending).Should().Be("v2", "the value kept at the timeout answers the call");
         release.SetResult("late");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
 
         (await _cache.GetAsync<string>(Key, Soft, Ct)).Should().Be("v2", "the generator began before v2 was written");
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "discarded");
     }
 
@@ -616,13 +621,13 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         await WarmAsync(cache, Soft);
         var release = Source();
         var pending = cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, Soft, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(SoftTimeout);
         (await pending).Should().Be("v1");
 
         // A late answer the cache does not store drops the value it replaced.
         release.SetResult(null);
-        await CachePeers.Until(() => cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => cache.LateGenerations == 0, Ct);
 
         var other = new CacheKey("other");
         (await cache.GetOrAddAsync(other, Producing("b"), Lifetime, FailSafe, Ct)).Should().Be("b");
@@ -744,7 +749,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         await WarmAsync(cache, policy);
         var release = Source();
         var pending = cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(SoftTimeout);
         (await pending).Should().Be("v1");
         cache.LateGenerations.Should().Be(1);
@@ -771,7 +776,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         var release = Source();
         var optedValue = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, Soft, Ct);
         var opted = optedValue.AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         using var joiner = new CancellationTokenSource();
         var plain = joinerLeft ? _cache.GetOrAddAsync(Key, Producing("own"), Lifetime, new CachePolicy(), joiner.Token).AsTask() : Task.FromCanceled<string?>(new CancellationToken(true));
         _clock.Advance(SoftTimeout);
@@ -780,7 +785,7 @@ public sealed class MultilayerCacheFailSafeEdgeTests : IDisposable
         await plain.Invoking(p => p).Should().ThrowAsync<OperationCanceledException>();
 
         release.SetException(new InvalidOperationException(failure));
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
     }
 
     private Task<string?> Throwing(CancellationToken token)
