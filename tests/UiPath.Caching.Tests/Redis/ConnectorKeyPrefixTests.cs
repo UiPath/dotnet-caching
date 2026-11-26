@@ -429,7 +429,8 @@ public sealed class ConnectorKeyPrefixTests : IDisposable
     private string[] Messages(LogLevel level) =>
         [.. _logger.ReceivedCalls()
             .Where(call => call.GetMethodInfo().Name == nameof(ILogger.Log) && (LogLevel)call.GetArguments()[0]! == level)
-            .Select(call => call.GetArguments()[2]!.ToString()!)];
+            .Select(call => call.GetArguments()[2]!.ToString()!),
+        ];
 
     private int Logged(LogLevel level) =>
         _logger.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILogger.Log) && (LogLevel)call.GetArguments()[0]! == level);

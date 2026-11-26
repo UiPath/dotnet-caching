@@ -2644,11 +2644,13 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
     private List<object?> NoAckReads() => [.. _database.ReceivedCalls()
         .Where(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamReadGroupAsync) && c.GetArguments().Length > 5 && c.GetArguments()[5] is true)
-        .Select(c => c.GetArguments()[5])];
+        .Select(c => c.GetArguments()[5]),
+    ];
 
     private List<int> ReadScriptFlags() => [.. _database.ReceivedCalls()
         .Where(c => c.GetMethodInfo().Name == nameof(IDatabase.ScriptEvaluateAsync) && c.GetArguments()[0] is string script && !IsHeadScript(script))
-        .Select(c => (int)((RedisValue[])c.GetArguments()[2]!)[4])];
+        .Select(c => (int)((RedisValue[])c.GetArguments()[2]!)[4]),
+    ];
 
     private void SetupSingleBatch(StreamEntry[] entries)
     {

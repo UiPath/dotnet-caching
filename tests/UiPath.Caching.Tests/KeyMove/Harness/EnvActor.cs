@@ -51,24 +51,6 @@ internal sealed record EnvActor(string Name, string Kind, int Key, ImmutableArra
     private static string[] DataKeys(World w) =>
         [.. w.Config.Keys.Select(k => $"{w.L.Get(k.L)?.Encode()}|{w.N.Get(k.N)?.Encode()}")];
 
-    private void EvictKey(World w, KeySpec spec, string option)
-    {
-        var (shard, key) = option switch
-        {
-            "L" => (w.L, spec.L),
-            "N" => (w.N, spec.N),
-            "G" => (w.N, spec.FenceForward),
-            "GL" => (w.L, spec.FenceReverse),
-            "ctlL" => (w.L, ShardStore.ControlKey),
-            _ => (w.N, ShardStore.ControlKey),
-        };
-        if (shard.Scripted(() => shard.Remove(key)) && option is "L" or "N")
-        {
-            // The evicted copy may be the newer one of a write in flight, and the older copy on the other side then shows.
-            w.Oracle.Lose(Key);
-        }
-    }
-
     private static void Fail(World w, string option)
     {
         var parts = option.Split(':');
@@ -93,6 +75,24 @@ internal sealed record EnvActor(string Name, string Kind, int Key, ImmutableArra
             {
                 w.Oracle.Lose(i);
             }
+        }
+    }
+
+    private void EvictKey(World w, KeySpec spec, string option)
+    {
+        var (shard, key) = option switch
+        {
+            "L" => (w.L, spec.L),
+            "N" => (w.N, spec.N),
+            "G" => (w.N, spec.FenceForward),
+            "GL" => (w.L, spec.FenceReverse),
+            "ctlL" => (w.L, ShardStore.ControlKey),
+            _ => (w.N, ShardStore.ControlKey),
+        };
+        if (shard.Scripted(() => shard.Remove(key)) && option is "L" or "N")
+        {
+            // The evicted copy may be the newer one of a write in flight, and the older copy on the other side then shows.
+            w.Oracle.Lose(Key);
         }
     }
 }

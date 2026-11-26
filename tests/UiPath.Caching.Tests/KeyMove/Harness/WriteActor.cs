@@ -155,6 +155,14 @@ internal sealed record WriteActor(string Name, int Node, int Key, ImmutableArray
         NoteDeadline(w, shard, key);
     }
 
+    private static void NoteDeadline(World w, ShardStore shard, string key)
+    {
+        if (shard.Get(key) is { } entry)
+        {
+            w.Oracle.NoteDeadline(entry.Version(), entry.ExpireAt);
+        }
+    }
+
     private WriteActor Advance(WriteActor done) =>
         OpIndex + 1 < Ops.Length ? done with { OpIndex = OpIndex + 1, Pc = 0, Unit = null, MutationId = -1, Plan = string.Empty, Reruns = 0, Touched = false } : done with { Done = true };
 
@@ -194,14 +202,6 @@ internal sealed record WriteActor(string Name, int Node, int Key, ImmutableArray
             default:
                 PlainPut(w, w.N, spec.N, spec, op);
                 return 1;
-        }
-    }
-
-    private static void NoteDeadline(World w, ShardStore shard, string key)
-    {
-        if (shard.Get(key) is { } entry)
-        {
-            w.Oracle.NoteDeadline(entry.Version(), entry.ExpireAt);
         }
     }
 }

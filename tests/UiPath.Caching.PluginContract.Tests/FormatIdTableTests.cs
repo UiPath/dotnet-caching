@@ -34,6 +34,7 @@ public partial class FormatIdTableTests
         table.Where(l => !Row().IsMatch(l)).Should().BeEmpty("a row this test cannot parse would hide an allocated id");
         return [.. table
             .Select(l => Row().Match(l))
-            .Select(m => (m.Groups["kind"].Value, Convert.ToInt32(m.Groups["id"].Value, 16)))];
+            .Select(m => (m.Groups["kind"].Value, Convert.ToInt32(m.Groups["id"].Value, 16))),
+        ];
     }
 }

@@ -23,23 +23,6 @@ internal sealed record RouterAdvertisement(string Instance, string Build, IReadO
     /// <summary>The application the entry belongs to, from its <c>ap</c> token; null for an entry that names none.</summary>
     public string? Scope => Tokens.FirstOrDefault(token => token.StartsWith(ScopePrefix, StringComparison.Ordinal))?[ScopePrefix.Length..];
 
-    public bool Has(string token) => Tokens.Contains(token, StringComparer.Ordinal);
-
-    public string Encode()
-    {
-        var text = new StringBuilder();
-        text.Append("kind=").Append(Kind)
-            .Append(";inst=").Append(Escape(Instance))
-            .Append(";build=").Append(Escape(Build))
-            .Append(";mig=").Append(Escape(string.Join('+', Tokens)));
-        if (Left)
-        {
-            text.Append(";left=1");
-        }
-
-        return text.ToString();
-    }
-
     /// <summary>Unknown fields and empty tokens are skipped; a text that is not a router entry does not parse.</summary>
     public static bool TryParse(string text, [NotNullWhen(true)] out RouterAdvertisement? advertisement)
     {
@@ -83,6 +66,23 @@ internal sealed record RouterAdvertisement(string Instance, string Build, IReadO
 
         advertisement = new RouterAdvertisement(instance, build ?? string.Empty, tokens, left);
         return true;
+    }
+
+    public bool Has(string token) => Tokens.Contains(token, StringComparer.Ordinal);
+
+    public string Encode()
+    {
+        var text = new StringBuilder();
+        text.Append("kind=").Append(Kind)
+            .Append(";inst=").Append(Escape(Instance))
+            .Append(";build=").Append(Escape(Build))
+            .Append(";mig=").Append(Escape(string.Join('+', Tokens)));
+        if (Left)
+        {
+            text.Append(";left=1");
+        }
+
+        return text.ToString();
     }
 
     private static string Escape(string text) =>

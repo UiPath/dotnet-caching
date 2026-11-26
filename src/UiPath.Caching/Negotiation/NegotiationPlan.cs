@@ -59,7 +59,8 @@ internal static class NegotiationPlan
     public static IReadOnlyList<string> ReadingNoJson(ICachePolicyFactory policies) =>
         [.. Policies(policies)
             .Where(p => p.Policy.Serializer?.Read is { } read && !read.Contains(CacheValueFormats.JsonName, StringComparer.OrdinalIgnoreCase))
-            .Select(p => p.Name)];
+            .Select(p => p.Name),
+        ];
 
     private static IEnumerable<string> Tokens(ValueSerializerRegistry registry, string format) =>
         registry.Resolve(format) is { } serializer

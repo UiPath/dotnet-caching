@@ -113,11 +113,14 @@ internal sealed record ReadActor(string Name, int Node, int Key, bool Mover = fa
         };
     }
 
-    private bool ReadsReplicaFirst(string plan) => !Mover && plan is "Fwd" or "UnionFwd" or "UnionRev";
-
     private static long Remaining(Entry e, long now) => e.ExpireAt == -1 ? -1 : e.ExpireAt - now;
 
     private static string? V(Entry? e) => e?.Version();
+
+    private static IEnumerable<KeyValuePair<string, string>> ParseFields(string encoded) =>
+        encoded.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(p => { var i = p.IndexOf('=', StringComparison.Ordinal); return new KeyValuePair<string, string>(p[..i], p[(i + 1)..]); });
+
+    private bool ReadsReplicaFirst(string plan) => !Mover && plan is "Fwd" or "UnionFwd" or "UnionRev";
 
     private bool Admitted(World w)
     {
@@ -425,7 +428,4 @@ internal sealed record ReadActor(string Name, int Node, int Key, bool Mover = fa
             : ModelScripts.CmpDel(route.Src, route.SrcKey, ShardStore.ControlKey, Unit!.Id, Snap!, w.Config.Faults);
         Note(w, $"compare-deletes the source, result {code}");
     }
-
-    private static IEnumerable<KeyValuePair<string, string>> ParseFields(string encoded) =>
-        encoded.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(p => { var i = p.IndexOf('=', StringComparison.Ordinal); return new KeyValuePair<string, string>(p[..i], p[(i + 1)..]); });
 }
