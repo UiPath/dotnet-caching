@@ -7,6 +7,8 @@ namespace UiPath.Caching.Tests;
 public class PeerRefreshHashTests
 {
     private const string Key = "k";
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
 
     private static readonly CachePolicy Awaited = new() { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30) };
 
@@ -17,7 +19,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_peer_update_the_holder_could_not_apply_is_refreshed_with_a_full_read()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
         (await b.Cache.GetAsync<string>(Key, Awaited, Ct)).Should().HaveCount(2);
@@ -43,7 +45,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_peer_update_applied_in_place_keeps_the_read_time()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var telemetry = new Telemetry.RecordingTelemetryProvider();
         var (a, b) = (c.Add("a"), c.Add("b", telemetry: telemetry));
         await Seed(a);
@@ -66,7 +68,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_hash_filled_by_a_read_is_refreshed_on_a_peer_update()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
         (await b.Cache.GetAsync<string>(Key, Awaited, Ct)).Should().HaveCount(2);
@@ -83,7 +85,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_refreshed_hash_carries_the_inner_version()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
         await b.Cache.GetAsync<string>(Key, Awaited, Ct);
@@ -114,7 +116,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_field_update_after_a_pending_refresh_is_read_again_instead_of_applied()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
         await b.Cache.GetAsync<string>(Key, Awaited, Ct);
@@ -129,7 +131,7 @@ public class PeerRefreshHashTests
 
         // The later write first: two writes ahead of the copy, it cannot be applied, and the refresh starts reading.
         c.Deliver(b, after);
-        await Until(() => b.InnerReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.InnerReads == before + 1);
         // One write ahead, it would apply, over a copy the refresh is about to replace.
         c.Deliver(b, next);
 
@@ -145,7 +147,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_read_begun_before_an_update_handed_to_the_refresh_does_not_install_the_old_hash()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         var other = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(9), LocalExpirationDisconnected = TimeSpan.FromSeconds(30) };
         await Seed(a);
@@ -154,7 +156,7 @@ public class PeerRefreshHashTests
         b.Inner.ReadHold = read.Task;
         // Its own run: a read under another policy does not join it.
         var early = b.Cache.GetAsync<string>(Key, Awaited, Ct).AsTask();
-        await Until(() => b.InnerReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.InnerReads == 1);
         b.Inner.ReadHold = null;
         await b.Cache.GetAsync<string>(Key, other, Ct);
         await b.Cache.GetAsync<string>(Key, other, Ct);
@@ -179,7 +181,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_background_merge_does_not_lay_its_fields_over_a_copy_awaiting_refresh()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         var background = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30), BackgroundDistributedWrite = true };
         await Seed(a);
@@ -191,7 +193,7 @@ public class PeerRefreshHashTests
         await Add(a, ("c", "3"));
 
         (await b.Cache.SetAsync<string>(Key, Fields(("x", "9")), Merge, background, Ct)).Should().BeTrue();
-        await Until(() => b.Cache.RunsInFlight == 1);
+        b.Cache.RunsInFlight.Should().Be(1);
         refresh.SetResult();
         await b.Settled();
 
@@ -202,7 +204,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_merge_between_the_update_falling_back_and_its_hand_over_does_not_lay_over_the_held_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
         await b.Cache.GetAsync<string>(Key, Awaited, Ct);
@@ -233,7 +235,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_hand_over_that_throws_drops_the_held_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
         await b.Cache.GetAsync<string>(Key, Awaited, Ct);
@@ -253,7 +255,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_hash_held_only_as_fields_is_dropped_not_refreshed()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b", monitorsConnection: true));
         await Seed(a);
         b.Inner.IsConnected = false;
@@ -272,7 +274,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_hash_policy_that_opts_out_drops_as_before()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         var optOut = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(10), RefreshLocalOnPeerWrite = false };
         await Seed(a);
@@ -290,7 +292,7 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_peer_batch_of_hashes_is_refreshed_key_by_key()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a", peerFieldUpdates: false), c.Add("b", peerFieldUpdates: false));
         await a.Cache.SetAsync<string>("k1", Fields(("a", "1")), Awaited, Ct);
         await a.Cache.SetAsync<string>("k2", Fields(("b", "2")), Awaited, Ct);
@@ -319,14 +321,14 @@ public class PeerRefreshHashTests
     [Fact]
     public async Task A_read_begun_before_a_peer_s_write_of_a_hash_not_held_does_not_keep_the_old_hash()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
         var read = new TaskCompletionSource();
         b.Inner.HeldReadSnapshots = true;
         b.Inner.ReadHold = read.Task;
         var early = b.Cache.GetAsync<string>(Key, Awaited, Ct).AsTask();
-        await Until(() => b.InnerReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.InnerReads == 1);
 
         await Add(a, ("c", "3"));
         read.SetResult();
@@ -341,7 +343,7 @@ public class PeerRefreshHashTests
     [InlineData(true)]
     public async Task A_read_begun_while_this_node_s_field_removal_is_in_flight_does_not_bring_the_fields_back(bool peerFieldUpdates)
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (a, b) = (c.Add("a", peerFieldUpdates), c.Add("b", peerFieldUpdates));
         await Seed(a);
         (await b.Cache.GetAsync<string>(Key, Awaited, Ct)).Should().HaveCount(2);
@@ -371,14 +373,4 @@ public class PeerRefreshHashTests
     private static async Task Add(PeerCluster.Node node, params (string Field, string Value)[] fields) =>
         (await node.Cache.SetAsync<string>(Key, Fields(fields), Merge, Awaited, Ct)).Should().BeTrue();
 
-    private static async Task Until(Func<bool> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (!condition() && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
-
-        condition().Should().BeTrue();
-    }
 }

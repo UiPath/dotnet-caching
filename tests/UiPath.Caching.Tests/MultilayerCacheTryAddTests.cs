@@ -480,7 +480,8 @@ public class InMemoryCacheTryAddTests
     public async Task A_caller_whose_key_a_generator_still_holds_after_the_timeout_is_told_it_lost()
     {
         var options = new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(50) };
-        using var sut = CreateSut(options);
+        var clock = new ManualTimeProvider();
+        using var sut = CreateSut(options, clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Hold(CancellationToken _)
@@ -493,7 +494,11 @@ public class InMemoryCacheTryAddTests
         var holder = sut.GetOrAddAsync<string>("k", Hold, policy: null, token: Ct).AsTask();
         await started.Task.WaitAsync(Ct);
 
-        var added = await sut.TryAddAsync("k", "first", policy: null, token: Ct);
+        var timers = clock.TimersCreated;
+        var adding = sut.TryAddAsync("k", "first", policy: null, token: Ct).AsTask();
+        await clock.WhenTimersCreatedAsync(timers);
+        clock.Advance(options.LocalSingleFlightTimeout!.Value);
+        var added = await adding;
 
         added.Should().BeFalse();
         (await sut.GetAsync<string>("k", policy: null, token: Ct)).Should().BeNull("a loss must not write anything either");
@@ -536,7 +541,8 @@ public class InMemoryCacheTryAddTests
     }
 
     private static MultilayerCache CreateSut(
-        InMemoryCacheOptions? options = null)
+        InMemoryCacheOptions? options = null,
+        ManualTimeProvider? clock = null)
     {
         options ??= new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test" };
@@ -553,7 +559,7 @@ public class InMemoryCacheTryAddTests
             cacheOptions,
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
-            clock: new ManualTimeProvider(),
+            clock: clock ?? new ManualTimeProvider(),
             logger: NullLogger.Instance);
     }
 

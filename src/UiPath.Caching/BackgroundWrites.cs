@@ -410,6 +410,22 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
+    internal Task WhenIdleAsync()
+    {
+        lock (_gate)
+        {
+            if (_inFlight == 0)
+            {
+                return Task.CompletedTask;
+            }
+            if (_idle is null || _idle.Task.IsCompleted)
+            {
+                _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            return _idle.Task;
+        }
+    }
+
     // Under _gate: the tail's last write is waiting, holds a whole value, no awaited write is queued after it, and the new write sends its event if the waiting one does.
     private static bool Replaceable(Tail tail, bool publishes) => tail.Background is { Taken: false, Coalesce: true } queued && (publishes || !queued.Publishes) && tail.Awaited is not { Count: > 0 };
 
@@ -728,7 +744,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
                 return;
             }
 
-            idle = (_idle ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+            idle = WhenIdleAsync();
         }
 
         var timedOut = false;

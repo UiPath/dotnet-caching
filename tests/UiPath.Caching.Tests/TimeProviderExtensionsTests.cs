@@ -3,9 +3,11 @@
 /// <summary>The saturating conversion: <see cref="TimeSpan.MaxValue"/> lands on <see cref="DateTimeOffset.MaxValue"/> instead of overflowing.</summary>
 public class TimeProviderExtensionsTests
 {
+    private static readonly FakeTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     [Fact]
     public void An_unbounded_duration_lands_on_MaxValue_instead_of_overflowing() =>
-        TimeProvider.System.ToDateTimeOffset(TimeSpan.MaxValue).Should().Be(DateTimeOffset.MaxValue);
+        Clock.ToDateTimeOffset(TimeSpan.MaxValue).Should().Be(DateTimeOffset.MaxValue);
 
     /// <summary>A fake may report any offset; normalizing to UTC before the headroom check keeps the conversion total.</summary>
     [Theory]
@@ -35,7 +37,7 @@ public class TimeProviderExtensionsTests
     [Fact]
     public void Null_reads_as_unbounded()
     {
-        var sut = TimeProvider.System;
+        var sut = Clock;
 
         sut.ToDateTimeOffset(default(TimeSpan?)).Should().Be(DateTimeOffset.MaxValue);
         sut.ToDateTimeOffset(default(DateTimeOffset?)).Should().Be(DateTimeOffset.MaxValue);

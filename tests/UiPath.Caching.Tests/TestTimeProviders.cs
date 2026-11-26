@@ -28,9 +28,9 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     private int _created;
     private TaskCompletionSource _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public event Action? TimerScheduled;
-
     public ManualTimeProvider() : this(DateTimeOffset.UnixEpoch) { }
+
+    public event Action? TimerScheduled;
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
@@ -108,6 +108,10 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         _timerCreated.Pulse();
         return timer;
     }
+
+    /// <summary>Waits until more than <paramref name="count"/> timers were ever created.</summary>
+    public Task WhenTimersCreatedAsync(int count) =>
+        _timerCreated.UntilAsync(() => TimersCreated > count, TestContext.Current.CancellationToken);
 
     public Task WhenTimerScheduledAsync() =>
         _timerCreated.UntilAsync(() => HasTimers, TestContext.Current.CancellationToken);

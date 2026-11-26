@@ -152,8 +152,15 @@ internal sealed partial class MultilayerCache
             return true;
         }
 
-        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(token);
-        bounded.CancelAfter(BoundedTimeout(timeout));
+        // The system clock keeps the single linked source; only an injected clock needs its own timer source.
+        using var timeoutSource = ReferenceEquals(_clock, TimeProvider.System) ? null : new CancellationTokenSource(BoundedTimeout(timeout), _clock);
+        using var bounded = timeoutSource is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(token)
+            : CancellationTokenSource.CreateLinkedTokenSource(token, timeoutSource.Token);
+        if (timeoutSource is null)
+        {
+            bounded.CancelAfter(BoundedTimeout(timeout));
+        }
         try
         {
             await joined.Result.WaitAsync(bounded.Token).ConfigureAwait(false);

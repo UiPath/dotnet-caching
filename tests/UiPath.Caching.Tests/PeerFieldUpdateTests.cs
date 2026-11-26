@@ -10,6 +10,8 @@ namespace UiPath.Caching.Tests;
 /// <summary>A node that holds a hash exactly one write behind a peer's small <see cref="HashCacheSetOption.HashReplace"/> adds the written fields to its copy; any other copy is dropped.</summary>
 public class PeerFieldUpdateTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly CachePolicy Awaited = new() { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30) };
 
     private static readonly CachePolicy Background = new() { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30), BackgroundDistributedWrite = true };
@@ -25,7 +27,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_peer_one_write_behind_adds_the_written_fields_to_its_copy_and_keeps_it()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
@@ -42,8 +44,8 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_field_update_applied_to_a_copy_stored_without_refresh_leaves_it_unstamped()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        using var c = new PeerCluster();
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
         await Seed(writer);
         (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(2);
@@ -59,8 +61,8 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_field_update_applied_to_a_copy_stored_with_refresh_keeps_it_stamping()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        using var c = new PeerCluster();
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
         await Seed(writer);
         (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
@@ -77,8 +79,8 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_hash_hit_stamps_the_read_mark_when_the_policy_refreshes()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        using var c = new PeerCluster();
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
         await Seed(writer);
         (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
@@ -94,8 +96,8 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_hash_hit_leaves_the_read_mark_unset_when_the_policy_opts_out()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        using var c = new PeerCluster();
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
         await Seed(writer);
         (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(2);
@@ -109,8 +111,8 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_hash_stored_with_refresh_is_stamped_by_a_hit_under_a_policy_that_opts_out()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        using var c = new PeerCluster();
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
         await Seed(writer);
         (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
@@ -125,8 +127,8 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_hash_stored_without_refresh_is_not_stamped_by_a_hit_under_a_policy_that_refreshes()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        using var c = new PeerCluster();
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
         await Seed(writer);
         (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(2);
@@ -140,7 +142,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_dictionary_a_caller_holds_is_not_changed_by_an_update_applied_after_it_was_returned()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         var held = await peer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -154,7 +156,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_peer_two_writes_behind_drops_its_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
@@ -169,7 +171,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_node_that_holds_nothing_does_nothing()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
 
@@ -183,7 +185,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_peer_whose_copy_has_no_version_drops_it()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         c.Redis.ReadsVersions = false;
@@ -199,7 +201,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_late_event_after_newer_ones_were_applied_is_ignored_and_the_copy_kept()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -217,7 +219,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_event_delivered_twice_or_behind_a_read_that_already_counted_it_is_ignored_and_the_copy_kept()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         c.AutoDeliver = false;
@@ -234,7 +236,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_late_event_of_an_older_epoch_of_the_hash_drops_the_copy_of_the_new_one()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await Add(writer, ("c", "3"));
@@ -262,7 +264,7 @@ public class PeerFieldUpdateTests
     [InlineData(8, true)]
     public async Task A_lost_removal_followed_by_a_write_that_makes_the_hash_again_drops_the_copy_below_at_or_past_the_held_count(int writesAfterTheRemoval, bool newEpochAbove)
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var draws = new Queue<long>([100L << HashVersion.CounterBits, (newEpochAbove ? 200L : 50L) << HashVersion.CounterBits]);
         c.Redis.NextEpoch = draws.Dequeue;
         var (writer, peer) = (c.Add("a"), c.Add("b"));
@@ -292,7 +294,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_lost_removal_with_no_write_after_it_leaves_the_copy_as_it_always_did()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await Add(writer, ("c", "3"));
@@ -307,7 +309,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_node_that_wrote_over_a_copy_whose_removal_it_never_heard_of_drops_what_it_holds_on_the_next_event()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (node, other) = (c.Add("a"), c.Add("b"));
         await Seed(other, AwaitedDropping);
         await Add(other, AwaitedDropping, ("c", "3"));
@@ -326,7 +328,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_event_behind_a_copy_that_holds_writes_of_its_own_still_in_flight_is_ignored_and_the_writes_stay_over_the_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await Add(other, ("d", "4"));
@@ -350,7 +352,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_event_of_an_older_epoch_drops_a_copy_that_holds_writes_of_its_own_still_in_flight()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (node, other) = (c.Add("a"), c.Add("b"));
         await Seed(other);
         await Add(other, ("c", "3"));
@@ -375,7 +377,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_event_of_an_older_epoch_that_a_refresh_takes_leaves_no_copy_that_holds_writes_of_its_own_still_in_flight()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var telemetry = new Telemetry.RecordingTelemetryProvider();
         var (node, other) = (c.Add("a", telemetry: telemetry), c.Add("b"));
         await Seed(other);
@@ -408,7 +410,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_event_of_the_node_s_own_write_delivered_again_leaves_its_copy_alone()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var node = c.Add("a");
         await Seed(node);
         await Add(node, ("c", "3"));
@@ -425,7 +427,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_count_with_no_epoch_from_a_node_that_draws_none_is_never_ignored_as_late()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         c.Redis.Epochs = false;
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
@@ -444,7 +446,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_count_with_no_epoch_from_a_node_that_draws_none_is_never_ignored_as_late_and_the_copy_is_refreshed()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         c.Redis.Epochs = false;
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
@@ -464,7 +466,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_loss_of_events_clears_a_copy_that_ignored_a_late_event()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -483,7 +485,7 @@ public class PeerFieldUpdateTests
     [InlineData(true)]
     public async Task An_awaited_merge_that_a_background_merge_of_the_key_overtook_leaves_no_copy_that_lacks_its_fields_or_waits_for_its_version(bool peerWritesBetween)
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (node, other) = (c.Add("a"), c.Add("b"));
         await Seed(node);
         (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
@@ -508,7 +510,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task Two_awaited_merges_that_return_out_of_the_order_the_hash_took_them_leave_the_value_of_the_later_one()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var node = c.Add("a");
         await Seed(node);
         (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
@@ -538,7 +540,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_replacement_that_returns_after_a_merge_made_to_the_hash_it_replaced_does_not_keep_a_copy_without_that_merge()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var node = c.Add("a");
         await Seed(node);
         var replaced = new TaskCompletionSource();
@@ -571,7 +573,7 @@ public class PeerFieldUpdateTests
     [InlineData(HashCacheSetOption.KeyReplace, HashCacheSetOption.KeyReplace)]
     public async Task A_write_that_returns_after_a_later_batch_write_of_the_key_leaves_the_batch_s_value_in_the_copy(HashCacheSetOption singleOption, HashCacheSetOption batchOption)
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var node = c.Add("a");
         await Seed(node);
         var first = new TaskCompletionSource();
@@ -604,7 +606,7 @@ public class PeerFieldUpdateTests
     [InlineData(HashCacheSetOption.KeyReplace, HashCacheSetOption.KeyReplace)]
     public async Task A_batch_write_that_returns_after_a_later_write_of_the_key_leaves_the_later_value_in_the_copy(HashCacheSetOption batchOption, HashCacheSetOption singleOption)
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var node = c.Add("a");
         await Seed(node);
         var first = new TaskCompletionSource();
@@ -633,7 +635,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_write_that_returns_after_a_read_already_counted_it_does_not_put_its_values_over_the_read()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (node, other) = (c.Add("a"), c.Add("b"));
         await Seed(node, AwaitedDropping);
         var held = new TaskCompletionSource();
@@ -664,7 +666,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_write_that_returns_after_a_read_already_counted_it_does_not_put_its_values_over_the_refreshed_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (node, other) = (c.Add("a"), c.Add("b"));
         await Seed(node, Awaited);
         var held = new TaskCompletionSource();
@@ -696,7 +698,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_write_that_returns_after_a_peer_s_later_write_does_not_lay_its_values_over_the_copy_awaiting_refresh()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var telemetry = new Telemetry.RecordingTelemetryProvider();
         var (node, other) = (c.Add("a", telemetry: telemetry), c.Add("b"));
         await Seed(node, Awaited);
@@ -736,7 +738,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_replacement_of_the_whole_key_drops_the_peer_s_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
@@ -751,7 +753,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task Removing_the_key_drops_the_peer_s_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -765,7 +767,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task Removing_fields_counts_a_write_and_drops_the_writer_s_and_the_peer_s_copies()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -785,7 +787,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task Copies_read_after_a_field_removal_are_at_its_count_and_take_the_next_write_on_both_nodes()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await writer.Cache.RemoveFieldsAsync<string>("k", ["a"], Ct);
@@ -806,7 +808,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task Removing_the_last_fields_removes_the_hash_and_its_count_and_both_nodes_read_it_empty()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -821,7 +823,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_peer_whose_decode_of_the_carried_fields_fails_drops_its_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
@@ -837,7 +839,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_fill_reported_unwritten_keeps_its_copy_without_the_version_it_reported()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         writer.Inner.ReportsUnwritten = true;
 
@@ -856,7 +858,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_fill_reported_unwritten_has_its_copy_refreshed_instead_of_merged()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         writer.Inner.ReportsUnwritten = true;
 
@@ -876,7 +878,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_write_over_the_field_limit_or_the_byte_limit_carries_no_fields_and_the_peer_drops()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var narrow = c.Add("a", maxFields: 2);
         var small = c.Add("b", maxBytes: 8);
         var peer = c.Add("p");
@@ -901,7 +903,7 @@ public class PeerFieldUpdateTests
     [InlineData(-3)]
     public async Task A_field_limit_below_one_is_taken_as_one_and_does_not_switch_carrying_off(int maxFields)
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var writer = c.Add("a", maxFields: maxFields);
         await Seed(writer);
 
@@ -913,7 +915,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_small_merge_carries_its_version_and_fields_and_not_the_refresh_properties_an_older_node_would_act_on()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var writer = c.Add("a");
         await Seed(writer);
 
@@ -929,7 +931,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_node_with_the_option_off_counts_nothing_and_its_events_carry_no_fields()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var writer = c.Add("a", peerFieldUpdates: false);
         await Seed(writer);
 
@@ -944,7 +946,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_peer_with_the_option_off_drops_on_an_event_that_carries_fields()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var writer = c.Add("a");
         var older = c.Add("b", peerFieldUpdates: false);
         await Seed(writer);
@@ -959,7 +961,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_peer_with_the_option_off_refreshes_on_an_event_that_carries_fields()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var writer = c.Add("a");
         var older = c.Add("b", peerFieldUpdates: false);
         await Seed(writer);
@@ -975,7 +977,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task The_writer_s_own_copy_is_at_the_new_version_and_takes_a_peer_s_next_write()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await Add(writer, ("c", "3"));
@@ -989,7 +991,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_writer_whose_copy_was_two_writes_behind_keeps_its_merge_unversioned_and_drops_it_on_the_next_event()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer, AwaitedDropping);
         c.Redis.WriteQuietly(("z", "0"));
@@ -1004,7 +1006,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_background_merge_gives_the_writer_s_copy_the_new_version_once_it_is_written()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await writer.Cache.SetAsync<string>("k", Fields(("c", "3")), Merge, Background, Ct);
@@ -1020,7 +1022,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_background_merge_over_a_copy_two_writes_behind_leaves_the_copy_unversioned()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         c.Redis.WriteQuietly(("z", "0"));
@@ -1036,7 +1038,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_background_merge_in_flight_takes_a_peer_s_next_write_and_the_version_of_its_own_once_written()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         var release = new TaskCompletionSource();
@@ -1055,7 +1057,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_background_merge_over_a_merge_still_in_flight_takes_the_version_once_both_are_written()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         var release = new TaskCompletionSource();
@@ -1074,7 +1076,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_background_merge_over_a_background_fill_still_in_flight_takes_the_version_once_both_are_written()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         var release = new TaskCompletionSource();
         writer.Inner.Hold = release.Task;
@@ -1093,7 +1095,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_update_that_arrives_while_the_fill_that_made_the_copy_is_in_flight_drops_the_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         var release = new TaskCompletionSource();
         writer.Inner.Hold = release.Task;
@@ -1110,7 +1112,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_update_that_arrives_while_the_fill_that_made_the_copy_is_in_flight_refreshes_the_copy_to_the_hash()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         // No timeout: the read gate holds the refresh read for as long as the test needs, which a slow runner can stretch past one.
         var (writer, other) = (c.Add("a", timeout: Timeout.InfiniteTimeSpan), c.Add("b"));
         var release = new TaskCompletionSource();
@@ -1123,10 +1125,11 @@ public class PeerFieldUpdateTests
         await Add(other, ("z", "0"));
 
         // The copy waits for a refresh, whose first read starts while the fill is in flight; the fill then lands and leaves its turn before that read answers.
-        await CachePeers.Until(() => writer.InnerReads == reads + 1);
+        await writer.Inner.Changes.WaitUntil(() => writer.InnerReads == reads + 1);
         CachePeers.WriteInFlight(writer.Cache, "k").Should().BeTrue();
         release.SetResult();
-        await CachePeers.Until(() => !CachePeers.WriteInFlight(writer.Cache, "k"));
+        await CachePeers.BackgroundSettled(writer.Cache);
+        CachePeers.WriteInFlight(writer.Cache, "k").Should().BeFalse();
         readGate.SetResult();
         await writer.Settled();
 
@@ -1137,7 +1140,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_merge_two_writes_past_its_copy_takes_the_missing_write_when_its_event_comes_and_keeps_the_copy()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await Add(other, ("z", "0"));
@@ -1156,7 +1159,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_background_merge_two_writes_past_its_copy_takes_the_missing_write_when_its_event_comes_and_keeps_the_copy()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await Add(other, ("z", "0"));
@@ -1172,7 +1175,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_missing_write_that_came_before_the_node_s_own_on_a_field_does_not_replace_the_node_s_value()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await Add(other, ("c", "theirs"));
@@ -1188,7 +1191,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_merge_replaces_a_field_it_changes_keeps_one_it_rewrites_unchanged_and_adds_one_it_lacks_on_the_writer_and_the_peer()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await writer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -1205,7 +1208,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_merge_that_rewrites_only_values_the_copy_already_holds_keeps_the_copy_and_its_fields()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await writer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -1223,7 +1226,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_missing_write_takes_the_fields_the_node_has_not_written_since_and_leaves_the_ones_it_has()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await Add(other, ("a", "theirs"), ("c", "theirs"), ("d", "theirs"));
@@ -1238,7 +1241,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task Merging_one_field_into_a_large_copy_does_not_copy_the_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         var hash = Enumerable.Range(0, 200).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
         (await writer.Cache.SetAsync<string>("k", hash, Awaited, Ct)).Should().BeTrue();
@@ -1264,7 +1267,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task Missing_writes_take_their_turns_in_order_and_the_copy_ends_at_the_hash()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var (writer, other, third) = (c.Add("a"), c.Add("b"), c.Add("c"));
         await Seed(writer);
         await Add(other, ("y", "1"));
@@ -1281,7 +1284,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_missing_write_whose_event_comes_after_a_later_missing_one_drops_the_copy()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer, AwaitedDropping);
         await Add(other, AwaitedDropping, ("y", "1"));
@@ -1297,7 +1300,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_background_merge_the_inner_tier_refused_leaves_a_copy_that_no_peer_write_is_applied_to()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         writer.Inner.Refuses = true;
@@ -1313,7 +1316,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_background_merge_the_inner_tier_refused_leaves_a_copy_that_a_peer_write_refreshes_to_the_hash()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         writer.Inner.Refuses = true;
@@ -1335,7 +1338,7 @@ public class PeerFieldUpdateTests
     [InlineData(33, 1)]
     public async Task A_copy_holds_at_most_32_writes_of_its_own_ahead_of_the_hash_before_it_has_no_version(int merges, int reads)
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         var release = new TaskCompletionSource();
@@ -1357,7 +1360,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task The_applied_copy_takes_the_write_s_expiration_and_keeps_or_replaces_the_metadata()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -1370,7 +1373,7 @@ public class PeerFieldUpdateTests
         var entry = await peer.Cache.GetCacheEntryAsync<string>("k", Awaited, Ct);
         entry.Value.Should().HaveCount(4);
         entry.Metadata.Should().BeEquivalentTo(metadata);
-        entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(20), TimeSpan.FromMinutes(1));
+        entry.Expiration.Should().Be(Clock.GetUtcNow().AddMinutes(20));
         entry.Expiration.Should().BeCloseTo(c.Redis.Expiration(), TimeSpan.FromSeconds(1));
         peer.InnerReads.Should().Be(1);
     }
@@ -1378,7 +1381,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_refresh_event_keeps_the_copy_s_version_so_a_later_write_still_applies()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -1393,8 +1396,8 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_applied_copy_does_not_outlive_the_local_cap_it_was_read_under()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        using var c = new PeerCluster();
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
         var capped = new CachePolicy { LocalExpiration = TimeSpan.FromMilliseconds(800), LocalExpirationDisconnected = TimeSpan.FromSeconds(30) };
         await Seed(writer);
@@ -1413,7 +1416,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_loss_of_events_still_clears_an_applied_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", Awaited, Ct);
@@ -1428,7 +1431,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task A_local_merge_and_a_peer_apply_on_one_key_never_leave_a_field_missing_from_a_kept_copy()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (local, remote) = (c.Add("a"), c.Add("b"));
         await Seed(local);
         for (var i = 0; i < 300; i++)
@@ -1509,7 +1512,7 @@ public class PeerFieldUpdateTests
     [InlineData(0)]
     public async Task An_own_write_that_returns_at_or_below_the_held_count_leaves_the_held_copy_as_it_is(int offset)
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var node = c.Add("a");
         var (held, n) = await Held(c, node);
 
@@ -1528,7 +1531,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_own_write_one_past_the_held_count_is_laid_over_the_held_copy_and_stamped()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var node = c.Add("a");
         var (_, n) = await Held(c, node);
 
@@ -1545,7 +1548,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_own_write_at_or_below_the_held_count_of_another_epoch_is_merged_into_a_copy_no_version_stands_on()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var node = c.Add("a");
         var (_, n) = await Held(c, node);
 
@@ -1562,7 +1565,7 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_uncounted_own_write_is_merged_into_the_held_copy_without_a_stamp()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var node = c.Add("a");
         await Held(c, node);
 

@@ -6,12 +6,14 @@ namespace UiPath.Caching.Tests;
 
 public class SharedGenerationTests
 {
+    private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task A_batch_cancelled_while_it_reserves_its_keys_leaves_none_reserved()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var calls = 0;
         var generations = ReplaceGenerations(cache, new CallbackComparer(() =>
@@ -35,7 +37,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_batch_whose_generator_fails_leaves_none_reserved_and_the_next_caller_runs()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         var generations = ReplaceGenerations(cache, null);
 
         var failingRead = cache.GetOrAddAsync<string, string>([new("a", "a")], (_, _) => throw new InvalidOperationException("boom"), policy: null, Ct);
@@ -50,7 +52,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_batch_and_a_single_key_call_for_one_key_run_one_generator()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         using var batchAtReservation = new ManualResetEventSlim();
         using var allowReservation = new ManualResetEventSlim();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -63,7 +65,7 @@ public class SharedGenerationTests
             if (Interlocked.Increment(ref hashCalls) == 1)
             {
                 batchAtReservation.Set();
-                allowReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+                allowReservation.Wait(Ct);
             }
         }));
 
@@ -87,14 +89,14 @@ public class SharedGenerationTests
         }
 
         var batch = Task.Run(async () => await cache.GetOrAddAsync<string, string>([new("k", "k"), new("other", "other")], GenerateBatch, policy: null, Ct), Ct);
-        batchAtReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        batchAtReservation.Wait(Ct);
         var singleRead = cache.GetOrAddAsync<string>("k", GenerateSingle, policy: null, Ct);
         var single = singleRead.AsTask();
-        await singleStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await singleStarted.Task.WaitAsync(Ct);
         allowReservation.Set();
 
         // The batch has taken or joined every key once its generator runs; releasing before that would let the single run end first and free "k".
-        await batchGenerating.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await batchGenerating.Task.WaitAsync(Ct);
         release.SetResult();
 
         var results = await batch;
@@ -106,7 +108,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task Joiners_of_a_cancelled_batch_regenerate_its_key_once()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) }, clock: _clock);
         using var starterCancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var starterRead = cache.GetOrAddAsync<string, string>(
@@ -114,7 +116,7 @@ public class SharedGenerationTests
             async (_, token) =>
             {
                 started.SetResult();
-                await Task.Delay(Timeout.Infinite, token);
+                await new TaskCompletionSource().Task.WaitAsync(token);
                 return [];
             },
             policy: null,
@@ -125,6 +127,7 @@ public class SharedGenerationTests
         var joinedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var joinedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var kStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var kCalls = 0;
         async Task<KeyValuePair<string, string?>[]> Generate(string[] states, CancellationToken token)
         {
@@ -141,6 +144,7 @@ public class SharedGenerationTests
             if (states.Contains("k"))
             {
                 Interlocked.Increment(ref kCalls);
+                kStarted.TrySetResult();
                 await release.Task.WaitAsync(token);
             }
 
@@ -151,10 +155,10 @@ public class SharedGenerationTests
         var a = aRead.AsTask();
         var bRead = cache.GetOrAddAsync<string, string>([new("k", "k"), new("b", "b")], Generate, policy: null, Ct);
         var b = bRead.AsTask();
-        await Task.WhenAll(joinedA.Task, joinedB.Task).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await Task.WhenAll(joinedA.Task, joinedB.Task).WaitAsync(Ct);
         await starterCancellation.CancelAsync();
         await Throws<OperationCanceledException>(starter);
-        await Task.Delay(100, Ct);
+        await kStarted.Task.WaitAsync(Ct);
         release.SetResult();
         await Task.WhenAll(a, b);
 
@@ -166,7 +170,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_cancelled_starter_keeps_the_distributed_lease_until_the_shared_load_ends()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) }, clock: _clock);
         var distributed = Substitute.For<IDistributedLock>();
         var lease = new RecordingLease();
         ValueTaskStubs.Returns(distributed.AcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()), new ValueTask<IAsyncDisposable>(lease), new ValueTask<IAsyncDisposable>(NoOpAsyncDisposable.Instance));
@@ -189,7 +193,8 @@ public class SharedGenerationTests
         await started.Task;
         var joinerRead = cache.GetOrAddAsync<string>("k", _ => throw new InvalidOperationException("should join"), policy, Ct);
         var joiner = joinerRead.AsTask();
-        await Task.Delay(200, Ct);
+        _clock.Advance(TimeSpan.FromMilliseconds(200));
+        joiner.IsCompleted.Should().BeFalse();
 
         await cancellation.CancelAsync();
         await Throws<OperationCanceledException>(starter);
@@ -199,13 +204,13 @@ public class SharedGenerationTests
         (await joiner).Should().Be("loaded");
         sharedToken.IsCancellationRequested.Should().BeFalse();
         releasedWhileRunning.Should().BeFalse();
-        await lease.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await lease.Disposed.Task.WaitAsync(Ct);
     }
 
     [Fact]
     public async Task A_run_under_the_distributed_lock_leaves_the_table_only_once_its_lease_is_released()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         var distributed = Substitute.For<IDistributedLock>();
         var lease = new GatedLease();
         ValueTaskStubs.Returns(distributed.AcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()), new ValueTask<IAsyncDisposable>(lease));
@@ -226,7 +231,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_single_key_caller_that_reserves_after_the_key_was_written_does_not_generate()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         ReplaceGenerations(cache, PauseOnce(atReservation, proceed));
@@ -238,7 +243,7 @@ public class SharedGenerationTests
         }
 
         var call = Task.Run(async () => await cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct), Ct);
-        atReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        atReservation.Wait(Ct);
         (await cache.SetAsync<string>("k", "written", Ct)).Should().BeTrue();
         proceed.Set();
 
@@ -250,7 +255,7 @@ public class SharedGenerationTests
     public async Task A_write_that_began_before_the_read_and_returned_after_it_is_returned_not_generated()
     {
         var tokens = new GatedChangeTokenFactory();
-        using var cache = InMemoryMultilayer.Cache(tokens: tokens);
+        using var cache = InMemoryMultilayer.Cache(tokens: tokens, clock: _clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         ReplaceGenerations(cache, PauseOnce(atReservation, proceed));
@@ -262,9 +267,9 @@ public class SharedGenerationTests
         }
 
         var write = Task.Run(async () => await cache.SetAsync<string>("k", "written", Ct), Ct);
-        tokens.WaitUntilEntered(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        tokens.WaitUntilEntered(Ct);
         var call = Task.Run(async () => await cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct), Ct);
-        atReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        atReservation.Wait(Ct);
         tokens.Release();
         (await write).Should().BeTrue();
         proceed.Set();
@@ -276,7 +281,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_single_key_caller_that_reserves_after_another_key_was_written_still_generates()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         ReplaceGenerations(cache, PauseOnce(atReservation, proceed));
@@ -288,7 +293,7 @@ public class SharedGenerationTests
         }
 
         var call = Task.Run(async () => await cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct), Ct);
-        atReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        atReservation.Wait(Ct);
         (await cache.SetAsync<string>("other", "written", Ct)).Should().BeTrue();
         proceed.Set();
 
@@ -300,7 +305,7 @@ public class SharedGenerationTests
     public async Task A_batch_whose_run_is_held_inside_its_local_write_is_joined_and_a_caller_after_it_reads_the_local_tier()
     {
         var tokens = new GatedChangeTokenFactory();
-        using var cache = InMemoryMultilayer.Cache(tokens: tokens);
+        using var cache = InMemoryMultilayer.Cache(tokens: tokens, clock: _clock);
         var generated = 0;
         var running = 0;
         var overlapped = false;
@@ -318,9 +323,9 @@ public class SharedGenerationTests
 
         KeyValuePair<CacheKey, string>[] entries = [new("a", "a"), new("b", "b")];
         var first = Task.Run(async () => await cache.GetOrAddAsync<string, string>(entries, Generate, policy: null, Ct), Ct);
-        tokens.WaitUntilEntered(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
-        var joiner = Task.Run(async () => await cache.GetOrAddAsync<string, string>(entries, Generate, policy: null, Ct), Ct);
-        await Task.Delay(100, Ct);
+        tokens.WaitUntilEntered(Ct);
+        var joiner = cache.GetOrAddAsync<string, string>(entries, Generate, policy: null, Ct).AsTask();
+        joiner.IsCompleted.Should().BeFalse();
         tokens.Release();
 
         (await first).Select(p => p.Value).Should().Equal("generated", "generated");
@@ -335,7 +340,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_batch_that_reserves_after_one_key_was_written_generates_only_the_other()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         ReplaceGenerations(cache, PauseOnce(atReservation, proceed));
@@ -351,7 +356,7 @@ public class SharedGenerationTests
         }
 
         var call = Task.Run(async () => await cache.GetOrAddAsync<string, string>([new("k1", "k1"), new("k2", "k2")], Generate, policy: null, Ct), Ct);
-        atReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        atReservation.Wait(Ct);
         (await cache.SetAsync<string>("k1", "written", Ct)).Should().BeTrue();
         proceed.Set();
 
@@ -364,7 +369,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_batch_that_reserves_after_every_key_was_written_does_not_generate()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         var generations = ReplaceGenerations(cache, PauseOnce(atReservation, proceed));
@@ -376,7 +381,7 @@ public class SharedGenerationTests
         }
 
         var call = Task.Run(async () => await cache.GetOrAddAsync<string, string>([new("k1", "k1"), new("k2", "k2")], Generate, policy: null, Ct), Ct);
-        atReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        atReservation.Wait(Ct);
         await cache.SetAsync<string>("k1", "w1", Ct);
         await cache.SetAsync<string>("k2", "w2", Ct);
         proceed.Set();
@@ -389,7 +394,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_hash_cache_caller_that_reserves_after_the_key_was_written_does_not_generate()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: _clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         typeof(MultilayerHashCache).GetField("_generations", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -402,7 +407,7 @@ public class SharedGenerationTests
         }
 
         var call = Task.Run(async () => await cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct), Ct);
-        atReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        atReservation.Wait(Ct);
         await cache.SetAsync<string>("k", new Dictionary<string, string?> { ["f"] = "written" }, Ct);
         proceed.Set();
 
@@ -414,7 +419,7 @@ public class SharedGenerationTests
     public async Task The_recheck_after_taking_a_key_does_not_read_the_inner_tier()
     {
         var inner = MissingInner();
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: _clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         ReplaceGenerations(cache, PauseOnce(atReservation, proceed));
@@ -426,7 +431,7 @@ public class SharedGenerationTests
         }
 
         var call = Task.Run(async () => await cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct), Ct);
-        atReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        atReservation.Wait(Ct);
         var readsBefore = InnerReads(inner);
         proceed.Set();
 
@@ -439,7 +444,7 @@ public class SharedGenerationTests
     public async Task The_batch_recheck_after_taking_keys_does_not_read_the_inner_tier()
     {
         var inner = MissingInner();
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: _clock);
         using var atReservation = new ManualResetEventSlim();
         using var proceed = new ManualResetEventSlim();
         ReplaceGenerations(cache, PauseOnce(atReservation, proceed));
@@ -451,7 +456,7 @@ public class SharedGenerationTests
         }
 
         var call = Task.Run(async () => await cache.GetOrAddAsync<string, string>([new("k1", "k1"), new("k2", "k2")], Generate, policy: null, Ct), Ct);
-        atReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        atReservation.Wait(Ct);
         var readsBefore = InnerReads(inner);
         proceed.Set();
 
@@ -463,7 +468,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_run_writes_the_local_tier_before_it_leaves_the_table_single_key()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         var generated = false;
         var seenAtExit = new List<string?>();
         ReplaceGenerations(cache, new CallbackComparer(() =>
@@ -488,7 +493,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_run_writes_the_local_tier_before_it_leaves_the_table_batch()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         var generated = false;
         var seenAtExit = new List<string?>();
         ReplaceGenerations(cache, new CallbackComparer(() =>
@@ -513,7 +518,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task An_abandoned_run_does_not_store_over_a_newer_value()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) }, clock: _clock);
         var generations = ReplaceGenerations(cache, null);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -534,7 +539,7 @@ public class SharedGenerationTests
 
         (await cache.GetOrAddAsync<string>("k", _ => Task.FromResult<string?>("new"), policy: null, Ct)).Should().Be("new");
         release.SetResult();
-        await oldRun.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await oldRun.WaitAsync(Ct);
 
         (await cache.GetAsync<string>("k", Ct)).Should().Be("new");
     }
@@ -542,7 +547,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task An_abandoned_hash_run_does_not_store_over_a_newer_value()
     {
-        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) }, clock: _clock);
         var generations = new InFlight<InFlightKey, object?>();
         typeof(MultilayerHashCache).GetField("_generations", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(cache, generations);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
@@ -564,7 +569,7 @@ public class SharedGenerationTests
 
         (await cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = "new" }), policy: null, Ct))["f"].Should().Be("new");
         release.SetResult();
-        await oldRun.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await oldRun.WaitAsync(Ct);
 
         (await cache.GetAsync<string>("k", Ct))!["f"].Should().Be("new");
     }
@@ -572,7 +577,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_cancelled_batch_whose_generator_ignores_cancellation_keeps_its_keys_until_it_returns()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -596,7 +601,7 @@ public class SharedGenerationTests
         await cancellation.CancelAsync();
         var secondRead = cache.GetOrAddAsync<string, string>([new("k", "k")], Second, policy: null, Ct);
         var second = secondRead.AsTask();
-        await Task.Delay(200, Ct);
+        second.IsCompleted.Should().BeFalse();
         secondGenerated.Should().Be(0);
         release.SetResult();
 
@@ -607,7 +612,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_failed_batch_stops_counting_as_a_waiter_on_the_single_load_it_joined()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         var generations = ReplaceGenerations(cache, null);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -639,7 +644,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_cancelled_hash_starter_keeps_the_distributed_lease_until_the_shared_load_ends()
     {
-        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) }, clock: _clock);
         var distributed = Substitute.For<IDistributedLock>();
         var lease = new RecordingLease();
         ValueTaskStubs.Returns(distributed.AcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()), new ValueTask<IAsyncDisposable>(lease), new ValueTask<IAsyncDisposable>(NoOpAsyncDisposable.Instance));
@@ -663,7 +668,8 @@ public class SharedGenerationTests
         Task<IDictionary<string, string?>> ShouldJoin(CancellationToken token) => throw new InvalidOperationException("should join");
         var joinerRead = cache.GetOrAddAsync<string>("k", ShouldJoin, policy, Ct);
         var joiner = joinerRead.AsTask();
-        await Task.Delay(200, Ct);
+        _clock.Advance(TimeSpan.FromMilliseconds(200));
+        joiner.IsCompleted.Should().BeFalse();
 
         await cancellation.CancelAsync();
         await Throws<OperationCanceledException>(starter);
@@ -673,7 +679,7 @@ public class SharedGenerationTests
         (await joiner)["f"].Should().Be("loaded");
         sharedToken.IsCancellationRequested.Should().BeFalse();
         releasedWhileRunning.Should().BeFalse();
-        await lease.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await lease.Disposed.Task.WaitAsync(Ct);
     }
 
     private static CallbackComparer PauseOnce(ManualResetEventSlim reached, ManualResetEventSlim proceed)
@@ -684,7 +690,7 @@ public class SharedGenerationTests
             if (Interlocked.Increment(ref calls) == 1)
             {
                 reached.Set();
-                proceed.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+                proceed.Wait(Ct);
             }
         });
     }

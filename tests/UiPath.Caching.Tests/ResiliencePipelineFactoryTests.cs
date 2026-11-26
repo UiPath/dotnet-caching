@@ -4,10 +4,13 @@ using Polly;
 using Polly.Telemetry;
 using Polly.Timeout;
 using UiPath.Caching.Polly;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private TelemetryOptions? _telemetryOptions;
@@ -110,13 +113,18 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         var completed = false;
         var pipeline = _fixture.Create<ResiliencePipelineFactory>().Create("write", false);
 
-        var result = await pipeline.ExecuteAsync(async _ =>
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pending = pipeline.ExecuteAsync(async _ =>
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(300), testContextAccessor.Current.CancellationToken);
+            await release.Task;
             completed = true;
             return true;
         },
-        testContextAccessor.Current.CancellationToken);
+        testContextAccessor.Current.CancellationToken).AsTask();
+        _clock.Advance(TimeSpan.FromMilliseconds(300));
+        pending.IsCompleted.Should().BeFalse();
+        release.SetResult();
+        var result = await pending;
 
         completed.Should().BeTrue("the pipeline returned only once the callback had finished");
         result.Should().BeTrue("a callback that completes is not reported as timed out");
@@ -142,7 +150,7 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
             });
         var timeoutFunc = new Func<CancellationToken, ValueTask<bool>>(async token =>
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            await new TaskCompletionSource().Task.WaitAsync(token);
             return true;
         });
         var exceptionFunc = new Func<CancellationToken, ValueTask<bool>>(token =>
@@ -156,9 +164,10 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         var resiliencePipelineFactory = _fixture.Create<ResiliencePipelineFactory>();
         var pipeline = resiliencePipelineFactory.Create("read", false);
         using var guard = CancellationTokenSource.CreateLinkedTokenSource(testContextAccessor.Current.CancellationToken);
-        guard.CancelAfter(TimeSpan.FromSeconds(30));
 
-        var act = async () => await pipeline.ExecuteAsync(timeoutFunc, guard.Token);
+        var pending = pipeline.ExecuteAsync(timeoutFunc, guard.Token).AsTask();
+        _clock.Advance(TimeSpan.FromMilliseconds(50));
+        var act = async () => await pending;
         await act.Should().ThrowAsync<TimeoutRejectedException>();
         bool? actual = null;
         for (int i = 0; i < 3; i++)
@@ -178,22 +187,8 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         }
         actual.Should().BeFalse();
 
-        // The breaker reopens after DurationOfBreak, half-opens, then closes on the first
-        // successful probe. Poll for that instead of assuming it lands inside a fixed 250ms + 4x100ms
-        // budget: that leaves only 150ms of slack over a 500ms DurationOfBreak, and under parallel
-        // load it does not land, which is what made this test flaky.
-        var closed = false;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < TimeSpan.FromSeconds(30))
-        {
-            // While the breaker is open the fallback returns default(bool) rather than throwing.
-            closed = await pipeline.ExecuteAsync(successFunc, testContextAccessor.Current.CancellationToken);
-            if (closed)
-            {
-                break;
-            }
-            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
-        }
+        _clock.Advance(_resiliencePoliciesOptions.DurationOfBreak);
+        var closed = await pipeline.ExecuteAsync(successFunc, testContextAccessor.Current.CancellationToken);
         closed.Should().BeTrue("the breaker must close once DurationOfBreak has elapsed");
 
         logMessages.Should().NotBeEmpty();
@@ -222,6 +217,7 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         monitor.CurrentValue.Returns(_ => _resiliencePoliciesOptions);
         monitor.Get(Arg.Any<string>()).Returns(_ => _resiliencePoliciesOptions);
         _fixture.Inject(monitor);
+        _fixture.Register<ResiliencePipelineFactory>(() => new ClockedResiliencePipelineFactory(_loggerFactory, _telemetryOptions, monitor, _clock));
         _loggerFactory = _fixture.Freeze<ILoggerFactory>();
         _boolLogger = _fixture.Freeze<ILogger<ResiliencePipeline<bool>>>();
         _loggerFactory.CreateLogger(Arg.Any<string>()).ReturnsForAnyArgs(_boolLogger);

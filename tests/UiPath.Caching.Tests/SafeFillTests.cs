@@ -17,7 +17,7 @@ public class SafeFillTests
     [Fact]
     public async Task Nodes_that_miss_together_return_and_keep_the_value_stored_first()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var b = peers.Add("b");
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -45,7 +45,7 @@ public class SafeFillTests
     [InlineData(true)]
     public async Task A_fill_whose_key_was_removed_while_its_generator_ran_stores_and_keeps_nothing(bool byPeer)
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var b = peers.Add("b");
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -68,7 +68,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_fill_whose_key_was_written_while_its_generator_ran_leaves_the_written_value()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Generate(CancellationToken _)
@@ -91,13 +91,13 @@ public class SafeFillTests
     [Fact]
     public async Task A_value_a_fill_stored_is_not_kept_locally_when_a_peer_overwrites_it_before_the_keep()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var b = peers.Add("b");
         var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         a.Inner.AfterWrite = landed.Task;
         var fill = a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("generated"), Policy, Ct).AsTask();
-        await CachePeers.Until(() => peers.Store.Values.ContainsKey("k"));
+        await peers.Store.Changes.WaitUntil(() => peers.Store.Values.ContainsKey("k"));
 
         (await b.Cache.SetAsync<string>(Key, "peer", Policy, Ct)).Should().BeTrue();
         landed.SetResult();
@@ -109,7 +109,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_background_fill_that_finds_the_key_stored_replaces_the_copy_it_kept_ahead_of_the_write()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var policy = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(10), LocalExpiration = TimeSpan.FromMinutes(10), BackgroundDistributedWrite = true };
         Task<string?> Generate(CancellationToken _)
@@ -118,13 +118,17 @@ public class SafeFillTests
             return Task.FromResult<string?>("generated");
         }
 
+        var stored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        a.AfterCommit = _ =>
+        {
+            if (a.Local.TryGetValue("k", out var entry) && entry is ICacheEntry<string?> { Value: "stored" })
+            {
+                stored.TrySetResult();
+            }
+        };
         (await a.Cache.GetOrAddAsync<string>(Key, Generate, policy, Ct)).Should().Be("generated", "the call returned before the write");
         var reads = a.Inner.SingleReads;
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (await a.Cache.GetAsync<string>(Key, policy, Ct) != "stored" && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
+        await stored.Task.WaitAsync(Ct);
 
         (await a.Cache.GetAsync<string>(Key, policy, Ct)).Should().Be("stored", "the copy kept ahead of the write was replaced by the stored value");
         peers.Store.Values["k"].Should().Be("stored", "the fill did not overwrite it");
@@ -135,8 +139,9 @@ public class SafeFillTests
     [Fact]
     public async Task A_late_fail_safe_value_that_finds_the_key_stored_keeps_the_stored_value_and_announces_nothing()
     {
-        using var peers = new CachePeers();
-        var a = peers.Add("a", clock: _clock, localClock: _clock);
+        using var peers = new CachePeers(_clock);
+        var telemetry = new RecordingTelemetryProvider();
+        var a = peers.Add("a", telemetry: telemetry, clock: _clock, localClock: _clock);
         var policy = new CachePolicy { FailSafeEnabled = true, LocalExpiration = LocalLifetime, FailSafeTimeout = TimeSpan.FromMilliseconds(50) };
         (await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("v1"), policy, Ct)).Should().Be("v1");
         await a.Settled();
@@ -144,15 +149,15 @@ public class SafeFillTests
         _clock.Advance(LocalLifetime * 2);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var call = a.Cache.GetOrAddAsync<string>(Key, _ => release.Task, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        _clock.HasTimers.Should().BeTrue();
         _clock.Advance(TimeSpan.FromSeconds(1));
         (await call).Should().Be("v1");
 
         peers.Store.WriteQuietly("k", "v2");
         var announced = a.Published.Count;
         release.SetResult("late");
-        await CachePeers.Until(() => a.Cache.LateGenerations == 0);
-        await a.Settled();
+        await telemetry.Changes.WaitUntil(() => telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"));
+        await CachePeers.BackgroundSettled(a.Cache);
 
         a.Published.Should().HaveCount(announced, "a late value that lost the write is not announced");
         peers.Store.Values["k"].Should().Be("v2", "the late value did not overwrite what a peer stored");
@@ -164,8 +169,9 @@ public class SafeFillTests
     [Fact]
     public async Task A_late_fail_safe_value_that_wins_the_write_is_announced()
     {
-        using var peers = new CachePeers();
-        var a = peers.Add("a", clock: _clock, localClock: _clock);
+        using var peers = new CachePeers(_clock);
+        var telemetry = new RecordingTelemetryProvider();
+        var a = peers.Add("a", telemetry: telemetry, clock: _clock, localClock: _clock);
         var policy = new CachePolicy { FailSafeEnabled = true, LocalExpiration = LocalLifetime, FailSafeTimeout = TimeSpan.FromMilliseconds(50) };
         (await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("v1"), policy, Ct)).Should().Be("v1");
         await a.Settled();
@@ -173,14 +179,14 @@ public class SafeFillTests
         _clock.Advance(LocalLifetime * 2);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var call = a.Cache.GetOrAddAsync<string>(Key, _ => release.Task, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        _clock.HasTimers.Should().BeTrue();
         _clock.Advance(TimeSpan.FromSeconds(1));
         (await call).Should().Be("v1");
         var announced = a.Published.Count;
 
         release.SetResult("late");
-        await CachePeers.Until(() => a.Cache.LateGenerations == 0);
-        await a.Settled();
+        await telemetry.Changes.WaitUntil(() => telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"));
+        await CachePeers.BackgroundSettled(a.Cache);
 
         peers.Store.Values["k"].Should().Be("late");
         a.Published.Should().HaveCount(announced + 1, "peers in a cooldown serve the value it replaces");
@@ -189,7 +195,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_batch_fill_leaves_a_key_a_peer_stored_and_writes_the_others()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -201,7 +207,7 @@ public class SafeFillTests
         }
 
         var call = a.Cache.GetOrAddAsync<string, long>([new("a", 1L), new("b", 2L)], Generate, Policy, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         peers.Store.WriteQuietly("a", "peer-a");
         release.SetResult();
 
@@ -220,7 +226,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_rehydration_does_not_overwrite_a_write_that_landed_while_its_generator_ran()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var telemetry = new RecordingTelemetryProvider();
         var b = peers.Add("b", telemetry: telemetry);
         var policy = Rehydrating();
@@ -237,11 +243,11 @@ public class SafeFillTests
         }
 
         await b.Cache.GetOrAddAsync<string>(Key, Generate, policy, Ct);
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         peers.Store.WriteQuietly("k", "peer");
         var announced = b.Published.Count;
         release.SetResult();
-        await CachePeers.Until(() => telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"));
+        await telemetry.Changes.WaitUntil(() => telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"));
         await b.Settled();
 
         peers.Store.Values["k"].Should().Be("peer", "the rehydration compared against what its read saw, which a write has since replaced");
@@ -251,7 +257,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_rehydration_over_an_unchanged_value_writes_and_announces()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var b = peers.Add("b");
         var policy = Rehydrating();
         peers.Store.WriteQuietly("k", "old");
@@ -260,7 +266,7 @@ public class SafeFillTests
         var announced = b.Published.Count;
 
         await b.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("generated"), policy, Ct);
-        await CachePeers.Until(() => peers.Store.Values["k"] as string == "generated");
+        await peers.Store.Changes.WaitUntil(() => peers.Store.Values["k"] as string == "generated");
         await b.Settled();
 
         b.Published.Should().HaveCount(announced + 1);
@@ -269,7 +275,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_fill_waiting_for_its_turn_sends_no_command_when_a_change_lands_while_it_waits()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var background = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(10), LocalExpiration = TimeSpan.FromMinutes(10), BackgroundDistributedWrite = true };
         var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -293,7 +299,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_fill_refused_for_a_change_during_its_generator_is_counted_as_superseded_once()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var telemetry = new RecordingTelemetryProvider();
         var a = peers.Add("a", telemetry: telemetry);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -315,7 +321,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_batch_fill_is_one_call_and_leaves_out_a_key_changed_while_its_generator_ran()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -327,7 +333,7 @@ public class SafeFillTests
         }
 
         var call = a.Cache.GetOrAddAsync<string, long>([new("a", 1L), new("b", 2L), new("c", 3L)], Generate, Policy, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         (await a.Cache.SetAsync<string>("a", "set", Policy, Ct)).Should().BeTrue();
         release.SetResult();
 
@@ -347,7 +353,7 @@ public class SafeFillTests
     [InlineData(true)]
     public async Task A_generator_that_throws_or_is_canceled_leaves_no_fill_watch(bool cancels)
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         using var cts = new CancellationTokenSource();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -360,7 +366,7 @@ public class SafeFillTests
         }
 
         var call = a.Cache.GetOrAddAsync<string>(Key, Generate, Policy, cts.Token).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         a.Cache.FillsWatched.Should().BeTrue("the generator is running");
 
         if (cancels)
@@ -380,7 +386,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_rehydration_whose_key_expired_while_its_generator_ran_fills_the_absent_key()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var b = peers.Add("b");
         var policy = Rehydrating();
         peers.Store.WriteQuietly("k", "old");
@@ -396,11 +402,11 @@ public class SafeFillTests
         }
 
         await b.Cache.GetOrAddAsync<string>(Key, Generate, policy, Ct);
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         peers.Store.Values.TryRemove("k", out _).Should().BeTrue();
         release.SetResult();
 
-        await CachePeers.Until(() => peers.Store.Values.TryGetValue("k", out var stored) && stored as string == "generated");
+        await peers.Store.Changes.WaitUntil(() => peers.Store.Values.TryGetValue("k", out var stored) && stored as string == "generated");
         await b.Settled();
         peers.Store.Values["k"].Should().Be("generated", "the key was gone when the compare lost, so the value fills it");
     }
@@ -408,7 +414,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_rehydration_that_found_its_key_absent_fills_it()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var b = peers.Add("b");
         var policy = Rehydrating();
         peers.Store.WriteQuietly("k", "old");
@@ -418,14 +424,14 @@ public class SafeFillTests
 
         await b.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("generated"), policy, Ct);
 
-        await CachePeers.Until(() => peers.Store.Values.TryGetValue("k", out var stored) && stored as string == "generated");
+        await peers.Store.Changes.WaitUntil(() => peers.Store.Values.TryGetValue("k", out var stored) && stored as string == "generated");
         peers.Store.Values["k"].Should().Be("generated");
     }
 
     [Fact]
     public async Task A_background_fill_waiting_in_the_queue_sends_no_command_when_a_peer_removed_the_key_meanwhile()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var b = peers.Add("b");
         var background = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(10), LocalExpiration = TimeSpan.FromMinutes(10), BackgroundDistributedWrite = true };
@@ -433,7 +439,7 @@ public class SafeFillTests
         a.Inner.AfterWrite = hold.Task;
 
         await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("first"), background, Ct);
-        await CachePeers.Until(() => peers.Store.Values.ContainsKey("k"));
+        await peers.Store.Changes.WaitUntil(() => peers.Store.Values.ContainsKey("k"));
         a.Local.Remove(Key.Name);
         peers.Store.Values.TryRemove("k", out _).Should().BeTrue();
         var fills = a.Inner.Fills;
@@ -452,14 +458,14 @@ public class SafeFillTests
     [Fact]
     public async Task A_background_fill_that_a_newer_one_replaces_in_the_queue_leaves_no_watch()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         var background = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(10), LocalExpiration = TimeSpan.FromMinutes(10), BackgroundDistributedWrite = true };
         var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         a.Inner.AfterWrite = hold.Task;
 
         await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("first"), background, Ct);
-        await CachePeers.Until(() => peers.Store.Values.ContainsKey("k"));
+        await peers.Store.Changes.WaitUntil(() => peers.Store.Values.ContainsKey("k"));
         a.Local.Remove(Key.Name);
         peers.Store.Values.TryRemove("k", out _).Should().BeTrue();
         var fills = a.Inner.Fills;
@@ -477,7 +483,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_fill_that_finds_an_unreadable_value_replaces_it_only_while_it_is_what_was_read()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         peers.Store.Values["k"] = CachePeers.SharedStore.Unreadable;
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -490,12 +496,12 @@ public class SafeFillTests
         }
 
         var slow = a.Cache.GetOrAddAsync<string>(Key, Generate, Policy, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         a.Inner.AfterNextRead = landed.Task;
         release.SetResult();
 
-        await CachePeers.Until(() => a.Inner.AfterNextRead is null || slow.IsCompleted);
+        await a.Inner.Changes.WaitUntil(() => a.Inner.AfterNextRead is null);
         slow.IsCompleted.Should().BeFalse("the fill reads the unreadable value before it replaces it");
         peers.Store.WriteQuietly("k", "peer");
         landed.SetResult();
@@ -507,7 +513,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_fill_whose_conditional_heal_loses_to_a_removal_does_not_write_the_key_again()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var (a, b) = (peers.Add("a"), peers.Add("b"));
         peers.Store.Values["k"] = CachePeers.SharedStore.Unreadable;
         a.Inner.BeforeStampedWrite = async () =>
@@ -524,7 +530,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_fill_that_finds_an_unreadable_value_replaces_it()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var a = peers.Add("a");
         peers.Store.Values["k"] = CachePeers.SharedStore.Unreadable;
 
@@ -537,7 +543,7 @@ public class SafeFillTests
     [Fact]
     public async Task A_rehydration_whose_adoption_read_failed_fills_only_an_absent_key()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var telemetry = new RecordingTelemetryProvider();
         var b = peers.Add("b", telemetry: telemetry);
         var policy = Rehydrating();
@@ -555,10 +561,10 @@ public class SafeFillTests
 
         b.Inner.ReadThrows = true;
         await b.Cache.GetOrAddAsync<string>(Key, Generate, policy, Ct);
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         peers.Store.WriteQuietly("k", "peer");
         release.SetResult();
-        await CachePeers.Until(() => telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"));
+        await telemetry.Changes.WaitUntil(() => telemetry.Events.Any(e => e.Name == "cache.rehydrate.succeeded"));
         await b.Settled();
 
         peers.Store.Values["k"].Should().Be("peer", "with nothing read to compare against, the value fills an absent key only");

@@ -177,25 +177,7 @@ dotnet_diagnostic.RS0030.severity = none
 [UiPath.Caching.Tests/Negotiation/RedisSubscriberSourceTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Tests/NullCacheConditionalAddTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Tests/OpenTelemetry/OpenTelemetryCachingTelemetryProviderTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/OwnerArgumentTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/PeerFieldUpdateTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/PeerRefreshHashTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/PeerRefreshTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/PeerWriteGuardTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
 [UiPath.Caching.Tests/Redis/FailSafeIntegrationTests.cs]
@@ -204,83 +186,12 @@ dotnet_diagnostic.RS0030.severity = none
 [UiPath.Caching.Tests/Redis/RemoveTombstoneRedisIntegrationTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Tests/RedisProfilerTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/RehydrationCoordinatorTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/RepeatInvalidationTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/ReserveFirstTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/ResiliencePipelineFactoryTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/ResiliencePipelineWrapperTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/RunTableCombinationTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/SafeFillTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/SafeHashFillTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/SealedMemberPathTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Tests/Serialization/FormatMigratorTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
 [UiPath.Caching.Tests/Serialization/ValueMigrationTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Tests/SetCacheProviderTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/SharedGenerationTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/SpanGeneratedExpirationTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/SpanKeyDefaultWriteTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/SpanKeyOperationTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/SpanKeyWriteTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/StaleValuesTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/StateAndArgumentOverloadTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/StatefulGetOrAddTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/SyncExtensionsTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Tests/Telemetry/TelemetryListeningTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Tests/TestCacheEntryTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/TestChangeToken.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/TimeProviderExtensionsTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Tests/VerbatimKeyEndToEndTests.cs]
-dotnet_diagnostic.RS0030.severity = none

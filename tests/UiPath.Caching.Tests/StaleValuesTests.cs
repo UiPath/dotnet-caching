@@ -48,11 +48,11 @@ public sealed class StaleValuesTests : IDisposable
             var oldValue = store.Keep(Name, Topic, old, deadline, Size, Age, store.EpochFor(Topic), store.ChangeFor(Name))!;
 
             // As the token of the entry a write replaces changes, or a late answer drops the value it replaced, while that write keeps its own.
-            var go = 0;
+            var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var dropping = Task.Run(
-                () =>
+                async () =>
                 {
-                    SpinWait.SpinUntil(() => Volatile.Read(ref go) == 1);
+                    await go.Task.WaitAsync(Ct);
                     if (byEntry)
                     {
                         store.Drop(Name, old);
@@ -64,13 +64,13 @@ public sealed class StaleValuesTests : IDisposable
                 },
                 Ct);
             var keeping = Task.Run(
-                () =>
+                async () =>
                 {
-                    SpinWait.SpinUntil(() => Volatile.Read(ref go) == 1);
+                    await go.Task.WaitAsync(Ct);
                     store.Keep(Name, Topic, newest, deadline, Size, Age, store.EpochFor(Topic), store.ChangeFor(Name));
                 },
                 Ct);
-            Volatile.Write(ref go, 1);
+            go.SetResult();
             await Task.WhenAll(dropping, keeping);
 
             if (!store.TryGet<string>(Name, Age, out _, out var kept) || !ReferenceEquals(kept, newest))
@@ -93,22 +93,22 @@ public sealed class StaleValuesTests : IDisposable
             Keep(store, entry).Should().NotBeNull();
 
             // As a peer's removal of the key is heard while the tier tells that the entry expired.
-            var go = 0;
+            var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var charging = Task.Run(
-                () =>
+                async () =>
                 {
-                    SpinWait.SpinUntil(() => Volatile.Read(ref go) == 1);
+                    await go.Task.WaitAsync(Ct);
                     Leaves(store, entry, EvictionReason.Expired);
                 },
                 Ct);
             var removing = Task.Run(
-                () =>
+                async () =>
                 {
-                    SpinWait.SpinUntil(() => Volatile.Read(ref go) == 1);
+                    await go.Task.WaitAsync(Ct);
                     store.Drop(Name);
                 },
                 Ct);
-            Volatile.Write(ref go, 1);
+            go.SetResult();
             await Task.WhenAll(charging, removing);
 
             if (Kept(store) is not null)

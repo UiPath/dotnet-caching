@@ -13,6 +13,7 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
     private readonly List<ExceptionRecord> _exceptions = [];
 
     public TestSignal Signal { get; } = new();
+    public Fakes.AsyncTestSignal Changes { get; } = new();
 
     public IReadOnlyList<EventRecord> Events => Snapshot(_events);
     public IReadOnlyList<MetricRecord> Metrics => Snapshot(_metrics);
@@ -45,6 +46,7 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
             target.Add(record);
             Signal.Pulse();
         }
+        Changes.Pulse();
     }
 
     private T[] Snapshot<T>(List<T> source)

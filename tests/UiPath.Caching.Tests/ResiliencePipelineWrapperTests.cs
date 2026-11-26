@@ -1,9 +1,9 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Polly;
 using Polly.Timeout;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Polly;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
@@ -11,8 +11,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     private static readonly TimeSpan PipelineTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan CallbackDuration = TimeSpan.FromSeconds(1);
 
-    // Only a regression waits this long: the callback it would wait for never finishes on its own.
-    private static readonly TimeSpan ReleaseBound = TimeSpan.FromSeconds(30);
+    private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
 
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IResiliencePipelineFactory _resiliencePipelineFactory = default!;
@@ -68,7 +67,8 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
         {
             var pending = sut.ExecuteAsync(callback.RunAsync, false, testContextAccessor.Current.CancellationToken).AsTask();
 
-            (await Task.WhenAny(pending, Task.Delay(ReleaseBound, testContextAccessor.Current.CancellationToken))).Should().BeSameAs(pending, "the timeout releases the caller while the callback still runs");
+            await callback.Entered.WaitAsync(TestContext.Current.CancellationToken);
+            _clock.Advance(PipelineTimeout);
             var act = async () => await pending;
             await act.Should().ThrowAsync<TimeoutRejectedException>();
             callback.Finished.Should().BeFalse("it did not wait for the callback to finish");
@@ -86,7 +86,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     {
         var sut = CreateTimedSut(scope);
 
-        var result = await sut.ExecuteAsync(IgnoresTheToken, false, testContextAccessor.Current.CancellationToken);
+        var result = await RunCallback(sut);
 
         result.Should().BeTrue("the pipeline returned only once the callback had finished");
     }
@@ -106,7 +106,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     {
         var sut = CreateTimedSut(ResiliencePipelineNames.Read, disruptionTimeout: TimeSpan.FromSeconds(3), disruptionInProgress: true, suggestedTimeout: TimeSpan.FromMilliseconds(120));
 
-        var result = await sut.ExecuteAsync(IgnoresTheToken, false, testContextAccessor.Current.CancellationToken);
+        var result = await RunCallback(sut);
 
         result.Should().BeTrue("the call outlived the configured timeout but not the one the disruption allows");
     }
@@ -117,7 +117,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
         // The Azure probe route: in progress, with no announced window.
         var sut = CreateTimedSut(ResiliencePipelineNames.Read, disruptionTimeout: TimeSpan.FromSeconds(3), disruptionInProgress: true, suggestedTimeout: null);
 
-        var act = async () => await sut.ExecuteAsync(IgnoresTheToken, false, testContextAccessor.Current.CancellationToken);
+        var act = async () => await RunCallback(sut, timesOut: true);
 
         await act.Should().ThrowAsync<TimeoutRejectedException>();
     }
@@ -127,7 +127,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     {
         var sut = CreateTimedSut(ResiliencePipelineNames.Read, disruptionTimeout: TimeSpan.FromSeconds(3), disruptionInProgress: false);
 
-        var act = async () => await sut.ExecuteAsync(IgnoresTheToken, false, testContextAccessor.Current.CancellationToken);
+        var act = async () => await RunCallback(sut, timesOut: true);
 
         await act.Should().ThrowAsync<TimeoutRejectedException>();
     }
@@ -137,7 +137,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     {
         var sut = CreateTimedSut(ResiliencePipelineNames.Read, disruptionTimeout: null, disruptionInProgress: true);
 
-        var act = async () => await sut.ExecuteAsync(IgnoresTheToken, false, testContextAccessor.Current.CancellationToken);
+        var act = async () => await RunCallback(sut, timesOut: true);
 
         await act.Should().ThrowAsync<TimeoutRejectedException>();
     }
@@ -147,7 +147,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     {
         var sut = CreateTimedSut(ResiliencePipelineNames.Read, disruptionInProgress: true, suggestedTimeout: TimeSpan.FromSeconds(3));
 
-        var result = await sut.ExecuteAsync(IgnoresTheToken, false, testContextAccessor.Current.CancellationToken);
+        var result = await RunCallback(sut);
 
         result.Should().BeTrue("the tier is already relaxing its own timeouts by that much");
     }
@@ -161,7 +161,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
             disruptionInProgress: true,
             suggestedTimeout: TimeSpan.FromMilliseconds(120));
 
-        var result = await sut.ExecuteAsync(IgnoresTheToken, false, testContextAccessor.Current.CancellationToken);
+        var result = await RunCallback(sut);
 
         result.Should().BeTrue();
     }
@@ -176,7 +176,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
             suggestedTimeout: TimeSpan.FromMilliseconds(1),
             requestTimeout: TimeSpan.FromSeconds(3));
 
-        var result = await sut.ExecuteAsync(IgnoresTheToken, false, testContextAccessor.Current.CancellationToken);
+        var result = await RunCallback(sut);
 
         result.Should().BeTrue();
     }
@@ -218,11 +218,10 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
         {
             var pending = sut.ExecuteAsync(callback.RunAsync, false, caller.Token).AsTask();
             // Cancelled once running, or Polly would refuse the call up front.
-            await callback.Entered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await callback.Entered.WaitAsync(TestContext.Current.CancellationToken);
 
             await caller.CancelAsync();
 
-            (await Task.WhenAny(pending, Task.Delay(ReleaseBound, TestContext.Current.CancellationToken))).Should().BeSameAs(pending, "the caller is released while the callback still runs");
             var act = async () => await pending;
             await act.Should().ThrowAsync<OperationCanceledException>("the caller is released rather than waiting out the callback");
             callback.Finished.Should().BeFalse("it did not wait for the callback to finish");
@@ -239,8 +238,12 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
         var sut = CreateTimedSut(ResiliencePipelineNames.Write, requestTimeout: TimeSpan.FromSeconds(30));
         using var caller = new CancellationTokenSource();
 
-        var pending = sut.ExecuteAsync(IgnoresTheToken, false, caller.Token).AsTask();
+        var callback = new HeldCallback();
+        var pending = sut.ExecuteAsync(callback.RunAsync, false, caller.Token).AsTask();
+        await callback.Entered;
         await caller.CancelAsync();
+        pending.IsCompleted.Should().BeFalse();
+        callback.Release();
 
         (await pending).Should().BeTrue("the callback ran to its own completion");
     }
@@ -251,16 +254,26 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
         var sut = CreateTimedSut(ResiliencePipelineNames.Read, retryCount: 1);
         var attempts = 0;
 
-        var act = async () => await sut.ExecuteAsync(
+        var callback = new HeldCallback();
+        var pending = sut.ExecuteAsync(
             token =>
             {
                 Interlocked.Increment(ref attempts);
-                return IgnoresTheToken(token);
+                return callback.RunAsync(token);
             },
             false,
-            testContextAccessor.Current.CancellationToken);
-
-        await act.Should().ThrowAsync<TimeoutRejectedException>();
+            testContextAccessor.Current.CancellationToken).AsTask();
+        await callback.Entered;
+        _clock.Advance(PipelineTimeout);
+        try
+        {
+            var act = async () => await pending;
+            await act.Should().ThrowAsync<TimeoutRejectedException>();
+        }
+        finally
+        {
+            callback.Release();
+        }
         attempts.Should().Be(1);
     }
 
@@ -271,20 +284,16 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
         for (var i = 0; i < 5; i++)
         {
             using var caller = new CancellationTokenSource();
-            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var callback = new HeldCallback();
             var pending = sut.ExecuteAsync(
-                async _ =>
-                {
-                    entered.TrySetResult();
-                    await Task.Delay(CallbackDuration, CancellationToken.None).ConfigureAwait(false);
-                    return true;
-                },
+                callback.RunAsync,
                 false,
                 caller.Token).AsTask();
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await callback.Entered.WaitAsync(TestContext.Current.CancellationToken);
             await caller.CancelAsync();
             var act = async () => await pending;
             await act.Should().ThrowAsync<OperationCanceledException>();
+            callback.Release();
         }
 
         var result = await sut.ExecuteAsync(_ => new ValueTask<bool>(true), false, testContextAccessor.Current.CancellationToken);
@@ -306,23 +315,44 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     public async Task The_read_pipeline_abandons_a_state_callback_that_ignores_the_token()
     {
         var sut = CreateTimedSut(ResiliencePipelineNames.Read);
-        var elapsed = Stopwatch.StartNew();
-
-        var act = async () => await sut.ExecuteAsync(static (_, token) => IgnoresTheToken(token), 0, false, testContextAccessor.Current.CancellationToken);
-
-        await act.Should().ThrowAsync<TimeoutRejectedException>();
-        elapsed.Elapsed.Should().BeLessThan(CallbackDuration);
+        var callback = new HeldCallback();
+        var pending = sut.ExecuteAsync(static (state, token) => state.RunAsync(token), callback, false, testContextAccessor.Current.CancellationToken).AsTask();
+        await callback.Entered;
+        _clock.Advance(PipelineTimeout);
+        try
+        {
+            var act = async () => await pending;
+            await act.Should().ThrowAsync<TimeoutRejectedException>();
+            callback.Finished.Should().BeFalse();
+        }
+        finally
+        {
+            callback.Release();
+        }
     }
 
-    private static ValueTask<bool> IgnoresTheToken(CancellationToken token) => RunIgnoringCancellation();
-
-    private static async ValueTask<bool> RunIgnoringCancellation()
+    private async Task<bool> RunCallback(ResiliencePipelineWrapper sut, bool timesOut = false)
     {
-        await Task.Delay(CallbackDuration, CancellationToken.None).ConfigureAwait(false);
-        return true;
+        var callback = new HeldCallback();
+        var pending = sut.ExecuteAsync(callback.RunAsync, false, testContextAccessor.Current.CancellationToken).AsTask();
+        await callback.Entered;
+        _clock.Advance(CallbackDuration);
+        try
+        {
+            if (!timesOut)
+            {
+                pending.IsCompleted.Should().BeFalse();
+                callback.Release();
+            }
+            return await pending;
+        }
+        finally
+        {
+            callback.Release();
+        }
     }
 
-    private static ResiliencePipelineWrapper CreateTimedSut(string scope, TimeSpan? disruptionTimeout = null, bool disruptionInProgress = false, TimeSpan? suggestedTimeout = null, TimeSpan? requestTimeout = null, int retryCount = 0, int exceptionsAllowedBeforeBreaking = 500)
+    private ResiliencePipelineWrapper CreateTimedSut(string scope, TimeSpan? disruptionTimeout = null, bool disruptionInProgress = false, TimeSpan? suggestedTimeout = null, TimeSpan? requestTimeout = null, int retryCount = 0, int exceptionsAllowedBeforeBreaking = 500)
     {
         var options = new ResiliencePoliciesOptions
         {
@@ -339,7 +369,7 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
         state.InProgress.Returns(disruptionInProgress);
         state.SuggestedTimeout.Returns(suggestedTimeout);
 
-        return new(new ResiliencePipelineFactory(NullLoggerFactory.Instance, null, monitor, state), scope);
+        return new(new ClockedResiliencePipelineFactory(NullLoggerFactory.Instance, null, monitor, _clock, state), scope);
     }
 
     /// <summary>A callback that ignores its token and runs until the test releases it, so "the caller did not wait for it" is checked by state, not by a clock a busy machine can stretch.</summary>

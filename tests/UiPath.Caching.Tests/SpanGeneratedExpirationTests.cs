@@ -7,7 +7,9 @@ namespace UiPath.Caching.Tests;
 /// <summary>The <c>Span&lt;char&gt;</c> <c>GetOrAddWithExpirationAsync</c> answers as the <see cref="CacheKey"/> forms do, and a warm hit by span allocates nothing.</summary>
 public class SpanGeneratedExpirationTests
 {
-    private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+    private static readonly DateTimeOffset Deadline = Clock.GetUtcNow().AddMinutes(7);
     private static readonly Func<CancellationToken, Task<GeneratedValue<string>>> Unexpected = static _ => throw new InvalidOperationException("the generator ran on a hit");
     private static readonly Func<int, CancellationToken, Task<GeneratedValue<string>>> UnexpectedState = static (_, _) => throw new InvalidOperationException("the generator ran on a hit");
 
@@ -49,20 +51,20 @@ public class SpanGeneratedExpirationTests
     [InlineData(true)]
     public async Task A_typed_cache_hands_its_own_policy_to_a_span_call(bool withState)
     {
-        using var owner = InMemoryMultilayer.Cache();
+        using var owner = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(owner, new PrefixCacheKeyStrategy("app"), new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(20) });
 
         Complete(withState
             ? SpanTypedState(typed, "token", 1, static (_, _) => Task.FromResult(new GeneratedValue<string>("jwt")))
             : SpanTyped(typed, "token", static _ => Task.FromResult(new GeneratedValue<string>("jwt"))));
 
-        (await owner.GetCacheEntryAsync<string>("app:token", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(20), TimeSpan.FromSeconds(30));
+        (await owner.GetCacheEntryAsync<string>("app:token", policy: null, Ct)).Expiration.Should().Be(Clock.GetUtcNow().AddMinutes(20));
     }
 
     [Fact]
     public async Task A_span_miss_stores_the_value_until_the_expiration_the_generator_returns_and_a_hit_does_not_generate()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var calls = 0;
 
         var first = Complete(Span(cache, " User:42 ", _ => { calls++; return Task.FromResult(new GeneratedValue<string>("jwt", Deadline)); }));
@@ -77,7 +79,7 @@ public class SpanGeneratedExpirationTests
     [Fact]
     public async Task A_span_state_miss_stores_under_the_key_and_a_hit_does_not_generate()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         Complete(SpanState(cache, "user:42", 7, static (n, _) => Task.FromResult(new GeneratedValue<string>($"v{n}", Deadline)))).Should().Be("v7");
         Complete(SpanState(cache, " User:42 ", 8, UnexpectedState)).Should().Be("v7");
@@ -89,12 +91,12 @@ public class SpanGeneratedExpirationTests
     [Fact]
     public async Task A_span_value_that_has_already_expired_is_returned_and_not_stored()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var calls = 0;
         Task<GeneratedValue<string>> Generate(CancellationToken _)
         {
             calls++;
-            return Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(-1)));
+            return Task.FromResult(new GeneratedValue<string>("jwt", Clock.GetUtcNow().AddMinutes(-1)));
         }
 
         Complete(Span(cache, "token", Generate)).Should().Be("jwt");
@@ -107,18 +109,18 @@ public class SpanGeneratedExpirationTests
     [Fact]
     public async Task A_span_value_without_an_expiration_takes_the_policy_lifetime()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var policy = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(20) };
 
         Complete(Span(cache, "token", static _ => Task.FromResult(new GeneratedValue<string>("jwt")), policy));
 
-        (await cache.GetCacheEntryAsync<string>("token", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(20), TimeSpan.FromSeconds(30));
+        (await cache.GetCacheEntryAsync<string>("token", policy: null, Ct)).Expiration.Should().Be(Clock.GetUtcNow().AddMinutes(20));
     }
 
     [Fact]
     public async Task A_span_miss_runs_the_generator_once_under_concurrency()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var calls = 0;
         var gate = new TaskCompletionSource();
         async Task<GeneratedValue<string>> Generate(CancellationToken _)
@@ -139,7 +141,7 @@ public class SpanGeneratedExpirationTests
     [Fact]
     public async Task A_span_call_rejects_an_empty_key_as_the_key_form_does()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         var act = async () => await Span(cache, "  ", Unexpected);
         var byKey = async () => await cache.GetOrAddWithExpirationAsync<string>("  ", Unexpected, Ct);
@@ -151,7 +153,7 @@ public class SpanGeneratedExpirationTests
     [Fact]
     public void A_span_state_call_rejects_a_null_generator()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         var act = () => SpanState<int>(cache, "k", 1, null!);
 
@@ -161,7 +163,7 @@ public class SpanGeneratedExpirationTests
     [Fact]
     public async Task A_span_call_with_a_cancelled_token_ends_as_the_key_form_does()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         Complete(Span(cache, "warm", static _ => Task.FromResult(new GeneratedValue<string>("v", Deadline))));
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
@@ -175,7 +177,7 @@ public class SpanGeneratedExpirationTests
     [Fact]
     public async Task A_typed_cache_stores_a_span_key_under_its_own_strategy()
     {
-        using var owner = InMemoryMultilayer.Cache();
+        using var owner = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(owner, new PrefixCacheKeyStrategy("app"));
 
         Complete(SpanTyped(typed, " User:42 ", static _ => Task.FromResult(new GeneratedValue<string>("v", Deadline)))).Should().Be("v");
@@ -189,7 +191,7 @@ public class SpanGeneratedExpirationTests
     [Fact]
     public async Task A_typed_cache_with_a_strategy_that_declines_the_span_still_stores_under_the_key_it_builds()
     {
-        using var owner = InMemoryMultilayer.Cache();
+        using var owner = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(owner, new DecliningStrategy());
 
         Complete(SpanTypedState(typed, "user:42", 1, static (n, _) => Task.FromResult(new GeneratedValue<string>($"v{n}", Deadline)))).Should().Be("v1");
@@ -239,7 +241,7 @@ public class SpanGeneratedExpirationTests
     public void A_miss_by_span_reads_the_local_tier_once()
     {
         var memory = new CountingMemoryCacheFactory();
-        using var cache = InMemoryMultilayer.Cache(memory: memory);
+        using var cache = InMemoryMultilayer.Cache(memory: memory, clock: Clock);
         var noLocalLock = new CachePolicy { Lock = new LockProfile { LocalSingleFlightEnabled = false } };
 
         Complete(Span(cache, "k", static _ => Task.FromResult(new GeneratedValue<string>("v", Deadline)), noLocalLock)).Should().Be("v");
@@ -251,7 +253,7 @@ public class SpanGeneratedExpirationTests
     public void A_state_miss_by_span_reads_the_local_tier_once()
     {
         var memory = new CountingMemoryCacheFactory();
-        using var cache = InMemoryMultilayer.Cache(memory: memory);
+        using var cache = InMemoryMultilayer.Cache(memory: memory, clock: Clock);
         var noLocalLock = new CachePolicy { Lock = new LockProfile { LocalSingleFlightEnabled = false } };
 
         Complete(SpanState(cache, "k", 1, static (n, _) => Task.FromResult(new GeneratedValue<string>($"v{n}", Deadline)), noLocalLock)).Should().Be("v1");
@@ -263,7 +265,7 @@ public class SpanGeneratedExpirationTests
     [Fact]
     public async Task Warm_span_get_or_add_with_expiration_allocates_nothing()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") }, clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync("user:42", "v", Ct)).Should().BeTrue();
         (await cache.SetAsync<string>("plain:1", "p", policy: null, Ct)).Should().BeTrue();

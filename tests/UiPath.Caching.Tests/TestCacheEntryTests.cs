@@ -2,6 +2,8 @@ namespace UiPath.Caching.Tests;
 
 public class TestCacheEntryTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     [Fact]
     public void Found_defaults_to_Value_not_null_when_not_explicitly_set()
     {
@@ -22,7 +24,7 @@ public class TestCacheEntryTests
     {
         var entry = new TestCacheEntry<string?> { Value = null, Found = true };
 
-        var clone = (TestCacheEntry<string?>)entry.NewEntry(DateTimeOffset.UtcNow.AddMinutes(5));
+        var clone = (TestCacheEntry<string?>)entry.NewEntry(Clock.GetUtcNow().AddMinutes(5));
 
         clone.Found.Should().BeTrue("explicit Found override must survive cloning, otherwise metadata-refresh / clone-based tests turn a cached-null hit back into a miss");
         clone.Value.Should().BeNull();
@@ -33,7 +35,7 @@ public class TestCacheEntryTests
     {
         var entry = new TestCacheEntry<string?> { Value = null };
 
-        var clone = (TestCacheEntry<string?>)entry.NewEntry(DateTimeOffset.UtcNow.AddMinutes(5));
+        var clone = (TestCacheEntry<string?>)entry.NewEntry(Clock.GetUtcNow().AddMinutes(5));
 
         clone.Found.Should().BeFalse();
     }

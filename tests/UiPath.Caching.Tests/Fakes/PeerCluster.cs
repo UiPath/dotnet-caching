@@ -11,7 +11,7 @@ using UiPath.Caching.Tests.Broadcast;
 namespace UiPath.Caching.Tests.Fakes;
 
 /// <summary>Real multilayer hash caches, one per node, over one stand-in for Redis that counts a hash's writes, with a bus that carries their events as JSON, as the wire does.</summary>
-internal sealed class PeerCluster : IDisposable
+internal sealed class PeerCluster(TimeProvider? defaultClock = null) : IDisposable
 {
     private readonly List<Node> _nodes = [];
     private readonly CacheEventFormatter _formatter = new();
@@ -26,7 +26,7 @@ internal sealed class PeerCluster : IDisposable
     /// <param name="clock">The node's clock, for its local expirations; the system clock when null.</param>
     public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024, bool monitorsConnection = false, Telemetry.RecordingTelemetryProvider? telemetry = null, TimeSpan? timeout = null, TimeProvider? clock = null, TimeSpan? repeatInvalidationAfter = null)
     {
-        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry, timeout, clock ?? TimeProvider.System, repeatInvalidationAfter);
+        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry, timeout, clock ?? defaultClock ?? TimeProvider.System, repeatInvalidationAfter);
         _nodes.Add(node);
         return node;
     }
@@ -299,12 +299,12 @@ internal sealed class PeerCluster : IDisposable
 
     internal sealed class Node : IDisposable
     {
-        private readonly Telemetry.RecordingTelemetryProvider? _telemetry;
+        private readonly Telemetry.RecordingTelemetryProvider _telemetry;
 
         public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes, bool monitorsConnection, Telemetry.RecordingTelemetryProvider? telemetry, TimeSpan? timeout, TimeProvider clock, TimeSpan? repeatInvalidationAfter = null)
         {
             Name = name;
-            _telemetry = telemetry;
+            _telemetry = telemetry ?? new Telemetry.RecordingTelemetryProvider();
             var options = new InMemoryRedisCacheOptions { PeerFieldUpdates = peerFieldUpdates, PeerFieldUpdateMaxFields = maxFields, PeerFieldUpdateMaxBytes = maxBytes, ClearLocalOnReconnect = monitorsConnection ? false : null, RepeatInvalidationAfter = repeatInvalidationAfter };
             if (timeout is { } bound)
             {
@@ -332,7 +332,7 @@ internal sealed class PeerCluster : IDisposable
                 tokens,
                 topics,
                 events,
-                (ICachingTelemetryProvider?)telemetry ?? Substitute.For<ICachingTelemetryProvider>(),
+                _telemetry,
                 options,
                 options,
                 cacheOptions,
@@ -361,14 +361,11 @@ internal sealed class PeerCluster : IDisposable
 
         public async Task Settled()
         {
-            var until = DateTime.UtcNow.AddSeconds(10);
-            while (Cache.RunsInFlight != 0 && DateTime.UtcNow < until)
-            {
-                await Task.Delay(5);
-            }
+            await CachePeers.BackgroundSettled(Cache);
+            await _telemetry.Changes.WaitUntil(() => Cache.RunsInFlight == 0);
+            Cache.FlushPeerRefreshMetrics();
         }
 
-        /// <summary>Settles once the refresher has reported <paramref name="outcomes"/> keys since the node started.</summary>
         public async Task Settled(int outcomes)
         {
             await Settled();
@@ -434,6 +431,7 @@ internal sealed class PeerCluster : IDisposable
         public PeerFieldLimits Limits { get; set; }
 
         public TestSignal Changed { get; } = new();
+        public AsyncTestSignal Changes { get; } = new();
 
         public int Reads => Volatile.Read(ref _reads);
 
@@ -564,8 +562,9 @@ internal sealed class PeerCluster : IDisposable
         ValueTask<ICacheEntry<IDictionary<string, T?>>> ISharedHashTier.ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
             where T : default
         {
-            Interlocked.Increment(ref _reads);
             var entry = ReadHold is { } hold ? ReadAfterAsync(hold, cacheKey.Name) : Task.FromResult(Store.Read(cacheKey.Name));
+            Interlocked.Increment(ref _reads);
+            Changes.Pulse();
             Changed.Pulse();
             return new(entry.ContinueWith(static read => (ICacheEntry<IDictionary<string, T?>>)(object)read.Result, TaskScheduler.Default));
         }
@@ -579,12 +578,14 @@ internal sealed class PeerCluster : IDisposable
                 case "Dispose":
                     return null;
                 case nameof(IHashCache.GetCacheEntryAsync):
-                    Interlocked.Increment(ref _reads);
-                    Changed.Pulse();
                     var key = ((CacheKey)args![0]!).Name;
-                    return ReadHold is { } hold
+                    var read = ReadHold is { } hold
                         ? new ValueTask<ICacheEntry<IDictionary<string, string?>>>(ReadAfterAsync(hold, key))
                         : new ValueTask<ICacheEntry<IDictionary<string, string?>>>(Store.Read(key));
+                    Interlocked.Increment(ref _reads);
+                    Changes.Pulse();
+                    Changed.Pulse();
+                    return read;
                 case nameof(IHashCache.SetMetadataAsync):
                     Store.SetMetadata((IDictionary<string, string?>)args![1]!);
                     return new ValueTask<bool>(true);

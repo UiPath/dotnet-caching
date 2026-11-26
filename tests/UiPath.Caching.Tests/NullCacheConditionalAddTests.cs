@@ -4,6 +4,8 @@ namespace UiPath.Caching.Tests;
 
 public class NullCacheConditionalAddTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -22,7 +24,7 @@ public class NullCacheConditionalAddTests
 
         (await NullCache.Instance.TryAddAsync("k", "v", token: Ct)).Should().BeTrue();
         (await NullCache.Instance.TryAddAsync("k", "v", ttl, token: Ct)).Should().BeTrue();
-        (await NullCache.Instance.TryAddAsync("k", "v", DateTimeOffset.UtcNow.Add(ttl), token: Ct)).Should().BeTrue();
+        (await NullCache.Instance.TryAddAsync("k", "v", Clock.GetUtcNow().Add(ttl), token: Ct)).Should().BeTrue();
     }
 
     [Fact]

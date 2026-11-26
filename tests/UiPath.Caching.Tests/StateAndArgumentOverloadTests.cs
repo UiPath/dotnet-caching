@@ -6,7 +6,9 @@ namespace UiPath.Caching.Tests;
 /// <summary>The state overloads of the hash caches and of GetOrAddWithExpirationAsync, and the batch overloads that take one argument for the whole call.</summary>
 public class StateAndArgumentOverloadTests
 {
-    private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+    private static readonly DateTimeOffset Deadline = Clock.GetUtcNow().AddMinutes(7);
 
     private static readonly int[][] MissedBatches = [[2, 3], [4]];
 
@@ -17,7 +19,7 @@ public class StateAndArgumentOverloadTests
     [Fact]
     public async Task A_hash_miss_runs_the_generator_with_its_state_once_and_a_hit_does_not_run_it()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var request = new Request("a", 1);
         var calls = 0;
 
@@ -32,7 +34,7 @@ public class StateAndArgumentOverloadTests
     [Fact]
     public async Task A_hash_state_miss_carries_the_expiration_and_set_option_it_is_given()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var request = new Request("a", 1);
 
         await cache.GetOrAddAsync<string, Request>("k:when", request, LoadHash, Deadline, Ct);
@@ -40,14 +42,14 @@ public class StateAndArgumentOverloadTests
         await cache.GetOrAddAsync<string, Request>("k:set", request, LoadHash, Deadline, HashCacheSetOption.KeyReplace, policy: null, Ct);
 
         (await cache.GetCacheEntryAsync<string>("k:when", policy: null, Ct)).Expiration.Should().BeCloseTo(Deadline, TimeSpan.FromSeconds(1));
-        (await cache.GetCacheEntryAsync<string>("k:span", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(30), TimeSpan.FromSeconds(30));
+        (await cache.GetCacheEntryAsync<string>("k:span", policy: null, Ct)).Expiration.Should().Be(Clock.GetUtcNow().AddMinutes(30));
         (await cache.GetCacheEntryAsync<string>("k:set", policy: null, Ct)).Expiration.Should().BeCloseTo(Deadline, TimeSpan.FromSeconds(1));
     }
 
     [Fact]
     public async Task Concurrent_hash_state_misses_on_one_key_run_one_generator()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var calls = 0;
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<IDictionary<string, string?>> Slow(Request request, CancellationToken token)
@@ -58,7 +60,7 @@ public class StateAndArgumentOverloadTests
         }
 
         var callers = Enumerable.Range(0, 8).Select(_ => cache.GetOrAddAsync<string, Request>("k", new Request("a", 1), Slow, policy: null, Ct).AsTask()).ToArray();
-        await Task.Delay(100, Ct);
+        calls.Should().Be(1);
         release.SetResult();
 
         (await Task.WhenAll(callers)).Should().AllSatisfy(values => values["id"].Should().Be("a:1"));
@@ -68,7 +70,7 @@ public class StateAndArgumentOverloadTests
     [Fact]
     public async Task A_typed_hash_cache_runs_the_state_generator_under_its_own_key_strategy()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var request = new Request("a", 1);
 
@@ -120,7 +122,7 @@ public class StateAndArgumentOverloadTests
     [Fact]
     public async Task A_generated_expiration_miss_runs_the_generator_with_its_state_and_stores_until_the_expiration_it_returns()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var request = new Request("a", 1);
         var calls = 0;
@@ -159,7 +161,7 @@ public class StateAndArgumentOverloadTests
     [Fact]
     public async Task A_batch_with_an_argument_hands_it_and_the_missing_states_to_one_generator_run()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var loader = new Loader();
         await cache.SetAsync<string>("k:1", "cached", policy: null, Ct);
@@ -197,7 +199,7 @@ public class StateAndArgumentOverloadTests
     [Fact]
     public async Task A_warm_hash_state_hit_allocates_nothing()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var request = new Request("a", 1);
         CacheKey key = "k";
@@ -219,7 +221,7 @@ public class StateAndArgumentOverloadTests
 #if DEBUG
         Assert.Skip("allocation counts are only stable in Release");
 #endif
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var request = new Request("a", 1);
         var loader = new Loader();
         var entries = Entries(1, 2);

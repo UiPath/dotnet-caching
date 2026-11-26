@@ -12,6 +12,8 @@ public class PeerRefreshTests
     private const string Dropped = "cache.peer_refresh.dropped";
     private const string Kept = "cache.peer_refresh.kept";
     private const string Discarded = "cache.peer_refresh.discarded";
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly TimeSpan InMemoryRedisCacheOptionsTimeout = new InMemoryRedisCacheOptions().Timeout;
 
     private static readonly CachePolicy Window = new() { LocalExpiration = TimeSpan.FromMinutes(10) };
@@ -27,14 +29,14 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_peer_set_keeps_the_held_value_until_the_refresh_lands()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var before = b.Inner.SingleReads;
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
 
         (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("old");
         b.Inner.SingleReads.Should().Be(before + 1);
@@ -52,7 +54,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_fill_from_a_read_counts_as_a_read()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, read: false);
         var before = b.Inner.SingleReads;
@@ -69,7 +71,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_peer_write_refreshes_an_entry_read_since_it_was_stored()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var before = b.Inner.SingleReads;
@@ -87,7 +89,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_key_written_twice_between_reads_stays_refreshed()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var before = b.Inner.SingleReads;
@@ -107,9 +109,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task An_entry_not_read_within_the_local_expiration_is_dropped_on_a_peer_write()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Window, clock: clock);
         var before = b.Inner.SingleReads;
         var set = await QuietSet(peers, a);
@@ -126,9 +128,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_refreshed_copy_inherits_the_last_read_time()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Window, clock: clock);
 
         clock.Advance(TimeSpan.FromMinutes(6));
@@ -148,9 +150,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_hit_extends_the_idle_window()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Window, clock: clock);
         var before = b.Inner.SingleReads;
 
@@ -172,7 +174,7 @@ public class PeerRefreshTests
     public void Hits_in_the_same_second_keep_the_read_time()
     {
 #pragma warning disable S1944 // The factory's entries are read-tracked at run time.
-        var tracked = (ILocalEntry)new CacheEntryFactory().Create("v", DateTimeOffset.UtcNow.AddHours(1));
+        var tracked = (ILocalEntry)new CacheEntryFactory().Create("v", Clock.GetUtcNow().AddHours(1));
 #pragma warning restore S1944
         tracked.LastRead.Should().Be(ILocalEntry.NeverRead);
 
@@ -190,7 +192,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_peer_remove_drops_at_once()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var before = b.Inner.SingleReads;
 
@@ -204,7 +206,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_key_gone_from_the_inner_tier_on_refresh_drops()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var set = await QuietSet(peers, a);
@@ -222,9 +224,9 @@ public class PeerRefreshTests
     [InlineData("times_out")]
     public async Task A_failed_refresh_drops_the_held_copy(string how)
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, clock: clock);
         var set = await QuietSet(peers, a);
         var before = b.Inner.SingleReads;
@@ -244,12 +246,12 @@ public class PeerRefreshTests
         if (how != "throws")
         {
             // The deadline was set before the read began; only the clock moves it.
-            await Until(() => b.Inner.SingleReads == before + 1);
+            await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
             clock.Advance(InMemoryRedisCacheOptionsTimeout + TimeSpan.FromMilliseconds(1));
         }
 
         // The refresh leaves the runs in flight just before it reports the drop.
-        await Until(() => telemetry.Events.Any(e => e.Name == Dropped));
+        await telemetry.Changes.WaitUntil(() => telemetry.Events.Any(e => e.Name == Dropped));
         await b.Settled();
 
         var reason = how == "throws" ? "failed" : "timed_out";
@@ -263,7 +265,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_peer_batch_is_refreshed_with_one_batched_read()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var keys = new[] { "k1", "k2", "k3", "k4", "k5" };
         var (a, b) = await HoldingOld(peers, keys);
         var singleReads = b.Inner.SingleReads;
@@ -292,7 +294,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task Repeated_peer_sets_before_the_read_coalesce_into_one_read()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var before = b.Inner.SingleReads;
         var gate = new TaskCompletionSource();
@@ -315,7 +317,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_peer_set_during_the_read_causes_one_more_read()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var before = b.Inner.SingleReads;
@@ -323,7 +325,7 @@ public class PeerRefreshTests
         var second = new TaskCompletionSource();
         b.Inner.Hold = first.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
 
         await a.Cache.SetAsync(Key, "newer", null, Ct);
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
@@ -331,7 +333,7 @@ public class PeerRefreshTests
         peers.Store.WriteQuietly(Key, "new");
         b.Inner.Hold = second.Task;
         first.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 2);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 2);
         peers.Store.WriteQuietly(Key, "newer");
         second.SetResult();
         await b.Settled(outcomes: 1);
@@ -345,7 +347,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_key_still_dirty_after_the_second_read_drops_with_a_zero_retry_window()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Dropping);
         var before = b.Inner.SingleReads;
@@ -353,12 +355,12 @@ public class PeerRefreshTests
         var second = new TaskCompletionSource();
         b.Inner.Hold = first.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         await a.Cache.SetAsync(Key, "newer", null, Ct);
 
         b.Inner.Hold = second.Task;
         first.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 2);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 2);
         await a.Cache.SetAsync(Key, "newest", null, Ct);
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
         second.SetResult();
@@ -372,14 +374,14 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_local_write_during_the_refresh_wins()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var before = b.Inner.SingleReads;
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
 
         await b.Cache.SetAsync(Key, "mine", null, Ct);
         // The read reached the store before the local write.
@@ -396,12 +398,12 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_value_this_node_stored_in_the_background_is_refreshed_on_a_peer_write()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var a = peers.Add("a");
         var b = peers.Add("b", telemetry: telemetry);
         await b.Cache.SetAsync(Key, "mine", new CachePolicy { BackgroundDistributedWrite = true }, Ct);
-        await Until(() => (string?)peers.Store.Values[Key] == "mine");
+        await peers.Store.Changes.WaitUntil(() => peers.Store.Values.TryGetValue(Key, out var value) && (string?)value == "mine");
         await b.Settled();
         var before = b.Inner.SingleReads;
 
@@ -417,13 +419,13 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_background_write_in_flight_drops_on_a_peer_s_later_write()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var landed = new TaskCompletionSource();
         b.Inner.AfterWrite = landed.Task;
         await b.Cache.SetAsync(Key, "mine", new CachePolicy { BackgroundDistributedWrite = true }, Ct);
-        await Until(() => (string?)peers.Store.Values[Key] == "mine");
+        await peers.Store.Changes.WaitUntil(() => peers.Store.Values.TryGetValue(Key, out var value) && (string?)value == "mine");
 
         // The peer's write lands after this node's, and its event comes while this node's write is still in flight.
         var set = await QuietSet(peers, a);
@@ -437,7 +439,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_declined_fill_is_requeued_once()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var neighbour = Enumerable.Range(0, 100_000).Select(i => $"n{i}").First(n => BackgroundWrites.Stripe(n) == BackgroundWrites.Stripe(Key));
@@ -445,7 +447,7 @@ public class PeerRefreshTests
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
 
         // Moves the key's stripe without touching the key: the first fill is declined while the entry is still held.
         b.Inner.Hold = null;
@@ -463,7 +465,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task An_event_on_the_replaced_token_drops_the_refreshed_copy()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var oldToken = b.Subscribers[^1];
         await a.Cache.SetAsync(Key, "new", null, Ct);
@@ -482,7 +484,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_removal_on_the_replaced_token_drops_the_refreshed_copy()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var oldToken = b.Subscribers[^1];
         await a.Cache.SetAsync(Key, "new", null, Ct);
@@ -501,14 +503,14 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_removal_reaching_the_new_token_while_the_keep_commits_does_not_hang()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var before = b.Inner.SingleReads;
         var subscribed = b.Subscribers.Count;
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         peers.AutoDeliver = false;
         await a.Cache.RemoveAsync<string>(Key, Ct);
         var removal = a.Published[^1];
@@ -517,16 +519,19 @@ public class PeerRefreshTests
 
         // The keep holds the key's locks while it commits the refreshed entry, whose token the removal reaches first.
         bool? delivered = null;
+        var committed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         b.BeforeCommit = key =>
         {
             if (key == Key && delivered is null && b.Subscribers.Count > subscribed)
             {
                 var newToken = b.Subscribers[^1];
-                delivered = Task.Run(() => peers.Deliver(newToken, removal), Ct).Wait(TimeSpan.FromSeconds(5), Ct);
+                Task.Run(() => peers.Deliver(newToken, removal), Ct).Wait(Ct);
+                delivered = true;
+                committed.SetResult();
             }
         };
         gate.SetResult();
-        await Until(() => delivered is not null);
+        await committed.Task.WaitAsync(Ct);
         await b.Settled();
 
         delivered.Should().BeTrue();
@@ -537,7 +542,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_key_is_read_again_once_in_all_dirty_then_declined_drops_with_a_zero_retry_window()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Dropping);
         var neighbour = Enumerable.Range(0, 100_000).Select(i => $"n{i}").First(n => BackgroundWrites.Stripe(n) == BackgroundWrites.Stripe(Key));
@@ -546,12 +551,12 @@ public class PeerRefreshTests
         var second = new TaskCompletionSource();
         b.Inner.Hold = first.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         await a.Cache.SetAsync(Key, "newer", null, Ct);
 
         b.Inner.Hold = second.Task;
         first.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 2);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 2);
         // Declines the second read's fill while the entry is still held.
         await b.Cache.SetAsync(neighbour, "x", null, Ct);
         second.SetResult();
@@ -566,7 +571,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task Keys_past_the_queue_cap_drop_at_once()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var keys = new[] { "k1", "k2", "k3" };
         var (a, b) = await HoldingOld(peers, keys, bTelemetry: telemetry);
@@ -591,9 +596,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_key_that_waited_past_the_timeout_drops()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, clock: clock);
         var before = b.Inner.SingleReads;
         var gate = new TaskCompletionSource();
@@ -613,9 +618,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task An_infinite_Timeout_bounds_neither_the_queue_wait_nor_the_read()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, new InMemoryRedisCacheOptions { Timeout = Timeout.InfiniteTimeSpan }, telemetry, clock: clock);
         var before = b.Inner.SingleReads;
         var queue = new TaskCompletionSource();
@@ -626,7 +631,7 @@ public class PeerRefreshTests
         await a.Cache.SetAsync(Key, "new", null, Ct);
         clock.Advance(TimeSpan.FromHours(1));
         queue.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         clock.Advance(TimeSpan.FromHours(1));
         read.SetResult();
         await b.Settled(outcomes: 1);
@@ -639,7 +644,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_disconnected_inner_tier_drops_on_a_peer_set_without_reading()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var set = await QuietSet(peers, a);
         var before = b.Inner.SingleReads;
@@ -655,7 +660,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_policy_that_opts_out_drops_as_before()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var optOut = new CachePolicy { RefreshLocalOnPeerWrite = false };
         var (a, b) = await HoldingOld(peers, policy: optOut);
         var before = b.Inner.SingleReads;
@@ -670,7 +675,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_local_hit_leaves_the_read_mark_unset_when_the_policy_opts_out()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (_, b) = await HoldingOld(peers, policy: new CachePolicy { RefreshLocalOnPeerWrite = false });
 
         (await b.Cache.GetAsync<string>(Key, new CachePolicy { RefreshLocalOnPeerWrite = false }, Ct)).Should().Be("old");
@@ -681,8 +686,8 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_local_hit_stamps_the_read_mark_when_the_policy_refreshes()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (_, b) = await HoldingOld(peers, policy: Window, clock: clock);
         var stamped = ReadMark(b);
         stamped.Should().NotBe(ILocalEntry.NeverRead);
@@ -696,8 +701,8 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_copy_stored_with_refresh_is_stamped_by_a_hit_under_a_policy_that_opts_out()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (_, b) = await HoldingOld(peers, policy: Window, clock: clock);
         var stamped = ReadMark(b);
         clock.Advance(TimeSpan.FromSeconds(5));
@@ -710,8 +715,8 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_copy_stored_without_refresh_is_not_stamped_by_a_hit_under_a_policy_that_refreshes()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (_, b) = await HoldingOld(peers, policy: new CachePolicy { RefreshLocalOnPeerWrite = false }, clock: clock);
         clock.Advance(TimeSpan.FromSeconds(5));
 
@@ -723,7 +728,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task The_dispatcher_is_not_held_by_a_slow_refresh()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var a = peers.Add("a");
         var b = peers.Add("b");
         foreach (var key in new[] { "k1", "k2" })
@@ -747,7 +752,7 @@ public class PeerRefreshTests
                 peers.Deliver(b, set2);
             },
             Ct);
-        await delivery.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        await delivery.WaitAsync(Ct);
 
         b.Local.TryGetValue("k1", out _).Should().BeTrue();
         b.Local.TryGetValue("k2", out _).Should().BeTrue();
@@ -756,7 +761,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task Refresh_reads_demand_the_master()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
@@ -769,14 +774,14 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_refresh_read_still_demands_the_master_after_its_first_await()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var before = b.Inner.SingleReads;
         var flags = new TaskCompletionSource();
         b.Inner.BeforeFlags = flags.Task;
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         flags.SetResult();
         await b.Settled();
 
@@ -787,7 +792,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_drain_that_throws_keeps_later_refreshes_working()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers, ["k1", "k2"]);
         b.Inner.ReadThrows = true;
         b.RemoveThrows = true;
@@ -811,7 +816,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task Disposing_the_cache_stops_queued_refreshes()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var before = b.Inner.SingleReads;
@@ -832,13 +837,13 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_read_begun_before_a_peer_set_of_a_key_not_held_does_not_keep_the_old_value()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = (peers.Add("a"), peers.Add("b"));
         await a.Cache.SetAsync(Key, "old", null, Ct);
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         var read = b.Cache.GetAsync<string>(Key, null, Ct).AsTask();
-        await Until(() => b.Inner.SingleReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == 1);
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
         // The read reached the store before the peer's write.
@@ -854,13 +859,13 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_read_begun_before_a_peer_removal_of_a_key_not_held_does_not_keep_the_old_value()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = (peers.Add("a"), peers.Add("b"));
         await a.Cache.SetAsync(Key, "old", null, Ct);
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         var read = b.Cache.GetAsync<string>(Key, null, Ct).AsTask();
-        await Until(() => b.Inner.SingleReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == 1);
 
         await a.Cache.RemoveAsync<string>(Key, Ct);
         peers.Store.WriteQuietly(Key, "old");
@@ -875,13 +880,13 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_read_begun_before_lost_events_does_not_keep_its_value()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = (peers.Add("a"), peers.Add("b"));
         await a.Cache.SetAsync(Key, "old", null, Ct);
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         var read = b.Cache.GetAsync<string>(Key, null, Ct).AsTask();
-        await Until(() => b.Inner.SingleReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == 1);
 
         b.Subject.Invalidate(MissedEventsReason.Lost);
         gate.SetResult();
@@ -893,14 +898,14 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_peer_set_of_a_key_in_another_stripe_does_not_refuse_the_fill()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = (peers.Add("a"), peers.Add("b"));
         var other = Enumerable.Range(0, 100).Select(i => $"o{i}").First(o => BackgroundWrites.Stripe(o) != BackgroundWrites.Stripe(Key));
         await a.Cache.SetAsync(Key, "old", null, Ct);
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         var read = b.Cache.GetAsync<string>(Key, null, Ct).AsTask();
-        await Until(() => b.Inner.SingleReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == 1);
 
         await a.Cache.SetAsync(other, "x", null, Ct);
         gate.SetResult();
@@ -912,13 +917,13 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_fill_that_commits_while_a_peer_set_reaches_the_key_s_other_observers_is_not_kept()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = (peers.Add("a"), peers.Add("b"));
         await a.Cache.SetAsync(Key, "old", null, Ct);
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         var read = b.Cache.GetAsync<string>(Key, null, Ct).AsTask();
-        await Until(() => b.Inner.SingleReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == 1);
         peers.AutoDeliver = false;
         await a.Cache.SetAsync(Key, "new", null, Ct);
         peers.Store.WriteQuietly(Key, "old");
@@ -940,7 +945,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task The_cache_watches_its_topic_once_from_its_first_inner_read_until_disposed()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var b = peers.Add("b");
         b.Subscribers.Should().BeEmpty();
         b.Cache.BackgroundWritesActive.Should().BeFalse();
@@ -957,7 +962,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task Watching_counts_changes_for_fills_without_ordering_awaited_writes()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var b = peers.Add("b");
 
         (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().BeNull();
@@ -971,13 +976,13 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_read_begun_before_this_node_s_awaited_write_does_not_replace_it()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = (peers.Add("a"), peers.Add("b"));
         await a.Cache.SetAsync(Key, "old", null, Ct);
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         var read = b.Cache.GetAsync<string>(Key, null, Ct).AsTask();
-        await Until(() => b.Inner.SingleReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == 1);
 
         await b.Cache.SetAsync(Key, "mine", null, Ct);
         peers.Store.WriteQuietly(Key, "old");
@@ -993,7 +998,7 @@ public class PeerRefreshTests
     [InlineData(false)]
     public async Task A_batch_read_begun_before_a_peer_set_does_not_keep_the_old_value(bool entries)
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = (peers.Add("a"), peers.Add("b"));
         await a.Cache.SetAsync(Key, "old", null, Ct);
         await a.Cache.SetAsync("k2", "old2", null, Ct);
@@ -1003,7 +1008,7 @@ public class PeerRefreshTests
         var read = entries
             ? b.Cache.GetCacheEntriesAsync<string>(keys, null, Ct).AsTask().ContinueWith(t => t.Result.Select(e => e.Value.Value).ToArray(), TaskScheduler.Default)
             : b.Cache.GetAsync<string>(keys, null, Ct).AsTask().ContinueWith(t => t.Result.Select(e => e.Value).ToArray(), TaskScheduler.Default);
-        await Until(() => b.Inner.BatchReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.BatchReads == 1);
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
         peers.Store.WriteQuietly(Key, "old");
@@ -1018,13 +1023,13 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_read_begun_before_a_peer_s_topic_invalidation_does_not_keep_its_value()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = (peers.Add("a", new InMemoryRedisCacheOptions { BatchTopicInvalidationThreshold = 1 }), peers.Add("b"));
         await a.Cache.SetAsync(Key, "old", null, Ct);
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         var read = b.Cache.GetAsync<string>(Key, null, Ct).AsTask();
-        await Until(() => b.Inner.SingleReads == 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == 1);
 
         await a.Cache.SetManyAsync<string>([new(Key, "new"), new("x", "y")], null, Ct);
         a.Published[^1].Type.Should().Be(KnownEventTypes.TopicInvalidated);
@@ -1041,7 +1046,7 @@ public class PeerRefreshTests
     [InlineData("many")]
     public async Task A_read_begun_while_this_node_s_removal_is_in_flight_does_not_bring_the_value_back(string how)
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (_, b) = await HoldingOld(peers);
         var gate = new TaskCompletionSource();
         b.Inner.RemoveHold = gate.Task;
@@ -1067,7 +1072,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_local_write_in_flight_when_the_keep_runs_wins()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var before = b.Inner.SingleReads;
@@ -1079,7 +1084,7 @@ public class PeerRefreshTests
         // The local write is awaiting the inner tier, and has not replaced the held copy yet, when the refresh keeps.
         b.Inner.AfterWrite = landed.Task;
         var write = b.Cache.SetAsync(Key, "mine", null, Ct).AsTask();
-        await Until(() => (string?)peers.Store.Values[Key] == "mine");
+        await peers.Store.Changes.WaitUntil(() => peers.Store.Values.TryGetValue(Key, out var value) && (string?)value == "mine");
         b.Local.TryGetValue(Key, out var held).Should().BeTrue();
         gate.SetResult();
         await b.Settled(outcomes: 1);
@@ -1098,14 +1103,14 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_peer_write_during_the_keep_drops_the_refreshed_copy()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var oldToken = b.Subscribers[^1];
         var before = b.Inner.SingleReads;
         var gate = new TaskCompletionSource();
         b.Inner.Hold = gate.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         peers.AutoDeliver = false;
         await a.Cache.SetAsync(Key, "newer", null, Ct);
         var newer = a.Published[^1];
@@ -1114,16 +1119,18 @@ public class PeerRefreshTests
 
         // The second write reaches the held entry's token while the keep holds the key's locks: it waits for the keep, and then hears the entry replaced.
         Task? delivery = null;
+        var committing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         b.BeforeCommit = key =>
         {
             if (key == Key && delivery is null && b.Subscribers.Count > 1 && !ReferenceEquals(b.Subscribers[^1], oldToken))
             {
                 delivery = Task.Run(() => peers.Deliver(oldToken, newer), Ct);
+                committing.SetResult();
             }
         };
         gate.SetResult();
-        await Until(() => delivery is not null);
-        await delivery!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        await committing.Task.WaitAsync(Ct);
+        await delivery!.WaitAsync(Ct);
         await b.Settled();
 
         b.Local.TryGetValue(Key, out _).Should().BeFalse();
@@ -1135,7 +1142,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_replaced_entry_token_is_disposed_before_the_next_peer_write()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers);
         var oldToken = b.Subscribers[^1];
 
@@ -1150,7 +1157,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_late_event_on_a_replaced_token_drops_only_the_copy_its_refresh_installed()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var firstToken = b.Subscribers[^1];
@@ -1173,7 +1180,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_late_event_on_a_replaced_token_spares_an_entry_this_node_wrote_since()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         var oldToken = b.Subscribers[^1];
@@ -1190,7 +1197,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_long_run_of_refreshes_of_one_key_keeps_no_superseded_copy_alive()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
         // One superseded copy stays reachable, as a reader still holding it or an ephemeral collection does: it must not keep the later ones.
@@ -1203,7 +1210,7 @@ public class PeerRefreshTests
         }
 
         // The local tier releases a replaced entry's token from an eviction callback on the pool, and the harness records every token of the node: a token roots its entry.
-        await b.Evicted(40).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await b.Evicted(40).WaitAsync(Ct);
         b.Subscribers.Clear();
         b.Unsubscribed.Clear();
         var superseded = copies[..^1];
@@ -1216,7 +1223,7 @@ public class PeerRefreshTests
     [Fact]
     public async Task An_entry_from_a_custom_entry_factory_drops_on_a_peer_write()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var (a, b) = await HoldingOld(peers, new InMemoryRedisCacheOptions { EntryFactory = new TestCacheEntryFactory() });
         var before = b.Inner.SingleReads;
 
@@ -1230,9 +1237,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task Within_the_retry_window_a_key_still_dirty_after_the_second_read_is_read_again_and_the_held_copy_is_served()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
         var before = b.Inner.SingleReads;
         var first = new TaskCompletionSource();
@@ -1240,16 +1247,16 @@ public class PeerRefreshTests
         var third = new TaskCompletionSource();
         b.Inner.Hold = first.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         await a.Cache.SetAsync(Key, "newer", null, Ct);
 
         b.Inner.Hold = second.Task;
         first.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 2);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 2);
         await a.Cache.SetAsync(Key, "newest", null, Ct);
         b.Inner.Hold = third.Task;
         second.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 3);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 3);
 
         // Served from the local tier while the third read is in flight: none of these reads reaches the inner tier.
         var served = await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => b.Cache.GetAsync<string>(Key, Retrying, Ct).AsTask()));
@@ -1269,21 +1276,21 @@ public class PeerRefreshTests
     [Fact]
     public async Task Past_the_default_retry_window_a_key_still_dirty_drops_and_the_next_read_goes_to_the_inner_tier()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, clock: clock);
         var before = b.Inner.SingleReads;
         var first = new TaskCompletionSource();
         var second = new TaskCompletionSource();
         b.Inner.Hold = first.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         await a.Cache.SetAsync(Key, "newer", null, Ct);
 
         b.Inner.Hold = second.Task;
         first.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 2);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 2);
         await a.Cache.SetAsync(Key, "newest", null, Ct);
         clock.Advance(MultilayerCacheBase.DefaultRefreshLocalRetryWindow + TimeSpan.FromMilliseconds(1));
         b.Inner.Hold = null;
@@ -1300,9 +1307,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task Within_the_retry_window_a_fill_declined_after_the_re_read_is_read_again()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
         var neighbour = Enumerable.Range(0, 100_000).Select(i => $"n{i}").First(n => BackgroundWrites.Stripe(n) == BackgroundWrites.Stripe(Key));
         var before = b.Inner.SingleReads;
@@ -1310,12 +1317,12 @@ public class PeerRefreshTests
         var second = new TaskCompletionSource();
         b.Inner.Hold = first.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         await a.Cache.SetAsync(Key, "newer", null, Ct);
 
         b.Inner.Hold = second.Task;
         first.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 2);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 2);
         // Declines the second read's fill while the entry is still held.
         await b.Cache.SetAsync(neighbour, "x", null, Ct);
         b.Inner.Hold = null;
@@ -1332,9 +1339,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task A_peer_removal_during_a_retried_refresh_drops_at_once()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
         var before = b.Inner.SingleReads;
         var first = new TaskCompletionSource();
@@ -1342,15 +1349,15 @@ public class PeerRefreshTests
         var third = new TaskCompletionSource();
         b.Inner.Hold = first.Task;
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         await a.Cache.SetAsync(Key, "newer", null, Ct);
         b.Inner.Hold = second.Task;
         first.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 2);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 2);
         await a.Cache.SetAsync(Key, "newest", null, Ct);
         b.Inner.Hold = third.Task;
         second.SetResult();
-        await Until(() => b.Inner.SingleReads == before + 3);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 3);
         (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().Be("old");
 
         await a.Cache.RemoveAsync<string>(Key, Ct);
@@ -1366,9 +1373,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task Within_a_retry_window_longer_than_the_timeout_a_timed_out_read_is_read_again()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
         var before = b.Inner.SingleReads;
         var slow = new TaskCompletionSource();
@@ -1376,7 +1383,7 @@ public class PeerRefreshTests
         b.Inner.HoldIgnoresCancellation = true;
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await Until(() => b.Inner.SingleReads == before + 1);
+        await b.Inner.Changes.WaitUntil(() => b.Inner.SingleReads == before + 1);
         b.Inner.Hold = null;
         clock.Advance(InMemoryRedisCacheOptionsTimeout + TimeSpan.FromMilliseconds(1));
         await b.Settled(outcomes: 1);
@@ -1392,9 +1399,9 @@ public class PeerRefreshTests
     [Fact]
     public async Task Within_a_retry_window_longer_than_the_timeout_a_key_that_waited_past_the_timeout_is_still_read()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(Clock);
         var telemetry = new RecordingTelemetryProvider();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
         var before = b.Inner.SingleReads;
         var gate = new TaskCompletionSource();
@@ -1460,16 +1467,6 @@ public class PeerRefreshTests
     private static double KeptCount(RecordingTelemetryProvider telemetry) =>
         telemetry.Metrics.Where(m => m.Name == Kept).Sum(m => m.Value);
 
-    private static async Task Until(Func<bool> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (!condition() && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
-
-        condition().Should().BeTrue();
-    }
 
     /// <summary>Node <c>a</c> writes <paramref name="value"/>, and node <c>b</c>'s refresh of it lands: returns as the refresher reports the kept key, at the end of its drain.</summary>
     private static async Task Refreshed(CachePeers.Node a, CachePeers.Node b, RecordingTelemetryProvider telemetry, string value)
@@ -1483,7 +1480,7 @@ public class PeerRefreshTests
             }
         };
         await a.Cache.SetAsync(Key, value, null, Ct);
-        await kept.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await kept.Task.WaitAsync(Ct);
         telemetry.MetricRecorded = null;
         (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be(value);
     }

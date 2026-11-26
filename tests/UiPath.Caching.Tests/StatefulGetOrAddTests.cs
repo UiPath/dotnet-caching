@@ -4,6 +4,8 @@ namespace UiPath.Caching.Tests;
 
 public class StatefulGetOrAddTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static Func<Request, CancellationToken, Task<string?>> Unexpected { get; } = static (_, _) => throw new InvalidOperationException("the generator ran on a hit");
@@ -11,14 +13,14 @@ public class StatefulGetOrAddTests
     [Fact]
     public async Task A_multilayer_miss_runs_the_generator_with_its_state_once_and_stores_the_value()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var request = new Request("a", 1);
         var calls = 0;
 
         (await cache.GetOrAddAsync<string, Request>("k:plain", request, (r, ct) => { calls++; return Load(r, ct); }, Ct)).Should().Be("a:1");
         (await cache.GetOrAddAsync<string, Request>("k:plain", request, Unexpected, Ct)).Should().Be("a:1");
         (await cache.GetOrAddAsync<string, Request>("k:span", request, Load, TimeSpan.FromMinutes(5), Ct)).Should().Be("a:1");
-        (await cache.GetOrAddAsync<string, Request>("k:when", request, Load, DateTimeOffset.UtcNow.AddMinutes(5), Ct)).Should().Be("a:1");
+        (await cache.GetOrAddAsync<string, Request>("k:when", request, Load, Clock.GetUtcNow().AddMinutes(5), Ct)).Should().Be("a:1");
         (await cache.GetOrAddAsync<string, Request>("k:policy", request, Load, (CachePolicy?)null, Ct)).Should().Be("a:1");
 
         calls.Should().Be(1);
@@ -28,25 +30,25 @@ public class StatefulGetOrAddTests
     [Fact]
     public async Task The_expiration_a_stateful_miss_is_given_is_the_one_the_entry_carries()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var request = new Request("a", 1);
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(30);
+        var deadline = Clock.GetUtcNow().AddMinutes(30);
 
         await cache.GetOrAddAsync<string, Request>("k:when", request, Load, deadline, Ct);
         await cache.GetOrAddAsync<string, Request>("k:span", request, Load, TimeSpan.FromMinutes(30), Ct);
 
         (await cache.GetCacheEntryAsync<string>("k:when", policy: null, Ct)).Expiration.Should().Be(deadline);
-        (await cache.GetCacheEntryAsync<string>("k:span", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(30), TimeSpan.FromSeconds(30));
+        (await cache.GetCacheEntryAsync<string>("k:span", policy: null, Ct)).Expiration.Should().Be(Clock.GetUtcNow().AddMinutes(30));
     }
 
     [Fact]
     public async Task A_stateful_miss_rejects_the_expiration_the_closure_form_rejects()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var request = new Request("a", 1);
 
         var span = async () => await cache.GetOrAddAsync<string, Request>("k", request, Load, TimeSpan.Zero, Ct);
-        var when = async () => await cache.GetOrAddAsync<string, Request>("k", request, Load, DateTimeOffset.UtcNow.AddMinutes(-1), Ct);
+        var when = async () => await cache.GetOrAddAsync<string, Request>("k", request, Load, Clock.GetUtcNow().AddMinutes(-1), Ct);
 
         await span.Should().ThrowAsync<ArgumentOutOfRangeException>();
         await when.Should().ThrowAsync<ArgumentOutOfRangeException>();
@@ -55,7 +57,7 @@ public class StatefulGetOrAddTests
     [Fact]
     public async Task A_stateful_generator_must_not_be_null()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache);
 
         var key = async () => await cache.GetOrAddAsync<string, Request>("k", new Request("a", 1), null!, Ct);
@@ -68,14 +70,14 @@ public class StatefulGetOrAddTests
     [Fact]
     public async Task A_typed_cache_runs_the_stateful_generator_under_its_own_key_strategy()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var request = new Request("a", 1);
 
         (await typed.GetOrAddAsync("k:plain", request, Load, Ct)).Should().Be("a:1");
         (await typed.GetOrAddAsync("k:plain", request, Unexpected, Ct)).Should().Be("a:1");
         (await typed.GetOrAddAsync("k:span", request, Load, TimeSpan.FromMinutes(5), Ct)).Should().Be("a:1");
-        (await typed.GetOrAddAsync("k:when", request, Load, DateTimeOffset.UtcNow.AddMinutes(5), Ct)).Should().Be("a:1");
+        (await typed.GetOrAddAsync("k:when", request, Load, Clock.GetUtcNow().AddMinutes(5), Ct)).Should().Be("a:1");
         SpanCalls(typed).Should().Be("a:1");
 
         (await typed.GetAsync("k:plain", Ct)).Should().Be("a:1");
@@ -85,7 +87,8 @@ public class StatefulGetOrAddTests
     [Fact]
     public async Task A_stateful_hit_past_the_rehydrate_threshold_refreshes_with_its_state()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
+        using var cache = InMemoryMultilayer.Cache(clock: clock);
         var policy = new CachePolicy
         {
             DistributedExpiration = TimeSpan.FromSeconds(2),
@@ -96,10 +99,10 @@ public class StatefulGetOrAddTests
         var request = new Request("a", 7);
         await cache.GetOrAddAsync<string, Request>("k", request, Load, policy, Ct);
 
-        await Task.Delay(300, Ct);
+        clock.Advance(TimeSpan.FromMilliseconds(300));
         await cache.GetOrAddAsync<string, Request>("k", request, (r, _) => { refreshed.TrySetResult(r); return Task.FromResult<string?>("fresh"); }, policy, Ct);
 
-        (await refreshed.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().BeSameAs(request);
+        (await refreshed.Task.WaitAsync(Ct)).Should().BeSameAs(request);
     }
 
     [Fact]
@@ -123,7 +126,7 @@ public class StatefulGetOrAddTests
     [Fact]
     public async Task A_warm_stateful_get_or_add_that_hits_locally_allocates_nothing()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var request = new Request("a", 1);
         await cache.GetOrAddAsync<string, Request>("k", request, Load, Ct);
@@ -132,7 +135,7 @@ public class StatefulGetOrAddTests
 
         AllocatedBy(() => cache.GetOrAddAsync<string, Request>(key, request, Unexpected, Ct)).Should().Be(0, "the CacheKey form");
         AllocatedBy(() => cache.GetOrAddAsync<string, Request>(key, request, Unexpected, TimeSpan.FromMinutes(1), Ct)).Should().Be(0, "the TimeSpan form");
-        AllocatedBy(() => cache.GetOrAddAsync<string, Request>(key, request, Unexpected, DateTimeOffset.UtcNow.AddMinutes(1), Ct)).Should().Be(0, "the DateTimeOffset form");
+        AllocatedBy(() => cache.GetOrAddAsync<string, Request>(key, request, Unexpected, Clock.GetUtcNow().AddMinutes(1), Ct)).Should().Be(0, "the DateTimeOffset form");
         AllocatedBy(() => SpanHit(cache, request, withExpiration: false)).Should().Be(0, "the span form");
         AllocatedBy(() => SpanHit(cache, request, withExpiration: true)).Should().Be(0, "the span form with an expiration");
         AllocatedBy(() => typed.GetOrAddAsync(key, request, Unexpected, Ct)).Should().Be(0, "the typed CacheKey form");

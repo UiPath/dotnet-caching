@@ -8,6 +8,8 @@ namespace UiPath.Caching.Tests;
 public class RepeatInvalidationTests
 {
     private const string Key = "k";
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly TimeSpan Delay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan Half = TimeSpan.FromMilliseconds(500);
 
@@ -16,8 +18,8 @@ public class RepeatInvalidationTests
     [Fact]
     public async Task Off_by_default_a_remote_removal_drops_the_entry_once()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await Holding(peers, clock, repeat: null);
 
         await a.Cache.RemoveAsync<string>(Key, Ct);
@@ -32,8 +34,8 @@ public class RepeatInvalidationTests
     [Fact]
     public async Task A_refill_before_the_delay_is_dropped_at_the_delay()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await Holding(peers, clock, Delay);
 
         await a.Cache.RemoveAsync<string>(Key, Ct);
@@ -52,8 +54,8 @@ public class RepeatInvalidationTests
     [Fact]
     public async Task A_refill_after_the_delay_survives()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await Holding(peers, clock, Delay);
 
         await a.Cache.RemoveAsync<string>(Key, Ct);
@@ -67,8 +69,8 @@ public class RepeatInvalidationTests
     [Fact]
     public async Task A_peer_write_schedules_the_repeat()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await Holding(peers, clock, Delay);
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
@@ -82,8 +84,8 @@ public class RepeatInvalidationTests
     [Fact]
     public async Task A_removal_of_another_key_schedules_nothing()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await Holding(peers, clock, Delay);
 
         await a.Cache.SetAsync("other", "x", null, Ct);
@@ -97,8 +99,8 @@ public class RepeatInvalidationTests
     [Fact]
     public async Task A_nodes_own_write_schedules_nothing()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (_, b) = await Holding(peers, clock, Delay);
 
         await b.Cache.SetAsync(Key, "mine", null, Ct);
@@ -111,8 +113,8 @@ public class RepeatInvalidationTests
     [Fact]
     public async Task A_loss_report_schedules_nothing()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (_, b) = await Holding(peers, clock, Delay);
 
         foreach (var observer in b.Subscribers.ToArray().OfType<IMissedEventsObserver>())
@@ -131,8 +133,8 @@ public class RepeatInvalidationTests
     [Fact]
     public async Task A_disposed_cache_runs_no_queued_removal()
     {
-        using var peers = new CachePeers();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var peers = new CachePeers(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var (a, b) = await Holding(peers, clock, Delay);
         await a.Cache.RemoveAsync<string>(Key, Ct);
 
@@ -146,8 +148,8 @@ public class RepeatInvalidationTests
     [Fact]
     public async Task A_hash_cache_drops_its_copy_again_after_a_peer_write()
     {
-        using var cluster = new PeerCluster();
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var cluster = new PeerCluster(Clock);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var writer = cluster.Add("a");
         var peer = cluster.Add("b", clock: clock, repeatInvalidationAfter: Delay);
         var policy = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30), RefreshLocalOnPeerWrite = false };
@@ -168,7 +170,7 @@ public class RepeatInvalidationTests
     [Fact]
     public void Requests_run_in_order_one_delay_after_each()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var removed = new List<string>();
         using var repeats = new RepeatInvalidations(clock, Delay, removed.Add);
 
@@ -186,7 +188,7 @@ public class RepeatInvalidationTests
     [Fact]
     public void A_removal_that_throws_does_not_stop_the_next()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var clock = new ManualTimeProvider(Clock.GetUtcNow());
         var removed = new List<string>();
         using var repeats = new RepeatInvalidations(clock, Delay, key => { removed.Add(key); throw new InvalidOperationException(); });
 

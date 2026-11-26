@@ -7,9 +7,11 @@ namespace UiPath.Caching.Tests;
 public class PeerWriteGuardTests
 {
     private const string Key = "k";
+
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
     private static readonly TopicKey Topic = new("topic");
 
-    private readonly BackgroundWrites _writes = new(0, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), TimeProvider.System);
+    private readonly BackgroundWrites _writes = new(0, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), Clock);
     private readonly SteppedClock _clock = new();
     private readonly ITopicProvider _topics = Substitute.For<ITopicProvider>();
     private FakeTopic _current = new();
@@ -172,7 +174,7 @@ public class PeerWriteGuardTests
         Source = source ?? new Uri("urn:node:a"),
         Data = new CacheEventData(Key)
         {
-            Properties = metadata ? new Dictionary<string, object?> { [KnownFieldNames.MetadataKey] = null } : new Dictionary<string, object?> { [KnownFieldNames.ExpirationKey] = DateTimeOffset.UtcNow },
+            Properties = metadata ? new Dictionary<string, object?> { [KnownFieldNames.MetadataKey] = null } : new Dictionary<string, object?> { [KnownFieldNames.ExpirationKey] = Clock.GetUtcNow() },
         },
     };
 

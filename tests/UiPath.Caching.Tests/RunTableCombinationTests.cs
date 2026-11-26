@@ -7,6 +7,8 @@ public class RunTableCombinationTests
 {
     private const int Callers = 8;
 
+    private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     public static TheoryData<bool, bool> Combinations() => new()
@@ -22,7 +24,7 @@ public class RunTableCombinationTests
     public async Task A_single_key_miss(bool sharedRun, bool distributedLock)
     {
         var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.Cache(distributedLock: distributed);
+        using var cache = InMemoryMultilayer.Cache(distributedLock: distributed, clock: _clock);
         var gate = new Gate(Callers);
         async Task<string?> Generate(CancellationToken _)
         {
@@ -31,7 +33,7 @@ public class RunTableCombinationTests
             return "generated";
         }
 
-        var calls = Enumerable.Range(0, Callers).Select(_ => Task.Run(async () => await cache.GetOrAddAsync<string>("k", Generate, Policy(sharedRun, distributedLock), Ct), Ct)).ToArray();
+        var calls = Enumerable.Range(0, Callers).Select(_ => cache.GetOrAddAsync<string>("k", Generate, Policy(sharedRun, distributedLock), Ct).AsTask()).ToArray();
         await gate.Open(sharedRun, Ct);
         (await Task.WhenAll(calls)).Should().AllBe("generated");
 
@@ -44,7 +46,7 @@ public class RunTableCombinationTests
     public async Task A_batch_miss(bool sharedRun, bool distributedLock)
     {
         var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.Cache(distributedLock: distributed);
+        using var cache = InMemoryMultilayer.Cache(distributedLock: distributed, clock: _clock);
         var gate = new Gate(Callers);
         KeyValuePair<CacheKey, string>[] entries = [new("a", "a"), new("b", "b")];
         async Task<KeyValuePair<string, string?>[]> Generate(string[] states, CancellationToken _)
@@ -54,7 +56,7 @@ public class RunTableCombinationTests
             return states.Select(x => new KeyValuePair<string, string?>(x, "generated")).ToArray();
         }
 
-        var calls = Enumerable.Range(0, Callers).Select(_ => Task.Run(async () => await cache.GetOrAddAsync<string, string>(entries, Generate, Policy(sharedRun, distributedLock), Ct), Ct)).ToArray();
+        var calls = Enumerable.Range(0, Callers).Select(_ => cache.GetOrAddAsync<string, string>(entries, Generate, Policy(sharedRun, distributedLock), Ct).AsTask()).ToArray();
         await gate.Open(sharedRun, Ct);
         var results = await Task.WhenAll(calls);
 
@@ -68,7 +70,7 @@ public class RunTableCombinationTests
     public async Task A_hash_key_miss(bool sharedRun, bool distributedLock)
     {
         var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.HashCache(distributedLock: distributed);
+        using var cache = InMemoryMultilayer.HashCache(distributedLock: distributed, clock: _clock);
         var gate = new Gate(Callers);
         async Task<IDictionary<string, string?>> Generate(CancellationToken _)
         {
@@ -77,7 +79,7 @@ public class RunTableCombinationTests
             return new Dictionary<string, string?> { ["f"] = "generated" };
         }
 
-        var calls = Enumerable.Range(0, Callers).Select(_ => Task.Run(async () => await cache.GetOrAddAsync<string>("k", Generate, Policy(sharedRun, distributedLock), Ct), Ct)).ToArray();
+        var calls = Enumerable.Range(0, Callers).Select(_ => cache.GetOrAddAsync<string>("k", Generate, Policy(sharedRun, distributedLock), Ct).AsTask()).ToArray();
         await gate.Open(sharedRun, Ct);
         var results = await Task.WhenAll(calls);
 
@@ -90,7 +92,7 @@ public class RunTableCombinationTests
     public async Task A_joiner_of_a_run_under_a_distributed_lock_never_takes_the_lock()
     {
         var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.Cache(distributedLock: distributed);
+        using var cache = InMemoryMultilayer.Cache(distributedLock: distributed, clock: _clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Generate(CancellationToken _)
@@ -103,9 +105,9 @@ public class RunTableCombinationTests
         var policy = Policy(true, true);
         var firstRun = cache.GetOrAddAsync<string>("k", Generate, policy, Ct);
         var first = firstRun.AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var joiner = cache.GetOrAddAsync<string>("k", Generate, policy, Ct).AsTask();
-        await Task.Delay(100, Ct);
+        joiner.IsCompleted.Should().BeFalse();
         distributed.Acquisitions.Should().Be(1, "only the caller that runs the generator takes the lock");
         release.SetResult();
 
@@ -120,7 +122,7 @@ public class RunTableCombinationTests
     public async Task TryAdd_takes_no_distributed_lock_and_one_caller_wins(bool sharedRun)
     {
         var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.Cache(distributedLock: distributed);
+        using var cache = InMemoryMultilayer.Cache(distributedLock: distributed, clock: _clock);
         var policy = Policy(sharedRun, false);
 
         var results = await Task.WhenAll(Enumerable.Range(0, Callers).Select(i => Task.Run(async () => await cache.TryAddAsync<string>("k", "caller-" + i, policy, Ct), Ct)));
@@ -146,6 +148,7 @@ public class RunTableCombinationTests
     {
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _first = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _all = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _generators;
 
         public Task Released => _release.Task;
@@ -154,7 +157,12 @@ public class RunTableCombinationTests
 
         public void Entered()
         {
-            if (Interlocked.Increment(ref _generators) == 1)
+            var count = Interlocked.Increment(ref _generators);
+            if (count == callers)
+            {
+                _all.TrySetResult();
+            }
+            if (count == 1)
             {
                 _first.TrySetResult();
             }
@@ -163,15 +171,8 @@ public class RunTableCombinationTests
         /// <summary>With a shared run one generator starts and the rest join it; without one each caller starts its own.</summary>
         public async Task Open(bool sharedRun, CancellationToken token)
         {
-            await _first.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
-            // Without a shared run, a caller that starts after a sibling wrote the entry would hit it instead of generating.
-            var deadline = Environment.TickCount64 + 10_000;
-            while (Generators < (sharedRun ? 1 : callers) && Environment.TickCount64 < deadline)
-            {
-                await Task.Delay(10, token);
-            }
-
-            await Task.Delay(sharedRun ? 150 : 0, token);
+            await (sharedRun ? _first.Task : _all.Task).WaitAsync(token);
+            Generators.Should().Be(sharedRun ? 1 : callers);
             _release.TrySetResult();
         }
     }
