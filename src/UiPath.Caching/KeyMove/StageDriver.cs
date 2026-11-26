@@ -132,7 +132,7 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
         var conflict = services.Monitor?.RulesFor(group).Alerts.FirstOrDefault(a => a is "identity_conflict" or "commit_mismatch");
         var zero = memory.DurZeroFor(state, time);
         var mover = services.Mover;
-        var drain = Memoize(ct => mover.DrainAsync(group, state.Direction, ct), cancellationToken);
+        var drain = Memoize(ct => mover.DrainAsync(group, state, ct), cancellationToken);
         var inventory = Memoize(ct => mover.ResidueInventoryAsync(group, ct), cancellationToken);
         return new StepInput(
             group,

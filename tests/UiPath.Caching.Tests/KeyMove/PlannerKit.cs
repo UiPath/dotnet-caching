@@ -120,7 +120,7 @@ internal static class PlannerKit
             facts,
             _ => Task.FromResult(preflight ?? new PreflightResult([])),
             () => data.CountNativeAsync(Group, CancellationToken.None),
-            () => mover.DrainAsync(Group, state.Direction, CancellationToken.None),
+            () => mover.DrainAsync(Group, state, CancellationToken.None),
             () => mover.ResidueInventoryAsync(Group, CancellationToken.None),
             () => Task.FromResult(retire ?? RetireVerdict.Done));
     }

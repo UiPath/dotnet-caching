@@ -1,4 +1,3 @@
-using System.Globalization;
 using StackExchange.Redis;
 
 namespace UiPath.Caching.KeyMove;
@@ -20,19 +19,20 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
             return null;
         }
 
+        return await RunAsync(group, state, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<InventoryResult?> RunAsync(string group, StateRecord state, CancellationToken cancellationToken)
+    {
         var side = SourceOf(state);
         var cacheIds = state.CacheIds;
         var now = time.GetUtcNow().ToUnixTimeMilliseconds();
-        var t3 = T3Of(state);
+        var t3 = state.S3AckedAt;
 
         var result = await scanner.RunAsync(space.Patterns(group, side), keys => CountAsync(keys, group, side, cacheIds, now, t3, cancellationToken), cancellationToken).ConfigureAwait(false);
         KeyMoveTelemetry.CountCanaryKeys(group, result?.Canary ?? 0);
         return result;
     }
-
-    // S3 is when every node acknowledged the S3 identity; the leader stores the time with that acknowledgement, and a time that no acknowledgement of the current identity stands behind is an older move's.
-    private static long? T3Of(StateRecord state) =>
-        state.AllAck == state.Id && long.TryParse(state.Field(StateFields.T3At), NumberStyles.None, CultureInfo.InvariantCulture, out var at) ? at : null;
 
     private async Task<InventoryResult> CountAsync(IAsyncEnumerable<string> keys, string group, MoveSide side, IReadOnlyList<string> cacheIds, long now, long? t3, CancellationToken cancellationToken)
     {

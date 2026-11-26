@@ -13,9 +13,9 @@ internal sealed class FakeMoverStatus : IMoverStatus
     public static DrainReport Drained(long canary = 0, params (string Cache, long Count)[] residue) =>
         new(true, residue.ToDictionary(r => r.Cache, r => r.Count), canary);
 
-    public Task<DrainReport?> DrainAsync(string group, string direction, CancellationToken cancellationToken)
+    public Task<DrainReport?> DrainAsync(string group, StateRecord state, CancellationToken cancellationToken)
     {
-        Directions.Add(direction);
+        Directions.Add(state.Direction);
         return Task.FromResult(Report);
     }
 

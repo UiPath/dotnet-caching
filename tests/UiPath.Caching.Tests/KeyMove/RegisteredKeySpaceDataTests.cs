@@ -87,13 +87,14 @@ public class RegisteredKeySpaceDataTests(RedisContainerFixture fixture)
         {
             var state = (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!;
             await kit.Scripts.FieldsAsync(kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+            state = (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!;
 
             var found = (await inventory.RunAsync(kit.Group, CancellationToken.None))!;
 
             found.Ambiguous.Should().Be(1);
             found.Residue.Should().BeEquivalentTo(new Dictionary<string, long> { ["a"] = 2, ["b"] = 1 });
             found.Movable.Should().Be(1, "only the unambiguous key can move");
-            (await new InventoryMoverStatus(inventory, kit.Time, (_, _, _) => Task.FromResult(true)).DrainAsync(kit.Group, "fwd", CancellationToken.None)).Should().BeNull();
+            (await new InventoryMoverStatus(inventory, kit.Time, (_, _, _) => Task.FromResult(true)).DrainAsync(kit.Group, state, CancellationToken.None)).Should().BeNull();
             alerts.Should().Contain(x => x.Code == "ambiguous_ownership");
         }
         finally
@@ -171,6 +172,7 @@ public class RegisteredKeySpaceDataTests(RedisContainerFixture fixture)
             (await kit.Db.KeyExistsAsync(theirs)).Should().BeTrue("another group's key is never deleted");
             (await kit.Db.KeyExistsAsync(own)).Should().BeFalse();
             await kit.Scripts.FieldsAsync(kit.StateKey, state.Id, [(StateFields.T3At, "1"), (StateFields.AllAck, state.Id)], []);
+            state = (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!;
             var found = (await inventory.RunAsync(kit.Group, CancellationToken.None))!;
             found.Ambiguous.Should().Be(1);
             found.Residue["a"].Should().Be(2);
