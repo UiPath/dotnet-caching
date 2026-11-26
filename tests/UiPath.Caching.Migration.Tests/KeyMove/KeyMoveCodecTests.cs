@@ -655,26 +655,32 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
             services.AddSingleton(rate);
         }
 
+        var nativePrefix = N(string.Empty);
+        var moveRegistration = new KeyMoveCacheRegistration
+        {
+            Name = registration.Name,
+            Group = Group,
+            InPlacePattern = $"{InPlacePrefix}*",
+            ParseInPlaceKey = key => key.StartsWith(InPlacePrefix, StringComparison.Ordinal) ? key[InPlacePrefix.Length..] : null,
+            NativePattern = $"{nativePrefix}*",
+            FormatNativeKey = N,
+            ParseNativeKey = key => key.StartsWith(nativePrefix, StringComparison.Ordinal) ? key[nativePrefix.Length..] : null,
+        };
         configureServices?.Invoke(services);
         services.AddCachingRouter(
             configuration,
-            router => WithEnvelope(router.UseLibraryWhen(_ => true), inPlace)
-                .UseNodeIdentity($"kc{_unique}{_providers.Count}")
-                .UseSourceConnection(() => Db)
-                .Add(registration)
-                .UseKeyMove(new Stage(), moves => moves
-                    .UseLibraryKeyPrefix(Library)
-                    .AddGroup(Group)
-                    .AddCache(new KeyMoveCacheRegistration
-                    {
-                        Name = "items",
-                        Group = Group,
-                        InPlacePattern = $"{InPlacePrefix}*",
-                        ParseInPlaceKey = key => key.StartsWith(InPlacePrefix, StringComparison.Ordinal) ? key[InPlacePrefix.Length..] : null,
-                        NativePattern = $"{AppPrefix}{_unique}:N:*",
-                        FormatNativeKey = N,
-                        ParseNativeKey = key => key.StartsWith($"{AppPrefix}{_unique}:N:", StringComparison.Ordinal) ? key[$"{AppPrefix}{_unique}:N:".Length..] : null,
-                    })),
+            router =>
+            {
+                router.MoverOptions = new MoverOptions { MinScanInterval = TimeSpan.Zero };
+                WithEnvelope(router.UseLibraryWhen(_ => true), inPlace)
+                    .UseNodeIdentity($"kc{_unique}{_providers.Count}")
+                    .UseSourceConnection(() => Db)
+                    .Add(registration)
+                    .UseKeyMove(new Stage(), moves => moves
+                        .UseLibraryKeyPrefix(Library)
+                        .AddGroup(Group)
+                        .AddCache(moveRegistration));
+            },
             "RouterCaching");
         var provider = services.BuildServiceProvider();
         _providers.Add(provider);

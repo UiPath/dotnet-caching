@@ -6,9 +6,6 @@ dotnet_diagnostic.RS0030.severity = error
 [UiPath.Caching.Migration.Tests/BridgeTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Migration.Tests/KeyMove/DryRunTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashPromotionOutcomeTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
