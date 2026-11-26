@@ -36,6 +36,9 @@ internal sealed record KeyMoveSetup(
     /// <summary>CLAIMDROP, for <c>RemoveGroup</c>; null when no group takes a claim.</summary>
     public Func<string, LeaseFence?, CancellationToken, Task<ClaimOutcome>>? DropClaim { get; init; }
 
+    /// <summary>Overrides the retry clock and optionally wraps the topology for the router's inventory scanner in tests.</summary>
+    internal (TimeProvider RetryClock, Func<IStateTopology, IStateTopology>? WrapTopology)? InventoryScanOverride { get; init; }
+
     internal Action<Task>? SnapshotPollScheduled { get; init; }
 
     internal Action<Task>? StagePollScheduled { get; init; }

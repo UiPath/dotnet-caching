@@ -213,6 +213,9 @@ internal sealed class KeyMoveNode
         var records = new ControlRecordReader(control, names);
         var units = new MultiplexerScanUnits(() => database.Multiplexer);
         var scanner = new MasterScanner(connector.GetPrimaries, topology, database.Database, prefix, _time, ScanRetryDelay, alert: _setup.Alert);
+        var inventoryScanner = _setup.InventoryScanOverride is { } scanOverride
+            ? new MasterScanner(connector.GetPrimaries, scanOverride.WrapTopology?.Invoke(topology) ?? topology, database.Database, prefix, scanOverride.RetryClock, ScanRetryDelay, alert: _setup.Alert)
+            : scanner;
         return new Wiring(
             database.Multiplexer,
             store,
@@ -224,7 +227,7 @@ internal sealed class KeyMoveNode
             records,
             new ControlUpkeep(records, sequence, store, state, _time, Report),
             new GroupDataOps(scanner, _setup.KeySpace, store, stateScripts, controlScripts, names, alert: _ambiguity.Raise),
-            new KeyInventory(scanner, _setup.KeySpace, store, database, prefix, _time, _ambiguity.Raise, _setup.Values),
+            new KeyInventory(inventoryScanner, _setup.KeySpace, store, database, prefix, _time, _ambiguity.Raise, _setup.Values),
             new StuckGateReopener(records, controlScripts, database, names, state, _time),
             new MarkerSweeper(control, controlScripts, names, state, _time),
             new RetireGate(control, names, state, _time),
