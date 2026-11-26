@@ -169,7 +169,7 @@ for i in "${!apps[@]}"; do
     # dotnet test starts the runner on the testing platform, which owns the trx, coverage and class filter.
     exec timeout 10m dotnet test --project "${projects[i]}" --framework "${frameworks[i]}" -c Release --no-build \
       --filter-class "${classes[@]}" \
-      --results-directory "$results/${names[i]}" --report-xunit-trx --long-running 60 "${options[@]}"
+      --results-directory "$results/${names[i]}" --report-xunit-trx --output Detailed "${options[@]}"
   ) > "$results/${names[i]}/output.log" 2>&1 &
   pids+=("$!")
 done
