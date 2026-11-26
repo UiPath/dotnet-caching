@@ -74,7 +74,8 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
     public async Task Migrate_on_read_rewrites_json_into_the_plugin_and_never_back_to_json()
     {
         Assert.SkipUnless(Fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var node = Node(new("a"));
+        var telemetry = new RecordingTelemetry();
+        var node = Node(new("a") { Telemetry = telemetry });
         var cache = Cache(node);
         var json = Unique();
         var stored = Unique();
@@ -85,9 +86,7 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
         await cache.GetAsync<Profile>(stored, PolicyOf(node, Plain), Ct);
         (await cache.GetAsync<Profile>(json, PolicyOf(node, Migrating), Ct)).Should().Be(new Profile("x", 1));
 
-        // The rewrite is asynchronous; the json key flipping shows the queue has run, and the plugin value read before it was in that queue.
-        (await UntilAsync(async () => (await Raw(json))![0] == 0x1F)).Should().BeTrue("the read rewrites the value into the policy's format");
-        await Task.Delay(500, Ct);
+        await telemetry.WaitForMetricAsync(Metrics.SerializerRewrite, "outcome", "done", Ct);
         (await Raw(json))!.Take(2).Should().Equal(0x1F, 0x00);
         (await Raw(stored))![0].Should().Be(0x1F, "a policy that writes json does not move a plugin value back");
     }
@@ -107,14 +106,14 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
         (await cache.GetAsync<Profile>(key, PolicyOf(node, ToBeta), Ct)).Should().Be(new Profile("x", 1));
         if (deterministic)
         {
-            (await UntilAsync(async () => (await Raw(key))![1] == expectedLowByte, seconds: 10)).Should().BeTrue("the value is moved to the other plugin");
+            await telemetry.WaitForMetricAsync(Metrics.SerializerRewrite, "outcome", "done", Ct);
+            (await Raw(key))![1].Should().Be((byte)expectedLowByte, "the value is moved to the other plugin");
             telemetry.Count(Metrics.SerializerRewrite, "outcome", "lossy").Should().Be(0);
             return;
         }
 
-        (await UntilAsync(() => Task.FromResult(telemetry.Count(Metrics.SerializerRewrite, "outcome", "lossy") > 0), seconds: 10))
-            .Should().BeTrue("a source that does not serialize to the same bytes twice is counted lossy");
-        await Task.Delay(300, Ct);
+        await telemetry.WaitForMetricAsync(Metrics.SerializerRewrite, "outcome", "lossy", Ct);
+        telemetry.Count(Metrics.SerializerRewrite, "outcome", "lossy").Should().BeGreaterThan(0);
         (await Raw(key))!.Take(2).Should().Equal(new byte[] { 0x1F, (byte)expectedLowByte }, "a lossy value is skipped, not moved");
     }
 
@@ -143,8 +142,6 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
         var node = Node(new("a") { Streams = true });
         await Start(node);
 
-        (await UntilAsync(async () => (await Advertisements()).Count == 1)).Should().BeTrue();
-
         var ad = (await Advertisements()).Single();
         Field(ad, "vr").Should().Be("json,100,101");
         Field(ad, "er").Should().Be("json,11");
@@ -155,17 +152,30 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
     {
         Assert.SkipUnless(Fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var readerEvents = new AcmeEventFormat();
-        var writer = Cache(Node(new("a")), KnownCacheProviderNames.InMemoryRedis);
-        var reader = Cache(Node(new("b") { Events = readerEvents }), KnownCacheProviderNames.InMemoryRedis);
+        var writerNode = Node(new("a"));
+        var readerNode = Node(new("b") { Events = readerEvents, ObservedTopic = nameof(Profile) });
+        var writer = Cache(writerNode, KnownCacheProviderNames.InMemoryRedis);
+        var reader = Cache(readerNode, KnownCacheProviderNames.InMemoryRedis);
         var policy = PolicyOf(Nodes[0], Policy);
         var key = Unique();
         await writer.SetAsync(key, new Profile("first", 1), policy, Ct);
         (await reader.GetAsync<Profile>(key, policy, Ct)).Should().Be(new Profile("first", 1));
 
-        await writer.SetAsync(key, new Profile("second", 2), policy, Ct);
+        await ReadyAsync(readerNode);
+        await BarrierAsync<Profile>(writerNode, readerNode);
+        var decoded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        readerEvents.OnDecode = message =>
+        {
+            if (message.Key?.EndsWith(key, StringComparison.Ordinal) == true)
+            {
+                decoded.TrySetResult();
+            }
+        };
 
-        (await UntilAsync(async () => await reader.GetAsync<Profile>(key, policy, Ct) == new Profile("second", 2)))
-            .Should().BeTrue("the invalidation dropped the reader's copy");
+        await writer.SetAsync(key, new Profile("second", 2), policy, Ct);
+        await decoded.Task.WaitAsync(Ct);
+        await BarrierAsync<Profile>(writerNode, readerNode);
+        (await reader.GetAsync<Profile>(key, policy, Ct)).Should().Be(new Profile("second", 2), "the invalidation dropped the reader's copy");
         readerEvents.Decoded.Should().NotBeEmpty("the reader's plugin decoded a body that started with its id, so the writer did not fall back to JSON");
     }
 
@@ -175,40 +185,36 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
         Assert.SkipUnless(Fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var readerEvents = new AcmeEventFormat();
         var reads = new ProfilingSession();
-        var writer = HashNode("a", new AcmeEventFormat(), profile: null);
-        var peer = HashNode("b", readerEvents, reads);
+        var writerNode = Node(new("a") { Events = new AcmeEventFormat(), PeerFieldUpdates = true, DefaultPolicy = true });
+        var peerNode = Node(new("b") { Events = readerEvents, PeerFieldUpdates = true, DefaultPolicy = true, Profile = reads, ObservedTopic = nameof(Profile) });
+        var writer = HashCache(writerNode);
+        var peer = HashCache(peerNode);
+        var clock = peerNode.GetRequiredService<TimeProvider>();
         var warm = Unique();
         (await writer.SetAsync(warm, Fields("a"), TimeSpan.FromMinutes(10), Ct)).Should().BeTrue();
         (await peer.GetAsync<Profile>(warm, Ct)).Should().HaveCount(1);
-        (await UntilAsync(async () =>
-        {
-            await writer.SetAsync(warm, Fields("w"), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10), SetOption: HashCacheSetOption.HashReplace), Ct);
-            return readerEvents.Decoded.Any(e => e.Data?.Properties?.ContainsKey(CacheEventPropertyNames.PeerFields) == true);
-        })).Should().BeTrue("the peer's stream consumer is reading before the measured update is published");
+        await ReadyAsync(peerNode);
+        (await writer.SetAsync(warm, Fields("w"), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10), SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
+        await BarrierAsync<Profile>(writerNode, peerNode);
+        readerEvents.Decoded.Should().Contain(e => e.Data!.Properties!.ContainsKey(CacheEventPropertyNames.PeerFields), "the peer is reading before the measured update is published");
         var key = Unique();
         (await writer.SetAsync(key, Fields("a"), TimeSpan.FromMinutes(10), Ct)).Should().BeTrue();
+        await BarrierAsync<Profile>(writerNode, peerNode);
         (await peer.GetAsync<Profile>(key, Ct)).Should().HaveCount(1);
         reads.FinishProfiling().Select(c => c.Command).Should().Contain(c => c.StartsWith('H') || c.StartsWith("EVAL", StringComparison.Ordinal), "the session sees the peer's own hash read");
-        await Task.Delay(1000, Ct);
         _ = reads.FinishProfiling().ToList();
 
         (await writer.SetAsync(key, Fields("b"), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(20), SetOption: HashCacheSetOption.HashReplace, Metadata: new Dictionary<string, string?> { ["m"] = "v" }), Ct)).Should().BeTrue();
 
-        var commands = new List<string>();
+        await BarrierAsync<Profile>(writerNode, peerNode);
         var expected = new Dictionary<string, Profile?> { ["a"] = new Profile("a", 1), ["b"] = new Profile("b", 1) };
         var entry = await peer.GetCacheEntryAsync<Profile>(key, Ct);
-        (await UntilAsync(
-            async () =>
-            {
-                entry = await peer.GetCacheEntryAsync<Profile>(key, Ct);
-                commands.AddRange(reads.FinishProfiling().Select(c => c.Command));
-                return entry?.Value?.Count == expected.Count && entry.Metadata?.ContainsKey("m") == true && entry.Expiration > DateTimeOffset.UtcNow.AddMinutes(15);
-            },
-            seconds: 10)).Should().BeTrue("the peer applied the field, metadata and expiry the event carried");
+        var commands = reads.FinishProfiling().Select(c => c.Command).ToList();
+        entry.Should().NotBeNull("the peer applied the field, metadata and expiry the event carried");
 
         entry!.Value.Should().BeEquivalentTo(expected, "the peer applied the field the event carried and kept the primed one");
         entry.Metadata.Should().Contain("m", "v");
-        entry.Expiration.Should().BeAfter(DateTimeOffset.UtcNow.AddMinutes(15), "the update's expiry replaced the primed one");
+        entry.Expiration.Should().BeAfter(clock.ToDateTimeOffset(TimeSpan.FromMinutes(15)), "the update's expiry replaced the primed one");
         commands.Should().NotContain(c => c.StartsWith('H'), "the peer read no hash from Redis");
         var withFields = readerEvents.Decoded.Where(e => e.Data?.Properties?.ContainsKey(CacheEventPropertyNames.PeerFields) == true).ToList();
         withFields.Should().NotBeEmpty("a peer-field update arrived as a plugin body");
@@ -223,10 +229,10 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
 
         (await RawField(key, "b"))!.Take(2).Should().Equal(0x1F, 0x00);
 
-        IHashCache HashNode(string source, AcmeEventFormat events, ProfilingSession? profile) =>
-            Node(new(source) { Events = events, PeerFieldUpdates = true, DefaultPolicy = true, Profile = profile })
-                .GetRequiredService<ICacheFactory>().CreateHashCache(KnownCacheProviderNames.InMemoryRedis);
     }
+
+    private static IHashCache HashCache(ServiceProvider node) =>
+        node.GetRequiredService<ICacheFactory>().CreateHashCache(KnownCacheProviderNames.InMemoryRedis);
 
     private static void AssertType(string name, object? value)
     {

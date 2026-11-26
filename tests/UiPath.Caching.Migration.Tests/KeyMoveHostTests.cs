@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Threading.Channels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -18,9 +20,20 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
     private const string RouterAppShortName = "kmhostrouter";
     private const char SharedRouterSeparator = '$';
 
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan AckInterval = TimeSpan.FromMilliseconds(53);
+    private static readonly TimeSpan AdvertiseInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan DriverInterval = TimeSpan.FromMilliseconds(2300);
+    private static readonly TimeSpan LeaseInterval = TimeSpan.FromMilliseconds(211);
+    private static readonly TimeSpan RewireInterval = TimeSpan.FromMilliseconds(500);
+
     private readonly string _unique = Guid.NewGuid().ToString("N")[..10];
-    private readonly System.Collections.Concurrent.ConcurrentQueue<KeyMoveAlert> _alerts = new();
+    private readonly ConcurrentQueue<KeyMoveAlert> _alerts = new();
+    private readonly PollSchedule _snapshots = new();
+    private readonly PollSchedule _flags = new();
+    private readonly Channel<StepOutcome?> _steps = Channel.CreateUnbounded<StepOutcome?>();
     private ConnectionMultiplexer? _redis;
+    private DateTimeOffset _serverTime;
     private RedisKey? _nodeKey;
     private string? _field;
     private RedisKey? _isolatedNodeKey;
@@ -39,6 +52,7 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         if (fixture.Enabled)
         {
             _redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+            _serverTime = await _redis.GetServer(_redis.GetEndPoints()[0]).TimeAsync();
         }
     }
 
@@ -111,21 +125,29 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         var router = (Router)provider.GetRequiredService<IRouter>();
         var lead = $"{Library}mg:{{{Group}}}:lead";
 
-        (await UntilAsync(() => router.KeyMove!.Runtime is not null)).Should().BeTrue("the node starts with the library");
-        (await UntilAsync(async () => (await Tokens(router, provider)).Any(t => t.StartsWith("snap=", StringComparison.Ordinal)))).Should().BeTrue("a listed group is read at startup, which gives the node a snapshot");
-        var tokens = await Tokens(router, provider);
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
+        var move = router.KeyMove!;
+        move.Runtime.Should().NotBeNull("the node starts with the library");
+        var clock = (SignalingTimeProvider)router.Clock;
+        await AdvanceLoopAsync(clock, LeaseInterval);
+        (await Db.KeyExistsAsync(lead)).Should().BeTrue("a relevant group is led by whoever holds the lease");
 
+        await AdvancePollsAsync(clock);
+        await AdvanceLoopAsync(clock, AdvertiseInterval);
+        var tokens = (await ReadEntryAsync(router, provider)).Tokens;
         tokens.Should().Contain("km").And.Contain($"kmg={Group}").And.Contain($"ca={Group}:advc");
-        (await UntilAsync(async () => await Db.KeyExistsAsync(lead))).Should().BeTrue("a relevant group is led by whoever holds the lease");
-
-        var init = await router.KeyMove!.Runtime!.Commands.InitAsync(Group, ["advc"], Ct);
+        tokens.Should().Contain(t => t.StartsWith("snap=", StringComparison.Ordinal), "a listed group has a snapshot");
+        var init = await move.Runtime.Commands.InitAsync(Group, ["advc"], Ct);
         init.Code.Should().Be(MoveScripts.StateCreated);
-        (await UntilAsync(async () => (await Tokens(router, provider)).Contains($"fl={Group}:2"))).Should().BeTrue("the stage flag is polled once the group is Init-ed and listed");
+        await AdvancePollsAsync(clock);
+        clock.Advance(AdvertiseInterval);
+        await clock.WaitForTimerAsync(AdvertiseInterval, Ct);
+        (await ReadEntryAsync(router, provider)).Tokens.Should().Contain($"fl={Group}:2", "the stage flag is polled once the group is Init-ed and listed");
 
         await router.StopAsync(Ct);
 
-        router.KeyMove.Runtime.Should().BeNull();
-        (await UntilAsync(async () => !await Db.KeyExistsAsync(lead))).Should().BeTrue("a stopped node releases its lease");
+        move.Runtime.Should().BeNull();
+        (await Db.KeyExistsAsync(lead)).Should().BeFalse("a stopped node releases its lease");
     }
 
     [Fact]
@@ -134,12 +156,17 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         Assert.SkipUnless(fixture.Enabled, Skip);
         await using var provider = Provider(keyMove: true);
         var router = (Router)provider.GetRequiredService<IRouter>();
-        (await UntilAsync(() => router.KeyMove!.Runtime is not null)).Should().BeTrue();
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
+        router.KeyMove!.Runtime.Should().NotBeNull();
 
         await router.KeyMove!.Runtime!.Commands.InitAsync(Group, ["advc"], Ct);
         var state = (await router.KeyMove.Runtime.Store.ReadAsync(Group, Ct))!;
 
-        (await UntilAsync(async () => (await Tokens(router, provider)).Any(t => t.StartsWith($"{Group}@{state.Ep}:{state.Id}:S0", StringComparison.Ordinal)))).Should().BeTrue();
+        var clock = (SignalingTimeProvider)router.Clock;
+        await AdvancePollsAsync(clock);
+        await AdvanceLoopAsync(clock, AckInterval);
+        await AdvanceLoopAsync(clock, AdvertiseInterval);
+        (await ReadEntryAsync(router, provider)).Tokens.Should().Contain(t => t.StartsWith($"{Group}@{state.Ep}:{state.Id}:S0", StringComparison.Ordinal));
     }
 
     // A node of a build without key move has no km token in its advert: once it joins a group that has started, the leader holds the group, and the hold ends when it leaves.
@@ -197,24 +224,47 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         await using var provider = Provider(keyMove: true);
         var router = (Router)provider.GetRequiredService<IRouter>();
         var connector = provider.GetRequiredService<IRedisConnector>();
-        (await UntilAsync(() => router.KeyMove!.Runtime is not null)).Should().BeTrue();
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
+        router.KeyMove!.Runtime.Should().NotBeNull();
         await router.KeyMove!.Runtime!.Commands.InitAsync(Group, ["advc"], Ct);
         var before = router.KeyMove.Runtime;
         var oldMux = connector.Database.Multiplexer;
         var lead = $"{Library}mg:{{{Group}}}:lead";
-        (await UntilAsync(async () => await Db.KeyExistsAsync(lead))).Should().BeTrue();
+        var clock = (SignalingTimeProvider)router.Clock;
+        await clock.WaitForTimerAsync(LeaseInterval, Ct);
+        (await Db.KeyExistsAsync(lead)).Should().BeTrue();
 
-        connector.ForceReconnect();
-        (await UntilAsync(() => !ReferenceEquals(connector.Database.Multiplexer, oldMux))).Should().BeTrue("the connector replaced its multiplexer");
+        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Reconnected(object? sender, EventArgs args) => reconnected.TrySetResult();
+        connector.OnReconnected += Reconnected;
+        try
+        {
+            connector.ForceReconnect();
+            await reconnected.Task.WaitAsync(Ct);
+        }
+        finally
+        {
+            connector.OnReconnected -= Reconnected;
+        }
 
-        (await UntilAsync(() => !ReferenceEquals(router.KeyMove.Runtime, before))).Should().BeTrue("the node rebuilt its services over the new connection");
+        connector.Database.Multiplexer.Should().NotBeSameAs(oldMux);
+        await clock.WaitForTimerAsync(RewireInterval, Ct);
+        clock.Advance(RewireInterval);
+        await clock.WaitForTimerAsync(RewireInterval, Ct);
+        router.KeyMove.Runtime.Should().NotBeSameAs(before, "the node rebuilt its services over the new connection");
         await Db.KeyDeleteAsync(lead);
-        (await UntilAsync(async () => await Db.KeyExistsAsync(lead))).Should().BeTrue("the lease is taken again through the new connection");
+        await clock.WaitForTimerAsync(LeaseInterval, Ct);
+        clock.Advance(LeaseInterval);
+        await clock.WaitForTimerAsync(LeaseInterval, Ct);
+
+        (await Db.KeyExistsAsync(lead)).Should().BeTrue("the lease is taken again through the new connection");
         (await router.KeyMove.Runtime!.Store.ReadAsync(Group, Ct)).Should().NotBeNull("commands run over the new connection");
 
-        // A snapshot loop that stopped at the reconnect would show an age that only grows, so the age must stay at or below one bucket well past 5 seconds.
-        await Task.Delay(TimeSpan.FromSeconds(7), Ct);
-        (await UntilAsync(async () => (await Tokens(router, provider)).Any(t => t is "snap=0" or "snap=5"))).Should().BeTrue("the snapshot loop reads through the new connection");
+        await AdvancePollsAsync(clock);
+        router.KeyMove.Monitor.CurrentState(Group).Should().NotBeNull("the snapshot reads through the replacement connection");
+        router.KeyMove.Monitor.SnapshotAge().Should().Be(TimeSpan.Zero);
+        await AdvanceLoopAsync(clock, AdvertiseInterval);
+        (await ReadEntryAsync(router, provider)).Tokens.Should().Contain(t => t == "snap=0" || t == "snap=5", "the advertisement carries the refreshed snapshot");
     }
 
     [Fact]
@@ -224,7 +274,8 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         await using var provider = Provider(keyMove: true);
         var router = (Router)provider.GetRequiredService<IRouter>();
         var connector = provider.GetRequiredService<IRedisConnector>();
-        (await UntilAsync(() => router.KeyMove!.Runtime is not null)).Should().BeTrue();
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
+        router.KeyMove!.Runtime.Should().NotBeNull();
 
         // Every command of the node now fails, the lease release included.
         await connector.Database.Multiplexer.DisposeAsync();
@@ -234,29 +285,26 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         await router.KeyMove.StopAsync();
     }
 
-    private static async Task<bool> UntilAsync(Func<bool> condition) => await UntilAsync(() => Task.FromResult(condition()));
-
-    private static async Task<bool> UntilAsync(Func<Task<bool>> condition, int seconds = 20)
+    private static async Task AdvanceLoopAsync(SignalingTimeProvider clock, TimeSpan interval)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(seconds);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(25, Ct);
-        }
-
-        return false;
+        await clock.WaitForTimerAsync(interval, Ct);
+        clock.Advance(interval);
+        await clock.WaitForTimerAsync(interval, Ct);
     }
 
     private static RedisKey AdvertisementKey(char separator) => RouterServiceCollectionExtensions.NodeListKey(
         new CacheOptions { Separator = separator },
         new RedisCacheOptions { RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance });
 
-    private async Task<IReadOnlyList<string>> Tokens(Router router, ServiceProvider provider) => (await EntryAsync(router, provider)).Tokens;
+    private async Task AdvancePollsAsync(SignalingTimeProvider clock)
+    {
+        // Both polls share an interval, so each loop signals when it arms its own timer.
+        await _snapshots.WaitAsync();
+        await _flags.WaitAsync();
+        clock.Advance(PollInterval);
+        await _snapshots.WaitAsync();
+        await _flags.WaitAsync();
+    }
 
     private async Task<StateRecord> StepAsync(KeyMoveRuntime runtime, DriverTestClock clock)
     {
@@ -307,16 +355,18 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
 
     private async Task<RouterAdvertisement> EntryAsync(Router router, ServiceProvider provider)
     {
-        var store = AdvertisementStore(provider);
-        _nodeKey = store.Key;
+        (await router.Advertiser!.WriteAsync(Ct)).Should().BeTrue();
+        return await ReadEntryAsync(router, provider);
+    }
+
+    private async Task<RouterAdvertisement> ReadEntryAsync(Router router, ServiceProvider provider)
+    {
+        var cacheOptions = provider.GetRequiredKeyedService<IOptions<CacheOptions>>(RouterServiceCollectionExtensions.StackName).Value;
+        var redisOptions = provider.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(RouterServiceCollectionExtensions.StackName).Value;
+        _nodeKey = RouterServiceCollectionExtensions.NodeListKey(cacheOptions, redisOptions);
         _field = router.Advertiser!.Field;
-        RouterAdvertisement? entry = null;
-        await UntilAsync(async () =>
-        {
-            entry = (await store.ReadAsync(Ct)).Where(e => e.Field == _field).Select(e => e.Advertisement).FirstOrDefault();
-            return entry is not null;
-        });
-        return entry ?? throw new InvalidOperationException("The router wrote no entry.");
+        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _nodeKey.Value);
+        return (await store.ReadAsync(Ct)).Single(e => e.Field == _field).Advertisement;
     }
 
     // A startable node passes every start gate: the flag asks for 3, the facts hold, and the view needs no time to settle.
@@ -338,11 +388,8 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
         };
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var source = new LegacySource(_redis!, "advc");
-        var services = new ServiceCollection().AddLogging();
-        if (clock is not null)
-        {
-            services.AddSingleton<TimeProvider>(clock);
-        }
+        var services = new ServiceCollection().AddLogging()
+            .AddSingleton<TimeProvider>(clock ?? (TimeProvider)new SignalingTimeProvider(_serverTime));
 
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(
@@ -368,13 +415,22 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
                         State = new KeyMoveStateOptions
                         {
                             ExpectedReplicasPerMaster = 0,
-                            LeaseRenewInterval = DriverTestClock.StartupInterval,
-                            PollInterval = DriverTestClock.StartupInterval,
+                            LeaseRenewInterval = clock is null ? LeaseInterval : DriverTestClock.StartupInterval,
+                            PollInterval = clock is null ? PollInterval : DriverTestClock.StartupInterval,
                         },
                         Alert = _alerts.Enqueue,
-                        Driver = startable
-                            ? new StageDriverOptions { AckInterval = TimeSpan.FromMilliseconds(50), UpgradeHold = TimeSpan.Zero }
-                            : new StageDriverOptions { AckInterval = TimeSpan.FromMilliseconds(50) },
+                        SnapshotPollScheduled = _snapshots.Scheduled,
+                        StagePollScheduled = _flags.Scheduled,
+                        DriverStepped = step => _steps.Writer.TryWrite(step),
+                        Driver = clock is null ? new StageDriverOptions
+                        {
+                            AckInterval = AckInterval,
+                            StepInterval = DriverInterval,
+                            UpgradeHold = startable ? TimeSpan.Zero : new StageDriverOptions().UpgradeHold,
+                        }
+                            : startable
+                                ? new StageDriverOptions { AckInterval = TimeSpan.FromMilliseconds(50), UpgradeHold = TimeSpan.Zero }
+                                : new StageDriverOptions { AckInterval = TimeSpan.FromMilliseconds(50) },
                     });
                 }
             },
@@ -410,6 +466,22 @@ public sealed class KeyMoveHostTests(RedisFixture fixture) : IAsyncLifetime
             }
 
             return timer;
+        }
+    }
+
+    private sealed class PollSchedule
+    {
+        private readonly Channel<Task> _scheduled = Channel.CreateUnbounded<Task>();
+        private Task _delay = Task.CompletedTask;
+
+        public void Scheduled(Task delay) => _scheduled.Writer.TryWrite(delay);
+
+        public async Task WaitAsync()
+        {
+            while (_delay.IsCompleted)
+            {
+                _delay = await _scheduled.Reader.ReadAsync(Ct);
+            }
         }
     }
 

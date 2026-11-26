@@ -389,16 +389,19 @@ public sealed class HashCacheContractTests : RouterTestBase
     {
         var (node, _, _) = Node("library");
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var runs = 0;
         async Task<IDictionary<string, Item?>> Generate(CancellationToken token)
         {
             Interlocked.Increment(ref runs);
+            entered.TrySetResult();
             await release.Task;
             return new Dictionary<string, Item?> { ["g"] = new Item("made") };
         }
 
         var callers = Enumerable.Range(0, 4).Select(_ => node.Surface.GetOrAddAsync("k", Generate, Ct).AsTask()).ToArray();
-        await UntilAsync(() => runs == 1);
+        await entered.Task.WaitAsync(Ct);
+        runs.Should().Be(1);
         release.SetResult();
         var results = await Task.WhenAll(callers);
 
@@ -491,40 +494,42 @@ public sealed class HashCacheContractTests : RouterTestBase
         await node.Cache.FlushAsync();
 
         node.Cache.PendingCount.Should().Be(0);
-        await settled.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        await settled.WaitAsync(Ct);
     }
 
     [Fact]
     public async Task A_key_whose_write_has_no_retry_is_pending_for_the_window_and_not_for_a_second_one()
     {
-        var (node, target, _) = Node("library");
+        var time = new SignalingTimeProvider(Clock);
+        var (node, target, _) = Node("library", time);
         target.WriteOutcome = WriteOutcome.Unknown;
         var window = TimeSpan.FromSeconds(30);
 
         // The waiter looks at the key late; the shared no-retry answer is no hold, so the window runs from the write.
         AdvanceOnce(node, TimeSpan.FromSeconds(20));
         await node.Surface.SetAsync("k", new Dictionary<string, Item?> { ["a"] = new Item("1") }, Ct);
-        await UntilAsync(() => Clock.HasTimers);
+        await time.WaitForTimerAsync(window - TimeSpan.FromSeconds(20), Ct);
 
         Clock.Advance(window - TimeSpan.FromSeconds(20));
 
-        await UntilAsync(() => node.Cache.PendingCount == 0);
+        await node.Cache.WhenPendingSettledAsync().WaitAsync(Ct);
+        node.Cache.PendingCount.Should().Be(0);
     }
 
     [Fact]
     public async Task A_completed_task_that_is_not_the_shared_no_retry_answer_is_a_hold_all_the_same()
     {
-        var (node, target, _) = Node("library");
+        var time = new SignalingTimeProvider(Clock);
+        var (node, target, _) = Node("library", time);
         target.WriteOutcome = WriteOutcome.Unknown;
 
         // Equal in value to the shared answer and a different task: it stands for a retry that has ended, whose window is still enforced.
         target.Settled = _ => Task.FromResult(0);
         AdvanceOnce(node, TimeSpan.FromSeconds(20));
         await node.Surface.SetAsync("k", new Dictionary<string, Item?> { ["a"] = new Item("1") }, Ct);
-        await UntilAsync(() => Clock.HasTimers);
+        await time.WaitForTimerAsync(TimeSpan.FromSeconds(30), Ct);
 
         Clock.Advance(TimeSpan.FromSeconds(10));
-        await Task.Delay(100, Ct);
 
         node.Cache.PendingCount.Should().Be(1);
     }
@@ -646,10 +651,15 @@ public sealed class HashCacheContractTests : RouterTestBase
         await started.Task;
         ((IRouterParticipant)node.Cache).ResetLocal();
         var join = node.Surface.GetOrAddAsync("k", New, Life, Ct).AsTask();
-        var finished = await Task.WhenAny(join, Task.Delay(TimeSpan.FromSeconds(10), Ct));
-        resume.TrySetResult();
-        finished.Should().BeSameAs(join, "a caller that starts after the reset must not wait for the earlier load");
-        var after = await join;
+        IDictionary<string, Item?> after;
+        try
+        {
+            after = await join.WaitAsync(Ct);
+        }
+        finally
+        {
+            resume.TrySetResult();
+        }
         await call;
 
         after.Keys.Should().Equal(["n"], "a caller that starts after the reset does not join the earlier load");
@@ -714,9 +724,9 @@ public sealed class HashCacheContractTests : RouterTestBase
     private void Seed(string key, params (string Field, string Value)[] fields) =>
         Hashes[key] = new StoredHash { Fields = fields.ToDictionary(f => f.Field, f => (Item?)new Item(f.Value)) };
 
-    private (HashTestNode Node, FakeHashBackend Target, FakeHashBackend Other) Node(string mode)
+    private (HashTestNode Node, FakeHashBackend Target, FakeHashBackend Other) Node(string mode, TimeProvider? time = null)
     {
-        var node = Own(HashTestNode.Create(Clock, CacheName, useLibrary: _ => mode == "library", bypass: mode == "bypass" ? () => true : null, store: Hashes));
+        var node = Own(HashTestNode.Create(Clock, CacheName, useLibrary: _ => mode == "library", bypass: mode == "bypass" ? () => true : null, store: Hashes, time: time));
 
         // The flag is read at start: without it the first call sees the flag and begins the switch in the background.
         node.Router.Start();

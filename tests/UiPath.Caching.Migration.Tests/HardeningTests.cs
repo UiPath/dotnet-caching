@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Caching.Migration.Tests.Support;
 
@@ -56,15 +57,17 @@ public sealed class HardeningTests : RouterTestBase
         node.LibraryBackend.InFlight = null;
         using var cts = new CancellationTokenSource();
         var clear = node.Cache.ClearAsync(cts.Token).AsTask();
-        await Task.Delay(100, Ct);
+        clear.IsCompleted.Should().BeFalse();
 
         await cts.CancelAsync();
         await clear.Invoking(task => task).Should().ThrowAsync<OperationCanceledException>();
+        node.SourceBackend.Clears.Should().Be(0, "cancellation wins while the write is still in flight");
         var other = node.Cache.SetAsync("other", new Item("v"), default, Ct).AsTask();
 
-        (await Task.WhenAny(other, Task.Delay(TimeSpan.FromSeconds(3), Ct))).Should().BeSameAs(other, "no clear is left holding new writes back");
+        (await other.WaitAsync(Ct)).Should().Be(WriteOutcome.Committed, "no clear is left holding new writes back");
         release.SetResult();
         await write;
+        Store.Keys.Should().BeEquivalentTo("k", "other");
         await node.Cache.ClearAsync(Ct);
         node.SourceBackend.Clears.Should().Be(1, "the cancelled clear never scanned, and the next one is not blocked by it");
     }
@@ -108,16 +111,15 @@ public sealed class HardeningTests : RouterTestBase
         await node.Cache.SetAsync("k", new Item("v"), default, Ct);
         Bus.FailPublish = false;
         Bus.FailWith = new TaskCanceledException();
-        for (var round = 0; round < 3; round++)
-        {
-            await Task.Delay(50, Ct);
-            Clock.Advance(TimeSpan.FromSeconds(6));
-        }
-
-        await Task.Delay(50, Ct);
+        await node.Time.WaitForTimerAsync(TimeSpan.FromMilliseconds(100), Ct);
+        Clock.Advance(TimeSpan.FromMilliseconds(100));
+        await node.Time.WaitForTimerAsync(TimeSpan.FromMilliseconds(200), Ct);
+        Clock.Advance(TimeSpan.FromMilliseconds(200));
+        await node.Time.WaitForTimerAsync(TimeSpan.FromMilliseconds(400), Ct);
         Bus.FailWith = null;
 
-        await RunBackgroundAsync(node, TimeSpan.FromSeconds(1));
+        Clock.Advance(TimeSpan.FromMilliseconds(400));
+        await node.Core.DrainAsync().WaitAsync(Ct);
 
         Bus.Published.Should().Be(1);
         node.Cache.Retrier.WaitingKeys.Should().Be(0);
@@ -126,7 +128,8 @@ public sealed class HardeningTests : RouterTestBase
     [Fact]
     public async Task A_retrier_whose_publish_callback_throws_a_cancellation_keeps_its_key_and_its_worker()
     {
-        var core = new RouterCore(Clock, _ => true, NullLogger.Instance);
+        var clock = new SignalingTimeProvider(Clock);
+        var core = new RouterCore(clock, _ => true, NullLogger.Instance);
         var attempts = 0;
         var retrier = new InvalidationRetrier(
             core,
@@ -136,11 +139,11 @@ public sealed class HardeningTests : RouterTestBase
             _ => { });
 
         retrier.ReportKey("k", new Route(RoutePath.Library, Route.Flag));
-        for (var round = 0; round < 40 && retrier.WaitingKeys > 0; round++)
-        {
-            await Task.Delay(30, Ct);
-            Clock.Advance(TimeSpan.FromSeconds(6));
-        }
+        await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(100), Ct);
+        Clock.Advance(TimeSpan.FromMilliseconds(100));
+        await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(200), Ct);
+        Clock.Advance(TimeSpan.FromMilliseconds(200));
+        await core.DrainAsync().WaitAsync(Ct);
 
         retrier.WaitingKeys.Should().Be(0, "the second attempt ran and published");
         attempts.Should().Be(2);
@@ -159,22 +162,14 @@ public sealed class HardeningTests : RouterTestBase
 
         retrier.ReportKey("k", new Route(RoutePath.Library, Route.Flag));
 
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (!core.IsIdle && DateTime.UtcNow < until)
-        {
-            await Task.Delay(10, Ct);
-        }
+        await core.DrainAsync().WaitAsync(Ct);
 
         core.IsIdle.Should().BeTrue();
         retrier.WaitingKeys.Should().Be(0, "the worker pruned the expired key instead of dying on a negative wait");
         // A new report must start a worker. With this clock the worker prunes the key and ends at once, so the
         // count of running workers is a race; the key's removal is the proof, since only a worker removes it.
         retrier.ReportKey("j", new Route(RoutePath.Library, Route.Flag));
-        until = DateTime.UtcNow.AddSeconds(5);
-        while ((retrier.WaitingKeys != 0 || !core.IsIdle) && DateTime.UtcNow < until)
-        {
-            await Task.Delay(10, Ct);
-        }
+        await core.DrainAsync().WaitAsync(Ct);
 
         retrier.WaitingKeys.Should().Be(0, "the running flag was released, so the new report started a worker that pruned the key");
         core.BeginStop();
@@ -187,18 +182,22 @@ public sealed class HardeningTests : RouterTestBase
     public async Task The_final_eviction_detaches_the_key_under_the_pending_gate()
     {
         var node = NewNode();
-        PendingMutations? pending = null;
-        var blocked = false;
-        pending = new PendingMutations(
-            node.Core,
-            "gate",
-            _ => ValueTask.CompletedTask,
-            _ => blocked = !Task.Run(() => pending!.Count, Ct).Wait(300, Ct));
+        var held = false;
+        object gate = null!;
+        var pending = new PendingMutations(node.Core, "gate", _ => ValueTask.CompletedTask, _ =>
+        {
+#if NET9_0_OR_GREATER
+            held = ((Lock)gate).IsHeldByCurrentThread;
+#else
+            held = Monitor.IsEntered(gate);
+#endif
+        });
+        gate = typeof(PendingMutations).GetField("_gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pending)!;
 
         pending.Begin("k", TimeSpan.FromSeconds(5));
         await RunBackgroundAsync(node, TimeSpan.FromSeconds(6));
 
-        blocked.Should().BeTrue("a load validated between the retire and the detach would still write");
+        held.Should().BeTrue("a load validated between the retire and the detach would still write");
     }
 
     [Fact]
@@ -319,17 +318,14 @@ public sealed class HardeningTests : RouterTestBase
         node.LibraryBackend.WriteOutcome = WriteOutcome.Unknown;
         await node.Cache.SetAsync("k", new Item("v"), default, Ct);
 
+        await node.Time.WaitForTimerAsync(TimeSpan.FromMinutes(5), Ct);
         var dispose = node.StartDispose();
-        for (var round = 0; round < 4; round++)
-        {
-            await Task.Delay(50, Ct);
-            Clock.Advance(TimeSpan.FromSeconds(6));
-        }
-
-        await Task.Delay(100, Ct);
+        var stop = node.StartStop(Ct);
+        Clock.Advance(TimeSpan.FromSeconds(5));
+        await stop.WaitAsync(Ct);
         dispose.IsCompleted.Should().BeFalse("the connector and topics the announcement needs are released after dispose returns");
-        await RunBackgroundAsync(node, TimeSpan.FromMinutes(1));
-        await dispose.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Clock.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromSeconds(5));
+        await dispose.WaitAsync(Ct);
 
         Bus.Events[^1].Type.Should().Be(UiPath.Caching.Broadcast.KnownEventTypes.CacheRemoved);
     }
@@ -342,24 +338,16 @@ public sealed class HardeningTests : RouterTestBase
         await node.Cache.SetAsync("k", new Item("v"), default, Ct);
         Bus.Hold = new TaskCompletionSource();
         Bus.FailNext = 1;
-        var attempts = Bus.Attempts;
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (!Clock.HasTimers && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
-
+        var attempted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Bus.OnAttempt = () => attempted.TrySetResult();
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(5), Ct);
         Clock.Advance(TimeSpan.FromSeconds(6));
-        while (Bus.Attempts == attempts && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
+        await attempted.Task.WaitAsync(Ct);
 
         var stop = node.StartStop(Ct);
-        await Task.Delay(150, Ct);
         stop.IsCompleted.Should().BeFalse("the final announcement is still in flight");
         Bus.Hold.SetResult();
-        await stop.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await stop.WaitAsync(Ct);
 
         Bus.Events.Count(ev => ev.Type == UiPath.Caching.Broadcast.KnownEventTypes.CacheRemoved).Should().Be(1, "the failed announcement was retried by the flush before background work was cancelled");
     }

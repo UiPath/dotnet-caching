@@ -36,24 +36,39 @@ public sealed class TopicReleaseTests : RouterTestBase
     [Fact]
     public async Task A_topic_release_that_outlasts_its_bound_is_cut_off_when_the_router_gives_up_on_it()
     {
+        var bound = TimeSpan.FromMilliseconds(200);
+        var clock = new SignalingTimeProvider(Clock);
         var seen = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var step = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var (core, router) = Started(
             (_, token) =>
             {
                 seen.TrySetResult(token);
-                return new TaskCompletionSource().Task;
+                return step.Task;
             },
-            TimeSpan.FromMilliseconds(200));
+            bound,
+            clock);
 
-        await core.ReleaseLibraryAsync().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var release = core.ReleaseLibraryAsync();
+        var token = await seen.Task.WaitAsync(Ct);
+        // The first timer cancels the token. The second lets the router move on.
+        await clock.WaitForTimerWhileRunningAsync(bound, release, Ct);
+        await clock.WaitForTimerWhileRunningAsync(bound, release, Ct);
+        release.IsCompleted.Should().BeFalse();
+        token.IsCancellationRequested.Should().BeFalse();
 
-        (await seen.Task).IsCancellationRequested.Should().BeTrue("a step that ignored its token is cut off, not left holding it");
+        clock.Advance(bound);
+        await release.WaitAsync(Ct);
+
+        token.IsCancellationRequested.Should().BeTrue("a step that ignored its token is cut off, not left holding it");
+        step.Task.IsCompleted.Should().BeFalse();
+        core.UnfinishedCleanup.Should().Be(1);
         await router.DisposeAsync();
     }
 
-    private (RouterCore Core, Router Router) Started(Func<TopicKey, CancellationToken, Task> releaseTopic, TimeSpan? cleanupBound = null)
+    private (RouterCore Core, Router Router) Started(Func<TopicKey, CancellationToken, Task> releaseTopic, TimeSpan? cleanupBound = null, TimeProvider? clock = null)
     {
-        var core = new RouterCore(Clock, _ => true, NullLogger.Instance) { CleanupBound = cleanupBound ?? Bound };
+        var core = new RouterCore(clock ?? Clock, _ => true, NullLogger.Instance) { CleanupBound = cleanupBound ?? Bound };
         var cache = new RoutedCache<Item>(core, new RouterCacheRegistration<Item> { Name = "first", Group = "g", Source = new FakeBackend(Store, Clock), RedisKey = key => key });
         var router = new Router(core, [("first", typeof(Item), cache)]);
         var made = Parts(new FakeMigrationCache());

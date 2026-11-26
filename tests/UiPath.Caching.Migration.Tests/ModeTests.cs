@@ -102,8 +102,10 @@ public sealed class ModeTests : RouterTestBase
         var held = node.Cache.TryGetAsync("held", Ct).AsTask();
         await started.Task;
 
+        var readFinishedAtNotification = false;
+        node.Router.ModeChanged += (_, _) => readFinishedAtNotification = release.Task.IsCompleted;
         var enter = node.Router.EnterBypassAsync(Ct);
-        await Task.WhenAny(enter, Task.Delay(150, Ct));
+        await node.Time.WaitForTimerWhileRunningAsync(node.Core.SourceTimeout, enter, Ct);
 
         enter.IsCompleted.Should().BeFalse("a call started in library mode is still running");
         node.Router.Mode.Should().Be(RouterMode.BypassLibrary, "new calls are already on the source");
@@ -117,6 +119,7 @@ public sealed class ModeTests : RouterTestBase
         release.SetResult();
         (await held).Should().Be(new Item("held"));
         await enter;
+        readFinishedAtNotification.Should().BeTrue();
 
         node.IsLocal("held").Should().BeFalse("a late completion from the previous mode never fills the tier");
     }
@@ -136,10 +139,12 @@ public sealed class ModeTests : RouterTestBase
         var held = node.Cache.TryGetAsync("held", Ct).AsTask();
         await started.Task;
         var enter = node.Router.EnterBypassAsync(Ct);
-        await Task.Delay(100, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(TimeSpan.FromSeconds(5), enter, Ct);
         enter.IsCompleted.Should().BeFalse();
 
-        await AdvanceUntilAsync(enter, TimeSpan.FromSeconds(6));
+        Clock.Advance(TimeSpan.FromSeconds(5));
+        await enter.WaitAsync(Ct);
+        held.IsCompleted.Should().BeFalse("the transition timed out before the read finished");
 
         node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
         release.SetResult();
@@ -160,7 +165,7 @@ public sealed class ModeTests : RouterTestBase
 
         await node.Cache.TryGetAsync("k", Ct);
 
-        (await entered.WaitAsync(TimeSpan.FromSeconds(5), Ct)).Should().Be(RouterMode.BypassLibrary);
+        (await entered.WaitAsync(Ct)).Should().Be(RouterMode.BypassLibrary);
         node.Router.ModeReason.Should().Be(RouterModeReason.Flag);
         node.IsLocal("k").Should().BeFalse();
         var left = NextMode(node);
@@ -168,7 +173,7 @@ public sealed class ModeTests : RouterTestBase
 
         await node.Cache.TryGetAsync("k", Ct);
 
-        (await left.WaitAsync(TimeSpan.FromSeconds(5), Ct)).Should().Be(RouterMode.Library);
+        (await left.WaitAsync(Ct)).Should().Be(RouterMode.Library);
         node.Router.ModeReason.Should().Be(RouterModeReason.Default);
         await node.Cache.TryGetAsync("k", Ct);
         node.IsLocal("k").Should().BeTrue("the tier serves again after the leave");
@@ -182,17 +187,16 @@ public sealed class ModeTests : RouterTestBase
         Bus.Subscribed = false;
 
         var leave = node.Router.LeaveBypassAsync(Ct);
-        await Task.Delay(100, Ct);
-        for (var i = 0; i < 5; i++)
-        {
-            await AdvanceWhenArmedAsync(Poll);
-        }
+        await node.Time.WaitForTimerAsync(Poll, Ct);
+        Clock.Advance(Poll);
+        await node.Time.WaitForTimerAsync(Poll, Ct);
 
         leave.IsCompleted.Should().BeFalse("peer events cannot be trusted before the subscription is in place");
         node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
         Bus.Subscribed = true;
 
-        await AdvanceUntilAsync(leave, Poll);
+        Clock.Advance(Poll);
+        await leave.WaitAsync(Ct);
 
         node.Router.Mode.Should().Be(RouterMode.Library);
     }
@@ -205,13 +209,18 @@ public sealed class ModeTests : RouterTestBase
         await node.Cache.SetAsync("k", new Item("new"), default, Ct);
         await node.Router.EnterBypassAsync(Ct);
 
+        var pendingAtNotification = -1;
+        node.Router.ModeChanged += (_, _) => pendingAtNotification = node.Cache.PendingKeyCount;
         var leave = node.Router.LeaveBypassAsync(Ct);
-        await Task.Delay(150, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(node.Core.SourceTimeout, leave, Ct);
 
         leave.IsCompleted.Should().BeFalse("a write of unknown outcome can still land");
         node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
 
-        await AdvanceUntilAsync(leave, TimeSpan.FromSeconds(31));
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(30), Ct);
+        Clock.Advance(TimeSpan.FromSeconds(30));
+        await leave.WaitAsync(Ct);
+        pendingAtNotification.Should().Be(0);
 
         node.Router.Mode.Should().Be(RouterMode.Library);
     }
@@ -234,8 +243,10 @@ public sealed class ModeTests : RouterTestBase
         await started.Task;
         node.SourceBackend.AfterRead = null;
 
+        var sourceReleasedAtNotification = false;
+        node.Router.ModeChanged += (_, _) => sourceReleasedAtNotification = release.Task.IsCompleted;
         var leave = node.Router.LeaveBypassAsync(Ct);
-        await Task.Delay(150, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(node.Core.SourceTimeout, leave, Ct);
 
         leave.IsCompleted.Should().BeFalse("a call started in bypass is still running");
         node.Router.Mode.Should().Be(RouterMode.Library, "new calls take the library");
@@ -248,6 +259,7 @@ public sealed class ModeTests : RouterTestBase
         release.SetResult();
         await held;
         await leave;
+        sourceReleasedAtNotification.Should().BeTrue();
         await node.Cache.TryGetAsync("k", Ct);
         await node.Cache.TryGetAsync("k", Ct);
 
@@ -276,7 +288,8 @@ public sealed class ModeTests : RouterTestBase
         Bus.Subscribed = false;
         using var cancel = new CancellationTokenSource();
         var leave = node.Router.LeaveBypassAsync(cancel.Token);
-        await Task.Delay(100, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(Poll, leave, Ct);
+        leave.IsCompleted.Should().BeFalse();
 
         await cancel.CancelAsync();
 
@@ -350,19 +363,23 @@ public sealed class ModeTests : RouterTestBase
         });
         attempts.Should().Be(1);
 
-        await AdvanceWhenArmedAsync(TimeSpan.FromSeconds(1));
-        await UntilAsync(() => attempts == 2);
-        await AdvanceWhenArmedAsync(TimeSpan.FromSeconds(1));
-        await Task.Delay(100, Ct);
+        var firstDelay = TimeSpan.FromSeconds(1);
+        var secondDelay = TimeSpan.FromSeconds(2);
+        var thirdDelay = TimeSpan.FromSeconds(4);
+        await node.Time.WaitForTimerAsync(firstDelay, Ct);
+        Clock.Advance(firstDelay);
+        await node.Time.WaitForTimerAsync(secondDelay, Ct);
+        attempts.Should().Be(2);
+        Clock.Advance(firstDelay);
         attempts.Should().Be(2, "the second delay is two seconds");
-        await AdvanceWhenArmedAsync(TimeSpan.FromSeconds(1));
-        await UntilAsync(() => attempts == 3);
+        Clock.Advance(firstDelay);
+        await node.Time.WaitForTimerAsync(thirdDelay, Ct);
+        attempts.Should().Be(3);
         healthy = true;
         var left = NextMode(node);
-        await AdvanceWhenArmedAsync(TimeSpan.FromSeconds(4));
-        await AdvanceWhenArmedAsync(TimeSpan.FromSeconds(4));
+        Clock.Advance(thirdDelay);
 
-        (await left.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().Be(RouterMode.Library);
+        (await left.WaitAsync(Ct)).Should().Be(RouterMode.Library);
         await node.Cache.TryGetAsync("k", Ct);
         store.Keys.Should().NotBeEmpty("the library path serves now");
     }
@@ -380,17 +397,18 @@ public sealed class ModeTests : RouterTestBase
                 attempts++;
                 return Parts(store);
             });
-        await AdvanceWhenArmedAsync(TimeSpan.FromSeconds(5));
-        await Task.Delay(100, Ct);
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(1), Ct);
+        Clock.Advance(TimeSpan.FromSeconds(1));
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(1), Ct);
 
         attempts.Should().Be(0, "the flag asks for no library at all");
         node.Router.ModeReason.Should().Be(RouterModeReason.Flag);
         var left = NextMode(node);
         flag = false;
         await node.Cache.TryGetAsync("k", Ct);
-        await AdvanceWhenArmedAsync(TimeSpan.FromSeconds(1));
+        Clock.Advance(TimeSpan.FromSeconds(1));
 
-        (await left.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().Be(RouterMode.Library);
+        (await left.WaitAsync(Ct)).Should().Be(RouterMode.Library);
         attempts.Should().Be(1);
     }
 
@@ -401,14 +419,14 @@ public sealed class ModeTests : RouterTestBase
         var node = NewNode(bypass: () => flag);
         var entered = NextMode(node);
         await node.Cache.TryGetAsync("k", Ct);
-        await entered.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        await entered.WaitAsync(Ct);
         Bus.Subscribed = false;
         flag = false;
         await node.Cache.TryGetAsync("k", Ct);
-        await Task.Delay(150, Ct);
+        await node.Time.WaitForTimerAsync(Poll, Ct);
         node.Core.IsIdle.Should().BeFalse("the leave is waiting for the subscription");
 
-        await node.StopAsync(TimeSpan.FromMilliseconds(50));
+        await node.StopAsync();
 
         node.Core.IsIdle.Should().BeTrue();
     }

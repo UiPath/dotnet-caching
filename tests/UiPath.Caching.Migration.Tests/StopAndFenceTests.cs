@@ -20,15 +20,16 @@ public sealed class StopAndFenceTests : RouterTestBase
         };
 
         var leader = node.Cache.GetOrAddAsync("k", _ => Task.FromResult<Item?>(new Item("old")), default, Ct).AsTask();
-        await inFlight.Task;
+        await inFlight.Task.WaitAsync(Ct);
         node.LibraryBackend.InFlight = null;
         var set = node.Cache.SetAsync("k", new Item("new"), default, Ct).AsTask();
-        await Task.Delay(150, Ct);
+        set.IsCompleted.Should().BeFalse();
 
         node.LibraryBackend.Writes.Should().Be(1, "the mutation waits for the factory's write instead of racing it");
         release.SetResult();
         await leader;
         await set;
+        node.LibraryBackend.Writes.Should().Be(2);
         Store["k"].Should().Be(new Item("new"), "the mutation is the later write");
     }
 
@@ -36,7 +37,8 @@ public sealed class StopAndFenceTests : RouterTestBase
     public async Task A_factory_that_finishes_while_a_mutation_is_being_sent_does_not_write_over_it()
     {
         var node = NewNode(localCap: TimeSpan.Zero);
-        var factoryGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factoryGate = new TaskCompletionSource();
+        var factoryReturning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var factoryEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -45,6 +47,7 @@ public sealed class StopAndFenceTests : RouterTestBase
         {
             factoryEntered.TrySetResult();
             await factoryGate.Task;
+            factoryReturning.TrySetResult();
             return new Item("old");
         }
 
@@ -58,7 +61,8 @@ public sealed class StopAndFenceTests : RouterTestBase
         var set = node.Cache.SetAsync("k", new Item("new"), default, Ct).AsTask();
         await inFlight.Task;
         factoryGate.SetResult();
-        await Task.Delay(150, Ct);
+        await factoryReturning.Task.WaitAsync(Ct);
+        leader.IsCompleted.Should().BeFalse();
         release.SetResult();
 
         await set;
@@ -144,7 +148,7 @@ public sealed class StopAndFenceTests : RouterTestBase
             Write = async (_, token) =>
             {
                 entered.TrySetResult();
-                await Task.Delay(Timeout.Infinite, token);
+                await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token);
                 return StoreOutcome.Committed;
             },
         };
@@ -156,12 +160,12 @@ public sealed class StopAndFenceTests : RouterTestBase
         await cts.CancelAsync();
         await write.Invoking(task => task).Should().ThrowAsync<OperationCanceledException>();
         Bus.Published.Should().Be(1);
-        await WaitForTimerAsync();
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(60), Ct);
         Clock.Advance(TimeSpan.FromSeconds(30));
-        await Task.Delay(100, Ct);
 
         Bus.Published.Should().Be(1, "the library command can still land for up to a minute");
-        await RunBackgroundAsync(node, TimeSpan.FromSeconds(31));
+        Clock.Advance(TimeSpan.FromSeconds(31));
+        await node.Core.DrainAsync().WaitAsync(Ct);
         Bus.Published.Should().Be(2);
     }
 
@@ -180,7 +184,7 @@ public sealed class StopAndFenceTests : RouterTestBase
         await inFlight.Task;
 
         var stop = node.StartStop(Ct);
-        await Task.Delay(150, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(TimeSpan.FromSeconds(5), stop, Ct);
 
         stop.IsCompleted.Should().BeFalse("a call is still running");
         var late = async () => await node.Cache.RemoveAsync("k", Ct);
@@ -188,6 +192,7 @@ public sealed class StopAndFenceTests : RouterTestBase
         release.SetResult();
         (await write).Should().Be(WriteOutcome.Committed);
         await stop;
+        node.Core.OperationsDrained.IsCompletedSuccessfully.Should().BeTrue();
         Bus.Published.Should().Be(1, "the running call settled and announced before the router shut down");
         Store["k"].Should().Be(new Item("v"));
     }
@@ -203,7 +208,10 @@ public sealed class StopAndFenceTests : RouterTestBase
         var publishedAt = new List<DateTimeOffset>();
         Bus.OnPublish = _ => publishedAt.Add(Clock.GetUtcNow());
 
-        await node.StopAsync(TimeSpan.FromSeconds(1));
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(2), Ct);
+        var stop = node.StartStop(Ct);
+        Clock.Advance(TimeSpan.FromSeconds(2));
+        await stop.WaitAsync(Ct);
 
         Bus.Events.Should().NotContain(ev => ev.Type == KnownEventTypes.TopicInvalidated, "the key settled inside the stop limit");
         publishedAt.Should().ContainSingle("only the final announcement is left");
@@ -217,21 +225,27 @@ public sealed class StopAndFenceTests : RouterTestBase
         node.LibraryBackend.WriteOutcome = WriteOutcome.Unknown;
         await node.Cache.SetAsync("k", new Item("v"), default, Ct);
         var started = Clock.GetUtcNow();
-
-        // Dispose waits for the whole cleanup, not only the bounded stop; the clock moves on while it runs.
-        var dispose = node.StartDispose();
-        while (!dispose.IsCompleted)
+        DateTimeOffset? finalAnnouncement = null;
+        Bus.OnPublish = message =>
         {
-            await Task.WhenAny(dispose, Task.Delay(20, Ct));
-            if (!dispose.IsCompleted)
+            if (message.Type == KnownEventTypes.CacheRemoved)
             {
-                Clock.Advance(TimeSpan.FromSeconds(1));
+                finalAnnouncement = Clock.GetUtcNow();
             }
-        }
+        };
 
-        await dispose;
+        await node.Time.WaitForTimerAsync(TimeSpan.FromMinutes(10), Ct);
+        var dispose = node.StartDispose();
+        var stop = node.StartStop(Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(TimeSpan.FromSeconds(5), stop, Ct);
+        Clock.Advance(TimeSpan.FromSeconds(5));
+        await stop.WaitAsync(Ct);
+        dispose.IsCompleted.Should().BeFalse();
+        Clock.Advance(TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(5));
+        await dispose.WaitAsync(Ct);
 
-        (Clock.GetUtcNow() - started).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMinutes(10), "the final announcement waits for the window, so a late commit is never missed by a peer");
+        (Clock.GetUtcNow() - started).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMinutes(10));
+        finalAnnouncement.Should().Be(started + TimeSpan.FromMinutes(10), "the final announcement waits for the pending window");
         Bus.Events.Should().Contain(ev => ev.Type == KnownEventTypes.TopicInvalidated, "the bounded stop still announced the cache-level invalidation");
     }
 
@@ -262,9 +276,11 @@ public sealed class StopAndFenceTests : RouterTestBase
         await node.Cache.SetAsync("k", new Item("v"), default, Ct);
         Bus.Hold = new TaskCompletionSource();
 
-        var stop = node.StopAsync(TimeSpan.FromSeconds(2));
+        var stop = node.StopAsync();
 
-        (await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(20), Ct))).Should().BeSameAs(stop);
+        await stop.WaitAsync(Ct);
+        Bus.Hold.Task.IsCompleted.Should().BeFalse("the cleanup ended on its bound while publishing still hung");
+        node.Core.IsStopped.Should().BeTrue();
         Bus.Hold.SetResult();
     }
 
@@ -312,14 +328,32 @@ public sealed class StopAndFenceTests : RouterTestBase
         await inFlight.Task;
         node.LibraryBackend.InFlight = null;
 
+        var clearing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishClear = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        node.SourceBackend.BeforeClear = () =>
+        {
+            clearing.TrySetResult();
+            return finishClear.Task;
+        };
         var clear = node.Cache.ClearAsync(Ct).AsTask();
-        await Task.Delay(150, Ct);
+        clear.IsCompleted.Should().BeFalse();
 
         node.SourceBackend.Clears.Should().Be(0, "the scan starts only once the write under way has finished");
         var later = node.Cache.SetAsync("other", new Item("v"), default, Ct).AsTask();
-        await Task.Delay(100, Ct);
+        later.IsCompleted.Should().BeFalse();
         node.LibraryBackend.Writes.Should().Be(1, "a write that starts during the clear waits for it");
         release.SetResult();
+        await clearing.Task.WaitAsync(Ct);
+        try
+        {
+            later.IsCompleted.Should().BeFalse("the clear is now scanning");
+            Store.Should().ContainKey("k", "the first write landed before the clear scanned");
+        }
+        finally
+        {
+            finishClear.TrySetResult();
+        }
+
         await write;
         await clear;
         await later;
@@ -329,13 +363,4 @@ public sealed class StopAndFenceTests : RouterTestBase
     }
 
     private static int StripeOf(string cache, string key) => (int)((uint)new LocalKey(cache, key).Hash() % Stripes);
-
-    private async Task WaitForTimerAsync()
-    {
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (!Clock.HasTimers && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
-    }
 }

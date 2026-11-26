@@ -5,6 +5,8 @@ namespace UiPath.Caching.Migration.Tests;
 // An answer lost after the send cannot establish whether this call wrote the value.
 public sealed class LibraryPathOutcomeTests
 {
+    private static readonly ManualTimeProvider Clock = new(DateTimeOffset.UnixEpoch);
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -85,7 +87,7 @@ public sealed class LibraryPathOutcomeTests
         var (client, script, _) = Client();
         var calls = 0;
         script.Answers["SetAsync"] = _ => throw new InvalidOperationException("a fill must not be an unconditional set");
-        var expiry = DateTimeOffset.UtcNow.AddMinutes(5);
+        var expiry = Clock.ToDateTimeOffset(TimeSpan.FromMinutes(5));
 
         script.Answers["TryFillAsync"] = _ => { calls++; return new ValueTask<FillResult<Item>>(new FillResult<Item>(FillOutcome.Existed, new Item("winner"), expiry)); };
         var box = new FillBox<Item>();
@@ -108,7 +110,7 @@ public sealed class LibraryPathOutcomeTests
     {
         var connection = new FakeConnection { IsConnected = false };
         var (cache, script) = ScriptedCache.Create();
-        var client = new LibraryPathClient<Item>(new FakeMigrationCache(), connection, k => k, TimeSpan.FromSeconds(4)) { Cache = cache };
+        var client = new LibraryPathClient<Item>(new FakeMigrationCache(Clock), connection, k => k, TimeSpan.FromSeconds(4)) { Cache = cache };
 
         var add = await client.TryAddAsync("k", null, null, Ct);
         add.Kind.Should().Be(TryAddKind.Failed);
@@ -125,7 +127,7 @@ public sealed class LibraryPathOutcomeTests
     [Fact]
     public async Task A_client_without_the_library_cache_fills_through_its_store_and_cannot_answer_expiry()
     {
-        var store = new FakeMigrationCache();
+        var store = new FakeMigrationCache(Clock);
         var client = new LibraryPathClient<Item>(store, new FakeConnection(), k => $"mapped:{k}", TimeSpan.FromSeconds(4));
         var box = new FillBox<Item>();
 
@@ -142,7 +144,7 @@ public sealed class LibraryPathOutcomeTests
     public async Task A_fill_with_no_result_box_preserves_the_library_winner_even_when_it_is_null()
     {
         var (client, script, store) = Client();
-        var expiry = DateTimeOffset.UtcNow.AddMinutes(2);
+        var expiry = Clock.ToDateTimeOffset(TimeSpan.FromMinutes(2));
         script.Answers["TryFillAsync"] = _ => new FillResult<Item>(FillOutcome.Existed, null, expiry);
 
         (await client.FillAsync("k", new Item("new"), null, null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
@@ -182,7 +184,7 @@ public sealed class LibraryPathOutcomeTests
     {
         var (client, script, _) = Client();
         var span = TimeSpan.FromMinutes(2);
-        var deadline = DateTimeOffset.UtcNow + span;
+        var deadline = Clock.ToDateTimeOffset(span);
         script.Answers["TimeToLiveAsync"] = args =>
         {
             ((CacheKey)args[0]!).Name.Should().Be("hit");
@@ -224,7 +226,7 @@ public sealed class LibraryPathOutcomeTests
     private static (LibraryPathClient<Item> Client, ScriptedCache Script, FakeMigrationCache Store) Client()
     {
         var (cache, script) = ScriptedCache.Create();
-        var store = new FakeMigrationCache();
+        var store = new FakeMigrationCache(Clock);
         return (new LibraryPathClient<Item>(store, new FakeConnection(), key => key, TimeSpan.FromSeconds(30)) { Cache = cache }, script, store);
     }
 }

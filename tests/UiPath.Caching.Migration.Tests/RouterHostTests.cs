@@ -48,16 +48,23 @@ public sealed class RouterHostTests
     [Fact]
     public async Task A_started_service_that_ignores_its_stop_does_not_hold_up_the_rollback_of_a_failed_start()
     {
-        var services = Register(connector: true, identity: null, cleanupBound: TimeSpan.FromMilliseconds(300));
+        var bound = TimeSpan.FromMilliseconds(300);
+        var clock = new SignalingTimeProvider(DateTimeOffset.UnixEpoch);
+        var logs = new CapturedLogs();
+        var services = Register(connector: true, identity: null, logs: logs, cleanupBound: bound);
+        services.AddSingleton<TimeProvider>(clock);
         services.AddKeyedSingleton(RouterServiceCollectionExtensions.StackName, new StackServices([new HangingHostedService(), new FailingHostedService()]));
         await using var provider = services.BuildServiceProvider();
-        var clock = System.Diagnostics.Stopwatch.StartNew();
 
-        var router = provider.GetRequiredService<IRouter>();
+        var creating = Task.Run(provider.GetRequiredService<IRouter>, Ct);
+        await clock.WaitForTimerAsync(bound, Ct);
+        creating.IsCompleted.Should().BeFalse("the rollback waits for the cleanup bound");
+        clock.Advance(bound);
+        var router = await creating.WaitAsync(Ct);
 
-        clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3), "the rollback is bounded, so the first attempt ended well inside the start bound");
+        logs.Entries.Should().Contain(entry => entry.Message.Contains("library stack could not start", StringComparison.Ordinal), "the first attempt ended inside the start bound");
         router.Mode.Should().Be(RouterMode.BypassLibrary);
-        await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await provider.DisposeAsync().AsTask().WaitAsync(Ct);
     }
 
     [Fact]

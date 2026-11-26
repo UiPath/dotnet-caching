@@ -8,32 +8,61 @@ public sealed class ModeBoundsTests : RouterTestBase
     [Fact]
     public async Task A_factory_that_never_returns_lets_the_router_resolve_in_bypass_within_the_bound_and_dispose_in_time()
     {
-        var node = NewNode(lazyLibraryAsync: _ => new TaskCompletionSource<LibraryParts>().Task, startBound: TimeSpan.FromMilliseconds(300));
+        var node = await StartBoundedAsync(_ => new TaskCompletionSource<LibraryParts>().Task);
 
         node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
         node.Router.ModeReason.Should().Be(RouterModeReason.LibraryUnavailable);
         await node.Cache.TryGetAsync("k", Ct);
         node.SourceBackend.Reads.Should().Be(1);
 
-        await node.StartDispose().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await node.StartDispose().WaitAsync(Ct);
+    }
+
+    [Fact]
+    public async Task The_start_bound_can_expire_before_the_factory_is_entered()
+    {
+        var bypass = true;
+        var startup = new SignalingTimeProvider(Clock.GetUtcNow());
+        var bound = TimeSpan.FromMilliseconds(375);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var node = NewNode(
+            bypass: () => bypass,
+            lazyLibraryAsync: _ =>
+            {
+                entered.TrySetResult();
+                return Task.FromResult(Parts(new FakeMigrationCache()));
+            },
+            startBound: bound,
+            startupClock: startup);
+
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(1), Ct);
+        bypass = false;
+        var starting = Task.Run(node.Core.Start, Ct);
+        await startup.WaitForTimerWhileRunningAsync(bound, starting, Ct);
+        starting.IsCompleted.Should().BeFalse();
+        startup.Advance(bound);
+        await starting.WaitAsync(Ct);
+
+        entered.Task.IsCompleted.Should().BeFalse();
+        node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
+        await node.Cache.TryGetAsync("k", Ct);
+        node.SourceBackend.Reads.Should().Be(1);
     }
 
     [Fact]
     public async Task A_factory_that_blocks_its_thread_holds_up_neither_creation_nor_dispose()
     {
         using var release = new ManualResetEventSlim();
-        var node = NewNode(
-            lazyLibraryAsync: token =>
-            {
-                release.Wait(token);
-                return Task.FromResult(Parts(new FakeMigrationCache()));
-            },
-            startBound: TimeSpan.FromMilliseconds(300));
+        var node = await StartBoundedAsync(token =>
+        {
+            release.Wait(token);
+            return Task.FromResult(Parts(new FakeMigrationCache()));
+        });
 
         try
         {
             node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
-            await node.StartDispose().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await node.StartDispose().WaitAsync(Ct);
         }
         finally
         {
@@ -46,12 +75,13 @@ public sealed class ModeBoundsTests : RouterTestBase
     {
         var late = new TaskCompletionSource<LibraryParts>();
         var hosted = new FakeHostedService();
-        var node = NewNode(lazyLibraryAsync: _ => late.Task, startBound: TimeSpan.FromMilliseconds(200));
-        await node.StartDispose().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var node = await StartBoundedAsync(_ => late.Task);
+        await node.StartDispose().WaitAsync(Ct);
 
         late.SetResult(Parts(new FakeMigrationCache(), [hosted]));
 
-        await UntilAsync(() => hosted.Stopped == 1);
+        await hosted.StopCalled.Task.WaitAsync(Ct);
+        hosted.Stopped.Should().Be(1);
         Bus.Subscriptions.Should().Be(0, "the late stack was never attached");
     }
 
@@ -59,13 +89,13 @@ public sealed class ModeBoundsTests : RouterTestBase
     public async Task A_late_start_after_the_bound_leaves_bypass_by_the_normal_order()
     {
         var gate = new TaskCompletionSource<LibraryParts>();
-        var node = NewNode(lazyLibraryAsync: _ => gate.Task, startBound: TimeSpan.FromMilliseconds(200));
+        var node = await StartBoundedAsync(_ => gate.Task);
         node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
         var left = NextMode(node);
 
         gate.SetResult(Parts(new FakeMigrationCache()));
 
-        (await left.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().Be(RouterMode.Library);
+        (await left.WaitAsync(Ct)).Should().Be(RouterMode.Library);
     }
 
     [Fact]
@@ -76,16 +106,18 @@ public sealed class ModeBoundsTests : RouterTestBase
         Bus.Subscribed = false;
 
         var leave = node.Router.LeaveBypassAsync(Ct);
-        await AdvanceWithinAsync(() => leave.IsCompleted, node, TimeSpan.FromSeconds(1));
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(5), Ct);
+        Clock.Advance(TimeSpan.FromSeconds(5));
 
         await Assert.ThrowsAsync<TimeoutException>(() => leave);
         node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
         var left = NextMode(node);
         Bus.Subscribed = true;
 
-        await AdvanceWithinAsync(() => left.IsCompleted, node, TimeSpan.FromSeconds(1));
+        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(5), Ct);
+        Clock.Advance(TimeSpan.FromSeconds(5));
 
-        (await left.WaitAsync(TimeSpan.FromSeconds(1), Ct)).Should().Be(RouterMode.Library, "the background retry left once the subscription was in place");
+        (await left.WaitAsync(Ct)).Should().Be(RouterMode.Library, "the background retry left once the subscription was in place");
     }
 
     [Fact]
@@ -106,12 +138,17 @@ public sealed class ModeBoundsTests : RouterTestBase
         await started.Task;
         node.SourceBackend.AfterRead = null;
         using var cancel = new CancellationTokenSource();
+        var sourceReleasedAtNotification = false;
+        node.Router.ModeChanged += (_, _) => sourceReleasedAtNotification = release.Task.IsCompleted;
         var leave = node.Router.LeaveBypassAsync(cancel.Token);
-        await UntilAsync(() => node.Router.Mode == RouterMode.Library);
+        await node.Time.WaitForTimerWhileRunningAsync(node.Core.SourceTimeout, leave, Ct);
+        node.Router.Mode.Should().Be(RouterMode.Library);
+        leave.IsCompleted.Should().BeFalse();
 
         try
         {
             await cancel.CancelAsync();
+            leave.IsCompleted.Should().BeFalse("cancellation does not interrupt the committed transition");
         }
         finally
         {
@@ -119,7 +156,8 @@ public sealed class ModeBoundsTests : RouterTestBase
         }
 
         await held;
-        await leave.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await leave.WaitAsync(Ct);
+        sourceReleasedAtNotification.Should().BeTrue();
 
         await node.Cache.TryGetAsync("k", Ct);
         node.IsLocal("k").Should().BeTrue("the committed transition finished and the tier serves again");
@@ -131,6 +169,7 @@ public sealed class ModeBoundsTests : RouterTestBase
     {
         var node = NewNode();
         var seen = new List<RouterMode>();
+        var left = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         node.Router.ModeChanged += (mode, _) =>
         {
             seen.Add(mode);
@@ -138,11 +177,15 @@ public sealed class ModeBoundsTests : RouterTestBase
             {
                 node.Router.LeaveBypassAsync(Ct).GetAwaiter().GetResult();
             }
+            else
+            {
+                left.TrySetResult();
+            }
         };
 
-        await node.Router.EnterBypassAsync(Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await node.Router.EnterBypassAsync(Ct).WaitAsync(Ct);
 
-        await UntilAsync(() => seen.Count == 2);
+        await left.Task.WaitAsync(Ct);
         seen.Should().Equal(RouterMode.BypassLibrary, RouterMode.Library);
         node.Router.Mode.Should().Be(RouterMode.Library);
     }
@@ -157,7 +200,7 @@ public sealed class ModeBoundsTests : RouterTestBase
         peer.IsLocal("k").Should().BeTrue();
         Bus.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await bypassed.Cache.SetAsync("k", new Item("new"), default, Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        await bypassed.Cache.SetAsync("k", new Item("new"), default, Ct).AsTask().WaitAsync(Ct);
 
         bypassed.SourceBackend.Writes.Should().Be(1);
         peer.IsLocal("k").Should().BeTrue("the announcement is stuck behind the hung publish");
@@ -172,7 +215,8 @@ public sealed class ModeBoundsTests : RouterTestBase
     public async Task A_cache_that_cannot_attach_gives_back_what_the_earlier_ones_took_and_the_retry_attaches_all()
     {
         var hosted = new FakeHostedService();
-        var core = new RouterCore(Clock, _ => true, NullLogger.Instance);
+        var clock = new SignalingTimeProvider(Clock);
+        var core = new RouterCore(clock, _ => true, NullLogger.Instance);
         RoutedCache<Item> Make(string name) => new(core, new RouterCacheRegistration<Item> { Name = name, Group = "g", Source = new FakeBackend(Store, Clock), RedisKey = key => key });
         var router = new Router(core, [("first", typeof(Item), Make("first")), ("second", typeof(Item), Make("second"))]);
         core.UseLibrary(_ => Task.FromResult(Parts(new FakeMigrationCache(), [hosted])));
@@ -193,7 +237,9 @@ public sealed class ModeBoundsTests : RouterTestBase
         Bus.Subscriptions.Should().Be(0, "the first cache's subscription was given back when the second failed");
         hosted.Stopped.Should().Be(1, "so were the stack's hosted services");
         Bus.FailCreate = null;
-        await AdvanceWithinAsync(() => left.Task.IsCompleted, node: null, TimeSpan.FromSeconds(1), router);
+        await clock.WaitForTimerAsync(TimeSpan.FromSeconds(1), Ct);
+        Clock.Advance(TimeSpan.FromSeconds(1));
+        await left.Task.WaitAsync(Ct);
 
         Bus.Subscriptions.Should().Be(2);
         router.Mode.Should().Be(RouterMode.Library);
@@ -207,15 +253,17 @@ public sealed class ModeBoundsTests : RouterTestBase
         await node.Router.EnterBypassAsync(Ct);
         Bus.Subscribed = false;
         var leave = node.Router.LeaveBypassAsync(Ct);
-        await Task.Delay(100, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(TimeSpan.FromMilliseconds(100), leave, Ct);
+        leave.IsCompleted.Should().BeFalse();
         var enter = node.Router.EnterBypassAsync(Ct);
-        await Task.Delay(100, Ct);
+        enter.IsCompleted.Should().BeFalse();
 
-        await node.StartDispose().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await node.StartDispose().WaitAsync(Ct);
+        node.Core.TransitionsEnded.IsCompletedSuccessfully.Should().BeTrue();
 
         foreach (var transition in new[] { leave, enter })
         {
-            var outcome = await Outcome(transition.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+            var outcome = await Outcome(transition.WaitAsync(Ct));
             (outcome is null or OperationCanceledException or ObjectDisposedException).Should().BeTrue($"got {outcome}");
         }
     }
@@ -235,7 +283,7 @@ public sealed class ModeBoundsTests : RouterTestBase
 
         await node.Cache.TryGetAsync("k", Ct);
 
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await disposed.Task.WaitAsync(Ct);
 
         disposed.Task.IsCompletedSuccessfully.Should().BeTrue("the handler's own dispose returned");
         node.Core.IsStopped.Should().BeTrue();
@@ -247,7 +295,12 @@ public sealed class ModeBoundsTests : RouterTestBase
         var node = NewNode(lazyLibrary: () => Parts(new FakeMigrationCache(), [new HangingHostedService()]), cleanupBound: TimeSpan.FromMilliseconds(300));
         node.Router.Mode.Should().Be(RouterMode.Library);
 
-        await node.StartDispose().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var dispose = node.StartDispose();
+        var bound = TimeSpan.FromMilliseconds(300);
+        await node.Time.WaitForTimerAsync(bound, Ct);
+        await node.Time.WaitForTimerAsync(bound, Ct);
+        Clock.Advance(bound);
+        await dispose.WaitAsync(Ct);
 
         node.Core.UnfinishedCleanup.Should().Be(1, "the step is counted and left running");
     }
@@ -260,10 +313,15 @@ public sealed class ModeBoundsTests : RouterTestBase
         try
         {
             await node.Cache.SetAsync("k", new Item("v"), default, Ct);
-            await RunBackgroundStartedAsync(node);
+            var attempted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Bus.OnAttempt = () => attempted.TrySetResult();
+            var delay = TimeSpan.FromMilliseconds(100);
+            await node.Time.WaitForTimerAsync(delay, Ct);
+            Clock.Advance(delay);
+            await attempted.Task.WaitAsync(Ct);
 
             var teardown = node.DisposeAsync().AsTask();
-            await teardown.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await teardown.WaitAsync(Ct);
 
             teardown.IsCompletedSuccessfully.Should().BeTrue();
             node.Core.IsIdle.Should().BeTrue("no background work is left behind the stuck publish");
@@ -288,32 +346,22 @@ public sealed class ModeBoundsTests : RouterTestBase
         }
     }
 
-    /// <summary>Gives the retrier's first publish time to start, which needs the clock to pass its first delay.</summary>
-    private async Task RunBackgroundStartedAsync(TestNode node)
+    private async Task<TestNode> StartBoundedAsync(Func<CancellationToken, Task<LibraryParts>> factory)
     {
-        for (var i = 0; i < 20 && !node.Core.IsIdle; i++)
+        var startup = new SignalingTimeProvider(Clock.GetUtcNow());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bound = TimeSpan.FromMilliseconds(300);
+        Task<LibraryParts> Start(CancellationToken token)
         {
-            await AdvanceWhenArmedAsync(TimeSpan.FromMilliseconds(150));
-            if (Bus.Attempts > 0)
-            {
-                return;
-            }
-        }
-    }
-
-    /// <summary>Moves the clock until the condition holds, with a real-time limit and a message that says what the router was doing.</summary>
-    private async Task AdvanceWithinAsync(Func<bool> done, TestNode? node, TimeSpan step, Router? router = null)
-    {
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (!done() && DateTime.UtcNow < until)
-        {
-            await AdvanceWhenArmedAsync(step);
+            entered.TrySetResult();
+            return factory(token);
         }
 
-        if (!done())
-        {
-            var mode = (node?.Router ?? router)!;
-            throw new TimeoutException($"Gave up after 20 s: mode {mode.Mode}, reason {mode.ModeReason}, subscribed {Bus.Subscribed}, subscriptions {Bus.Subscriptions}, timers armed {Clock.HasTimers}, background idle {node?.Core.IsIdle}.");
-        }
+        var creating = Task.Run(() => NewNode(lazyLibraryAsync: Start, startBound: bound, startupClock: startup), Ct);
+        await entered.Task.WaitAsync(Ct);
+        await startup.WaitForTimerWhileRunningAsync(bound, creating, Ct);
+        creating.IsCompleted.Should().BeFalse();
+        startup.Advance(bound);
+        return await creating.WaitAsync(Ct);
     }
 }

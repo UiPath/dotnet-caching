@@ -72,13 +72,15 @@ public sealed class LibraryPathClientTests : RouterTestBase
     [Fact]
     public async Task A_found_entry_carries_the_ttl_of_the_same_snapshot()
     {
-        _store.Read = (_, _) => Task.FromResult<object?>(new Item("v"));
+        var store = new FakeMigrationCache(Clock) { Read = (_, _) => Task.FromResult<object?>(new Item("v")) };
+        var client = new LibraryPathClient<Item>(store, _connection, key => key, Settle);
+        Clock.Advance(TimeSpan.FromSeconds(10));
 
-        var read = await Client().ReadAsync("k", Ct);
+        var read = await client.ReadAsync("k", Ct);
 
         read.Kind.Should().Be(ReadOutcome.Found);
         read.Value.Should().Be(new Item("v"));
-        read.Expiration.Should().NotBeNull();
+        read.Expiration.Should().Be(Clock.GetUtcNow().AddMinutes(1));
     }
 
     [Theory]

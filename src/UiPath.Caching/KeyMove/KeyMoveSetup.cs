@@ -35,4 +35,10 @@ internal sealed record KeyMoveSetup(
 
     /// <summary>CLAIMDROP, for <c>RemoveGroup</c>; null when no group takes a claim.</summary>
     public Func<string, LeaseFence?, CancellationToken, Task<ClaimOutcome>>? DropClaim { get; init; }
+
+    internal Action<Task>? SnapshotPollScheduled { get; init; }
+
+    internal Action<Task>? StagePollScheduled { get; init; }
+
+    internal Action<StepOutcome?>? DriverStepped { get; init; }
 }

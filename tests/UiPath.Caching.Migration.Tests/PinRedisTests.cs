@@ -11,6 +11,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
     private const string Skip = "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.";
 
     private readonly string _run = $"pin-test:{Guid.NewGuid():N}";
+    private ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
     private ConnectionMultiplexer? _redis;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -24,6 +25,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
         if (fixture.Enabled)
         {
             _redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+            _clock = new ManualTimeProvider(await _redis.GetServer(_redis.GetEndPoints()[0]).TimeAsync());
         }
     }
 
@@ -84,7 +86,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
         Assert.SkipUnless(fixture.Enabled, Skip);
         var nodes = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), NodeHash);
         await nodes.WriteAsync("urn:a#router", new RouterAdvertisement("urn:a", "b", ["pin=g"]), Ct);
-        await Db.HashSetAsync(NodeHash, "urn:a", $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}|lib=3;inst=x;vr=json");
+        await Db.HashSetAsync(NodeHash, "urn:a", $"{_clock.GetUtcNow().ToUnixTimeMilliseconds()}|lib=3;inst=x;vr=json");
         await Db.HashSetAsync(NodeHash, "garbage", "no stamp here");
 
         var entries = await new RedisPinStore(nodes, string.Empty, "app1").ReadNodesAsync(Ct);
@@ -97,7 +99,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
     public async Task Redis_down_fails_the_state_read_and_the_group_closed_without_throwing_to_a_caller()
     {
         var nodes = new RouterAdvertisementStore(_ => throw new RedisException("down"), NodeHash);
-        var core = new RouterCore(TimeProvider.System, _ => false, NullLogger.Instance);
+        var core = new RouterCore(_clock, _ => false, NullLogger.Instance);
         var pins = new PinCoordinator(core, _ => false, new RedisPinStore(nodes, string.Empty, "app1"), "app1", TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance);
         core.Pins = pins;
         pins.GroupFor("g");
@@ -106,7 +108,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
         (await pins.RefreshAsync(Ct)).Should().BeFalse();
 
         pins.Hold().Should().NotBeNull();
-        core.PinFor("g")!.StateKnown(TimeProvider.System, pins.StateValidity).Should().BeFalse();
+        core.PinFor("g")!.StateKnown(_clock, pins.StateValidity).Should().BeFalse();
     }
 
     [Fact]
@@ -175,7 +177,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
                 await new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), NodeHash).WriteAsync("urn:byp#router", new RouterAdvertisement("urn:byp", "b", ["byp", "ap=app1"]), Ct);
                 break;
             default:
-                await Db.HashSetAsync(NodeHash, "urn:silent", $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}|lib=3;inst=x;vr=json");
+                await Db.HashSetAsync(NodeHash, "urn:silent", $"{_clock.GetUtcNow().ToUnixTimeMilliseconds()}|lib=3;inst=x;vr=json");
                 break;
         }
 
@@ -250,7 +252,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
         var pinned = true;
-        var core = new RouterCore(TimeProvider.System, _ => false, NullLogger.Instance);
+        var core = new RouterCore(_clock, _ => false, NullLogger.Instance);
         var nodes = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), NodeHash);
         var store = new RedisPinStore(nodes, _run + ":", "app1");
         var pins = new PinCoordinator(core, _ => pinned, store, "app1", TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance) { OwnField = "urn:a#router" };
@@ -264,7 +266,7 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
         pins.EvaluatePins();
         await pins.RefreshAsync(Ct);
 
-        pin.StateKnown(TimeProvider.System, pins.StateValidity).Should().BeTrue();
+        pin.StateKnown(_clock, pins.StateValidity).Should().BeTrue();
         (await store.CommitSwitchAsync("g", observed, Ct)).Should().BeFalse();
         (await store.ReadStateAsync("g", Ct)).Should().Be(SwitchRead.Unswitched);
     }
@@ -274,15 +276,15 @@ public sealed class PinRedisTests(RedisFixture fixture) : IAsyncLifetime
 
     private async Task<(PinCoordinator Pins, RouterAdvertiser Advertiser)> NodeAsync(string app, string node, bool pin, Func<string, string?>? format = null)
     {
-        var core = new RouterCore(TimeProvider.System, _ => false, NullLogger.Instance);
+        var core = new RouterCore(_clock, _ => false, NullLogger.Instance);
         var nodes = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), NodeHash);
         var pins = new PinCoordinator(core, _ => pin, new RedisPinStore(nodes, _run + ":", app), app, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance) { OwnField = node + RouterAdvertisement.FieldSuffix, WriteFormat = format };
         core.Pins = pins;
         pins.GroupFor("g");
         pins.EvaluatePins();
-        var advertiser = new RouterAdvertiser(nodes, node, "b", [new BypassTokens(core), new ScopeTokens(app), pins], TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(120), TimeProvider.System, NullLogger.Instance);
+        var advertiser = new RouterAdvertiser(nodes, node, "b", [new BypassTokens(core), new ScopeTokens(app), pins], TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(120), _clock, NullLogger.Instance);
         (await advertiser.WriteAsync(Ct)).Should().BeTrue();
-        await Db.HashSetAsync(NodeHash, node, $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}|lib=3;inst=x;vr=json");
+        await Db.HashSetAsync(NodeHash, node, $"{_clock.GetUtcNow().ToUnixTimeMilliseconds()}|lib=3;inst=x;vr=json");
         return (pins, advertiser);
     }
 }

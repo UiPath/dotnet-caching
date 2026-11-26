@@ -9,6 +9,8 @@ internal sealed class FakeHostedService : IHostedService
 
     public int Stopped { get; private set; }
 
+    public TaskCompletionSource StopCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         Started++;
@@ -18,6 +20,7 @@ internal sealed class FakeHostedService : IHostedService
     public Task StopAsync(CancellationToken cancellationToken)
     {
         Stopped++;
+        StopCalled.TrySetResult();
         return Task.CompletedTask;
     }
 }

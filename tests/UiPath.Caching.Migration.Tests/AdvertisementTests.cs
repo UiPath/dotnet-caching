@@ -1,4 +1,5 @@
 using System.Reflection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
 using UiPath.Caching.Migration.Tests.Support;
@@ -47,7 +48,7 @@ public sealed class AdvertisementTests
     [Fact]
     public async Task Bypass_toggles_the_token()
     {
-        await using var node = TestNode.Create(new FakeBus(), new ManualTimeProvider(DateTimeOffset.UtcNow), [], "c");
+        await using var node = TestNode.Create(new FakeBus(), new ManualTimeProvider(DateTimeOffset.UnixEpoch), [], "c");
         var advertiser = Advertiser(() => throw new RedisException("down"), node.Core);
         advertiser.Current().Has(RouterAdvertisement.Bypass).Should().BeFalse();
 
@@ -62,7 +63,8 @@ public sealed class AdvertisementTests
     public async Task Redis_down_never_throws_and_the_loop_keeps_retrying()
     {
         var attempts = 0;
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+        var clock = new SignalingTimeProvider(DateTimeOffset.UnixEpoch);
+        var core = new RouterCore(clock, _ => true, NullLogger.Instance);
         var advertiser = Advertiser(
             () =>
             {
@@ -74,11 +76,12 @@ public sealed class AdvertisementTests
 
         (await advertiser.WriteAsync(Ct)).Should().BeFalse();
         advertiser.Start();
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (Volatile.Read(ref attempts) < 4 && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(10, Ct);
-        }
+        var interval = TimeSpan.FromMilliseconds(20);
+        await clock.WaitForTimerAsync(interval, Ct);
+        clock.Advance(interval);
+        await clock.WaitForTimerAsync(interval, Ct);
+        clock.Advance(interval);
+        await clock.WaitForTimerAsync(interval, Ct);
 
         var stop = () => advertiser.StopAsync(TimeSpan.FromSeconds(1));
         await stop.Should().NotThrowAsync();
@@ -88,22 +91,32 @@ public sealed class AdvertisementTests
     [Fact]
     public async Task A_stalled_connection_never_holds_the_stop()
     {
-        using var never = new ManualResetEventSlim();
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var core = new RouterCore(clock, _ => true, NullLogger.Instance);
         var advertiser = Advertiser(
             () =>
             {
-                never.Wait(TimeSpan.FromSeconds(30));
+                entered.TrySetResult();
+                release.Wait(Ct);
                 throw new RedisException("released");
             },
             core);
         advertiser.Start();
-        await Task.Delay(100, Ct);
-
-        var stopping = advertiser.StopAsync(TimeSpan.FromMilliseconds(200));
-
-        (await Task.WhenAny(stopping, Task.Delay(TimeSpan.FromSeconds(5), Ct))).Should().BeSameAs(stopping, "the stop is bounded even while acquisition blocks");
-        never.Set();
+        try
+        {
+            await entered.Task.WaitAsync(Ct);
+            var bound = TimeSpan.FromMilliseconds(200);
+            var stopping = advertiser.StopAsync(bound);
+            clock.Advance(bound);
+            await stopping.WaitAsync(Ct);
+            release.IsSet.Should().BeFalse("the stop ended on its bound while the write was still stalled");
+        }
+        finally
+        {
+            release.Set();
+        }
     }
 
     [Theory]
@@ -117,21 +130,24 @@ public sealed class AdvertisementTests
         var tokens = new BlockingAdvertisementTokens(() =>
         {
             entered.TrySetResult();
-            release.Wait(TimeSpan.FromSeconds(30), ct);
+            release.Wait(ct);
         });
         var store = new RouterAdvertisementStore(_ => throw new RedisException("down"), "caching:nodes");
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         var advertiser = new RouterAdvertiser(
-            store, "urn:test", "b", [tokens], TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(120), TimeProvider.System, NullLogger.Instance);
+            store, "urn:test", "b", [tokens], TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(120), clock, NullLogger.Instance);
         var source = (CancellationTokenSource)typeof(RouterAdvertiser)
             .GetField("_stop", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(advertiser)!;
         Action readToken = () => _ = source.Token;
         advertiser.Start();
         try
         {
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            await entered.Task.WaitAsync(ct);
             if (stopFirst)
             {
-                await advertiser.StopAsync(TimeSpan.Zero);
+                var stopping = advertiser.StopAsync(TimeSpan.Zero);
+                clock.Advance(TimeSpan.Zero);
+                await stopping.WaitAsync(ct);
             }
 
             advertiser.Dispose();
@@ -146,7 +162,8 @@ public sealed class AdvertisementTests
             release.Set();
         }
 
-        await UntilAsync(() => Record.Exception(readToken) is ObjectDisposedException);
+        await advertiser.Shutdown.WaitAsync(ct);
+        readToken.Should().Throw<ObjectDisposedException>();
         advertiser.Dispose();
         await advertiser.StopAsync(TimeSpan.Zero);
     }
@@ -159,31 +176,40 @@ public sealed class AdvertisementTests
         TaskScheduler.UnobservedTaskException += OnUnobserved;
         using var release = new ManualResetEventSlim();
         var calls = 0;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var bound = TimeSpan.FromMilliseconds(100);
         var store = new RouterAdvertisementStore(
             _ =>
             {
                 Interlocked.Increment(ref calls);
-                // The acquisition stays blocked after a caller stops waiting.
-                release.Wait(TimeSpan.FromSeconds(30), CancellationToken.None);
+                entered.TrySetResult();
+                release.Wait(Ct);
                 throw new RedisException("released");
             },
             "caching:nodes");
         var entry = new RouterAdvertisement("n", "b", []);
 
-        using (var first = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        try
         {
-            var abandon = () => store.WriteAsync("f", entry, first.Token);
-            await abandon.Should().ThrowAsync<OperationCanceledException>();
+            using var first = new CancellationTokenSource(bound, clock);
+            var abandon = store.WriteAsync("f", entry, first.Token);
+            await entered.Task.WaitAsync(Ct);
+            clock.Advance(bound);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => abandon);
+
+            using var second = new CancellationTokenSource(bound, clock);
+            var again = store.WriteAsync("f", entry, second.Token);
+            clock.Advance(bound);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => again);
+
+            Volatile.Read(ref calls).Should().Be(1, "the running acquisition is reused while it is still running");
+        }
+        finally
+        {
+            release.Set();
         }
 
-        using (var second = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
-        {
-            var again = () => store.WriteAsync("f", entry, second.Token);
-            await again.Should().ThrowAsync<OperationCanceledException>();
-        }
-
-        Volatile.Read(ref calls).Should().Be(1, "the running acquisition is reused while it is still running");
-        release.Set();
         var after = () => store.WriteAsync("f", entry, Ct);
         await after.Should().ThrowAsync<RedisException>();
         Volatile.Read(ref calls).Should().BeLessThanOrEqualTo(2);
@@ -198,7 +224,7 @@ public sealed class AdvertisementTests
     public async Task Mode_change_nudges_keep_the_failure_backoff()
     {
         var attempts = 0;
-        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var clock = new SignalingTimeProvider(DateTimeOffset.UnixEpoch);
         var core = new RouterCore(clock, _ => true, NullLogger.Instance);
         var advertiser = Advertiser(
             () =>
@@ -210,7 +236,7 @@ public sealed class AdvertisementTests
             interval: TimeSpan.FromHours(1),
             clock: clock);
         advertiser.Start();
-        await UntilAsync(() => Volatile.Read(ref attempts) == 1 && clock.HasTimers);
+        await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(500), Ct);
 
         for (var i = 0; i < 30; i++)
         {
@@ -221,17 +247,21 @@ public sealed class AdvertisementTests
         await Task.Yield();
         Volatile.Read(ref attempts).Should().Be(1, "the first retry waits its 500 ms backoff whatever the nudges");
         clock.Advance(TimeSpan.FromMilliseconds(1));
-        await UntilAsync(() => Volatile.Read(ref attempts) == 2);
+        await clock.WaitForTimerAsync(TimeSpan.FromSeconds(1), Ct);
+        Volatile.Read(ref attempts).Should().Be(2);
         await advertiser.StopAsync(TimeSpan.FromSeconds(1));
     }
 
     [Fact]
     public async Task A_loop_that_faults_is_logged_and_the_stop_never_throws()
     {
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
-        var advertiser = Advertiser(() => throw new RedisException("down"), core, interval: TimeSpan.FromMilliseconds(-5));
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var logger = new ErrorSignal();
+        var core = new RouterCore(clock, _ => true, logger);
+        var store = new RouterAdvertisementStore(_ => throw new RedisException("down"), "caching:nodes");
+        var advertiser = new RouterAdvertiser(store, "urn:test", "b", [new BypassTokens(core)], TimeSpan.FromMilliseconds(-5), TimeSpan.FromSeconds(120), clock, logger);
         advertiser.Start();
-        await Task.Delay(50, Ct);
+        await logger.Logged.Task.WaitAsync(Ct);
 
         var stop = () => advertiser.StopAsync(TimeSpan.FromSeconds(1));
 
@@ -252,7 +282,7 @@ public sealed class AdvertisementTests
     [Fact]
     public void Entries_count_for_the_liveness_window_plus_two_intervals_and_are_pruned_later()
     {
-        var advertiser = Advertiser(() => null!, new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance), interval: TimeSpan.FromSeconds(15));
+        var advertiser = Advertiser(() => null!, new RouterCore(new ManualTimeProvider(DateTimeOffset.UnixEpoch), _ => true, NullLogger.Instance), interval: TimeSpan.FromSeconds(15));
         advertiser.Fresh.Should().Be(TimeSpan.FromSeconds(150));
         advertiser.Gone.Should().Be(TimeSpan.FromSeconds(300));
         advertiser.Field.Should().Be("urn:test" + RouterAdvertisement.FieldSuffix);
@@ -281,18 +311,25 @@ public sealed class AdvertisementTests
             [new BypassTokens(core)],
             interval ?? TimeSpan.FromSeconds(15),
             liveness ?? TimeSpan.FromSeconds(120),
-            clock ?? TimeProvider.System,
+            clock ?? core.Clock,
             NullLogger.Instance);
 
-    private static async Task UntilAsync(Func<bool> condition)
+    private sealed class ErrorSignal : ILogger
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (!condition() && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(5, Ct);
-        }
+        public TaskCompletionSource Logged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        condition().Should().BeTrue();
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel == LogLevel.Error;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (IsEnabled(logLevel))
+            {
+                Logged.TrySetResult();
+            }
+        }
     }
 
     private sealed class BlockingAdvertisementTokens(Action wait) : IAdvertisementTokens

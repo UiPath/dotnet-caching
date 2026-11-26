@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using UiPath.Caching.Telemetry;
 
@@ -7,6 +8,20 @@ namespace UiPath.Caching.PluginContract.Tests.Support;
 internal sealed class RecordingTelemetry : ICachingTelemetryProvider
 {
     private readonly ConcurrentQueue<(string Name, Dictionary<string, string> Tags)> _metrics = [];
+    private readonly Channel<(string Name, double Value, Dictionary<string, string> Tags)> _observed =
+        Channel.CreateUnbounded<(string, double, Dictionary<string, string>)>();
+
+    public async Task WaitForMetricAsync(string name, string tag, string value, CancellationToken token, int? sample = null)
+    {
+        while (true)
+        {
+            var (metricName, recordedValue, tags) = await _observed.Reader.ReadAsync(token);
+            if (metricName == name && (sample is null || Math.Abs(recordedValue - sample.Value) < 0.5) && tags.GetValueOrDefault(tag) == value)
+            {
+                return;
+            }
+        }
+    }
 
     public int Count(string name, string tag, string value) =>
         _metrics.Count(m => m.Name == name && m.Tags.TryGetValue(tag, out var found) && found == value);
@@ -23,8 +38,12 @@ internal sealed class RecordingTelemetry : ICachingTelemetryProvider
     {
     }
 
-    public void TrackMetric(string name, double value, TelemetryTags<string> properties = default) =>
-        _metrics.Enqueue((name, properties.ToDictionary(p => p.Key, p => p.Value)));
+    public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
+    {
+        var tags = properties.ToDictionary(p => p.Key, p => p.Value);
+        _metrics.Enqueue((name, tags));
+        _observed.Writer.TryWrite((name, value, tags));
+    }
 }
 
 internal sealed class RecordingLoggerProvider : ILoggerProvider

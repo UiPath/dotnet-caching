@@ -16,6 +16,7 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
     private readonly string _cacheName = $"Rt{Guid.NewGuid():N}"[..12];
     private readonly string _app = $"rt{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
+    private DateTimeOffset _serverTime;
     private ConnectionMultiplexer? _redis;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -27,6 +28,7 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
         if (fixture.Enabled)
         {
             _redis = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
+            _serverTime = await _redis.GetServer(_redis.GetEndPoints()[0]).TimeAsync();
         }
     }
 
@@ -55,7 +57,7 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
         var provider = NewNode("batch", () => true, TimeSpan.Zero);
         var library = provider.GetRequiredKeyedService<ICacheFactory>(RouterServiceCollectionExtensions.StackName).CreateCache(KnownCacheProviderNames.Redis);
         var batch = new LibraryBatch<List<long>>(library, RedisKeyOf, null, null);
-        var deadline = DateTimeOffset.UtcNow + Lifetime;
+        var deadline = provider.GetRequiredService<TimeProvider>().ToDateTimeOffset(Lifetime);
 
         (await batch.SetAsync([new("one", [1]), new("two", [2])], deadline, Ct)).Should().BeTrue();
         ((byte[]?)await Db.StringGetAsync(RedisKeyOf("one"))).Should().Equal(LegacyEnvelope.Write(new List<long> { 1 }));
@@ -112,7 +114,8 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
 
         var router = NewNode("a", () => true, TimeSpan.Zero, extra: malformed, serializers: true).GetRequiredService<IRouter>();
 
-        (await UntilAsync(() => Task.FromResult(router.Mode == RouterMode.Library))).Should().BeTrue("a malformed section is skipped, as before");
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
+        router.Mode.Should().Be(RouterMode.Library, "a malformed section is skipped, as before");
     }
 
     [Fact]
@@ -146,9 +149,11 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
     public async Task A_peer_write_evicts_the_local_copy_on_another_node(string transport, bool peerOnLibrary)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
-        var reader = Cache(NewNode("reader", () => true, TimeSpan.FromMinutes(5), transport));
-        var writer = Cache(NewNode("writer", () => peerOnLibrary, TimeSpan.FromMinutes(5), transport));
-        await WaitSubscribedAsync();
+        var readerNode = NewNode("reader", () => true, TimeSpan.FromMinutes(5), transport);
+        var writerNode = NewNode("writer", () => peerOnLibrary, TimeSpan.FromMinutes(5), transport);
+        var reader = Cache(readerNode);
+        var writer = Cache(writerNode);
+        await Task.WhenAll(ReadyAsync(readerNode), ReadyAsync(writerNode));
         // Seeded by the reader, whose own event it ignores: a peer's seed event could land after the fill and evict it.
         await reader.SetAsync("k", [1], Lifetime, Ct);
         (await reader.GetAsync("k", Ct)).Should().Equal(1);
@@ -156,9 +161,14 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
         // Redis no longer has the entry, so only the local copy can answer.
         (await reader.GetAsync("k", Ct)).Should().Equal(1);
 
-        await writer.SetAsync("k", [2], Lifetime, Ct);
-
-        (await UntilAsync(async () => (await reader.GetAsync("k", Ct))?.SequenceEqual([2L]) == true)).Should().BeTrue("the event evicted the stale copy");
+        var writerSource = ((Router)writerNode.GetRequiredService<IRouter>()).Library!.Source;
+        await RedisTopicSignals.ObserveChangeAsync(
+            Topic(writerNode),
+            Topic(readerNode),
+            () => writer.SetAsync("k", [2], Lifetime, Ct).AsTask(),
+            Ct,
+            message => message.Key == "k" && message.Source == writerSource);
+        (await reader.GetAsync("k", Ct)).Should().Equal([2L], "the event evicted the stale copy");
     }
 
     [Theory]
@@ -167,17 +177,23 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
     public async Task A_clear_on_one_node_drops_the_local_copies_of_another(string transport)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
-        var first = Cache(NewNode("first", () => true, TimeSpan.FromMinutes(5), transport));
-        var second = Cache(NewNode("second", () => true, TimeSpan.FromMinutes(5), transport));
-        await WaitSubscribedAsync();
+        var firstNode = NewNode("first", () => true, TimeSpan.FromMinutes(5), transport);
+        var secondNode = NewNode("second", () => true, TimeSpan.FromMinutes(5), transport);
+        var first = Cache(firstNode);
+        var second = Cache(secondNode);
+        await Task.WhenAll(ReadyAsync(firstNode), ReadyAsync(secondNode));
         await first.SetAsync("a", [1], Lifetime, Ct);
         await first.SetAsync("b", [2], Lifetime, Ct);
         (await second.GetAsync("a", Ct)).Should().Equal(1);
         (await second.GetAsync("b", Ct)).Should().Equal(2);
 
-        await ((RoutedCache<List<long>>)first).ClearAsync(Ct);
-
-        (await UntilAsync(async () => await second.GetAsync("a", Ct) is null && await second.GetAsync("b", Ct) is null)).Should().BeTrue();
+        await RedisTopicSignals.ObserveChangeAsync(
+            Topic(firstNode),
+            Topic(secondNode),
+            () => ((RoutedCache<List<long>>)first).ClearAsync(Ct).AsTask(),
+            Ct);
+        (await second.GetAsync("a", Ct)).Should().BeNull();
+        (await second.GetAsync("b", Ct)).Should().BeNull();
         (await Db.KeyExistsAsync(RedisKeyOf("a"))).Should().BeFalse();
     }
 
@@ -197,13 +213,12 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
         (await Db.KeyExistsAsync(RedisKeyOf("bad"))).Should().BeTrue("the library does not delete what it cannot read");
     }
 
-    private static Task<bool> UntilAsync(Func<Task<bool>> condition) =>
-        TestPoll.UntilAsync(condition, TimeSpan.FromSeconds(20), TimeProvider.System);
-
     private static ICache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
 
-    /// <summary>Gives the subscriptions of every node a moment to be confirmed, so the first event is not lost to a slow start.</summary>
-    private static Task WaitSubscribedAsync() => Task.Delay(1500, Ct);
+    private static ITopic<ICacheEvent> Topic(ServiceProvider node) =>
+        ((Router)node.GetRequiredService<IRouter>()).Library!.Topics.Create(((IRouterParticipant)Cache(node)).Topic!.Value);
+
+    private static Task ReadyAsync(ServiceProvider node) => node.GetRequiredService<RedisTopicSignals>().WaitAsync(Ct);
 
     private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
 
@@ -223,7 +238,8 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
             ["Caching:Broadcast:RedisStreams:Enabled"] = pubSub ? "false" : "true",
         }).AddInMemoryCollection(extra ?? []).Build();
         var source = new LegacySource(_redis!, _cacheName);
-        var services = new ServiceCollection().AddLogging();
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(new SignalingTimeProvider(_serverTime));
+        RedisTopicSignals.Add(services, "router:lists", streams: !pubSub);
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(
             configuration,

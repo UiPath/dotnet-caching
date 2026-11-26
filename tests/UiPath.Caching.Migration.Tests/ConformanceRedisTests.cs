@@ -15,6 +15,7 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
 
     private readonly string _cacheName = $"Cf{Guid.NewGuid():N}"[..12];
     private ConnectionMultiplexer? _redis;
+    private ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -31,6 +32,7 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         if (fixture.Enabled)
         {
             _redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+            _clock = new ManualTimeProvider(await _redis.GetServer(_redis.GetEndPoints()[0]).TimeAsync());
         }
     }
 
@@ -99,11 +101,7 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         Assert.SkipUnless(fixture.Enabled, Skip);
         await using var provider = Provider(new LegacyEnvelopeProxy());
         var router = provider.GetRequiredService<IRouter>();
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (router.Mode != RouterMode.Library && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(25, Ct);
-        }
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
 
         router.Mode.Should().Be(RouterMode.Library);
         var cache = router.Get<List<long>>(_cacheName);
@@ -119,6 +117,14 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         }
         finally
         {
+            var routed = (IRouterParticipant)cache;
+            var pending = routed.PendingKeys();
+            if (pending.Count > 0)
+            {
+                _clock.Advance(pending.Max(item => item.Until) - _clock.GetUtcNow());
+                await routed.WhenPendingSettledAsync().WaitAsync(Ct);
+            }
+
             await _redis!.GetDatabase().KeyDeleteAsync(key);
         }
     }
@@ -144,11 +150,7 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         Assert.SkipUnless(fixture.Enabled, Skip);
         await using var provider = Provider(new LegacyEnvelopeProxy(), cacheNulls);
         var router = provider.GetRequiredService<IRouter>();
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (router.Mode != RouterMode.Library && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(25, Ct);
-        }
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
 
         var key = (RedisKey)$"n:{_cacheName},c:nul";
         await _redis!.GetDatabase().StringSetAsync(key, RedisValue.EmptyString, TimeSpan.FromMinutes(5));
@@ -185,7 +187,7 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
         }).Build();
         var legacy = new LegacySource(_redis!, _cacheName);
         source ??= legacy;
-        var services = new ServiceCollection().AddLogging();
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(_clock);
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(configuration, router =>
         {
@@ -216,8 +218,7 @@ public sealed class ConformanceRedisTests(RedisFixture fixture) : IAsyncLifetime
 
         public async ValueTask<WriteResult> SetAsync(string key, List<long> value, CacheExpiry expiry, CancellationToken cancellationToken)
         {
-            var ttl = expiry.Deadline is { } deadline ? deadline - DateTimeOffset.UtcNow : TimeSpan.FromMinutes(10);
-            await redis.GetDatabase().StringSetAsync(_inner.RedisKey(key), JsonSerializer.SerializeToUtf8Bytes(value), ttl).ConfigureAwait(false);
+            await LegacySource.WriteAsync(redis.GetDatabase(), _inner.RedisKey(key), JsonSerializer.SerializeToUtf8Bytes(value), expiry.Deadline, When.Always).ConfigureAwait(false);
             return WriteOutcome.Committed;
         }
 

@@ -30,12 +30,12 @@ internal sealed class HashTestNode : IAsyncDisposable
 
     public FakeHashBackend Library { get; }
 
-    public static HashTestNode Create(ManualTimeProvider clock, string name, Func<string, bool>? useLibrary = null, Func<bool>? bypass = null, IHashPathClient<Item>? library = null, TimeSpan? defaultExpiry = null, TimeSpan? pendingWindow = null, Dictionary<string, StoredHash>? store = null)
+    public static HashTestNode Create(ManualTimeProvider clock, string name, Func<string, bool>? useLibrary = null, Func<bool>? bypass = null, IHashPathClient<Item>? library = null, TimeSpan? defaultExpiry = null, TimeSpan? pendingWindow = null, Dictionary<string, StoredHash>? store = null, TimeProvider? time = null)
     {
         var shared = store ?? [];
         var source = new FakeHashBackend(shared, clock);
         var backend = new FakeHashBackend(shared, clock);
-        var core = new RouterCore(clock, useLibrary ?? (_ => true), NullLogger.Instance)
+        var core = new RouterCore(time ?? clock, useLibrary ?? (_ => true), NullLogger.Instance)
         {
             BypassFlag = bypass,
             SourceTimeout = TimeSpan.FromSeconds(30),
@@ -70,7 +70,7 @@ internal sealed class HashTestNode : IAsyncDisposable
 
         _core.BeginStop();
         _core.CancelBackground();
-        await _core.DrainAsync().WaitAsync(TimeSpan.FromSeconds(20), CancellationToken.None);
+        await _core.DrainAsync().WaitAsync(TestContext.Current.CancellationToken);
         Cache.Dispose();
         _core.DisposeResources();
     }
