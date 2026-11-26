@@ -98,7 +98,7 @@ Keep the code that reads the in-place keys deployed while a step back is possibl
 The meter `UiPath.Caching.KeyMove` has these counters:
 
 - `cache.keymove.gate_overrides`, tagged `group` and `gate`: a stored approval let a step past a gate.
-- `cache.keymove.canary_keys`, tagged `group`: keys counted as written after the switch.
+- `cache.keymove.canary_keys`, tagged `group`: keys counted as written after the switch during a forward move. This metric is forward-only.
 - `cache.keymove.marker_orphans`, tagged `group`: markers that no generation owns.
 
 `UseKeyMove(..., moves => moves.OnAlert(...))` receives every alert, with the codes above. The gate IDs are listed in [Key move stage checks](router.md#key-move-stage-checks). The same list also has `close.in_place_readers`.

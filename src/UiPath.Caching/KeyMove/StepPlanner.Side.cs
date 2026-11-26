@@ -101,7 +101,7 @@ internal static partial class StepPlanner
         return null;
     }
 
-    // A hold set by the canary clears only after a pass that counted none; no report is no evidence. The canary only counts in reverse, so it holds nothing there.
+    // A forward move clears a canary hold only after a report counts zero canary keys. A reverse move clears it without a report.
     private static async Task<bool> CleanPassAsync(StepInput i) =>
         i.State.Direction == "rev" || await i.Drain().ConfigureAwait(false) is { Canary: 0 };
 

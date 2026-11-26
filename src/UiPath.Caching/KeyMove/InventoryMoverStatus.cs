@@ -50,7 +50,7 @@ internal sealed class InventoryMoverStatus(KeyInventory inventory, TimeProvider 
             return null;
         }
 
-        // Going forward the canary needs S3's time; without it the inventory is no evidence. In reverse the canary only counts.
+        // Forward drain evidence requires a canary count. Reverse drain evidence uses the inventory without a canary count.
         if (direction != "rev" && result.Canary is null)
         {
             return null;

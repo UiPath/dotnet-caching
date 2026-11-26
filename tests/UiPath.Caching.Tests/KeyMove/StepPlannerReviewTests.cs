@@ -91,7 +91,7 @@ public class StepPlannerReviewTests
     }
 
     [Fact]
-    public async Task A_canary_hold_stays_when_the_mover_has_no_report_and_clears_in_a_reverse_where_the_canary_only_counts()
+    public async Task A_canary_hold_needs_a_clean_forward_report_and_clears_in_reverse_without_a_report()
     {
         var none = await StepPlanner.DecideAsync(Input(Moving with { HoldAuto = "canary" }, flag: Verdict(min: 3), mover: new FakeMoverStatus()), Defaults);
         none.AutoHoldClear.Should().BeFalse();

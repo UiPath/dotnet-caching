@@ -27,7 +27,7 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
         var side = SourceOf(state);
         var cacheIds = state.CacheIds;
         var now = time.GetUtcNow().ToUnixTimeMilliseconds();
-        var t3 = state.S3AckedAt;
+        var t3 = side == MoveSide.Legacy ? state.S3AckedAt : null;
 
         var result = await scanner.RunAsync(space.Patterns(group, side), keys => CountAsync(keys, group, side, cacheIds, now, t3, cancellationToken), cancellationToken).ConfigureAwait(false);
         KeyMoveTelemetry.CountCanaryKeys(group, result?.Canary ?? 0);
