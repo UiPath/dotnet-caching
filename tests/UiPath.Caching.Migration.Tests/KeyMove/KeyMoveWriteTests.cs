@@ -221,14 +221,14 @@ public sealed class KeyMoveWriteTests(RedisFixture fixture)
         var open = kit.Plane.Rules;
         kit.Plane.Rules = open with { Writes = WriteRule.WaitThenFailClosed, WriteWait = TimeSpan.FromMilliseconds(400) };
         var write = kit.Client.SetAsync("k", new Item("v1"), null, Ct).AsTask();
-        var admission = await kit.Time.NextTimerAsync(Ct);
+        var admission = await kit.Time.NextTimerWhileRunningAsync(write, Ct);
         kit.Plane.Rules = open;
         kit.Time.Advance(admission);
         (await write).Outcome.Should().Be(WriteOutcome.Committed);
 
         kit.Plane.Rules = open with { Writes = WriteRule.WaitThenFailClosed, WriteWait = TimeSpan.FromMilliseconds(60) };
         var late = kit.Client.SetAsync("k", new Item("v2"), null, Ct).AsTask();
-        await kit.Time.NextTimerAsync(Ct);
+        await kit.Time.NextTimerWhileRunningAsync(late, Ct);
         kit.Time.Advance(TimeSpan.FromMilliseconds(60));
         await Assert.ThrowsAsync<CacheUnavailableException>(() => late);
         (await kit.GetAsync(kit.N("k"))).Should().Be("v1");

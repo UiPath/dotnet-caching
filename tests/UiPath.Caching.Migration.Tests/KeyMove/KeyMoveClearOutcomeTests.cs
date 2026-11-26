@@ -71,14 +71,14 @@ public sealed class KeyMoveClearOutcomeTests
         var clear = new KeyMoveClear("g", "c", (_, _, _, _) => Task.FromResult(Count(ref calls, ClearOutcome.Unavailable)), (_, _, _, _) => Task.FromResult(0L), _ => ValueTask.CompletedTask, () => { }, () => ValueTask.CompletedTask, 5, time, TimeSpan.FromSeconds(1));
 
         var running = clear.ClearAsync(stop.Token);
-        (await time.NextTimerAsync(Ct)).Should().Be(TimeSpan.FromSeconds(1));
+        (await time.NextTimerWhileRunningAsync(running, Ct)).Should().Be(TimeSpan.FromSeconds(1));
         calls.Should().Be(1);
         time.Advance(TimeSpan.FromSeconds(1));
-        (await time.NextTimerAsync(Ct)).Should().Be(TimeSpan.FromSeconds(2));
+        (await time.NextTimerWhileRunningAsync(running, Ct)).Should().Be(TimeSpan.FromSeconds(2));
         time.Advance(TimeSpan.FromSeconds(1));
         calls.Should().Be(2, "the second wait is two seconds");
         time.Advance(TimeSpan.FromSeconds(1));
-        (await time.NextTimerAsync(Ct)).Should().Be(TimeSpan.FromSeconds(4));
+        (await time.NextTimerWhileRunningAsync(running, Ct)).Should().Be(TimeSpan.FromSeconds(4));
         calls.Should().Be(3);
         await stop.CancelAsync();
 

@@ -187,9 +187,9 @@ public sealed class ModeTests : RouterTestBase
         Bus.Subscribed = false;
 
         var leave = node.Router.LeaveBypassAsync(Ct);
-        await node.Time.WaitForTimerAsync(Poll, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(Poll, leave, Ct);
         Clock.Advance(Poll);
-        await node.Time.WaitForTimerAsync(Poll, Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(Poll, leave, Ct);
 
         leave.IsCompleted.Should().BeFalse("peer events cannot be trusted before the subscription is in place");
         node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
@@ -217,7 +217,7 @@ public sealed class ModeTests : RouterTestBase
         leave.IsCompleted.Should().BeFalse("a write of unknown outcome can still land");
         node.Router.Mode.Should().Be(RouterMode.BypassLibrary);
 
-        await node.Time.WaitForTimerAsync(TimeSpan.FromSeconds(30), Ct);
+        await node.Time.WaitForTimerWhileRunningAsync(TimeSpan.FromSeconds(30), leave, Ct);
         Clock.Advance(TimeSpan.FromSeconds(30));
         await leave.WaitAsync(Ct);
         pendingAtNotification.Should().Be(0);

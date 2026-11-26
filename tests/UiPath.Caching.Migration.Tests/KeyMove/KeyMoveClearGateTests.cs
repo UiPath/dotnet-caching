@@ -202,7 +202,7 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
             TimeSpan.FromMilliseconds(10));
 
         var running = clear.ClearAsync(Ct);
-        await ck.RetryTime.AdvanceNextTimerAsync(Ct);
+        await ck.RetryTime.AdvanceNextTimerWhileRunningAsync(running, Ct);
         await running;
 
         gatedCalls.Should().Be(2);
@@ -226,7 +226,7 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
         var clear = new KeyMoveClear(kit.Group, kit.Cid, ck.Coordinator.ClearAsync, ck.Sweep.SweepAsync, SourceClear, () => { }, () => ValueTask.CompletedTask, 2, ck.RetryTime, TimeSpan.FromMilliseconds(5));
 
         var act = clear.ClearAsync(Ct);
-        await ck.RetryTime.AdvanceNextTimerAsync(Ct);
+        await ck.RetryTime.AdvanceNextTimerWhileRunningAsync(act, Ct);
 
         await Assert.ThrowsAsync<CacheUnavailableException>(() => act);
         ran.Should().BeFalse();
@@ -285,8 +285,8 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
         var winning = first.ClearAsync(Ct);
         await inSweep.Task.WaitAsync(Ct);
         var waiting = second.ClearAsync(Ct);
-        await ck.RetryTime.AdvanceNextTimerAsync(Ct);
-        var nextAttempt = await ck.RetryTime.NextTimerAsync(Ct);
+        await ck.RetryTime.AdvanceNextTimerWhileRunningAsync(waiting, Ct);
+        var nextAttempt = await ck.RetryTime.NextTimerWhileRunningAsync(waiting, Ct);
         Volatile.Read(ref unavailable).Should().Be(2);
 
         (await ck.GateAsync()).Should().StartWith("CLOSED:", "the second Clear never reopens the first one's gate");
@@ -320,7 +320,7 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
         var holding = holder.ClearAsync(Ct);
         await inSweep.Task.WaitAsync(Ct);
         var act = loser.ClearAsync(Ct);
-        await ck.RetryTime.AdvanceNextTimerAsync(Ct);
+        await ck.RetryTime.AdvanceNextTimerWhileRunningAsync(act, Ct);
 
         await Assert.ThrowsAsync<CacheUnavailableException>(() => act);
         (await ck.GateAsync()).Should().StartWith("CLOSED:");

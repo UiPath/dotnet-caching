@@ -61,9 +61,14 @@ internal sealed class SignalingTimeProvider(ManualTimeProvider clock) : TimeProv
     {
         using var waiting = CancellationTokenSource.CreateLinkedTokenSource(token);
         var armed = WaitForTimerAsync(dueTime, waiting.Token);
-        var first = await Task.WhenAny(armed, operation);
-        await waiting.CancelAsync();
-        first.Should().BeSameAs(armed, "the operation arms its timer before completing");
+        await Task.WhenAny(armed, operation);
+        if (!armed.IsCompleted)
+        {
+            await waiting.CancelAsync();
+            await operation;
+            Assert.Fail("The operation completed before the expected timer was created.");
+        }
+
         await armed;
     }
 

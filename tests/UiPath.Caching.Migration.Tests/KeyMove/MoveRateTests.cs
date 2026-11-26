@@ -472,7 +472,7 @@ public sealed class MoveRateTests
         rig.Health.Async = _ => never.Task;
 
         var pending = rig.Rate.PauseReasonAsync("u1", Ct).AsTask();
-        await WaitForTimerAsync(rig);
+        await rig.Time.NextTimerWhileRunningAsync(pending, Ct);
         rig.Time.Advance(TimeSpan.FromSeconds(6));
 
         (await pending.WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct)).Should().Be("red");
@@ -528,7 +528,7 @@ public sealed class MoveRateTests
             var answer = new TaskCompletionSource<KeyMoveHealth>(TaskCreationOptions.RunContinuationsAsynchronously);
             rig.Health.Async = _ => answer.Task;
             var pending = rig.Rate.PauseReasonAsync("u1", Ct).AsTask();
-            await WaitForTimerAsync(rig);
+            await rig.Time.NextTimerWhileRunningAsync(pending, Ct);
             var race = Task.Run(() => answer.TrySetResult(new KeyMoveHealth(KeyMoveHealthState.Green, string.Empty)), Ct);
             rig.Time.Advance(TimeSpan.FromSeconds(6));
             await race;
@@ -542,7 +542,7 @@ public sealed class MoveRateTests
         var late = new TaskCompletionSource<KeyMoveHealth>();
         rigLate.Health.Async = _ => late.Task;
         var waiting = rigLate.Rate.PauseReasonAsync("u1", Ct).AsTask();
-        await WaitForTimerAsync(rigLate);
+        await rigLate.Time.NextTimerWhileRunningAsync(waiting, Ct);
         rigLate.Time.Advance(TimeSpan.FromSeconds(6));
         await waiting;
         late.SetException(new InvalidOperationException("late-health-failure"));
@@ -667,7 +667,7 @@ public sealed class MoveRateTests
                 return work.Task;
             };
             var first = rig.Rate.PauseReasonAsync("u1", Ct).AsTask();
-            await WaitForTimerAsync(rig);
+            await rig.Time.NextTimerWhileRunningAsync(first, Ct);
             await Task.Run(() => rig.Time.Advance(TimeSpan.FromSeconds(6)), Ct).WaitAsync(Ct);
             (await first.WaitAsync(Ct)).Should().Be("red");
             await inside.Task.WaitAsync(Ct);
@@ -703,7 +703,7 @@ public sealed class MoveRateTests
         var never = new TaskCompletionSource<KeyMoveHealth>(TaskCreationOptions.RunContinuationsAsynchronously);
         rig.Health.Async = _ => never.Task;
         var first = rig.Rate.PauseReasonAsync("u1", Ct).AsTask();
-        await WaitForTimerAsync(rig);
+        await rig.Time.NextTimerWhileRunningAsync(first, Ct);
         rig.Time.Advance(TimeSpan.FromSeconds(6));
         (await first.WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct)).Should().Be("red");
 
@@ -751,7 +751,7 @@ public sealed class MoveRateTests
         try
         {
             var first = rig.Rate.PauseReasonAsync("u1", Ct).AsTask();
-            await WaitForTimerAsync(rig);
+            await rig.Time.NextTimerWhileRunningAsync(first, Ct);
 
             // The timer fires on the thread that advances the clock, so a time limit that waited for the callbacks would hold this thread: advance on another.
             await Task.Run(() => rig.Time.Advance(TimeSpan.FromSeconds(6)), Ct).WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct);
@@ -832,14 +832,6 @@ public sealed class MoveRateTests
         latency.TakeTimeouts().Should().Be(1);
         latency.TakeTimeouts().Should().Be(0);
         (await rig.Rate.PauseReasonAsync("u1", Ct)).Should().BeNull("a timeout is a signal for the health source, not a pause of its own");
-    }
-
-    private static async Task WaitForTimerAsync(Rig rig)
-    {
-        while (!rig.Time.HasTimers)
-        {
-            await rig.Time.NextTimerAsync(Ct);
-        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

@@ -21,8 +21,8 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
         await kit.Kit.MoveGateAsync();
 
         var refused = kit.Client.FillAsync("k", Items(), Fill(), null, Ct).AsTask();
-        await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
-        await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
+        await kit.Kit.Time.AdvanceNextTimerWhileRunningAsync(refused, Ct);
+        await kit.Kit.Time.AdvanceNextTimerWhileRunningAsync(refused, Ct);
         await Assert.ThrowsAsync<CacheUnavailableException>(() => refused);
 
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
@@ -35,7 +35,7 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
         await kit.Kit.MoveGateAsync();
 
         var fill = kit.Client.FillAsync("k", Items(), Fill(), null, Ct).AsTask();
-        var admission = await kit.Kit.Time.NextTimerAsync(Ct);
+        var admission = await kit.Kit.Time.NextTimerWhileRunningAsync(fill, Ct);
         fill.IsCompleted.Should().BeFalse("the fill waits for the rules to follow the gate");
         kit.Kit.ApplyRules("S3");
         kit.Kit.Time.Advance(admission);
@@ -176,15 +176,15 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
         await using var strict = await StagedAsync(options: new KeyMoveOptions { AdmissionPoll = TimeSpan.FromMilliseconds(5), MaxReruns = 2 });
         await strict.Kit.MoveGateAsync();
         var refused = strict.Client.RefreshAsync("k", CacheExpiry.After(TimeSpan.FromHours(1)), Ct).AsTask();
-        await strict.Kit.Time.AdvanceNextTimerAsync(Ct);
-        await strict.Kit.Time.AdvanceNextTimerAsync(Ct);
+        await strict.Kit.Time.AdvanceNextTimerWhileRunningAsync(refused, Ct);
+        await strict.Kit.Time.AdvanceNextTimerWhileRunningAsync(refused, Ct);
         await Assert.ThrowsAsync<CacheUnavailableException>(() => refused);
 
         await using var kit = await StagedAsync(options: new KeyMoveOptions { AdmissionPoll = TimeSpan.FromMilliseconds(20), MaxReruns = 100 });
         await kit.SetAsync(kit.N("k"), Original, TimeSpan.FromMinutes(1));
         await kit.Kit.MoveGateAsync();
         var refresh = kit.Client.RefreshAsync("k", CacheExpiry.After(TimeSpan.FromHours(1)), Ct).AsTask();
-        var admission = await kit.Kit.Time.NextTimerAsync(Ct);
+        var admission = await kit.Kit.Time.NextTimerWhileRunningAsync(refresh, Ct);
         refresh.IsCompleted.Should().BeFalse();
         kit.Kit.ApplyRules("S3");
         kit.Kit.Time.Advance(admission);

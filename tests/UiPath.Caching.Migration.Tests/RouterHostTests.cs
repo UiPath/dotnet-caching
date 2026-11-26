@@ -57,8 +57,13 @@ public sealed class RouterHostTests
         await using var provider = services.BuildServiceProvider();
 
         var creating = Task.Run(provider.GetRequiredService<IRouter>, Ct);
-        await clock.WaitForTimerAsync(bound, Ct);
-        creating.IsCompleted.Should().BeFalse("the rollback waits for the cleanup bound");
+        await clock.WaitForTimerWhileRunningAsync(bound, creating, Ct);
+        if (creating.IsCompleted)
+        {
+            await creating;
+            Assert.Fail("The router was created before the rollback cleanup bound elapsed.");
+        }
+
         clock.Advance(bound);
         var router = await creating.WaitAsync(Ct);
 

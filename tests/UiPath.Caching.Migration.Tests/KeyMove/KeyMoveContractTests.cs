@@ -41,7 +41,7 @@ public sealed class KeyMoveContractTests(RedisFixture fixture)
         kit.Plain.Held = new Item("winner");
 
         var fill = kit.Client.TryFillAsync("k", new Item("mine"), null, Ct).AsTask();
-        var admission = await kit.Time.NextTimerAsync(Ct);
+        var admission = await kit.Time.NextTimerWhileRunningAsync(fill, Ct);
         kit.ApplyRules("S0");
         kit.Time.Advance(admission);
         var result = await fill;
