@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Parallel shards of one project share its bin directory, so instrumentation must not rewrite the assemblies on disk. -->
+<Configuration>
+  <CodeCoverage>
+    <EnableStaticManagedInstrumentation>False</EnableStaticManagedInstrumentation>
+    <EnableDynamicManagedInstrumentation>True</EnableDynamicManagedInstrumentation>
+  </CodeCoverage>
+</Configuration>
