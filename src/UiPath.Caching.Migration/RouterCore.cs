@@ -80,6 +80,7 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
             {
                 if (task.IsCompleted)
                 {
+                    _ = task.Exception;
                     _background.TryRemove(task, out _);
                 }
                 else

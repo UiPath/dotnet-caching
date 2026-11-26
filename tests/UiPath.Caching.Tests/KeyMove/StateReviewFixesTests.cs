@@ -170,10 +170,13 @@ public class StateReviewFixesTests(RedisContainerFixture fixture)
         var init = await kit.InitAsync("a");
         var key = kit.Names.Lead(kit.Group);
         var paused = new LeaderLease(kit.Scripts, key, kit.Options, kit.Time);
-        var next = new LeaderLease(kit.Scripts, key, new KeyMoveStateOptions { ExpectedReplicasPerMaster = 0, LeaseTtl = TimeSpan.FromMilliseconds(300) }, kit.Time);
-        await paused.TryHoldAsync();
-        await kit.Db.KeyDeleteAsync(key);
-        await next.TryHoldAsync();
+        var nextClock = new ManualTimeProvider(kit.Time.GetUtcNow());
+        var next = new LeaderLease(kit.Scripts, key, kit.Options, nextClock);
+        (await paused.TryHoldAsync()).Should().BeTrue();
+        nextClock.Advance(kit.Options.LeaseTtl);
+        await kit.Db.KeyExpireAsync(key, TimeSpan.Zero);
+        (await next.TryHoldAsync()).Should().BeTrue();
+        await kit.Db.KeyPersistAsync(key);
         var target = StateKit.TargetFrom(init, "S1", "fwd", 0);
 
         // The paused controller's clock still says it holds the lease; the server has it with another token.

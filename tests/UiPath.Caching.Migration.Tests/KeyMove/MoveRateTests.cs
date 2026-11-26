@@ -1,5 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using UiPath.Caching.KeyMove;
 using UiPath.Caching.Migration.Tests.Support;
@@ -494,51 +496,58 @@ public sealed class MoveRateTests
     }
 
     [Fact]
+    [SuppressMessage("SonarAnalyzer.CSharp", "S1215", Justification = "Finalization raises the task's unobserved exception event.")]
     public async Task A_timeout_that_fires_as_the_read_ends_never_throws_on_a_pool_thread_and_a_late_failure_is_observed()
     {
-        var unhandled = new System.Collections.Concurrent.ConcurrentBag<string>();
-        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e) => unhandled.Add(e.Exception.ToString());
-        void OnUnhandled(object? sender, UnhandledExceptionEventArgs e) => unhandled.Add(e.ExceptionObject.ToString() ?? string.Empty);
+        var owned = new HashSet<int>();
+        var unobserved = new List<int>();
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            if (sender is Task task && owned.Contains(task.Id))
+            {
+                unobserved.Add(task.Id);
+                args.SetObserved();
+            }
+        }
         TaskScheduler.UnobservedTaskException += OnUnobserved;
-        AppDomain.CurrentDomain.UnhandledException += OnUnhandled;
         try
         {
-            for (var i = 0; i < 200; i++)
-            {
-                var rig = new Rig(o => o.HealthTimeout = TimeSpan.FromSeconds(5));
-                var answer = new TaskCompletionSource<KeyMoveHealth>(TaskCreationOptions.RunContinuationsAsynchronously);
-                rig.Health.Async = _ => answer.Task;
-                var pending = rig.Rate.PauseReasonAsync("u1", Ct).AsTask();
-                await WaitForTimerAsync(rig);
-
-                // The answer and the end of the time limit arrive together.
-                var race = Task.Run(() => answer.TrySetResult(new KeyMoveHealth(KeyMoveHealthState.Green, string.Empty)), Ct);
-                rig.Time.Advance(TimeSpan.FromSeconds(6));
-                await race;
-
-                var verdict = await pending.WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct);
-                (verdict is null or "red").Should().BeTrue();
-            }
-
-            // A source that fails only after it was given up on.
-            var rigLate = new Rig(o => o.HealthTimeout = TimeSpan.FromSeconds(5));
-            var late = new TaskCompletionSource<KeyMoveHealth>();
-            rigLate.Health.Async = _ => late.Task;
-            var waiting = rigLate.Rate.PauseReasonAsync("u1", Ct).AsTask();
-            await WaitForTimerAsync(rigLate);
-            rigLate.Time.Advance(TimeSpan.FromSeconds(6));
-            await waiting.WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct);
-            late.SetException(new InvalidOperationException("late-health-failure"));
-            await Task.Delay(TimeSpan.FromMilliseconds(50), TimeProvider.System, Ct);
-            FinalizeUnobservedTasks();
-
-            unhandled.Where(u => u.Contains("late-health-failure", StringComparison.Ordinal) || u.Contains("ObjectDisposed", StringComparison.Ordinal)).Should().BeEmpty();
+            owned.Add(DrainCompletedFailure());
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            unobserved.Should().BeEmpty();
         }
         finally
         {
             TaskScheduler.UnobservedTaskException -= OnUnobserved;
-            AppDomain.CurrentDomain.UnhandledException -= OnUnhandled;
         }
+
+        for (var i = 0; i < 200; i++)
+        {
+            var rig = new Rig(o => o.HealthTimeout = TimeSpan.FromSeconds(5));
+            var answer = new TaskCompletionSource<KeyMoveHealth>(TaskCreationOptions.RunContinuationsAsynchronously);
+            rig.Health.Async = _ => answer.Task;
+            var pending = rig.Rate.PauseReasonAsync("u1", Ct).AsTask();
+            await WaitForTimerAsync(rig);
+            var race = Task.Run(() => answer.TrySetResult(new KeyMoveHealth(KeyMoveHealthState.Green, string.Empty)), Ct);
+            rig.Time.Advance(TimeSpan.FromSeconds(6));
+            await race;
+            var verdict = await pending;
+            (verdict is null or "red").Should().BeTrue();
+            await rig.Rate.HealthObservation;
+            await rig.Rate.HealthCancellation;
+        }
+
+        var rigLate = new Rig(o => o.HealthTimeout = TimeSpan.FromSeconds(5));
+        var late = new TaskCompletionSource<KeyMoveHealth>();
+        rigLate.Health.Async = _ => late.Task;
+        var waiting = rigLate.Rate.PauseReasonAsync("u1", Ct).AsTask();
+        await WaitForTimerAsync(rigLate);
+        rigLate.Time.Advance(TimeSpan.FromSeconds(6));
+        await waiting;
+        late.SetException(new InvalidOperationException("late-health-failure"));
+        await rigLate.Rate.HealthObservation;
+        await rigLate.Rate.HealthCancellation;
     }
 
     [Fact]
@@ -642,11 +651,6 @@ public sealed class MoveRateTests
     [Fact]
     public async Task Completed_work_whose_cancellation_callback_still_blocks_keeps_its_flight_and_starts_no_new_call_and_nothing_throws()
     {
-        var unhandled = new System.Collections.Concurrent.ConcurrentBag<string>();
-        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e) => unhandled.Add(e.Exception.ToString());
-        void OnUnhandled(object? sender, UnhandledExceptionEventArgs e) => unhandled.Add(e.ExceptionObject.ToString() ?? string.Empty);
-        TaskScheduler.UnobservedTaskException += OnUnobserved;
-        AppDomain.CurrentDomain.UnhandledException += OnUnhandled;
         using var block = new ManualResetEventSlim();
         try
         {
@@ -664,42 +668,31 @@ public sealed class MoveRateTests
             };
             var first = rig.Rate.PauseReasonAsync("u1", Ct).AsTask();
             await WaitForTimerAsync(rig);
-            await Task.Run(() => rig.Time.Advance(TimeSpan.FromSeconds(6)), Ct).WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct);
-            (await first.WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct)).Should().Be("red");
-            await inside.Task.WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct);
+            await Task.Run(() => rig.Time.Advance(TimeSpan.FromSeconds(6)), Ct).WaitAsync(Ct);
+            (await first.WaitAsync(Ct)).Should().Be("red");
+            await inside.Task.WaitAsync(Ct);
 
             // The work returns while the callback of its cancellation is still running.
             work.SetResult(new KeyMoveHealth(KeyMoveHealthState.Green, string.Empty));
-            await Task.Delay(TimeSpan.FromMilliseconds(100), TimeProvider.System, Ct);
+            await rig.Rate.HealthObservation;
             for (var i = 0; i < 5; i++)
             {
                 rig.Time.Advance(TimeSpan.FromSeconds(10));
-                (await rig.Rate.PauseReasonAsync("u1", Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(10), TimeProvider.System, Ct)).Should().Be("red", "the flight is held until its cancellation has ended");
+                (await rig.Rate.PauseReasonAsync("u1", Ct).AsTask().WaitAsync(Ct)).Should().Be("red", "the flight is held until its cancellation has ended");
             }
 
             rig.Health.Reads.Should().Be(1, "no second call, and so no second blocked cancellation, starts meanwhile");
 
             block.Set();
-            string? reason = "red";
-            for (var i = 0; i < 100 && reason is not null; i++)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(20), TimeProvider.System, Ct);
-                rig.Time.Advance(TimeSpan.FromSeconds(10));
-                reason = await rig.Rate.PauseReasonAsync("u1", Ct);
-            }
-
-            reason.Should().BeNull("with the cancellation over, the next evaluation makes a call of its own");
+            await rig.Rate.HealthCancellation;
+            rig.Time.Advance(TimeSpan.FromSeconds(10));
+            (await rig.Rate.PauseReasonAsync("u1", Ct)).Should().BeNull();
             rig.Health.Reads.Should().Be(2);
-            await Task.Delay(TimeSpan.FromMilliseconds(50), TimeProvider.System, Ct);
-            FinalizeUnobservedTasks();
-
-            unhandled.Should().BeEmpty();
+            await rig.Rate.HealthObservation;
         }
         finally
         {
             block.Set();
-            TaskScheduler.UnobservedTaskException -= OnUnobserved;
-            AppDomain.CurrentDomain.UnhandledException -= OnUnhandled;
         }
     }
 
@@ -841,24 +834,23 @@ public sealed class MoveRateTests
         (await rig.Rate.PauseReasonAsync("u1", Ct)).Should().BeNull("a timeout is a signal for the health source, not a pause of its own");
     }
 
-    [SuppressMessage("SonarAnalyzer.CSharp", "S1215", Justification = "TaskScheduler.UnobservedTaskException is raised during finalization, so these tests must force collection before checking for it.")]
-    private static void FinalizeUnobservedTasks()
+    private static async Task WaitForTimerAsync(Rig rig)
     {
-        for (var i = 0; i < 3; i++)
+        while (!rig.Time.HasTimers)
         {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
+            await rig.Time.NextTimerAsync(Ct);
         }
     }
 
-    private static async Task WaitForTimerAsync(Rig rig)
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int DrainCompletedFailure()
     {
-        var started = TimeProvider.System.GetTimestamp();
-        while (!rig.Time.HasTimers)
-        {
-            TimeProvider.System.GetElapsedTime(started).Should().BeLessThan(TimeSpan.FromSeconds(10));
-            await Task.Delay(TimeSpan.FromMilliseconds(1), TimeProvider.System, Ct);
-        }
+        var core = new RouterCore(new ManualTimeProvider(Noon), _ => true, NullLogger.Instance);
+        var task = Task.FromException(new InvalidOperationException("owned-drain-failure"));
+        var id = task.Id;
+        core.AddWithoutRemoval(task);
+        core.DrainAsync().IsCompletedSuccessfully.Should().BeTrue();
+        return id;
     }
 
     internal sealed class Rig

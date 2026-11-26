@@ -301,18 +301,25 @@ public sealed class DryRunTests(RedisFixture fixture)
     [Fact]
     public async Task A_rate_that_pauses_and_waits_delays_the_run_and_the_report_is_complete()
     {
-        await using var kit = await MoverKit.CreateAsync(fixture);
+        var clock = new ManualTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        await using var kit = await MoverKit.CreateAsync(fixture, clock: clock);
         await kit.SeedAsync("k1", "k2", "k3");
         var unit = (await kit.Units.ListAsync(Ct)).Should().ContainSingle().Subject;
         var server = ScanRecordingServer.Over(unit.Primary, out var recorder);
         var units = new ProxyUnits(kit.Units, u => u with { Primary = server, Replica = null });
         const int pauses = 5;
         var rate = new SlowRate(pauses, wait: TimeSpan.FromMilliseconds(50));
-        var started = TimeProvider.System.GetTimestamp();
+        var run = Runner(kit, rate: rate, units: units).RunAsync(Ct);
+        for (var i = 0; i < pauses + 3; i++)
+        {
+            var delay = await clock.NextTimerAsync(Ct);
+            delay.Should().Be(i < pauses ? MoverKit.Quick.PollInterval : TimeSpan.FromMilliseconds(50));
+            run.IsCompleted.Should().BeFalse();
+            clock.Advance(delay);
+        }
+        var report = await run;
 
-        var report = await Runner(kit, rate: rate, units: units).RunAsync(Ct);
-
-        TimeProvider.System.GetElapsedTime(started).Should().BeGreaterThan(TimeSpan.FromMilliseconds(300));
+        clock.GetTimestamp().Should().Be((MoverKit.Quick.PollInterval * pauses + TimeSpan.FromMilliseconds(150)).Ticks);
         report.Caches[kit.Kit.Cid].Movable.Should().Be(3);
         rate.PauseCalls.Should().Be(pauses + recorder.Cursors.Count + 3);
         rate.Reserved.Should().Equal(4L, 4L, 4L);

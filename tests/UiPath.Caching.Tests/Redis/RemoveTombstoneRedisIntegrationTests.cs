@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
+using UiPath.Caching.Broadcast.Redis;
 using UiPath.Caching.Config;
 using UiPath.Caching.Redis;
 using UiPath.Caching.Serialization;
@@ -18,11 +19,13 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     private static readonly TimeSpan Grace = TimeSpan.FromSeconds(30);
 
     private readonly string _app = $"tb{Guid.NewGuid():N}"[..10];
-    private readonly TimeProvider _clock = TimeProvider.System;
     private readonly List<ServiceProvider> _nodes = [];
+    private ManualTimeProvider? _time;
     private ConnectionMultiplexer? _raw;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private ManualTimeProvider Clock => _time ??= new(new DateTimeOffset(Server().Time(), TimeSpan.Zero));
 
     private IDatabase Raw => (_raw ??= ConnectionMultiplexer.Connect(fixture.ConnectionString)).GetDatabase();
 
@@ -30,7 +33,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_remove_leaves_a_tombstone_in_place_of_the_key_and_it_expires()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts: false, TimeSpan.FromMilliseconds(700)).Cache;
+        var cache = (await Node("a", scripts: false, TimeSpan.FromMilliseconds(700))).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "v", Ttl, Ct);
 
@@ -52,7 +55,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task Without_the_option_a_remove_deletes_the_key()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts: false, grace: null).Cache;
+        var cache = (await Node("a", scripts: false, grace: null)).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "v", Ttl, Ct);
         var redisKey = Find(key);
@@ -68,7 +71,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_tombstone_reads_as_a_miss_on_every_read_path(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts, Grace, o => o.AwaitRefresh = true).Cache;
+        var cache = (await Node("a", scripts, Grace, o => o.AwaitRefresh = true)).Cache;
         CacheKey one = $"it-{Guid.NewGuid():N}";
         CacheKey two = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(one, "v1", Ttl, Ct);
@@ -98,7 +101,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_set_of_a_default_value_is_a_remove()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts: false, Grace).Cache;
+        var cache = (await Node("a", scripts: false, Grace)).Cache;
         CacheKey single = $"it-{Guid.NewGuid():N}";
         CacheKey many = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(single, "v", Ttl, Ct);
@@ -117,8 +120,8 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_fill_after_a_concurrent_remove_does_not_resurrect_the_key(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var a = Node("a", scripts, Grace).Layered;
-        var b = Node("b", scripts, Grace).Layered;
+        var a = (await Node("a", scripts, Grace)).Layered;
+        var b = (await Node("b", scripts, Grace)).Layered;
         var key = $"it-{Guid.NewGuid():N}";
         var (generated, release) = Gate();
         async Task<string?> Generate(CancellationToken _)
@@ -129,8 +132,9 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
         }
 
         var slow = a.GetOrAddAsync<string>(key, Generate, Ttl, Ct).AsTask();
-        await generated.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await generated.Task.WaitAsync(Ct);
 
+        Clock.Advance(Grace);
         await b.RemoveAsync<string>(key, Ct);
         release.SetResult();
 
@@ -144,8 +148,8 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task Without_the_option_the_same_fill_puts_the_value_back()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var a = Node("a", scripts: false, grace: null).Layered;
-        var b = Node("b", scripts: false, grace: null);
+        var a = (await Node("a", scripts: false, grace: null)).Layered;
+        var b = (await Node("b", scripts: false, grace: null));
         var key = $"it-{Guid.NewGuid():N}";
         var (generated, release) = Gate();
         async Task<string?> Generate(CancellationToken _)
@@ -156,7 +160,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
         }
 
         var slow = a.GetOrAddAsync<string>(key, Generate, Ttl, Ct).AsTask();
-        await generated.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await generated.Task.WaitAsync(Ct);
 
         // Through the Redis-only cache, which tells no peer: a layered remove would also reach the fill's watch, first or not depending on timing.
         await b.Cache.RemoveAsync<string>(key, Ct);
@@ -172,8 +176,8 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_batch_fill_after_a_concurrent_remove_leaves_that_key_alone(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var a = Node("a", scripts, Grace).Layered;
-        var b = Node("b", scripts, Grace).Layered;
+        var a = (await Node("a", scripts, Grace)).Layered;
+        var b = (await Node("b", scripts, Grace)).Layered;
         var (x, y) = ($"it-{Guid.NewGuid():N}", $"it-{Guid.NewGuid():N}");
         var (generated, release) = Gate();
         async Task<KeyValuePair<int, string?>[]> Generate(int[] states, CancellationToken _)
@@ -184,8 +188,9 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
         }
 
         var batch = a.GetOrAddAsync<string, int>([new(x, 1), new(y, 2)], Generate, Ttl, null, Ct).AsTask();
-        await generated.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await generated.Task.WaitAsync(Ct);
 
+        Clock.Advance(Grace);
         await b.RemoveAsync<string>(y, Ct);
         release.SetResult();
 
@@ -200,12 +205,12 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_fill_whose_generator_started_after_the_remove_replaces_the_tombstone(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var a = Node("a", scripts, Grace).Layered;
-        var b = Node("b", scripts, Grace).Layered;
+        var a = (await Node("a", scripts, Grace)).Layered;
+        var b = (await Node("b", scripts, Grace)).Layered;
         var key = $"it-{Guid.NewGuid():N}";
         await b.SetAsync(key, "old", Ttl, Ct);
         await b.RemoveAsync<string>(key, Ct);
-        await Task.Delay(400, Ct);
+        await AgeAsync(key, TimeSpan.FromMilliseconds(400));
 
         (await a.GetOrAddAsync<string>(key, _ => Task.FromResult<string?>("new"), Ttl, Ct)).Should().Be("new");
 
@@ -219,7 +224,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task The_fill_refuses_a_tombstone_younger_than_its_generator_and_replaces_an_older_one(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var fenced = (IFencedFillTier)Node("a", scripts, Grace).Provider.CreateCache();
+        var fenced = (IFencedFillTier)(await Node("a", scripts, Grace)).Provider.CreateCache();
         var (young, old, plain, held) = ($"it-{Guid.NewGuid():N}", $"it-{Guid.NewGuid():N}", $"it-{Guid.NewGuid():N}", $"it-{Guid.NewGuid():N}");
         var cache = (ICache)fenced;
         foreach (var key in new[] { young, old, plain })
@@ -229,12 +234,15 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
         }
 
         await cache.SetAsync(held, "stored", Ttl, Ct);
-        await Task.Delay(400, Ct);
+        foreach (var key in new[] { young, old, plain })
+        {
+            await AgeAsync(key, TimeSpan.FromMilliseconds(400));
+        }
 
-        var refused = await fenced.TryFillAfterAsync<string>(young, "v", _clock.GetUtcNow() + Ttl, TimeSpan.FromSeconds(10), null, Ct);
-        var replaced = await fenced.TryFillAfterAsync<string>(old, "v", _clock.GetUtcNow() + Ttl, TimeSpan.FromMilliseconds(20), null, Ct);
+        var refused = await fenced.TryFillAfterAsync<string>(young, "v", Clock.ToDateTimeOffset(Ttl), TimeSpan.FromSeconds(10), null, Ct);
+        var replaced = await fenced.TryFillAfterAsync<string>(old, "v", Clock.ToDateTimeOffset(Ttl), TimeSpan.FromMilliseconds(20), null, Ct);
         var unfenced = await cache.TryFillAsync(plain, "v", Ttl, Ct);
-        var existed = await fenced.TryFillAfterAsync<string>(held, "v", _clock.GetUtcNow() + Ttl, TimeSpan.FromSeconds(10), null, Ct);
+        var existed = await fenced.TryFillAfterAsync<string>(held, "v", Clock.ToDateTimeOffset(Ttl), TimeSpan.FromSeconds(10), null, Ct);
 
         refused.Outcome.Should().Be(FillOutcome.Removed, "the generator started 10 s ago and the key was removed 0.4 s ago");
         TombstoneValue.Is(await Raw.StringGetAsync(Find(young))).Should().BeTrue("a refused fill leaves the tombstone");
@@ -251,15 +259,15 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_batch_fill_refuses_the_tombstoned_key_and_adds_the_absent_one(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var node = Node("a", scripts, Grace);
+        var node = (await Node("a", scripts, Grace));
         var many = (IFillManyTier)node.Provider.CreateCache();
         var cache = (ICache)many;
         var (removed, absent) = ($"it-{Guid.NewGuid():N}", $"it-{Guid.NewGuid():N}");
         await cache.SetAsync(removed, "old", Ttl, Ct);
         await cache.RemoveAsync<string>(removed, Ct);
-        await Task.Delay(300, Ct);
+        await AgeAsync(removed, TimeSpan.FromMilliseconds(300));
 
-        var results = await many.TryFillManyAsync<string>([new(removed, "v"), new(absent, "v")], _clock.GetUtcNow() + Ttl, null, Ct, TimeSpan.FromSeconds(10));
+        var results = await many.TryFillManyAsync<string>([new(removed, "v"), new(absent, "v")], Clock.ToDateTimeOffset(Ttl), null, Ct, TimeSpan.FromSeconds(10));
 
         results.Select(r => r.Outcome).Should().Equal(FillOutcome.Removed, FillOutcome.Added);
         TombstoneValue.Is(await Raw.StringGetAsync(Find(removed))).Should().BeTrue();
@@ -269,7 +277,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task SetIfChanged_over_a_tombstone_fills_the_key()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts: false, Grace).Cache;
+        var cache = (await Node("a", scripts: false, Grace)).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "v", Ttl, Ct);
         await cache.RemoveAsync<string>(key, Ct);
@@ -284,7 +292,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_node_that_sets_the_option_does_not_count_a_tombstone_as_unreadable_or_delete_it()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var on = Node("a", scripts: false, Grace, serializers: true);
+        var on = (await Node("a", scripts: false, Grace, serializers: true));
         var key = $"it-{Guid.NewGuid():N}";
         await on.Cache.SetAsync(key, "v", Ttl, Ct);
         await on.Cache.RemoveAsync<string>(key, Ct);
@@ -300,9 +308,9 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_node_without_the_option_reads_a_tombstone_as_a_miss_and_leaves_it()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var on = Node("a", scripts: false, Grace, serializers: true);
-        var off = Node("b", scripts: false, grace: null, serializers: true);
-        var plain = Node("c", scripts: false, grace: null);
+        var on = (await Node("a", scripts: false, Grace, serializers: true));
+        var off = (await Node("b", scripts: false, grace: null, serializers: true));
+        var plain = (await Node("c", scripts: false, grace: null));
         var key = $"it-{Guid.NewGuid():N}";
         await on.Cache.SetAsync(key, "v", Ttl, Ct);
         await on.Cache.RemoveAsync<string>(key, Ct);
@@ -321,8 +329,8 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var logs = new RecordedLogger();
-        var on = Node("a", scripts: false, Grace);
-        var plain = Node("b", scripts: false, grace: null, logs: logs);
+        var on = (await Node("a", scripts: false, Grace));
+        var plain = (await Node("b", scripts: false, grace: null, logs: logs));
         var key = $"it-{Guid.NewGuid():N}";
         await on.Cache.SetAsync(key, "v", Ttl, Ct);
         await on.Cache.RemoveAsync<string>(key, Ct);
@@ -338,8 +346,8 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_tombstone_stays_while_RemoveUnreadable_is_off()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var on = Node("a", scripts: false, Grace, serializers: true);
-        var off = Node("b", scripts: false, grace: null, o => o.RemoveUnreadable = false, serializers: true);
+        var on = (await Node("a", scripts: false, Grace, serializers: true));
+        var off = (await Node("b", scripts: false, grace: null, o => o.RemoveUnreadable = false, serializers: true));
         var key = $"it-{Guid.NewGuid():N}";
         await on.Cache.SetAsync(key, "v", Ttl, Ct);
         await on.Cache.RemoveAsync<string>(key, Ct);
@@ -353,7 +361,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task Every_remove_leaves_bytes_of_its_own()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts: false, Grace).Cache;
+        var cache = (await Node("a", scripts: false, Grace)).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "v", Ttl, Ct);
 
@@ -373,12 +381,12 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_second_remove_between_the_read_and_the_swap_keeps_the_fence(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var fenced = (RedisCache)Node("a", scripts, Grace).Provider.CreateCache();
+        var fenced = (RedisCache)(await Node("a", scripts, Grace)).Provider.CreateCache();
         var cache = fenced;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "old", Ttl, Ct);
         await cache.RemoveAsync<string>(key, Ct);
-        await Task.Delay(400, Ct);
+        await AgeAsync(key, TimeSpan.FromMilliseconds(400));
         var swaps = 0;
 
         // The tombstone is older than the generator, so the fill goes to swap it; a removal lands first.
@@ -386,10 +394,11 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
         {
             swaps++;
             fenced.BeforeTombstoneSwap = null;
+            Clock.Advance(Grace);
             await cache.RemoveAsync<string>(key, Ct);
         };
 
-        var result = await fenced.TryFillAfterAsync<string>(key, "v", _clock.GetUtcNow() + Ttl, TimeSpan.FromMilliseconds(20), null, Ct);
+        var result = await fenced.TryFillAfterAsync<string>(key, "v", Clock.ToDateTimeOffset(Ttl), TimeSpan.FromMilliseconds(20), null, Ct);
 
         swaps.Should().Be(1);
         result.Outcome.Should().Be(FillOutcome.Removed, "the new tombstone is younger than the generator");
@@ -404,18 +413,18 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_tombstone_with_no_deadline_or_past_its_grace_refuses_the_fill_and_goes_back_to_its_grace(bool scripts, bool persisted)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var fenced = (IFencedFillTier)Node("a", scripts, Grace).Provider.CreateCache();
+        var fenced = (IFencedFillTier)(await Node("a", scripts, Grace)).Provider.CreateCache();
         var cache = (ICache)fenced;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "old", Ttl, Ct);
         await cache.RemoveAsync<string>(key, Ct);
-        await Task.Delay(400, Ct);
+        await AgeAsync(key, TimeSpan.FromMilliseconds(400));
         var redisKey = Find(key);
         _ = persisted
             ? await Raw.KeyPersistAsync(redisKey)
             : await Raw.KeyExpireAsync(redisKey, TimeSpan.FromMinutes(10));
 
-        var result = await fenced.TryFillAfterAsync<string>(key, "v", _clock.GetUtcNow() + Ttl, TimeSpan.FromMilliseconds(20), null, Ct);
+        var result = await fenced.TryFillAfterAsync<string>(key, "v", Clock.ToDateTimeOffset(Ttl), TimeSpan.FromMilliseconds(20), null, Ct);
 
         result.Outcome.Should().Be(FillOutcome.Removed, "its age cannot be told, so it counts as younger than the generator");
         TombstoneValue.Is(await Raw.StringGetAsync(redisKey)).Should().BeTrue();
@@ -428,17 +437,17 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task The_age_is_judged_when_the_read_is_answered_not_when_the_fill_was_sent(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var clock = new JumpingClock();
-        var fenced = (RedisCache)Node("a", scripts, Grace, clock: clock).Provider.CreateCache();
+        var clock = Clock;
+        var fenced = (RedisCache)(await Node("a", scripts, Grace, clock: clock)).Provider.CreateCache();
         var cache = fenced;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "old", Ttl, Ct);
         await cache.RemoveAsync<string>(key, Ct);
-        await Task.Delay(300, Ct);
+        await AgeAsync(key, TimeSpan.FromMilliseconds(300));
 
         // The generator had run 30 ms when the fill was made and the removal is 300 ms old, so the removal is the older: the fill would replace it. The time the answer takes, 5 s by the clock the fill sees, passes after the fill has been sent.
-        fenced.AfterFillRead = () => clock.Jump(TimeSpan.FromSeconds(5));
-        var result = await ((IFencedFillTier)fenced).TryFillAfterAsync<string>(key, "v", clock.GetUtcNow() + Ttl, TimeSpan.FromMilliseconds(30), null, Ct);
+        fenced.AfterFillRead = () => clock.Advance(TimeSpan.FromSeconds(5));
+        var result = await ((IFencedFillTier)fenced).TryFillAfterAsync<string>(key, "v", clock.ToDateTimeOffset(Ttl), TimeSpan.FromMilliseconds(30), null, Ct);
 
         result.Outcome.Should().Be(FillOutcome.Removed, "by the time the answer came the generator had run longer than the tombstone had lived");
     }
@@ -446,7 +455,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_tombstone_without_a_generator_to_compare_with_is_replaced_whatever_its_age()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts: true, Grace).Provider.CreateCache();
+        var cache = (await Node("a", scripts: true, Grace)).Provider.CreateCache();
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "old", Ttl, Ct);
         await cache.RemoveAsync<string>(key, Ct);
@@ -461,7 +470,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_refresh_changes_a_live_key_and_leaves_a_tombstone_alone(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts, Grace, o => o.AwaitRefresh = true).Cache;
+        var cache = (await Node("a", scripts, Grace, o => o.AwaitRefresh = true)).Cache;
         var (live, removed) = ($"it-{Guid.NewGuid():N}", $"it-{Guid.NewGuid():N}");
         await cache.SetAsync(live, "v", TimeSpan.FromMinutes(1), Ct);
         await cache.SetAsync(removed, "v", Ttl, Ct);
@@ -487,7 +496,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_removal_between_the_refresh_check_and_its_change_is_not_touched_by_the_change(string change, bool awaited)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var redis = (RedisCache)Node("a", scripts: false, Grace, o => o.AwaitRefresh = awaited).Provider.CreateCache();
+        var redis = (RedisCache)(await Node("a", scripts: false, Grace, o => o.AwaitRefresh = awaited)).Provider.CreateCache();
         var cache = redis;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "v", TimeSpan.FromMinutes(1), Ct);
@@ -505,7 +514,8 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
             "shorter" => await cache.RefreshAsync<string>(key, TimeSpan.FromSeconds(1), null, Ct),
             _ => await cache.RefreshAsync<string>(key, TimeSpan.FromHours(1), null, Ct),
         };
-        await Task.Delay(400, Ct);
+        // One connection runs its commands in order, so this read answers after the refresh it may not have awaited.
+        _ = await cache.GetAsync<string>(key, Ct);
 
         removals.Should().Be(1);
         refreshed.Should().BeFalse("the key it was to change is a tombstone now");
@@ -523,7 +533,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_refresh_without_scripts_that_meets_a_tombstone_without_its_grace_puts_it_back(bool awaited, bool persisted)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts: false, Grace, o => o.AwaitRefresh = awaited).Cache;
+        var cache = (await Node("a", scripts: false, Grace, o => o.AwaitRefresh = awaited)).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "v", Ttl, Ct);
         await cache.RemoveAsync<string>(key, Ct);
@@ -551,7 +561,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_refresh_changes_a_live_key_whatever_the_length_of_its_value(bool scripts, int length)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts, Grace, o => o.AwaitRefresh = true).Cache;
+        var cache = (await Node("a", scripts, Grace, o => o.AwaitRefresh = true)).Cache;
         var (key, other) = ($"it-{Guid.NewGuid():N}", $"it-{Guid.NewGuid():N}");
         await cache.SetAsync(key, new string('x', length), TimeSpan.FromMinutes(1), Ct);
         await cache.SetAsync(other, new string('x', length), TimeSpan.FromMinutes(1), Ct);
@@ -568,19 +578,15 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_refresh_without_scripts_that_is_not_awaited_is_applied()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts: false, Grace).Cache;
+        var cache = (await Node("a", scripts: false, Grace)).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "v", TimeSpan.FromMinutes(1), Ct);
 
         (await cache.RefreshAsync<string>(key, TimeSpan.FromHours(1), null, Ct)).Should().BeFalse("a refresh that is not awaited answers nothing");
 
+        // One connection runs its commands in order, so this read answers after the refresh it may not have awaited.
+        _ = await cache.GetAsync<string>(key, Ct);
         var left = await Raw.KeyTimeToLiveAsync(Find(key));
-        for (var poll = 0; poll < 100 && left < TimeSpan.FromMinutes(30); poll++)
-        {
-            await Task.Delay(50, Ct);
-            left = await Raw.KeyTimeToLiveAsync(Find(key));
-        }
-
         left!.Value.Should().BeGreaterThan(TimeSpan.FromMinutes(30));
     }
     [Theory]
@@ -589,7 +595,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_read_of_the_lifetime_puts_a_tombstone_that_lost_its_grace_back(bool persisted)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Node("a", scripts: false, Grace).Cache;
+        var cache = (await Node("a", scripts: false, Grace)).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         await cache.SetAsync(key, "v", Ttl, Ct);
         await cache.RemoveAsync<string>(key, Ct);
@@ -611,8 +617,8 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_redis_only_GetOrAdd_does_not_put_back_a_value_removed_while_its_generator_ran(bool scripts, int shape)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var a = Node("a", scripts, Grace).Cache;
-        var b = Node("b", scripts, Grace).Cache;
+        var a = (await Node("a", scripts, Grace)).Cache;
+        var b = (await Node("b", scripts, Grace)).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         var (generated, release) = Gate();
         async Task Wait()
@@ -624,11 +630,12 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
         var slow = shape switch
         {
             0 => a.GetOrAddAsync<string>(key, async _ => { await Wait(); return "from-a"; }, Ttl, Ct).AsTask(),
-            1 => a.GetOrAddWithExpirationAsync<string>(key, async _ => { await Wait(); return new GeneratedValue<string>("from-a", _clock.GetUtcNow() + Ttl); }, Ct).AsTask(),
+            1 => a.GetOrAddWithExpirationAsync<string>(key, async _ => { await Wait(); return new GeneratedValue<string>("from-a", Clock.ToDateTimeOffset(Ttl)); }, Ct).AsTask(),
             _ => BatchAsync(a, key, Wait),
         };
-        await generated.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await generated.Task.WaitAsync(Ct);
 
+        Clock.Advance(Grace);
         await b.RemoveAsync<string>(key, Ct);
         release.SetResult();
 
@@ -665,9 +672,9 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_value_nothing_reads_is_replaced_by_the_fill_only_while_it_is_still_there(bool scripts, int shape, string change)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var redis = (RedisCache)Node("a", scripts, Grace).Provider.CreateCache();
+        var redis = (RedisCache)(await Node("a", scripts, Grace)).Provider.CreateCache();
         var a = (ICache)redis;
-        var b = Node("b", scripts, Grace).Cache;
+        var b = (await Node("b", scripts, Grace)).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         await a.SetAsync(key, "seed", Ttl, Ct);
         var redisKey = Find(key);
@@ -685,6 +692,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
             switch (change)
             {
                 case "removal":
+                    Clock.Advance(Grace);
                     await b.RemoveAsync<string>(key, Ct);
                     break;
                 case "peer":
@@ -697,7 +705,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
         var slow = shape switch
         {
             0 => a.GetOrAddAsync<string>(key, async _ => { await Wait(); return "from-a"; }, Ttl, Ct).AsTask(),
-            1 => a.GetOrAddWithExpirationAsync<string>(key, async _ => { await Wait(); return new GeneratedValue<string>("from-a", _clock.GetUtcNow() + Ttl); }, Ct).AsTask(),
+            1 => a.GetOrAddWithExpirationAsync<string>(key, async _ => { await Wait(); return new GeneratedValue<string>("from-a", Clock.ToDateTimeOffset(Ttl)); }, Ct).AsTask(),
             2 => Task.Run(async () =>
             {
                 var result = await a.GetOrAddResultAsync<string>(key, async _ => { await Wait(); return "from-a"; }, Ttl, null, Ct);
@@ -706,7 +714,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
             }),
             _ => BatchAsync(a, key, Wait),
         };
-        await generated.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await generated.Task.WaitAsync(Ct);
         await Raw.StringSetAsync(redisKey, "not json{", Ttl);
         release.SetResult();
 
@@ -750,7 +758,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_batch_fill_decides_again_after_the_unreadable_value_changed_and_stops_after_three_attempts(bool scripts, int changes, string stays)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var redis = (RedisCache)Node("a", scripts, Grace).Provider.CreateCache();
+        var redis = (RedisCache)(await Node("a", scripts, Grace)).Provider.CreateCache();
         var a = (ICache)redis;
         var key = $"it-{Guid.NewGuid():N}";
         await a.SetAsync(key, "seed", Ttl, Ct);
@@ -787,8 +795,8 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
     public async Task A_redis_only_GetOrAdd_answers_with_the_value_a_peer_stored_meanwhile(bool scripts)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var a = Node("a", scripts, Grace).Cache;
-        var b = Node("b", scripts, Grace).Cache;
+        var a = (await Node("a", scripts, Grace)).Cache;
+        var b = (await Node("b", scripts, Grace)).Cache;
         var key = $"it-{Guid.NewGuid():N}";
         var (generated, release) = Gate();
         async Task<string?> Generate(CancellationToken _)
@@ -799,7 +807,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
         }
 
         var slow = a.GetOrAddAsync<string>(key, Generate, Ttl, Ct).AsTask();
-        await generated.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await generated.Task.WaitAsync(Ct);
 
         await b.SetAsync(key, "from-b", Ttl, Ct);
         release.SetResult();
@@ -849,12 +857,12 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
         return found.Length == 0 && allowMissing ? $"missing:{key}" : found.Single();
     }
 
-    private TestNode Node(string source, bool scripts, TimeSpan? grace, Action<RedisCacheOptions>? configure = null, bool serializers = false, TimeProvider? clock = null, ILogger? logs = null)
+    private async Task<TestNode> Node(string source, bool scripts, TimeSpan? grace, Action<RedisCacheOptions>? configure = null, bool serializers = false, TimeProvider? clock = null, ILogger? logs = null)
     {
         var telemetry = new Telemetry.RecordingTelemetryProvider();
         var provider = new ServiceCollection()
             .AddSingleton<ICachingTelemetryProvider>(telemetry)
-            .AddSingleton(clock ?? _clock)
+            .AddSingleton(clock ?? Clock)
             .AddLogging(b =>
             {
                 if (logs is not null)
@@ -866,6 +874,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
                 b =>
                 {
                     b.AddRedisConnection(o => o.ConnectionString = fixture.ConnectionString);
+                    b.AddRedisPubSub(o => { o.Enabled = true; o.SubscriberDueTime = TimeSpan.Zero; });
                     b.AddRedis(o =>
                     {
                         o.ReadScriptsEnabled = scripts;
@@ -881,22 +890,37 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
                 o =>
                 {
                     o.AppShortName = _app;
+                    o.DefaultTopic = KnownTopicNames.RedisPubSub;
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
+        var topic = (RedisPubSubTopic<ICacheEvent>)provider.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub)
+            .Create(new DefaultTopicKeyStrategy().GetTopicKey(typeof(string)));
+        var subscribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Ready() => subscribed.TrySetResult();
+        topic.Subscribed += Ready;
+        using var subscription = topic.Subscribe(Substitute.For<IObserver<ICacheEvent>>());
+        try
+        {
+            if (!topic.IsSubscribed)
+            {
+                await subscribed.Task.WaitAsync(Ct);
+            }
+        }
+        finally
+        {
+            topic.Subscribed -= Ready;
+        }
         return new TestNode(provider, telemetry);
     }
 
-    /// <summary>The real clock, which can be moved forward: the time a command spends in flight.</summary>
-    private sealed class JumpingClock : TimeProvider
+    private async Task AgeAsync(string key, TimeSpan age)
     {
-        private long _jump;
-
-        public override long GetTimestamp() => base.GetTimestamp() + Interlocked.Read(ref _jump);
-
-        public void Jump(TimeSpan by) => Interlocked.Add(ref _jump, (long)(by.TotalSeconds * TimestampFrequency));
+        Clock.Advance(age);
+        await Raw.KeyExpireAsync(Find(key), Grace - age);
     }
+
     private sealed class FixedLoggerProvider(ILogger logger) : ILoggerProvider
     {
         public ILogger CreateLogger(string categoryName) => logger;

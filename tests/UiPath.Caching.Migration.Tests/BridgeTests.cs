@@ -151,6 +151,7 @@ public sealed class BridgeTests : RouterTestBase
     [Fact]
     public async Task The_router_from_DI_subscribes_the_bridge_and_publishes_under_its_stack_identity()
     {
+        using var subscribe = new ManualResetEventSlim();
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Caching:AppShortName"] = "brtest",
@@ -160,9 +161,9 @@ public sealed class BridgeTests : RouterTestBase
             ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
             ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
         }).Build();
-        var bridge = new FakeChannelBridge();
+        var bridge = new FakeChannelBridge { SubscribeGate = subscribe };
         var source = new FakeBackend(Store, Clock);
-        var services = new ServiceCollection().AddLogging();
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(Clock);
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(configuration, router => router
             .Add(new RouterCacheRegistration<Item> { Name = "items", Group = "g", Source = source, RedisKey = key => key })
@@ -173,7 +174,16 @@ public sealed class BridgeTests : RouterTestBase
             .UseChannelBridge(bridge));
         await using var provider = services.BuildServiceProvider();
 
-        await provider.GetRequiredService<IRouter>().Get<Item>("items").SetAsync("k", new Item("v"), Ct);
+        try
+        {
+            await provider.GetRequiredService<IRouter>().Get<Item>("items").SetAsync("k", new Item("v"), Ct);
+            bridge.Subscribed.Should().BeFalse();
+        }
+        finally
+        {
+            subscribe.Set();
+        }
+        await bridge.SubscriptionCompleted.Task.WaitAsync(Ct);
 
         bridge.Subscribed.Should().BeTrue();
         bridge.Published.Should().ContainSingle().Which.Origin.Should().Be("urn:bridge-host-pbridge1?stack=uipath.caching.migration");

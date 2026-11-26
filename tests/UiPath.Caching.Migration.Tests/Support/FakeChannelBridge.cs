@@ -36,6 +36,8 @@ internal sealed class FakeChannelBridge : IChannelBridge
 
     public bool Subscribed => _subscriber is not null;
 
+    public TaskCompletionSource SubscriptionCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public IReadOnlyList<BridgeMessage> Published
     {
         get
@@ -78,13 +80,14 @@ internal sealed class FakeChannelBridge : IChannelBridge
     public IDisposable Subscribe(Action<BridgeMessage> onMessage)
     {
         Volatile.Write(ref _entered, 1);
-        SubscribeGate?.Wait(TimeSpan.FromSeconds(30));
+        SubscribeGate?.Wait();
         if (Interlocked.Increment(ref _subscribeCalls) <= SubscribeFailures)
         {
             throw new InvalidOperationException("channel unavailable");
         }
 
         _subscriber = onMessage;
+        SubscriptionCompleted.TrySetResult();
         return new Unsubscriber(this);
     }
 
