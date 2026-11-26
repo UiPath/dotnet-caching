@@ -165,7 +165,7 @@ for i in "${!apps[@]}"; do
       export TWO_SERVER_SRC="127.0.0.1:$((port + 2))" TWO_SERVER_DST="127.0.0.1:$((port + 3))"
       export MOVE_SIDES_MASTER="127.0.0.1:$((port + 4))" MOVE_SIDES_REPLICA="127.0.0.1:$((port + 5))"
     fi
-    if "$coverage"; then options+=(--coverage --coverage-output-format xml --coverage-output coverage.xml); fi
+    if "$coverage"; then options+=(--coverage --coverage-output-format xml --coverage-output coverage.xml --coverage-settings "$PWD/eng/coverage.settings.xml"); fi
     # dotnet test starts the runner on the testing platform, which owns the trx, coverage and class filter.
     exec timeout 10m dotnet test --project "${projects[i]}" --framework "${frameworks[i]}" -c Release --no-build \
       --filter-class "${classes[@]}" \
