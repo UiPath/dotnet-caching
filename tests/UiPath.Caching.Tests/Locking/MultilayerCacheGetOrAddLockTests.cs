@@ -7,6 +7,7 @@ namespace UiPath.Caching.Tests.Locking;
 
 public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private readonly object _sutLock = new();
 
@@ -17,7 +18,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
     private ITopic<ICacheEvent> _topic = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;
-    private MemoryCache _memoryCache = default!;
+    private IMemoryCache _memoryCache = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
     private IMemoryCacheFactory _memoryCacheFactory = default!;
     private InMemoryRedisCacheOptions _options = default!;
@@ -71,7 +72,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             }
             while (Interlocked.CompareExchange(ref maxConcurrent, inside, observed) != observed);
             firstEntered.TrySetResult();
-            await release.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            await release.Task.WaitAsync(ct);
             Interlocked.Increment(ref generatorCalls);
             Interlocked.Decrement(ref concurrentInGenerator);
             return producedValue;
@@ -81,7 +82,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, (CachePolicy?)null, token)))
             .ToArray();
 
-        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await firstEntered.Task.WaitAsync(token);
         release.TrySetResult();
 
         var results = await Task.WhenAll(tasks);
@@ -125,7 +126,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             {
                 bothStarted.TrySetResult();
             }
-            await bothStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            await bothStarted.Task.WaitAsync(ct);
 
             Interlocked.Decrement(ref concurrentInGenerator);
             return "v";
@@ -266,10 +267,10 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         }
 
         var holderTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Holder, (CachePolicy?)null, token));
-        await holderAcquired.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+        await holderAcquired.Task.WaitAsync(token);
 
-        var secondTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Second, (CachePolicy?)null, token));
-        await Task.Delay(TimeSpan.FromMilliseconds(600), token);
+        var secondTask = Sut.GetOrAddAsync(cacheKey, Second, (CachePolicy?)null, token).AsTask();
+        _clock.Advance(TimeSpan.FromMilliseconds(600));
 
         secondTask.IsCompleted.Should().BeFalse("the second caller joins the generator in flight, and keeps waiting for it past the local lock timeout, which no longer bounds the wait");
         holderRelease.TrySetResult();
@@ -313,7 +314,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             {
                 allStarted.TrySetResult();
             }
-            await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            await allStarted.Task.WaitAsync(ct);
 
             Interlocked.Decrement(ref concurrentInGenerator);
             return "v";
@@ -378,12 +379,13 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
 
     public ValueTask InitializeAsync()
     {
+        _fixture.Inject<TimeProvider>(_clock);
         _topicKey = _fixture.Create<string>();
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         // A token that never reports a change, so an entry the local tier takes stays there; an auto-made one reports one at random and the entry is gone at once.
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(_ => new TestChangeToken { ActiveChangeCallbacks = true, HasChanged = false });
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions { Clock = new TimeProviderClock(_fixture.Create<TimeProvider>()) }));
+        _memoryCache = new MemoryCacheFactory(_clock, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance).Get(new InMemoryCacheOptions());
         _innerCache = _fixture.Freeze<ICache>();
         _options = new InMemoryRedisCacheOptions
         {

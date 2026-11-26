@@ -16,6 +16,8 @@ namespace UiPath.Caching.Tests.Negotiation;
 [Collection(WriterPoolCollection.Name)]
 public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly string[] Binary = ["10"];
 
     private readonly IDatabase _database = Substitute.For<IDatabase>();
@@ -50,7 +52,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
         var sut = HashCache(out var registry);
         var policy = ResolvedPolicy(registry);
         var written = CaptureHashWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
+        var options = new HashCacheEntryOptions(Clock.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, options, policy, Token);
         _gate.Open = true;
@@ -69,7 +71,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
         var sut = HashCache(out var registry, new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
         var policy = ResolvedPolicy(registry);
         var written = CaptureHashWrites();
-        var replace = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" }, SetOption: HashCacheSetOption.HashReplace);
+        var replace = new HashCacheEntryOptions(Clock.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" }, SetOption: HashCacheSetOption.HashReplace);
         var metadata = new Dictionary<string, string?> { ["m"] = "v" };
         _database.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Do<RedisValue>(v => written.Add([new HashEntry("_metadata_", v)])), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
 
@@ -102,7 +104,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     {
         var nodeList = new FakeNodeListServer();
         var policy = ResolvedPolicy(new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]));
-        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, TimeProvider.System);
+        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, Clock);
         negotiator.Observe(new NodeListView([new("me", new("3.2.0", "i", ["json", "10"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true));
         negotiator.Allows(_fast).Should().BeTrue();
         var without = SimpleCache(out _, gate: false);
@@ -172,7 +174,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
         var negotiator = new FormatNegotiator(
             [new DesiredWrite(_fast, Binary, ["default"], []), new DesiredWrite(other, ["11"], [], ["default"])],
             new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero },
-            TimeProvider.System);
+            Clock);
         // Every node reads 11 and one node does not read 10.
         negotiator.Observe(new NodeListView([new("me", new("3.2.0", "i", ["json", "11"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true));
         var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast), RegistryEntry.Of("other", other)]);
@@ -189,7 +191,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public void Reading_the_decision_through_the_resolver_allocates_nothing()
     {
-        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, TimeProvider.System);
+        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, Clock);
         negotiator.Observe(new NodeListView([new("me", new("3.2.0", "i", ["json", "10"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true));
         var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         var resolver = new ValueFormatResolver(new SystemJsonByteSerializerProxy(), registry, new CachePolicy(), negotiator);
@@ -268,7 +270,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     {
         var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         var gate = new OutsideGate { Reason = "node_without_pin" };
-        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, TimeProvider.System, writeGate: gate);
+        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, Clock, writeGate: gate);
         var view = new NodeListView([new("me", new("3.2.0", "i", ["json", "10"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true);
         negotiator.Observe(view);
         var sut = SimpleCache(registry, negotiator, new RawByteSerializerProxy());
@@ -304,7 +306,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     public async Task A_policy_on_a_header_free_proxy_writes_the_proxy_bytes_while_the_node_list_holds_the_format()
     {
         var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
-        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, TimeProvider.System);
+        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, Clock);
         negotiator.Observe(new NodeListView([new("old", new("3.2.0", "i", ["json"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true));
         var sut = SimpleCache(registry, negotiator, new HeaderFreeProxy());
         var written = CaptureSimpleWrites();
@@ -374,7 +376,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
             .AddSingleton(Substitute.For<IRedisConnector>())
             .AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance)
             .AddSingleton<ICachingTelemetryProvider>(NullTelemetryProvider.Instance)
-            .AddSingleton(TimeProvider.System)
+            .AddSingleton<TimeProvider>(Clock)
             .AddSingleton<ISerializerProxy<byte[]>>(new SystemJsonByteSerializerProxy())
             .AddSingleton(registry)
             .AddSingleton<ICachePolicyFactory>(sp => new DefaultCachePolicyFactory(null, defaultPolicy, valueSerializers: registry))
@@ -442,7 +444,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
             new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false },
             new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true },
             new DefaultCachePolicyFactory(null, null, valueSerializers: registry),
-            TimeProvider.System,
+            Clock,
             NullLogger<RedisCache>.Instance)
         {
             ValueSerializers = registry,
@@ -462,7 +464,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
             new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false },
             new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true },
             new DefaultCachePolicyFactory(null, defaultPolicy, valueSerializers: registry),
-            TimeProvider.System,
+            Clock,
             NullLogger<RedisHashCache>.Instance)
         {
             ValueSerializers = registry,

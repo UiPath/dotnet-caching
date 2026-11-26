@@ -9,6 +9,8 @@ namespace UiPath.Caching.Tests.Broadcast;
 
 public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+    private readonly TaskCompletionSource _received = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private readonly List<ICacheEvent> _onNextMessages = [];
     private readonly TimeSpan _delay = 50.Milliseconds();
@@ -70,17 +72,11 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var bytes = _formatter.Encode(cloudEvent);
         var message = Encoding.UTF8.GetString(bytes.Span);
 
-        for (var count = 0; _handler is null && count < 100; count++)
-        {
-            await Task.Delay(50.Milliseconds(), testContextAccessor.Current.CancellationToken);
-        }
+        await WaitForSubscribeAsync();
         _handler.Should().NotBeNull("the topic must subscribe and capture the message handler");
 
         _handler!.Invoke(RedisChannel.Literal(_topicKey.Name), message);
-        for (var count = 0; _onNextMessages.Count == 0 && count < 100; count++)
-        {
-            await Task.Delay(100.Milliseconds(), testContextAccessor.Current.CancellationToken);
-        }
+        await _received.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
         _onNextMessages.FirstOrDefault().Should().BeEquivalentTo(cloudEvent);
         _onCompleted.Should().BeFalse();
     }
@@ -92,14 +88,11 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var observer = new MissedObserver();
         using var subscription = new GapFilteringTopic(sut).Subscribe(observer);
         await WaitForSubscribeAsync();
-        for (var count = 0; _handler is null && count < 100; count++)
-        {
-            await Task.Delay(50.Milliseconds(), testContextAccessor.Current.CancellationToken);
-        }
+        await WaitForSubscribeAsync();
 
         _handler!.Invoke(RedisChannel.Literal(_topicKey.Name), (RedisValue)new byte[] { 0x02, 0x81, 0x01 });
 
-        (await observer.Lost.Task.WaitAsync(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken)).Should().Be(MissedEventsReason.Lost);
+        (await observer.Lost.Task.WaitAsync(testContextAccessor.Current.CancellationToken)).Should().Be(MissedEventsReason.Lost);
     }
 
     [Fact]
@@ -159,7 +152,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var sut = await Sut();
         await WaitForSubscribeAsync();
         sut.Dispose();
-        await _unsubscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
+        await _unsubscribeCalled.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
 #pragma warning disable S6966 // The code under test uses the sync API, so the verification must match it.
         _subscriber.Received().Unsubscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>?>(), Arg.Any<CommandFlags>());
 #pragma warning restore S6966
@@ -261,11 +254,14 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         _fixture.Inject<Func<IEventSubject<ICacheEvent>>>(() => subject);
         // The subscription goes in place only once the observer is mid-join, so no scheduling delay can reorder the two.
         _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
-            .Do(_ => subject.Joining.Wait(TimeSpan.FromSeconds(30)));
-        var sut = await Sut();
+            .Do(_ => subject.Joining.Wait(testContextAccessor.Current.CancellationToken));
+        var sut = await Sut(startSubscription: false);
         var entry = new KeptEntry { Throws = throws };
 
-        (await Task.Run(() => sut.Subscribe(entry), testContextAccessor.Current.CancellationToken)).Dispose();
+        var joining = Task.Run(() => sut.Subscribe(entry), testContextAccessor.Current.CancellationToken);
+        subject.Joining.Wait(testContextAccessor.Current.CancellationToken);
+        _clock.Advance(TimeSpan.Zero);
+        (await joining).Dispose();
 
         entry.Missed.Task.IsCompleted.Should().BeTrue("the subscription went in place after the mark but before this observer joined");
     }
@@ -281,7 +277,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         _redisConnector.OnConnectionFailed += Raise.Event<EventHandler>(_redisConnector, EventArgs.Empty);
         _redisConnector.OnConnectionRestored += Raise.Event<EventHandler>(_redisConnector, EventArgs.Empty);
 
-        await entry.Missed.Awaiting(m => m.Task).Should().CompleteWithinAsync(TimeSpan.FromSeconds(10), "the topic expires its entries itself, on whatever local tier holds them");
+        await entry.Missed.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
     }
 
     [Fact]
@@ -294,7 +290,8 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 
         _redisConnector.OnReconnected += Raise.Event<EventHandler>(_redisConnector, EventArgs.Empty);
 
-        await entry.Missed.Awaiting(m => m.Task).Should().CompleteWithinAsync(TimeSpan.FromSeconds(10), "publications between the swap and the new subscription never arrived");
+        _clock.Advance(_options.SubscriberDueTime!.Value);
+        await entry.Missed.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
     }
 
     public ValueTask DisposeAsync()
@@ -305,6 +302,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 
     public ValueTask InitializeAsync()
     {
+        _fixture.Inject<TimeProvider>(_clock);
         _database = _fixture.Freeze<IDatabase>();
 
         _fixture.Inject<Func<IDatabase>>(() => _database);
@@ -324,7 +322,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         _subscriber = _fixture.Freeze<ISubscriber>();
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
         _observer.When(x => x.OnNext(Arg.Any<ICacheEvent>()))
-            .Do(c => _onNextMessages.Add(c.Arg<ICacheEvent>()!));
+            .Do(c => { _onNextMessages.Add(c.Arg<ICacheEvent>()!); _received.TrySetResult(); });
         _observer.When(x => x.OnCompleted())
             .Do(c => _onCompleted = true);
         _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
@@ -359,19 +357,19 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 
         return ValueTask.CompletedTask;
     }
-    private async Task<RedisPubSubTopic<ICacheEvent>> Sut(int delayMultiplier = 2)
+    private Task<RedisPubSubTopic<ICacheEvent>> Sut(bool startSubscription = true)
     {
         if (_sut != null)
         {
-            return _sut;
+            return Task.FromResult(_sut);
         }
-        _sut = _fixture.Create<RedisPubSubTopic<ICacheEvent>>();
-        await Task.Delay(_delay.Multiply(delayMultiplier), testContextAccessor.Current.CancellationToken);
-        return _sut;
+        _sut = new RedisPubSubTopic<ICacheEvent>(_topicKey, _fixture.Create<Uri>(), _redisConnector, _redisConnector, _redisChannelStrategy, _fixture.Create<Func<IEventSubject<ICacheEvent>>>(), _formatter, _resiliencePipelineProvider, _options, _fixture.Create<ILogger<RedisPubSubTopic<ICacheEvent>>>(), testContextAccessor.Current.CancellationToken, _clock);
+        if (startSubscription) { _clock.Advance(TimeSpan.Zero); }
+        return Task.FromResult(_sut);
     }
 
     private Task WaitForSubscribeAsync() =>
-        _subscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
+        _subscribeCalled.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
 
     private sealed class MissedObserver : IObserver<ICacheEvent>, IMissedEventsObserver
     {
@@ -403,7 +401,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         public IDisposable Subscribe(IObserver<ICacheEvent> observer)
         {
             Joining.Set();
-            _invalidated.Wait(TimeSpan.FromSeconds(30));
+            _invalidated.Wait(TestContext.Current.CancellationToken);
             return _inner.Subscribe(observer);
         }
 

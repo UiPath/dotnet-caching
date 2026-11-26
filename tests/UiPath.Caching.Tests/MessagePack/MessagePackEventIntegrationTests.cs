@@ -3,7 +3,10 @@ using StackExchange.Redis;
 using UiPath.Caching.CloudEvents;
 using UiPath.Caching.Config;
 using UiPath.Caching.MessagePack;
+using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Broadcast;
 using UiPath.Caching.Tests.Redis;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.MessagePack;
 
@@ -28,16 +31,18 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
-        var writer = Hashes(Node("a", Events.WriteBinary));
-        var peer = Hashes(Node("b", Events.WriteBinary));
+        var writer = Hashes(await Node("a", Events.WriteBinary));
+        var peer = Hashes(await Node("b", Events.WriteBinary));
         var key = Unique();
         (await writer.SetAsync(key, Fields(("a", "1")), TimeSpan.FromMinutes(10), Ct)).Should().BeTrue();
         (await peer.GetAsync<string>(key, Ct)).Should().HaveCount(1);
-        await Task.Delay(1000, Ct);
+        using var observed = await BroadcastNodeSignals.AttachAsync(_nodes[1], key);
 
         (await writer.SetAsync(key, Fields(("b", "2")), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10), SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
 
-        (await UntilAsync(async () => (await peer.GetAsync<string>(key, Ct)).ContainsKey("b"))).Should().BeTrue("the peer applies the field from the binary event");
+        await observed.TickAsync();
+        await observed.ReceivedAsync(peer);
+        (await peer.GetAsync<string>(key, Ct)).ContainsKey("b").Should().BeTrue("the peer applies the field from the binary event");
         (await peer.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2")));
         (await StreamBodies()).Should().Contain(body => body[0] == MessagePackFormats.Event, "the events on the wire are binary");
     }
@@ -46,38 +51,66 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
     public async Task A_node_that_reads_both_applies_a_binary_event_and_one_that_cannot_expires_its_copies()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var writer = Cache(Node("a", Events.WriteBinary));
-        var reader = Cache(Node("b", Events.WriteBinary));
-        var stale = Cache(Node("c", Events.PlainJson));
+        var writer = Cache(await Node("a", Events.WriteBinary));
+        var reader = Cache(await Node("b", Events.WriteBinary));
+        var stale = Cache(await Node("c", Events.PlainJson));
         var key = Unique();
         await writer.SetAsync(key, "first", policy: null, Ct);
         (await reader.GetAsync<string>(key, policy: null, Ct)).Should().Be("first");
         (await stale.GetAsync<string>(key, policy: null, Ct)).Should().Be("first");
-        await Task.Delay(1000, Ct);
+        using var observed = await BroadcastNodeSignals.AttachAsync(_nodes[1], key);
 
+        using var staleObserved = _nodes.Count == 3 ? await BroadcastNodeSignals.AttachAsync(_nodes[2], key) : null;
         await writer.SetAsync(key, "second", policy: null, Ct);
+        if (!_nodes[1].GetRequiredService<RedisPubSubTopicProvider>().Enabled)
+        {
+            await observed.TickAsync();
+            if (staleObserved is not null)
+            {
+                await staleObserved.TickAsync();
+            }
+        }
+        await observed.ReceivedAsync(reader);
+        if (staleObserved is not null)
+        {
+            await staleObserved.ReceivedAsync(stale);
+        }
 
-        (await UntilAsync(async () => await reader.GetAsync<string>(key, policy: null, Ct) == "second")).Should().BeTrue("a node that reads both applies the event");
-        (await UntilAsync(async () => await stale.GetAsync<string>(key, policy: null, Ct) == "second")).Should().BeTrue("a node that cannot read it treats the event as a loss and drops its copies");
+        (await reader.GetAsync<string>(key, policy: null, Ct) == "second").Should().BeTrue("a node that reads both applies the event");
+        (await stale.GetAsync<string>(key, policy: null, Ct) == "second").Should().BeTrue("a node that cannot read it treats the event as a loss and drops its copies");
     }
 
     [Fact]
     public async Task Over_pub_sub_a_node_that_reads_both_applies_a_binary_event_and_one_that_cannot_expires_its_copies_though_it_keeps_its_tier_over_a_gap()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var writer = Cache(Node("a", Events.WriteBinary, pubSub: true));
-        var reader = Cache(Node("b", Events.WriteBinary, pubSub: true));
-        var stale = Cache(Node("c", Events.PlainJson, pubSub: true));
+        var writer = Cache(await Node("a", Events.WriteBinary, pubSub: true));
+        var reader = Cache(await Node("b", Events.WriteBinary, pubSub: true));
+        var stale = Cache(await Node("c", Events.PlainJson, pubSub: true));
         var key = Unique();
         await writer.SetAsync(key, "first", policy: null, Ct);
         (await reader.GetAsync<string>(key, policy: null, Ct)).Should().Be("first");
         (await stale.GetAsync<string>(key, policy: null, Ct)).Should().Be("first");
-        await SubscribedAsync(3);
+        using var observed = await BroadcastNodeSignals.AttachAsync(_nodes[1], key);
 
+        using var staleObserved = _nodes.Count == 3 ? await BroadcastNodeSignals.AttachAsync(_nodes[2], key) : null;
         await writer.SetAsync(key, "second", policy: null, Ct);
+        if (!_nodes[1].GetRequiredService<RedisPubSubTopicProvider>().Enabled)
+        {
+            await observed.TickAsync();
+            if (staleObserved is not null)
+            {
+                await staleObserved.TickAsync();
+            }
+        }
+        await observed.ReceivedAsync(reader);
+        if (staleObserved is not null)
+        {
+            await staleObserved.ReceivedAsync(stale);
+        }
 
-        (await UntilAsync(async () => await reader.GetAsync<string>(key, policy: null, Ct) == "second")).Should().BeTrue("a node that reads both applies the event");
-        (await UntilAsync(async () => await stale.GetAsync<string>(key, policy: null, Ct) == "second")).Should().BeTrue("a node that cannot read it treats the event as a loss, which a cache that ignores gaps still honours");
+        (await reader.GetAsync<string>(key, policy: null, Ct) == "second").Should().BeTrue("a node that reads both applies the event");
+        (await stale.GetAsync<string>(key, policy: null, Ct) == "second").Should().BeTrue("a node that cannot read it treats the event as a loss, which a cache that ignores gaps still honours");
     }
 
     [Theory]
@@ -91,16 +124,21 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipWhen(!pubSub && !fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
-        var writer = Cache(Node("a", events, pubSub: pubSub, cloudEventsFirst: cloudEventsFirst));
-        var reader = Cache(Node("b", events, pubSub: pubSub, cloudEventsFirst: cloudEventsFirst));
+        var writer = Cache(await Node("a", events, pubSub: pubSub, cloudEventsFirst: cloudEventsFirst));
+        var reader = Cache(await Node("b", events, pubSub: pubSub, cloudEventsFirst: cloudEventsFirst));
         var key = Unique();
         await writer.SetAsync(key, "first", policy: null, Ct);
         (await reader.GetAsync<string>(key, policy: null, Ct)).Should().Be("first");
-        await (pubSub ? SubscribedAsync(2) : Task.Delay(1000, Ct));
+        using var observed = await BroadcastNodeSignals.AttachAsync(_nodes[1], key);
 
         await writer.SetAsync(key, "second", policy: null, Ct);
+        if (!_nodes[1].GetRequiredService<RedisPubSubTopicProvider>().Enabled)
+        {
+            await observed.TickAsync();
+        }
+        await observed.ReceivedAsync(reader);
 
-        (await UntilAsync(async () => await reader.GetAsync<string>(key, policy: null, Ct) == "second")).Should().BeTrue("the peer decoded the event that was published");
+        (await reader.GetAsync<string>(key, policy: null, Ct) == "second").Should().BeTrue("the peer decoded the event that was published");
         if (!pubSub)
         {
             var bodies = await StreamBodies();
@@ -136,45 +174,6 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
     private static Dictionary<string, string?> Fields(params (string Field, string Value)[] fields) =>
         fields.ToDictionary(f => f.Field, f => (string?)f.Value);
 
-    private static async Task<bool> UntilAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(15);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(50, Ct);
-        }
-
-        return false;
-    }
-
-    private async Task SubscribedAsync(int nodes)
-    {
-        await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        var until = DateTime.UtcNow.AddSeconds(30);
-        while (DateTime.UtcNow < until)
-        {
-            if (await RedisTestKeys.SubscribersAsync(redis, $"{_app}:ps:string") >= nodes)
-            {
-                if (!fixture.CountsSubscribersPerClient)
-                {
-                    // The count runs ahead of the clients on a proxy such as Azure Managed Redis, so it cannot say they are all subscribed yet.
-                    await Task.Delay(TimeSpan.FromSeconds(3), Ct);
-                }
-
-                return;
-            }
-
-            await Task.Delay(50, Ct);
-        }
-
-        throw new TimeoutException($"{nodes} nodes did not subscribe");
-    }
-
     private async Task<List<byte[]>> StreamBodies()
     {
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
@@ -196,9 +195,14 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
         return bodies;
     }
 
-    private ServiceProvider Node(string source, Events events, bool pubSub = false, bool? cloudEventsFirst = null)
+    private async Task<ServiceProvider> Node(string source, Events events, bool pubSub = false, bool? cloudEventsFirst = null)
     {
+        await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var time = (RedisResult[])(await redis.GetDatabase().ExecuteAsync("TIME"))!;
+        var clock = new ManualTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds((long)time[0] * 1000 + (long)time[1] / 1000));
         var provider = new ServiceCollection()
+            .AddSingleton<TimeProvider>(clock)
+            .AddSingleton<ICachingTelemetryProvider, RecordingTelemetryProvider>()
             .AddCaching(
                 b =>
                 {
@@ -211,6 +215,8 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
                         b.AddRedisStreams(o => { o.Enabled = false; o.MaintainerEnabled = false; });
                     }
 
+                    b.AddRedisStreams(o => { o.NotifyEnabled = false; o.MaintainerEnabled = false; });
+                    b.AddRedisPubSub(o => o.SubscriberDueTime = TimeSpan.Zero);
                     b.AddBroadcast();
                     if (cloudEventsFirst == true)
                     {

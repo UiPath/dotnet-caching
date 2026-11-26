@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
@@ -11,7 +10,11 @@ namespace UiPath.Caching.Tests.Broadcast;
 
 public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+    private readonly System.Threading.Channels.Channel<bool> _published = System.Threading.Channels.Channel.CreateUnbounded<bool>();
+    private readonly TaskCompletionSource _invalidated = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private int _doorbellsObserved;
     private RedisStreamsTopicOptions _redisStreamsTopicOptions = default!;
     private RedisCacheOptions _redisCacheOptions = default!;
     private CacheOptions _cacheOptions = default!;
@@ -321,8 +324,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         var first = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondSent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
-        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>()).Returns(_ =>
-        {
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>()).Returns(_ => NotifyPublish(() =>
+            {
             if (Interlocked.Increment(ref calls) == 1)
             {
                 return first.Task;
@@ -330,7 +333,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
             secondSent.TrySetResult();
             return Task.FromResult(1L);
-        });
+        }));
         var token = testContextAccessor.Current.CancellationToken;
 
         for (var i = 0; i < 3; i++)
@@ -340,7 +343,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
         Volatile.Read(ref calls).Should().Be(1, "the rings during a doorbell fold into one more");
         first.SetResult(1);
-        await secondSent.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await secondSent.Task.WaitAsync(token);
         Volatile.Read(ref calls).Should().Be(2, "the folded ring is one doorbell, sent once the first is answered");
     }
 
@@ -363,7 +366,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
             .Returns("1-0");
         var gate = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ => gate.Task);
+            .ReturnsForAnyArgs(_ => NotifyPublish(() => gate.Task));
 
         for (var i = 0; i < 20; i++)
         {
@@ -372,13 +375,9 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
         await _database.ReceivedWithAnyArgs(1).PublishAsync(default, default, default);
         gate.SetResult(1);
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (_database.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.PublishAsync)) < 2 && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, testContextAccessor.Current.CancellationToken);
-        }
+        await DoorbellCallsSettledAsync(Doorbells, 2, testContextAccessor.Current.CancellationToken);
 
-        await Task.Delay(100, testContextAccessor.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
         await _database.ReceivedWithAnyArgs(2).PublishAsync(default, default, default);
     }
 
@@ -401,16 +400,17 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
             .Returns("1-0");
         var sent = new List<long>();
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ =>
+            .ReturnsForAnyArgs(_ => NotifyPublish(() =>
             {
                 lock (sent)
                 {
-                    sent.Add(Stopwatch.GetTimestamp());
+                    sent.Add(_clock.GetTimestamp());
                 }
 
                 return Task.FromResult(1L);
-            });
+            }));
         Sut.DoorbellSpacing = TimeSpan.FromSeconds(2);
+        _clock.Advance(Sut.DoorbellSpacing);
         var token = testContextAccessor.Current.CancellationToken;
 
         (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
@@ -419,40 +419,20 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
             (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
         }
 
-        // The spacing is far longer than the publishes take, so even a starved test thread sees the first doorbell alone.
-        // Waits for each doorbell rather than sleeping a fixed time, so a loaded machine cannot make the counts race.
-        (await SentAtLeast(1)).Should().BeTrue();
+        await DoorbellCallsSettledAsync(() => sent.Count, 1, token, settle: false);
         lock (sent)
         {
             sent.Should().HaveCount(1, "the first ring goes out at once and the rest wait out the interval");
         }
 
-        (await SentAtLeast(2)).Should().BeTrue();
-        await Task.Delay(2_500, token); // longer than the spacing, so a stray third doorbell would have arrived
+        await DoorbellCallsSettledAsync(() => sent.Count, 2, token, settle: false);
+        _clock.Advance(TimeSpan.FromMilliseconds(2_500));
         lock (sent)
         {
             sent.Should().HaveCount(2, "the waiting rings fold into one doorbell");
-            Stopwatch.GetElapsedTime(sent[0], sent[1]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(1_500));
+            _clock.GetElapsedTime(sent[0], sent[1]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(1_500));
         }
 
-        async Task<bool> SentAtLeast(int count)
-        {
-            var started = Stopwatch.GetTimestamp();
-            while (Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(30))
-            {
-                lock (sent)
-                {
-                    if (sent.Count >= count)
-                    {
-                        return true;
-                    }
-                }
-
-                await Task.Delay(10, token);
-            }
-
-            return false;
-        }
     }
 
     [Fact]
@@ -476,17 +456,14 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         var calls = 0;
         // Only the first doorbell stalls: a second that stalled too would have its folded ring retried after its own timeout.
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) == 1 ? stalled.Task : Task.FromResult(1L));
+            .ReturnsForAnyArgs(_ => NotifyPublish(() => Interlocked.Increment(ref calls) == 1 ? stalled.Task : Task.FromResult(1L)));
         Sut.DoorbellTimeout = TimeSpan.FromMilliseconds(200);
 
         (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
         (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
 
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (_database.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.PublishAsync)) < 2 && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, testContextAccessor.Current.CancellationToken);
-        }
+        _clock.Advance(Sut.DoorbellTimeout);
+        await DoorbellCallsSettledAsync(Doorbells, 2, testContextAccessor.Current.CancellationToken);
 
         await _database.ReceivedWithAnyArgs(2).PublishAsync(default, default, default);
         stalled.SetResult(1);
@@ -511,7 +488,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
                 flags: Arg.Any<CommandFlags>())
             .Returns("1-0");
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs<Task<long>>(_ => throw new RedisException("doorbell down"));
+            .ReturnsForAnyArgs<Task<long>>(_ => NotifyPublish(() => throw new RedisException("doorbell down")));
 
         var ev = _fixture.Create<ICacheEvent>();
         var ok = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
@@ -538,16 +515,12 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
             .Returns("1-0");
         var calls = 0;
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) == 1 ? throw new TimeoutException("timed out") : Task.FromResult(1L));
+            .ReturnsForAnyArgs(_ => NotifyPublish(() => Interlocked.Increment(ref calls) == 1 ? throw new TimeoutException("timed out") : Task.FromResult(1L)));
 
         (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
         (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
 
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (Volatile.Read(ref calls) < 2 && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, testContextAccessor.Current.CancellationToken);
-        }
+        await DoorbellCallsSettledAsync(() => Volatile.Read(ref calls), 2, testContextAccessor.Current.CancellationToken);
 
         Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(2);
     }
@@ -561,7 +534,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         var calls = 0;
         var first = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ =>
+            .ReturnsForAnyArgs(_ => NotifyPublish(() =>
             {
                 var n = Interlocked.Increment(ref calls);
                 if (n == 1)
@@ -572,8 +545,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
                 return n - 1 <= failuresBeforeSuccess
                     ? Task.FromException<long>(new RedisException("down"))
                     : Task.FromResult(1L);
-            });
-        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(200);
+            }));
+        _redisStreamsTopicOptions.NotifyMinInterval = TimeSpan.FromMilliseconds(200);
         var token = testContextAccessor.Current.CancellationToken;
 
         // The first doorbell stays in flight until both later rings have folded into the next one.
@@ -593,12 +566,12 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         ArrangeDoorbell();
         var calls = 0;
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) > 0 ? Task.FromException<long>(new RedisException("down")) : Task.FromResult(1L));
-        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(200);
+            .ReturnsForAnyArgs(_ => NotifyPublish(() => Interlocked.Increment(ref calls) > 0 ? Task.FromException<long>(new RedisException("down")) : Task.FromResult(1L)));
+        _redisStreamsTopicOptions.NotifyMinInterval = TimeSpan.FromMilliseconds(200);
         var token = testContextAccessor.Current.CancellationToken;
 
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
-        await Task.Delay(700, token);
+        _clock.Advance(TimeSpan.FromMilliseconds(700));
 
         Volatile.Read(ref calls).Should().Be(1);
     }
@@ -609,7 +582,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         ArrangeDoorbell();
         var calls = 0;
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ =>
+            .ReturnsForAnyArgs(_ => NotifyPublish(() =>
             {
                 var n = Interlocked.Increment(ref calls);
                 if (n == 1)
@@ -618,8 +591,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
                 }
 
                 return n == 2 ? Task.FromException<long>(new RedisException("down")) : Task.FromResult(1L);
-            });
-        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(100);
+            }));
+        _redisStreamsTopicOptions.NotifyMinInterval = TimeSpan.FromMilliseconds(100);
 
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
         await DoorbellCallsSettledAsync(() => Volatile.Read(ref calls), 3, testContextAccessor.Current.CancellationToken);
@@ -633,7 +606,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         ArrangeDoorbell();
         var calls = 0;
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ =>
+            .ReturnsForAnyArgs(_ => NotifyPublish(() =>
             {
                 var n = Interlocked.Increment(ref calls);
                 if (n is 1 or 4)
@@ -642,8 +615,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
                 }
 
                 return n == 1 ? Task.FromResult(1L) : Task.FromException<long>(new RedisException("down"));
-            });
-        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(100);
+            }));
+        _redisStreamsTopicOptions.NotifyMinInterval = TimeSpan.FromMilliseconds(100);
 
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
         await DoorbellCallsSettledAsync(() => Volatile.Read(ref calls), 7, testContextAccessor.Current.CancellationToken);
@@ -659,18 +632,19 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         ArrangeDoorbell();
         var calls = 0;
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ =>
+            .ReturnsForAnyArgs(_ => NotifyPublish(() =>
             {
                 Interlocked.Increment(ref calls);
                 // A ring that arrives during the send, and the topic going away before the doorbell loops to answer it.
                 Sut.PublishAsync(_fixture.Create<ICacheEvent>(), CancellationToken.None).AsTask().GetAwaiter().GetResult();
                 Sut.Dispose();
                 return Task.FromResult(1L);
-            });
+            }));
         Sut.DoorbellSpacing = TimeSpan.FromSeconds(10);
+        _clock.Advance(Sut.DoorbellSpacing);
 
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
-        await Task.Delay(200, testContextAccessor.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromMilliseconds(200));
 
         Volatile.Read(ref calls).Should().Be(1);
         logger.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ILogger.Log) && c.GetArguments()[0] is LogLevel.Warning && c.GetArguments()[2]?.ToString()!.Contains("doorbell", StringComparison.Ordinal) == true)
@@ -689,11 +663,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _redisStreamsTopicOptions.NotifyEnabled = false;
         _ = Sut;
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline && !_subject.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IEventSubject<ICacheEvent>.Invalidate)))
-        {
-            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
-        }
+        await PollAsync();
+        await _invalidated.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
 
         _subject.Received(1).Invalidate(MissedEventsReason.Lost);
     }
@@ -738,7 +709,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         (await ReadsAsync(1, token)).Should().BeTrue();
 
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
-        await Task.Delay(300, token);
+        _clock.Advance(TimeSpan.FromMilliseconds(300));
         Volatile.Read(ref reads).Should().Be(1, "one own entry is nowhere near the trim");
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
 
@@ -746,12 +717,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
         async Task<bool> ReadsAsync(int expected, CancellationToken ct)
         {
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-            while (DateTime.UtcNow < deadline && Volatile.Read(ref reads) < expected)
-            {
-                await Task.Delay(20, ct);
-            }
-
+            await _clock.WhenTimerAsync(() => Volatile.Read(ref reads) >= expected).WaitAsync(ct);
             return Volatile.Read(ref reads) == expected;
         }
     }
@@ -762,26 +728,37 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         var subscribed = false;
         var reads = 0;
         var readsSinceSubscribed = 0;
+        var firstRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var successfulRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thirdRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
-            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref reads) > 0 && (!Volatile.Read(ref subscribed) || Interlocked.Increment(ref readsSinceSubscribed) == 1)
-                ? Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group"))
-                : Task.FromResult(Array.Empty<StreamEntry>()));
-        // The group the subscribe makes stays: a NOGROUP answered to a read issued before it recreates nothing and stays silent.
+            .ReturnsForAnyArgs(_ =>
+            {
+                Interlocked.Increment(ref reads);
+                firstRead.TrySetResult();
+                if (!Volatile.Read(ref subscribed) || Interlocked.Increment(ref readsSinceSubscribed) == 1)
+                {
+                    return Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group"));
+                }
+                successfulRead.TrySetResult();
+                if (Volatile.Read(ref readsSinceSubscribed) >= 3)
+                {
+                    thirdRead.TrySetResult();
+                }
+                return Task.FromResult(Array.Empty<StreamEntry>());
+            });
         _database.StreamCreateConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>())
             .ThrowsAsyncForAnyArgs(new RedisServerException(RedisErrorKind.None, CommandFlags.None, TestErrors.ConsumerGroupNameExists));
         _redisStreamsTopicOptions.PollInterval = TimeSpan.FromMilliseconds(20);
         _redisStreamsTopicOptions.NotifyEnabled = false;
 
         using var subscription = Sut.Subscribe(_observer);
-        // A read issued before the subscribe may answer after it; the stream goes once a read issued after it is seen.
-        await ReadsAfterAsync(() => Volatile.Read(ref reads));
+        await firstRead.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
         Volatile.Write(ref subscribed, true);
-
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline && Volatile.Read(ref readsSinceSubscribed) < 3)
-        {
-            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
-        }
+        await successfulRead.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
+        await _clock.WhenTimerAsync(() => _clock.HasTimerDueIn(_redisStreamsTopicOptions.PollInterval));
+        _clock.Advance(_redisStreamsTopicOptions.PollInterval);
+        await thirdRead.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
 
         _subject.Received(1).Invalidate(MissedEventsReason.Lost);
     }
@@ -817,7 +794,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _subject.Subscribe(Arg.Any<IObserver<ICacheEvent>>()).Returns(_ =>
         {
             joining.Set();
-            release.Wait(TimeSpan.FromSeconds(10));
+            release.Wait(testContextAccessor.Current.CancellationToken);
             return Substitute.For<IDisposable>();
         });
         var entry = Substitute.For<IObserver<ICacheEvent>, IMissedEventsObserver>();
@@ -829,15 +806,12 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _ = Sut;
 
         var subscribing = Task.Run(() => Sut.Subscribe(entry), testContextAccessor.Current.CancellationToken);
-        joining.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
+        joining.Wait(testContextAccessor.Current.CancellationToken);
         // A read issued before the subscriber joined may answer after it; the loss comes to a read issued after.
         await ReadsAfterAsync(() => Volatile.Read(ref reads));
         Volatile.Write(ref lose, true);
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline && !_subject.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IEventSubject<ICacheEvent>.Invalidate)))
-        {
-            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
-        }
+        await PollAsync();
+        await _invalidated.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
 
         release.Set();
         (await subscribing).Dispose();
@@ -855,7 +829,11 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
     public ValueTask InitializeAsync()
     {
+        _fixture.Inject<TimeProvider>(_clock);
+        _fixture.Customize<RedisStreamsTopic<ICacheEvent>>(c => c.FromFactory(new AutoFixture.Kernel.MethodInvoker(new AutoFixture.Kernel.GreedyConstructorQuery())));
         _database = _fixture.Freeze<IDatabase>();
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .Returns(_ => NotifyPublish(() => Task.FromResult(1L)));
 
         // Reads go apart from the gap check, so these tests drive them through StreamReadGroupAsync.
         _database.Configure().ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
@@ -868,6 +846,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _redis.Database.Returns(_database);
         _redis.GetPrimaries().Returns([]);
         _subject = _fixture.Freeze<IEventSubject<ICacheEvent>>();
+        _subject.When(x => x.Invalidate(Arg.Any<MissedEventsReason>())).Do(_ => _invalidated.TrySetResult());
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
         _connectionState = _fixture.Freeze<IConnectionState>();
         _connectionState.IsConnected.Returns(info => _isConnected);
@@ -880,6 +859,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _fixture.Inject(_cancellationTokenSource.Token);
         _redisStreamsTopicOptions = _fixture.Create<RedisStreamsTopicOptions>();
         _redisStreamsTopicOptions.NotifiedPollInterval = null;
+        _redisStreamsTopicOptions.PollInterval = TimeSpan.FromHours(1);
+        _redisStreamsTopicOptions.NotifyMinInterval = null;
         _fixture.Inject(_redisStreamsTopicOptions);
         _redisCacheOptions = _fixture.Create<RedisCacheOptions>();
         _fixture.Inject(_redisCacheOptions);
@@ -1017,7 +998,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>()).Returns(scripted.Task);
         var calls = 0;
         _database.PublishAsync(default, default, default)
-            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) == 1 ? Task.FromException<long>(new RedisException("down")) : Task.FromResult(1L));
+            .ReturnsForAnyArgs(_ => NotifyPublish(() => Interlocked.Increment(ref calls) == 1 ? Task.FromException<long>(new RedisException("down")) : Task.FromResult(1L)));
         var token = testContextAccessor.Current.CancellationToken;
 
         var first = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
@@ -1120,16 +1101,33 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
             : [RedisResult.Create((RedisValue)id), rungFlag, RedisResult.Create((RedisValue)error)]);
     }
 
-    /// <summary>Waits for the expected number of doorbells rather than a fixed time, then a little longer to show no further one follows.</summary>
-    private static async Task DoorbellCallsSettledAsync(Func<int> calls, int expected, CancellationToken token)
+    private Task<long> NotifyPublish(Func<Task<long>> publish)
     {
-        var started = Stopwatch.GetTimestamp();
-        while (calls() < expected && Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(30))
+        try
         {
-            await Task.Delay(10, token);
+            return publish();
         }
+        finally
+        {
+            _published.Writer.TryWrite(true);
+        }
+    }
 
-        await Task.Delay(700, token);
+    private async Task DoorbellCallsSettledAsync(Func<int> calls, int expected, CancellationToken token, bool settle = true)
+    {
+        for (; _doorbellsObserved < expected; _doorbellsObserved++)
+        {
+            if (calls() <= _doorbellsObserved && Sut.DoorbellSpacing > TimeSpan.Zero)
+            {
+                await _clock.WhenTimerAsync(() => _clock.HasTimerDueIn(Sut.DoorbellSpacing));
+                _clock.Advance(Sut.DoorbellSpacing);
+            }
+            await _published.Reader.ReadAsync(token);
+        }
+        if (settle)
+        {
+            _clock.Advance(TimeSpan.FromMilliseconds(700));
+        }
     }
 
     private int Doorbells() => _database.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IDatabase.PublishAsync));
@@ -1155,11 +1153,16 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     private async Task ReadsAfterAsync(Func<int> reads)
     {
         var seen = reads();
-        var until = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < until && reads() <= seen)
-        {
-            await Task.Delay(5, testContextAccessor.Current.CancellationToken);
-        }
+        await PollAsync();
+        await _clock.WhenTimerAsync(() => reads() > seen);
+    }
+
+    private async Task PollAsync()
+    {
+        await _clock.WhenTimerAsync(() => _clock.HasTimers);
+        var timers = _clock.TimersCreated;
+        _clock.Advance(StreamConstants.MaxErrorBackoff);
+        await _clock.WaitForTimersAsync(timers + 1);
     }
 
     private void ArrangeRingInAdd()

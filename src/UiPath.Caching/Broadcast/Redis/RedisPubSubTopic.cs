@@ -32,6 +32,23 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
         RedisPubSubTopicOptions options,
         ILogger<RedisPubSubTopic<T>> logger,
         CancellationToken stopToken)
+        : this(topicKey, sourceUri, connectionState, redis, redisChannelStrategy, subjectFactory, formatter, resiliencePipelineProvider, options, logger, stopToken, TimeProvider.System)
+    {
+    }
+
+    public RedisPubSubTopic(
+        TopicKey topicKey,
+        Uri sourceUri,
+        IConnectionState connectionState,
+        IRedisConnector redis,
+        IRedisChannelStrategy redisChannelStrategy,
+        Func<IEventSubject<T>> subjectFactory,
+        IEventFormatterProxy<T> formatter,
+        IResiliencePipelineProvider resiliencePipelineProvider,
+        RedisPubSubTopicOptions options,
+        ILogger<RedisPubSubTopic<T>> logger,
+        CancellationToken stopToken,
+        TimeProvider clock)
     {
         TopicKey = topicKey;
         _connectionState = connectionState;
@@ -45,7 +62,7 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
         _subject = subjectFactory();
         var dropped = new DroppedEvents(topicKey, () => _subject.Invalidate(MissedEventsReason.Lost), _logger);
         var channel = ChannelHelper.Create<T>(options.ConsumerCapacity < 1, options.ConsumerCapacity, options.FullMode, _ => dropped.Dropped());
-        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, _redis, channel, _formatter, options, _logger, () => _subject.Invalidate(MissedEventsReason.SubscriptionGap), dropped.Dropped);
+        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, _redis, channel, _formatter, options, _logger, () => _subject.Invalidate(MissedEventsReason.SubscriptionGap), dropped.Dropped, clock);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 

@@ -12,10 +12,12 @@ namespace UiPath.Caching.Tests.Broadcast;
 public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture) : IAsyncLifetime
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(20);
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
     private readonly RedisKey _stream = $"it:gap:{Guid.NewGuid():N}";
     private readonly RedisValue _group = "node";
     private readonly IConnectionState _state = Substitute.For<IConnectionState>();
     private readonly CancellationTokenSource _stop = new();
+    private ObservedFetchWaiter? _waiter;
     private RedisConnector? _connector;
     private RedisStreamSubjectWriter<ICacheEvent>? _sut;
     private int _missed;
@@ -36,7 +38,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         await Db.StreamTrimAsync(_stream, maxLength: 2);
         Reconnect();
 
-        (await EventuallyAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue();
+        (await AfterReadAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue();
     }
 
     [Fact]
@@ -51,7 +53,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
             "for i = 1, 5 do redis.call('XADD', KEYS[1], '*', 'f', 'v') end redis.call('XTRIM', KEYS[1], 'MAXLEN', 2)",
             [_stream]);
 
-        (await EventuallyAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue("the connection never dropped, so only a checked read can see it");
+        (await AfterReadAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue("the connection never dropped, so only a checked read can see it");
     }
 
     [Fact]
@@ -65,12 +67,12 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         await Db.ScriptEvaluateAsync(
             "for i = 1, 5 do redis.call('XADD', KEYS[1], '*', 'f', 'v') end redis.call('XTRIM', KEYS[1], 'MAXLEN', 0)",
             [_stream]);
-        (await EventuallyAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue();
-        await Task.Delay(PollInterval * 15, TestContext.Current.CancellationToken);
+        (await AfterReadAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue();
+        await PollAsync(15);
         Volatile.Read(ref _missed).Should().Be(1, "an empty read leaves the group where it was, so later checks find the same gap");
 
         var next = await AddAsync(1);
-        (await EventuallyAsync(async () => await LastDeliveredAsync() == next)).Should().BeTrue();
+        (await AfterReadAsync(async () => await LastDeliveredAsync() == next)).Should().BeTrue();
         Volatile.Read(ref _missed).Should().Be(1, "the entry added after the trim was not lost");
     }
 
@@ -83,10 +85,10 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         StartWriter();
 
         // Reads that find nothing put the group in use before it has read an entry.
-        await Task.Delay(PollInterval * 5, TestContext.Current.CancellationToken);
+        await PollAsync(5);
         var first = await AddAsync(1);
 
-        (await EventuallyAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
+        (await AfterReadAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
         Volatile.Read(ref _missed).Should().Be(0, "a group that has not read yet counts nothing read, which no trim explains");
     }
 
@@ -100,13 +102,13 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         await Db.StreamDeleteConsumerGroupAsync(_stream, _group);
         await AddAsync(5);
         await Db.StreamTrimAsync(_stream, maxLength: 0);
-        await ConsumerGroups.CreateAsync(Db, _stream, _group, StreamPosition.NewMessages, await ConsumerGroups.HeadAsync(Db, _stream));
+        await ConsumerGroups.CreateAsync(Db, _stream, _group, StreamPosition.NewMessages, await ConsumerGroups.HeadAsync(Db, _stream, _clock));
         var first = await AddAsync(1);
 
         StartSubscribedOffline();
         Reconnect();
 
-        (await EventuallyAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
+        (await AfterReadAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
         Volatile.Read(ref _missed).Should().Be(0, "the entries trimmed before the group existed were never its to read");
     }
 
@@ -122,10 +124,10 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
 
         // The node makes the group itself, so it knows the count it made it with even where the server does not report it.
         StartWriter();
-        (await EventuallyAsync(async () => Array.Exists(await Db.StreamGroupInfoAsync(_stream), g => g.Name == _group))).Should().BeTrue();
+        (await AfterReadAsync(async () => Array.Exists(await Db.StreamGroupInfoAsync(_stream), g => g.Name == _group))).Should().BeTrue();
         var first = await AddAsync(1);
 
-        (await EventuallyAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
+        (await AfterReadAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
         Volatile.Read(ref _missed).Should().Be(0, "the entries trimmed before the group existed were never its to read");
     }
 
@@ -140,7 +142,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
             [_stream]);
         Reconnect();
 
-        (await EventuallyAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue("no poll ran before the trim, so only the count the group was created with shows it");
+        (await AfterReadAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue("no poll ran before the trim, so only the count the group was created with shows it");
     }
 
     [Fact]
@@ -166,7 +168,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         var last = await AddAsync(5);
         Reconnect();
 
-        (await EventuallyAsync(async () => await LastDeliveredAsync() == last)).Should().BeTrue("the stream still held them");
+        (await AfterReadAsync(async () => await LastDeliveredAsync() == last)).Should().BeTrue("the stream still held them");
         Volatile.Read(ref _missed).Should().Be(0);
     }
 
@@ -178,14 +180,14 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         Assert.SkipWhen(fixture.ServerVersion.Major < 7, "Counts entries with ENTRIESREAD and max-deleted-entry-id, which Redis 7.0 added.");
         await StartReadingAsync();
         var last = await AddAsync(3);
-        (await EventuallyAsync(async () => await LastDeliveredAsync() == last)).Should().BeTrue();
+        (await AfterReadAsync(async () => await LastDeliveredAsync() == last)).Should().BeTrue();
 
         await GoOfflineAsync();
         await Db.StreamTrimAsync(_stream, maxLength: 0);
         var next = await AddAsync(1);
         Reconnect();
 
-        (await EventuallyAsync(async () => await LastDeliveredAsync() == next)).Should().BeTrue();
+        (await AfterReadAsync(async () => await LastDeliveredAsync() == next)).Should().BeTrue();
         Volatile.Read(ref _missed).Should().Be(0, "the entry added after the trim is the only one not yet read");
     }
 
@@ -198,8 +200,8 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
 
         await Db.KeyDeleteAsync(_stream);
 
-        (await EventuallyAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue();
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        (await AfterReadAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue();
+        await PollAsync(15);
         Volatile.Read(ref _missed).Should().Be(1, "the recreated group is read again before another loss counts");
     }
 
@@ -212,8 +214,8 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
 
         await Db.StreamDeleteConsumerGroupAsync(_stream, _group);
 
-        (await EventuallyAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue("the script's read fails with NOGROUP while the stream remains");
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        (await AfterReadAsync(() => Volatile.Read(ref _missed) == 1)).Should().BeTrue("the script's read fails with NOGROUP while the stream remains");
+        await PollAsync(15);
         Volatile.Read(ref _missed).Should().Be(1);
     }
 
@@ -223,7 +225,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10], SourceUri = new Uri("urn:node") };
-        var options = new RedisStreamsTopicOptions { Enabled = true, PollInterval = PollInterval };
+        var options = new RedisStreamsTopicOptions { Enabled = true, PollInterval = PollInterval, NotifyEnabled = false };
         var stream = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("orders");
         using var topic = new RedisStreamsTopic<ICacheEvent>(
             "orders",
@@ -237,17 +239,20 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
             NullLogger<RedisStreamsTopic<ICacheEvent>>.Instance,
             NullTelemetryProvider.Instance,
             NullRedisProfiler.Instance,
-            _stop.Token);
+            _stop.Token,
+            clock: _clock);
         var entry = new KeptEntry();
         using var subscription = topic.Subscribe(entry);
+        await BroadcastNodeSignals.ReadyAsync(topic, _clock);
 
         try
         {
             var id = await Db.StreamAddAsync(stream, options.FieldName, "v");
-            (await EventuallyAsync(async () => Array.Find(await Db.StreamGroupInfoAsync(stream), g => g.Name == "urn:node").LastDeliveredId == id)).Should().BeTrue();
+            (await AfterReadAsync(async () => Array.Find(await Db.StreamGroupInfoAsync(stream), g => g.Name == "urn:node").LastDeliveredId == id)).Should().BeTrue();
             await Db.KeyDeleteAsync(stream);
 
-            (await Task.WhenAny(entry.Expired.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken))).Should().BeSameAs(entry.Expired.Task);
+            await PollAsync();
+            await entry.Expired.Task.WaitAsync(TestContext.Current.CancellationToken);
         }
         finally
         {
@@ -264,12 +269,12 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         await Db.StreamDeleteConsumerGroupAsync(_stream, _group);
         StartWriter();
         _sut!.MarkSubscribed();
-        (await EventuallyAsync(async () => (await Db.StreamGroupInfoAsync(_stream)).Any(g => g.Name == _group))).Should().BeTrue("the writer makes the group on the empty stream");
+        (await AfterReadAsync(async () => (await Db.StreamGroupInfoAsync(_stream)).Any(g => g.Name == _group))).Should().BeTrue("the writer makes the group on the empty stream");
         _state.OnConnectionRestored += Raise.Event<EventHandler>(_state, EventArgs.Empty);
         var first = await AddAsync(1);
 
-        (await EventuallyAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
-        await Task.Delay(PollInterval * 5, TestContext.Current.CancellationToken);
+        (await AfterReadAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
+        await PollAsync(5);
         Volatile.Read(ref _missed).Should().Be(0);
     }
 
@@ -287,7 +292,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
             new ConnectionMultiplexerFactory(options, NullRedisProfiler.Instance),
             options);
         await _connector.ConnectAsync(TestContext.Current.CancellationToken);
-        await ConsumerGroups.CreateAsync(Db, _stream, _group, StreamPosition.NewMessages, await ConsumerGroups.HeadAsync(Db, _stream));
+        await ConsumerGroups.CreateAsync(Db, _stream, _group, StreamPosition.NewMessages, await ConsumerGroups.HeadAsync(Db, _stream, _clock));
         _state.IsConnected.Returns(_ =>
         {
             if (_connected)
@@ -313,22 +318,29 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         _stop.Dispose();
     }
 
-    private static Task<bool> EventuallyAsync(Func<bool> condition) => EventuallyAsync(() => Task.FromResult(condition()));
+    private Task<bool> AfterReadAsync(Func<bool> condition) => AfterReadAsync(() => Task.FromResult(condition()));
 
-    private static async Task<bool> EventuallyAsync(Func<Task<bool>> condition)
+    private async Task<bool> AfterReadAsync(Func<Task<bool>> condition)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline)
+        await PollAsync();
+        return await condition();
+    }
+
+    private async Task PollAsync(int count = 1)
+    {
+        for (var poll = 0; poll < count; poll++)
         {
-            if (await condition())
+            _clock.Advance(PollInterval);
+            if (_waiter is not null)
             {
-                return true;
+                await _waiter.ReadAsync();
             }
-
-            await Task.Delay(20, TestContext.Current.CancellationToken);
+            else
+            {
+                var timers = _clock.TimersCreated;
+                await _clock.WaitForTimersAsync(timers + 1);
+            }
         }
-
-        return false;
     }
 
     // Added before the writer starts: an empty first read would put the group in use at 0-0, where a server below 7.0 takes the entry for a trim.
@@ -336,7 +348,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     {
         var first = await AddAsync(1);
         StartWriter();
-        (await EventuallyAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue("the group is in use once it has read");
+        (await AfterReadAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue("the group is in use once it has read");
     }
 
     // Subscribed before the writer could read, as a topic does, so its first read is checked.
@@ -350,6 +362,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     private void StartWriter()
     {
         var context = new RedisStreamContext(_stream, "f", _group, _group, new Uri("urn:node"), 100, PollInterval, false, false);
+        _waiter = new ObservedFetchWaiter(PollInterval, _clock);
         _sut = new RedisStreamSubjectWriter<ICacheEvent>(
             context,
             _state,
@@ -359,9 +372,10 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
             NullLogger.Instance,
             NullTelemetryProvider.Instance,
             NullRedisProfiler.Instance,
-            new SignalingFetchWaiter(PollInterval),
+            _waiter,
             () => Interlocked.Increment(ref _missed),
-            _stop.Token);
+            _stop.Token,
+            clock: _clock);
     }
 
     private async Task<RedisValue> AddAsync(int count)
@@ -386,7 +400,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
     {
         var seen = Volatile.Read(ref _offlineChecks);
         _connected = false;
-        (await EventuallyAsync(() => Volatile.Read(ref _offlineChecks) > seen)).Should().BeTrue("the reader parks before the outage's entries are added");
+        (await AfterReadAsync(() => Volatile.Read(ref _offlineChecks) > seen)).Should().BeTrue("the reader parks before the outage's entries are added");
     }
 
     private void Reconnect()

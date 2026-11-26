@@ -1,5 +1,6 @@
-using System.Diagnostics;
 using System.Net;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
@@ -25,11 +26,14 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     private readonly List<RedisKey> _extraKeys = [];
     // The commands of the nodes' own connection, whatever else runs against the server.
     private readonly ProfilingSession _profile = new();
+    private readonly Dictionary<RedisStreamsTopic<ICacheEvent>, TopicRun> _runs = [];
     private RedisConnector? _connector;
     private ConnectionMultiplexer? _admin;
     private RedisKey _stream;
     private RedisChannel _channel;
     private string? _aclUser;
+    private DateTimeOffset _now;
+
 
     [Fact]
     public async Task A_disposed_connector_ends_the_doorbell_subscribe_retries()
@@ -39,10 +43,11 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var connector = await ConnectAsync(fixture.ConnectionString);
         var logger = new RecordingLogger();
         // Due after the connector is gone, as for a host disposed right after it starts.
-        Topic("urn:a", FarPoll, connector: connector, logger: logger, configure: o => { o.NotifySubscriberDueTime = TimeSpan.FromMilliseconds(200); o.NotifySubscriberTimeout = TimeSpan.FromMilliseconds(100); });
+        var (topic, _) = Topic("urn:a", FarPoll, connector: connector, logger: logger, configure: o => { o.NotifySubscriberDueTime = TimeSpan.FromMilliseconds(200); o.NotifySubscriberTimeout = TimeSpan.FromMilliseconds(100); });
         connector.Dispose();
 
-        await Task.Delay(700, TestContext.Current.CancellationToken);
+        await SubscribeAsync(topic);
+        _runs[topic].Clock.Advance(TimeSpan.FromMilliseconds(500));
 
         logger.Records.Count(r => r.Message.Contains("subscribe error", StringComparison.OrdinalIgnoreCase)).Should().BeLessThanOrEqualTo(1, "the retries stop once the connector is gone, rather than one per period");
     }
@@ -58,13 +63,15 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         await SettledAsync();
         // The server counts a subscription a little before the node treats it as live, and going live wakes a read; the count
         // below starts only once both nodes are live and the reads that woke have ended.
-        (await EventuallyAsync(() => Task.FromResult(a.NotifyLive && b.NotifyLive))).Should().BeTrue("both doorbell subscriptions go live");
-        (await EventuallyAsync(QuietAsync)).Should().BeTrue("the reads woken by going live end");
+        await ReadyAsync();
+        (a.NotifyLive && b.NotifyLive).Should().BeTrue("both doorbell subscriptions go live");
+        await QuietAsync();
 
+        var read = _runs[b].Reader.NextIdleAsync();
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the poll is far away, so only the doorbell delivers in time");
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await read;
         // StackExchange.Redis records a script call as EVAL, whichever of EVALSHA and EVAL it sent.
         // Before Redis 7.0 the script is not used: the read checks for a gap with an XINFO STREAM sent with the XREADGROUP, against the
         // position it knows; the XINFO GROUPS that asks the server for it ran on the read that went live, within the poll interval.
@@ -90,14 +97,13 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         // Off, the doorbell is a PUBLISH of its own; on, it goes out in the script with the XADD.
         a.RingInAdd = ringInAdd;
         var (b, received) = Topic("urn:b", FarPoll, connector: connector);
-        (await EventuallyAsync(() => Task.FromResult(a.NotifyLive && b.NotifyLive))).Should().BeTrue("both doorbell subscriptions go live");
-        (await EventuallyAsync(QuietAsync)).Should().BeTrue("the reads woken by going live end");
+        await ReadyAsync();
+        (a.NotifyLive && b.NotifyLive).Should().BeTrue("both doorbell subscriptions go live");
+        await QuietAsync();
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(
-            received.Next.Task,
-            "the subscriber does not carry the key prefix, so a doorbell published with it rings a channel nobody listens on, and the poll is far away");
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -107,30 +113,28 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         Assert.SkipWhen(_connector!.GetPrimaries().Any(p => p.ServerType != ServerType.Standalone), "on a cluster or behind a proxy the doorbell waits for the XADD reply");
         var writes = new HandedBackWrites();
-        var (a, _) = Topic("urn:a", FarPoll, pipelines: writes);
+        var (a, _) = Topic("urn:a", FarPoll, pipelines: writes, connector: new KeyPrefixingConnector(_connector!, null, writes));
         // The doorbell as a command of its own, as a sharded or custom channel sends it.
         a.RingInAdd = false;
         var (b, received) = Topic("urn:b", FarPoll);
         await SettledAsync();
-        (await EventuallyAsync(() => Task.FromResult(a.NotifyLive && b.NotifyLive))).Should().BeTrue("both doorbell subscriptions go live");
-        (await EventuallyAsync(QuietAsync)).Should().BeTrue("the reads woken by going live end");
+        await ReadyAsync();
+        (a.NotifyLive && b.NotifyLive).Should().BeTrue("both doorbell subscriptions go live");
+        await QuietAsync();
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the poll is far away, so only the doorbell delivers in time");
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
         (await received.Next.Task).Id.Should().Be("1", "the woken node's read finds the entry the doorbell announced");
-        var commands = new List<IProfiledCommand>();
-        (await EventuallyAsync(() =>
-        {
-            commands.AddRange(_profile.FinishProfiling());
-            return Task.FromResult(commands.Exists(c => c.Command == "XADD") && commands.Exists(c => c.Command == "PUBLISH"));
-        })).Should().BeTrue("both the add and the doorbell complete");
+        await writes.Published!;
+        var commands = _profile.FinishProfiling().ToList();
+        commands.Should().Contain(c => c.Command == "XADD").And.Contain(c => c.Command == "PUBLISH");
         var add = commands.Single(c => c.Command == "XADD");
         var doorbell = commands.Single(c => c.Command == "PUBLISH");
         doorbell.EndPoint.Should().Be(add.EndPoint, "the doorbell goes to the primary that took the XADD");
         // Ordered against the write handing back the XADD's pending reply, not against the reply's round trip: a first call's
         // JIT or a busy machine can delay the doorbell past a sub-millisecond reply, while ringing after the reply cannot come first.
-        doorbell.CommandCreated.Should().BeOnOrBefore(writes.HandedBack, "the doorbell is enqueued behind the XADD before the publisher awaits its reply");
+        writes.BeforeHandback.Should().BeTrue( "the doorbell is enqueued behind the XADD before the publisher awaits its reply");
     }
 
     [Fact]
@@ -149,17 +153,19 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         // the reader; a batch is published once the one before it was read, so what the trim removes is always read already.
         for (var batch = 0; batch < 10; batch++)
         {
+            var read = _runs[a].Reader.NextIdleAsync();
             for (var i = 0; i < 32; i++)
             {
                 (await a.PublishAsync(Event("urn:a", $"{batch}-{i}"), TestContext.Current.CancellationToken)).Should().BeTrue();
             }
 
-            (await EventuallyAsync(() => CaughtUpAsync("urn:a"))).Should().BeTrue("every 32 own publishes wake a read (batch {0})", batch);
+            await read;
+            (await CaughtUpAsync("urn:a")).Should().BeTrue("every 32 own publishes wake a read (batch {0})", batch);
         }
 
         (await b.PublishAsync(Event("urn:b", "x"), TestContext.Current.CancellationToken)).Should().BeTrue("its ring makes node a check the stream against its position");
-        (await Task.WhenAny(receivedA.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(receivedA.Next.Task);
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await receivedA.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await ReadyAsync();
         receivedA.Missed.Task.IsCompleted.Should().BeFalse("no entry was trimmed unread: {0}", string.Join(" | ", log.Records.Select(r => $"{r.Level}: {r.Message}")));
     }
 
@@ -168,14 +174,11 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
-        var (b, _) = Topic("urn:b", FarPoll);
         for (var i = 0; i < 5; i++)
         {
-            (await b.PublishAsync(Event("urn:b", $"old-{i}"), TestContext.Current.CancellationToken)).Should().BeTrue();
+            await _connector!.Database.StreamAddAsync(_stream, "event", new TestCacheEventFormatterProxy().Encode(Event("urn:b", $"old-{i}")), $"1-{i}");
         }
 
-        // Well before the join, so a stall up to here cannot bring the old entries inside the window.
-        await Task.Delay(2000, TestContext.Current.CancellationToken);
         var (_, received) = Topic("urn:fresh", FarPoll);
         await SettledAsync();
 
@@ -187,10 +190,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
-        var (b, _) = Topic("urn:b", FarPoll);
-        (await b.PublishAsync(Event("urn:b", "old"), TestContext.Current.CancellationToken)).Should().BeTrue();
-        // Well before the join, so a stall up to the head read cannot bring the other node's entry inside the window.
-        await Task.Delay(2000, TestContext.Current.CancellationToken);
+        await _connector!.Database.StreamAddAsync(_stream, "event", new TestCacheEventFormatterProxy().Encode(Event("urn:b", "old")), "1-0");
 
         // Published straight after the subscribe, so they race the group the reader makes.
         var (a, received) = Topic("urn:fresh", FarPoll);
@@ -237,10 +237,11 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var (a, _) = Topic("urn:a", FarPoll, connector: limited, logger: log, configure: o => o.NotifyShardedPubSub = true);
         var (b, received) = Topic("urn:b", FarPoll, connector: limited, logger: log, configure: o => o.NotifyShardedPubSub = true);
 
-        (await EventuallyAsync(() => Task.FromResult(a.NotifyLive && b.NotifyLive))).Should().BeTrue("both subscriptions go live on the literal channel after the refusal");
+        await ReadyAsync();
+        (a.NotifyLive && b.NotifyLive).Should().BeTrue("both subscriptions go live on the literal channel after the refusal");
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the doorbell woke the peer without waiting for the poll");
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
         log.Records.Count(r => r.Level == LogLevel.Warning && r.Message.Contains("Sharded Pub/Sub was refused", StringComparison.Ordinal)).Should().Be(1, "one warning per connector");
     }
 
@@ -257,13 +258,15 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var denied = await ConnectAsync($"{fixture.ConnectionString},user={user},password=pw");
         var log = new RecordingLogger();
         var (a, _) = Topic("urn:a", TimeSpan.FromMilliseconds(250));
-        var (_, received) = Topic("urn:b", TimeSpan.FromMilliseconds(250), connector: denied, logger: log);
+        var (b, received) = Topic("urn:b", TimeSpan.FromMilliseconds(250), connector: denied, logger: log);
 
-        (await EventuallyAsync(() => Task.FromResult(log.Records.Any(r => r.Message.Contains("polls only"))))).Should().BeTrue();
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        await ReadyAsync();
+        log.Records.Should().Contain(r => r.Message.Contains("polls only"));
+        await ReadyAsync();
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the poll still delivers");
+        await AdvanceAsync(b, Poll);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
         (await SubscribersAsync()).Should().Be(1, "only node a's connection subscribed");
         var records = string.Join(" | ", log.Records.Select(r => $"{r.Level}: {r.Message}"));
         log.Records.Should().ContainSingle(r => r.Message.Contains("polls only"), "the refusal is logged once: {0}", records);
@@ -281,16 +284,20 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         Assert.SkipUnless(fixture.SupportsClientKillByType, "Needs CLIENT KILL TYPE pubsub, which this server does not support.");
         Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var (a, _) = Topic("urn:a", FarPoll);
-        var (_, received) = Topic("urn:b", FarPoll);
+        var (b, received) = Topic("urn:b", FarPoll);
         await SettledAsync();
 
         // What a restart or failover looks like from the client: the subscription connection is gone.
+        var restored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _connector!.OnConnectionRestored += (_, _) => restored.TrySetResult();
         await _admin!.GetServer(_admin.GetEndPoints()[0]).ExecuteAsync("CLIENT", "KILL", "TYPE", "pubsub");
-        (await EventuallyAsync(async () => await SubscribersAsync() == 1, TimeSpan.FromSeconds(20))).Should().BeTrue("the subscription is taken again");
+        await restored.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await ReadyAsync();
+        (await SubscribersAsync()).Should().Be(1, "the subscription is taken again");
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -304,18 +311,20 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var (topicB, received) = Topic("urn:b", Poll, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(5));
         await SettledAsync();
         // The waiter is read for the mechanism itself: a primer that merely took long could be a stalled machine, not a live doorbell.
-        (await EventuallyAsync(() => Task.FromResult(topicB.NotifyLive))).Should().BeTrue("the subscription goes live a little after the server counts it");
+        topicB.NotifyLive.Should().BeTrue("the subscription goes live a little after the server counts it");
         // A wait that began before it went live still ends at the 250 ms poll; once that primer is read and acknowledged, the next wait is the notified one.
         (await a.PublishAsync(Event("urn:a", "primer"), TestContext.Current.CancellationToken)).Should().BeTrue();
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "a poll always catches the primer");
+        await AdvanceAsync(topicB, TimeSpan.FromSeconds(5));
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
         received.Next = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        (await EventuallyAsync(() => CaughtUpAsync("urn:b"))).Should().BeTrue("the primer is read and acknowledged before the wait that follows it begins");
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        (await CaughtUpAsync("urn:b")).Should().BeTrue("the primer is read and acknowledged before the wait that follows it begins");
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromMilliseconds(600), TestContext.Current.CancellationToken))).Should().NotBeSameAs(received.Next.Task, "the 250 ms poll is not the one in force while the doorbell is live");
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the notified poll still catches it");
+        _runs[topicB].Clock.Advance(TimeSpan.FromMilliseconds(600));
+        received.Next.Task.IsCompleted.Should().BeFalse("the 250 ms poll is not the one in force while the doorbell is live");
+        await AdvanceAsync(topicB, TimeSpan.FromMilliseconds(4400));
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -329,15 +338,15 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var telemetry = Substitute.For<ICachingTelemetryProvider>();
         var (topicB, received) = Topic("urn:b", Poll, logger: log, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(3), telemetry: telemetry);
         await SettledAsync();
-        (await EventuallyAsync(() => Task.FromResult(topicB.NotifyLive))).Should().BeTrue("the subscription goes live a little after the server counts it");
+        topicB.NotifyLive.Should().BeTrue("the subscription goes live a little after the server counts it");
         // Each of these lands in a wait that began live and runs its whole 3 s, since nothing rings for it.
         foreach (var id in new[] { "primer", "1", "2" })
         {
             (await a.PublishAsync(Event("urn:a", id), TestContext.Current.CancellationToken)).Should().BeTrue();
-            (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "a poll always catches it");
+            await AdvanceAsync(topicB, TimeSpan.FromSeconds(3));
+            await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
             received.Next = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            (await EventuallyAsync(() => CaughtUpAsync("urn:b"))).Should().BeTrue("the entry is read and acknowledged before the wait that follows it begins");
-            await Task.Delay(300, TestContext.Current.CancellationToken);
+            (await CaughtUpAsync("urn:b")).Should().BeTrue("the entry is read and acknowledged before the wait that follows it begins");
         }
 
         log.Records.Should().Contain(r => r.Level == LogLevel.Warning && r.Message.Contains("with no doorbell"), "two entries in a row came unannounced");
@@ -346,7 +355,8 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
 
         (await a.PublishAsync(Event("urn:a", "3"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromMilliseconds(1500), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the 250 ms poll is back in force, well inside the 3 s notified interval");
+        await AdvanceAsync(topicB, Poll);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -357,12 +367,14 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         // No node wakes for its own doorbell, so its own entries are always read on a wait that ran its whole interval.
         var log = new RecordingLogger();
         var (a, _) = Topic("urn:a", Poll, logger: log, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(1));
-        (await EventuallyAsync(() => Task.FromResult(a.NotifyLive))).Should().BeTrue("the subscription goes live");
+        await ReadyAsync();
+        a.NotifyLive.Should().BeTrue("the subscription goes live");
 
         foreach (var id in new[] { "1", "2", "3" })
         {
             (await a.PublishAsync(Event("urn:a", id), TestContext.Current.CancellationToken)).Should().BeTrue();
-            (await EventuallyAsync(() => CaughtUpAsync("urn:a"))).Should().BeTrue("the node reads and acknowledges its own entry on the next poll");
+            await AdvanceAsync(a, TimeSpan.FromSeconds(1));
+            (await CaughtUpAsync("urn:a")).Should().BeTrue("the node reads and acknowledges its own entry on the next poll");
         }
 
         a.DoorbellShortened.Should().BeFalse("only entries of other nodes can show a doorbell missing");
@@ -375,12 +387,13 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var (a, _) = Topic("urn:a", Poll);
-        var (_, received) = Topic("urn:b", Poll, configure: o => { o.NotifyEnabled = false; o.NotifiedPollInterval = FarPoll; });
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        var (b, received) = Topic("urn:b", Poll, configure: o => { o.NotifyEnabled = false; o.NotifiedPollInterval = FarPoll; });
+        await ReadyAsync();
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "no doorbell is listened to, so only the poll interval can deliver");
+        await AdvanceAsync(b, Poll);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -395,12 +408,14 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var denied = await ConnectAsync($"{fixture.ConnectionString},user={user},password=pw");
         var log = new RecordingLogger();
         var (a, _) = Topic("urn:a", Poll);
-        var (_, received) = Topic("urn:b", Poll, connector: denied, logger: log, configure: o => o.NotifiedPollInterval = FarPoll);
-        (await EventuallyAsync(() => Task.FromResult(log.Records.Any(r => r.Message.Contains("polls only"))))).Should().BeTrue();
+        var (b, received) = Topic("urn:b", Poll, connector: denied, logger: log, configure: o => o.NotifiedPollInterval = FarPoll);
+        await ReadyAsync();
+        log.Records.Should().Contain(r => r.Message.Contains("polls only"));
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "a topic that cannot subscribe never gets the long interval");
+        await AdvanceAsync(b, Poll);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -412,26 +427,28 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 to run.");
         Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
-        var (_, received) = Topic("urn:b", Poll, configure: o => o.AutoAck = autoAck);
+        var (b, received) = Topic("urn:b", Poll, configure: o => o.AutoAck = autoAck);
         await SettledAsync();
         var db = _connector!.Database;
         var formatter = new TestCacheEventFormatterProxy();
         // Redis can generate the same id again when DEL and both XADDs fall in one millisecond.
         // Explicit ids make that interleaving deterministic without depending on the machine's speed.
         await db.StreamAddAsync(_stream, "event", formatter.Encode(Event("urn:a", "before")), oldId);
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task);
-        (await EventuallyAsync(() => CaughtUpAsync("urn:b"))).Should().BeTrue();
+        await AdvanceAsync(b, FarPoll);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
+        (await CaughtUpAsync("urn:b")).Should().BeTrue();
         received.Next = new(TaskCreationOptions.RunContinuationsAsynchronously);
         await db.KeyDeleteAsync(_stream);
         await db.StreamAddAsync(_stream, "event", formatter.Encode(Event("urn:a", "after")), "1000-0");
-        await received.Missed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await AdvanceAsync(b, FarPoll);
+        await received.Missed.Task.WaitAsync(TestContext.Current.CancellationToken);
         if (publishAfterRecovery)
         {
             // Even writes made after the one-off loss notification are skipped until ids pass the old cursor.
             await db.StreamAddAsync(_stream, "event", formatter.Encode(Event("urn:a", "after-recovery")), "1000-1");
         }
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task,
-            "the recreated stream's entries must be delivered even when their ids do not exceed the old stream's last delivered id");
+        await AdvanceAsync(b, FarPoll);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -441,17 +458,22 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         Assert.SkipUnless(fixture.CountsSubscribersPerClient, "Counts the subscribers of a channel from PUBSUB NUMSUB, which this server does not answer with a client count.");
         Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
         var (a, _) = Topic("urn:a", TimeSpan.FromMilliseconds(250));
-        var (_, received) = Topic("urn:b", TimeSpan.FromMilliseconds(250));
+        var (b, received) = Topic("urn:b", TimeSpan.FromMilliseconds(250));
         await SettledAsync();
+        var firstRead = _runs[b].Reader.NextIdleAsync();
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await firstRead;
         received.Next = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        var recovery = _runs[b].Reader.NextIdleAsync();
         await _connector!.Database.KeyDeleteAsync(_stream);
         (await a.PublishAsync(Event("urn:a", "2"), TestContext.Current.CancellationToken)).Should().BeTrue("the add recreates the stream, without the groups");
 
-        (await Task.WhenAny(received.Missed.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Missed.Task, "a wake read that finds no group reports what the group held as lost");
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the group is recreated and the entry read at the next poll");
+        await received.Missed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await recovery;
+        await AdvanceAsync(b, FarPoll);
+        await received.Next.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     public async ValueTask InitializeAsync()
@@ -464,6 +486,8 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         _connector = await ConnectAsync(fixture.ConnectionString, _profile);
         _admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString + ",allowAdmin=true");
         _state.IsConnected.Returns(true);
+        var time = (RedisResult[])(await _connector.Database.ExecuteAsync("TIME"))!;
+        _now = DateTimeOffset.FromUnixTimeMilliseconds((long)time[0] * 1000 + (long)time[1] / 1000);
         var keys = new PrefixStrategy(RedisKeyspaces.Streams, _cacheOptions);
         _stream = keys.GetRedisKey("orders");
         _channel = new StreamSuffixChannelStrategy(keys, _cacheOptions, null).GetRedisChannel("orders");
@@ -497,22 +521,6 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
 
     private static TestCacheEvent Event(string source, string id) => new() { Id = id, Source = new Uri(source), Data = new("order:1") };
 
-    private static async Task<bool> EventuallyAsync(Func<Task<bool>> condition, TimeSpan? timeout = null)
-    {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20, TestContext.Current.CancellationToken);
-        }
-
-        return false;
-    }
-
     private async Task<RedisConnector> ConnectAsync(string connectionString, ProfilingSession? profile = null)
     {
         var options = Options.Create(new RedisConnectionOptions
@@ -537,6 +545,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = _cacheOptions.AppShortName, SourceUri = new Uri(source) };
         var options = new RedisStreamsTopicOptions { Enabled = true, PollInterval = pollInterval, MaxLength = maxLength, NotifySubscriberDueTime = TimeSpan.FromMilliseconds(10) };
         configure?.Invoke(options);
+        var clock = new ManualTimeProvider(_now);
         var topic = new RedisStreamsTopic<ICacheEvent>(
             "orders",
             _state,
@@ -549,36 +558,59 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
             logger ?? NullLogger<RedisStreamsTopic<ICacheEvent>>.Instance,
             telemetry ?? NullTelemetryProvider.Instance,
             NullRedisProfiler.Instance,
-            _stop.Token);
+            _stop.Token,
+            clock);
+        _runs.Add(topic, new(clock, ObservedFetchWaiter.Attach(topic), options.NotifySubscriberDueTime!.Value, options));
         var observer = new Received();
         _disposables.Add(topic.Subscribe(observer));
         _disposables.Add(topic);
         return (topic, observer);
     }
 
-    // Both nodes subscribed to the doorbell, and the reads their subscriptions trigger done.
+    private async Task SubscribeAsync(RedisStreamsTopic<ICacheEvent> topic)
+    {
+        var run = _runs[topic];
+        run.Clock.Advance(run.Due);
+        var notify = typeof(RedisStreamsTopic<ICacheEvent>).GetField("_notifyChannel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(topic);
+        if (notify is not null)
+        {
+            ((ManualResetEventSlim)notify.GetType().GetField("_subscribingDone", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(notify)!).Wait(TestContext.Current.CancellationToken);
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task ReadyAsync()
+    {
+        foreach (var topic in _runs.Keys)
+        {
+            await SubscribeAsync(topic);
+            await SubscribeAsync(topic);
+            await _runs[topic].Reader.ReadAsync();
+        }
+    }
+
     private async Task SettledAsync()
     {
         SkipOnCluster();
-        (await EventuallyAsync(async () => await SubscribersAsync() == 1)).Should().BeTrue("one multiplexer carries both nodes' subscriptions");
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await ReadyAsync();
+        (await SubscribersAsync()).Should().Be(1, "one multiplexer carries both nodes' subscriptions");
     }
 
-    /// <summary>No command went out on the profiled connection for two 300 ms windows in a row; what went out before is dropped.</summary>
-    /// <remarks>Two windows, so a read woken late by a stalled go-live signal shows in the second one rather than in the count.</remarks>
-    private async Task<bool> QuietAsync()
+    private async Task QuietAsync()
     {
-        _ = _profile.FinishProfiling().ToList();
-        for (var window = 0; window < 2; window++)
+        foreach (var run in _runs.Values)
         {
-            await Task.Delay(300, TestContext.Current.CancellationToken);
-            if (_profile.FinishProfiling().Any())
-            {
-                return false;
-            }
+            await run.Reader.ReadAsync();
         }
+        _ = _profile.FinishProfiling().ToList();
+    }
 
-        return true;
+    private async Task AdvanceAsync(RedisStreamsTopic<ICacheEvent> topic, TimeSpan elapsed)
+    {
+        var run = _runs[topic];
+        var idle = run.Reader.NextIdleAsync();
+        run.Clock.Advance(elapsed);
+        await idle;
     }
 
     /// <summary>The group has been delivered the newest entry and acknowledged everything.</summary>
@@ -599,8 +631,15 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     // A cluster keeps a subscription on one node and moves it with the topology, so a count of one is not the count of one connection.
     private void SkipOnCluster() => Assert.SkipWhen(fixture.IsCluster, "Counts the subscribers of one channel, and after a dropped connection StackExchange.Redis 3.4.31 can restore one subscription on two cluster nodes.");
 
+    public class OrderedCalls : DispatchProxy
+    {
+        internal Func<MethodInfo, object?[]?, object?> InvokeCall { get; set; } = null!;
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) => InvokeCall(targetMethod!, args);
+    }
+
     /// <summary>What an application's own connector may do: commands go through a <c>WithKeyPrefix</c> database, subscriptions through the plain subscriber.</summary>
-    private sealed class KeyPrefixingConnector(RedisConnector inner, string prefix) : IRedisConnector
+    private sealed class KeyPrefixingConnector(RedisConnector inner, string? prefix, HandedBackWrites? writes = null) : IRedisConnector
     {
         public event EventHandler? OnConnectionFailed
         {
@@ -624,7 +663,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
 
         public Version Version => inner.Version;
 
-        public IDatabase Database => inner.Database.WithKeyPrefix(prefix);
+        public IDatabase Database => writes is not null ? writes.Observe(inner.Database) : inner.Database.WithKeyPrefix(prefix!);
 
         public ISubscriber Subscriber => inner.Subscriber;
 
@@ -649,9 +688,43 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     /// <summary>Runs writes as the empty pipeline does, and records when the last one handed its pending result back to the caller.</summary>
     private sealed class HandedBackWrites : IResiliencePipelineProvider, IResiliencePipeline
     {
-        private long _handedBack;
+        private bool _inside;
 
-        public DateTime HandedBack => new(Interlocked.Read(ref _handedBack), DateTimeKind.Utc);
+        public bool BeforeHandback { get; private set; }
+        public Task? Published { get; private set; }
+
+        public T Observe<T>(T target) where T : class
+        {
+            var proxy = DispatchProxy.Create<T, OrderedCalls>();
+            ((OrderedCalls)(object)proxy).InvokeCall = (method, args) =>
+            {
+                if (method.Name == nameof(IDatabase.PublishAsync))
+                {
+                    BeforeHandback = _inside;
+                }
+                object? result;
+                try
+                {
+                    result = method.Invoke(target, args);
+                }
+                catch (TargetInvocationException error) when (error.InnerException is not null)
+                {
+                    ExceptionDispatchInfo.Capture(error.InnerException).Throw();
+                    throw;
+                }
+                if (method.Name == nameof(IDatabase.PublishAsync))
+                {
+                    Published = (Task)result!;
+                }
+                return result switch
+                {
+                    IConnectionMultiplexer mux => Observe(mux),
+                    IDatabase database => Observe(database),
+                    _ => result,
+                };
+            };
+            return proxy;
+        }
 
         public IResiliencePipeline Get(string? name) => name == ResiliencePipelineNames.Write ? this : EmptyResiliencePipeline.Instance;
 
@@ -660,9 +733,15 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
 
         public ValueTask<TResult> ExecuteAsync<TResult, TState>(Func<TState, CancellationToken, ValueTask<TResult>> callback, TState state, TResult defaultValue, CancellationToken cancellationToken = default)
         {
-            var pending = callback(state, cancellationToken);
-            Interlocked.Exchange(ref _handedBack, DateTime.UtcNow.Ticks);
-            return pending;
+            _inside = true;
+            try
+            {
+                return callback(state, cancellationToken);
+            }
+            finally
+            {
+                _inside = false;
+            }
         }
     }
 
@@ -702,4 +781,5 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
             public void Dispose() { }
         }
     }
+    private sealed record TopicRun(ManualTimeProvider Clock, ObservedFetchWaiter Reader, TimeSpan Due, RedisStreamsTopicOptions Options);
 }

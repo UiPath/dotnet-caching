@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 
 namespace UiPath.Caching.Broadcast.Redis;
@@ -51,8 +50,8 @@ internal static class ConsumerGroups
         return await database.StreamCreateConsumerGroupAsync(stream, group, position).ConfigureAwait(false);
     }
 
-    /// <summary>Whether an entry may have been added at or after <paramref name="since"/>, a <see cref="Stopwatch"/> timestamp; <c>true</c> when the head is unknown.</summary>
-    public static bool AddedSince(StreamHead? head, long since)
+    /// <summary>Whether an entry may have been added at or after <paramref name="since"/>, a clock timestamp; <c>true</c> when the head is unknown.</summary>
+    public static bool AddedSince(StreamHead? head, long since, TimeProvider? clock = null)
     {
         if (head is not { } h)
         {
@@ -64,24 +63,24 @@ internal static class ConsumerGroups
             return false;
         }
 
-        return h.LastMs is not { } last || last >= SinceMs(h, since);
+        return h.LastMs is not { } last || last >= SinceMs(h, since, clock);
     }
 
-    /// <summary><paramref name="since"/>, a <see cref="Stopwatch"/> timestamp, on the server's clock.</summary>
-    public static long SinceMs(StreamHead head, long since)
+    /// <summary><paramref name="since"/>, a clock timestamp, on the server's clock.</summary>
+    public static long SinceMs(StreamHead head, long since, TimeProvider? clock = null)
     {
         // Elapsed to the reply rather than the call, so the instant is placed early; 2 ms covers the truncated clocks.
-        var elapsed = (long)Math.Ceiling(Stopwatch.GetElapsedTime(since, head.RepliedAt).TotalMilliseconds);
+        var elapsed = (long)Math.Ceiling((clock ?? TimeProvider.System).GetElapsedTime(since, head.RepliedAt).TotalMilliseconds);
         return head.ServerMs - elapsed - 2;
     }
 
     /// <summary>The server's clock and the stream's head, or <c>null</c> when the server will not tell.</summary>
-    public static async Task<StreamHead?> HeadAsync(IDatabase database, RedisKey stream)
+    public static async Task<StreamHead?> HeadAsync(IDatabase database, RedisKey stream, TimeProvider? clock = null)
     {
         try
         {
             var reply = await database.ScriptEvaluateAsync(HeadScript, [stream]).ConfigureAwait(false);
-            var repliedAt = Stopwatch.GetTimestamp();
+            var repliedAt = (clock ?? TimeProvider.System).GetTimestamp();
             if (reply.Resp2Type != ResultType.Array || (RedisResult[]?)reply is not { Length: 6 } parts)
             {
                 return null;

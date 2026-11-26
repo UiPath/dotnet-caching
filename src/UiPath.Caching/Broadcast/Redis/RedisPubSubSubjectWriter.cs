@@ -16,7 +16,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     private readonly Action<RedisChannel, RedisValue> _handler;
     private readonly TimeSpan _timerPeriod;
     private readonly TimeSpan _timerDueTime;
-    private readonly Timer _subscribeTimer;
+    private readonly ITimer _subscribeTimer;
     private readonly Action _onSubscriptionGap;
     private readonly Action _onDropped;
     private readonly Lock _gate = new();
@@ -51,7 +51,8 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         RedisPubSubTopicOptions options,
         ILogger logger,
         Action onSubscriptionGap,
-        Action onDropped)
+        Action onDropped,
+        TimeProvider? clock = null)
     {
         _onSubscriptionGap = onSubscriptionGap;
         _onDropped = onDropped;
@@ -68,7 +69,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         _handler = (_, value) => OnMessage(value);
         _timerPeriod = options.SubscriberTimeout > TimeSpan.Zero ? options.SubscriberTimeout.Value : TimeSpan.FromMilliseconds(_redis.Subscriber.Multiplexer.TimeoutMilliseconds);
         _timerDueTime = options.SubscriberDueTime == null ? _timerPeriod.Multiply(0.5) : options.SubscriberDueTime.Value;
-        _subscribeTimer = new Timer(Subscribe, null, _timerDueTime, _timerPeriod);
+        _subscribeTimer = (clock ?? TimeProvider.System).CreateTimer(Subscribe, null, _timerDueTime, _timerPeriod);
     }
 
     /// <summary>Raised once a subscription is in place, after the server has confirmed it.</summary>
@@ -185,7 +186,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
                     return;
                 }
 
-                _subscribeTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                _subscribeTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 _activeGeneration = generation;
                 _activations++;
                 gap = _gap;

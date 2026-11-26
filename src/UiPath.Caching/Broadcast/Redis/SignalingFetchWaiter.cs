@@ -194,6 +194,10 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
                 return await _semaphore.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
             }
 
+            if (_semaphore.Wait(0, cancellationToken))
+            {
+                return true;
+            }
             return await WaitOnClockAsync(timeout, timeProvider, cancellationToken).ConfigureAwait(false);
         }
         catch (ObjectDisposedException)

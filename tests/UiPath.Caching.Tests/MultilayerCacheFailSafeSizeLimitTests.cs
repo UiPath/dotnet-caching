@@ -444,9 +444,12 @@ public class MultilayerCacheFailSafeSizeLimitTests
                         finally
                         {
                             Interlocked.Increment(ref owner._left);
+                            Broadcast.OperationSignals.Shared.Completed();
                         }
                     };
                 }
+
+                inner.RegisterPostEvictionCallback(static (_, _, _, _) => Broadcast.OperationSignals.Shared.Completed());
 
                 if (inner.Key is not string && inner.Size > 0 && owner.Charging is { } charging)
                 {

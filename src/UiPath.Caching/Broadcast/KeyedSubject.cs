@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 
 namespace UiPath.Caching.Broadcast;
 
@@ -12,13 +11,15 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
 
     private readonly ILogger _logger;
     private readonly TimeSpan _slowObserverThreshold;
+    private readonly TimeProvider _clock;
     private volatile bool _completed;
     // Replaced whole under the keyed lock, so a dispatch reads it without allocating.
     private volatile IObserver<T>[] _firstObservers = [];
 
-    public KeyedSubject(ILogger logger, TimeSpan? slowObserverThreshold = null)
+    public KeyedSubject(ILogger logger, TimeSpan? slowObserverThreshold = null, TimeProvider? clock = null)
     {
         _logger = logger;
+        _clock = clock ?? TimeProvider.System;
         _slowObserverThreshold = slowObserverThreshold ?? TimeSpan.MaxValue;
     }
 
@@ -178,7 +179,7 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
 
     private void SafeOnNext(IObserver<T> observer, T value)
     {
-        var start = Stopwatch.GetTimestamp();
+        var start = _clock.GetTimestamp();
         try
         {
             observer.OnNext(value);
@@ -187,7 +188,7 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         {
             LogObserverOnNextFailed(ex, value.Id);
         }
-        var elapsed = Stopwatch.GetElapsedTime(start);
+        var elapsed = _clock.GetElapsedTime(start);
         if (elapsed > _slowObserverThreshold)
         {
             LogObserverSlow(observer.GetType().FullName, elapsed.TotalMilliseconds, value.Id);

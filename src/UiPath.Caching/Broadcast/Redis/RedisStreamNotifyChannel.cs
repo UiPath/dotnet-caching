@@ -15,9 +15,10 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
     private readonly IRedisConnector _redis;
     private readonly SignalingFetchWaiter _waiter;
     private readonly ILogger _logger;
+    private readonly TimeProvider _clock;
     // _waiter ownership lives with the topic; this class only signals it and never disposes it.
     private readonly Action<RedisChannel, RedisValue> _handler;
-    private readonly Timer _subscribeTimer;
+    private readonly ITimer _subscribeTimer;
     private readonly TimeSpan _timerDueTime;
     private readonly ManualResetEventSlim _subscribingDone = new(initialState: true);
     private readonly Lock _liveGate = new();
@@ -53,8 +54,10 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         TimeSpan? subscriberTimeout,
         TimeSpan? subscriberDueTime,
         RedisValue self,
-        Func<Exception, bool>? onRefused = null)
+        Func<Exception, bool>? onRefused = null,
+        TimeProvider? clock = null)
     {
+        _clock = clock ?? TimeProvider.System;
         _channelValue = channel;
         _onRefused = onRefused;
         _redis = redis;
@@ -74,7 +77,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         _periodKnown = subscriberTimeout > TimeSpan.Zero;
         _timerPeriod = _periodKnown ? subscriberTimeout!.Value : DefaultPeriod;
         _timerDueTime = subscriberDueTime ?? _timerPeriod.Multiply(0.5);
-        _subscribeTimer = new Timer(Subscribe, null, _timerDueTime, _timerPeriod);
+        _subscribeTimer = _clock.CreateTimer(Subscribe, null, _timerDueTime, _timerPeriod);
     }
 
     private RedisChannel Channel
@@ -103,7 +106,15 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         _subscribed = false;
         PublishLive();
         _subscribeTimer.Dispose();
-        _subscribingDone.Wait(DisposeDrainTimeout);
+        using var drain = new CancellationTokenSource(DisposeDrainTimeout, _clock);
+        try
+        {
+            _subscribingDone.Wait(drain.Token);
+        }
+        catch (OperationCanceledException) when (drain.IsCancellationRequested)
+        {
+            // A late subscription is retired when it completes.
+        }
         Unsubscribe();
         _subscribingDone.Dispose();
     }

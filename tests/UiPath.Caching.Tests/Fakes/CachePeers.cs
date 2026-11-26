@@ -27,11 +27,12 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
     /// <summary>When off, events wait in <see cref="Node.Published"/> for <see cref="Deliver"/>.</summary>
     public bool AutoDeliver { get; set; } = true;
 
-    /// <param name="clock">The cache's clock; the system clock when null.</param>
-    /// <param name="localClock">The local tier's clock, for its expirations; the system clock when null.</param>
+    /// <param name="clock">The cache's clock; a manual clock when null.</param>
+    /// <param name="localClock">The local tier's clock; the cache's clock when null.</param>
     public Node Add(string name, InMemoryRedisCacheOptions? options = null, RecordingTelemetryProvider? telemetry = null, TimeProvider? clock = null, TimeProvider? localClock = null, ICachePolicyFactory? policies = null)
     {
-        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry, clock ?? defaultClock ?? TimeProvider.System, localClock ?? defaultClock ?? TimeProvider.System, policies);
+        clock ??= defaultClock ?? new ManualTimeProvider(localClock?.GetUtcNow() ?? DateTimeOffset.UnixEpoch);
+        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry, clock, localClock ?? defaultClock ?? clock, policies);
         _nodes.Add(node);
         return node;
     }
@@ -65,15 +66,14 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
     internal static bool WriteInFlight(MultilayerCacheBase cache, string key) =>
         ((BackgroundWrites)BackgroundField.GetValue(cache)!).WriteInFlight(key);
 
-    /// <summary>Polls <paramref name="condition"/> until it holds, for up to 10 s, and fails if it never does.</summary>
     internal static async Task Until(Func<bool> condition)
     {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (!condition() && DateTime.UtcNow < until)
+        var changed = OperationSignals.Shared.WhenAsync(condition);
+        if (!changed.IsCompleted)
         {
-            await Task.Delay(5);
+            RunTables.ObserveCompletions();
         }
-
+        await changed;
         condition().Should().BeTrue();
     }
 
@@ -223,13 +223,12 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
             }
         }
 
-        public Task Settled() => SettledBut(static _ => 0);
-
-        /// <summary>Settles all runs but the late generations, for a test that releases them after.</summary>
-        public Task SettledButLate() => SettledBut(static cache => cache.LateGenerations);
-
-        /// <summary>Settles all runs but the <paramref name="held"/> generations the test holds open, for a test that releases them after.</summary>
-        public Task SettledButHeld(int held) => SettledBut(_ => held);
+        public async Task Settled()
+        {
+            await BackgroundSettled(Cache);
+            await RunTables.RefreshesSettledAsync(Cache);
+            Cache.FlushPeerRefreshMetrics();
+        }
 
         /// <summary>Settles once the refresher has reported <paramref name="outcomes"/> keys since the node started.</summary>
         public async Task Settled(int outcomes)
@@ -242,13 +241,6 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
         {
             Cache.Dispose();
             Subject.Dispose();
-        }
-
-        private async Task SettledBut(Func<MultilayerCache, int> left)
-        {
-            await BackgroundSettled(Cache);
-            await _telemetry.Changes.WaitUntil(() => Cache.RunsInFlight == left(Cache));
-            Cache.FlushPeerRefreshMetrics();
         }
 
         private void OnEvicted()
@@ -427,6 +419,7 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
         }
 
         public SharedStore Store { get; set; } = null!;
+        public TimeProvider Clock { get; set; } = null!;
 
         public bool Fenced { get; set; }
 
@@ -437,8 +430,6 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
         public Func<CacheKey, bool>? RemovedWhileLoading { get; set; }
 
         bool IFencedFillTier.IsFenced => Fenced;
-
-        public TimeProvider Clock { get; set; } = TimeProvider.System;
 
         public TestSignal Changed { get; } = new();
 
@@ -618,34 +609,41 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2012:Use ValueTasks correctly", Justification = "DispatchProxy returns the ValueTask boxed to the proxied call, which awaits it once.")]
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
-            switch (targetMethod!.Name)
+            try
             {
-                case "get_Name":
-                    return "Redis";
-                case "Dispose":
-                    return null;
-                case nameof(ICache.GetCacheEntryAsync):
-                    return ReadOne.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(this, [args![0], args[2]]);
-                case nameof(ICache.GetCacheEntriesAsync):
-                    return ReadMany.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(this, [args![0], args[2]]);
-                case nameof(ICache.SetAsync) when args![0] is CacheKey key:
-                    Store.Values[key.Name] = args[1];
-                    Store.Changes.Pulse();
-                    return AfterWrite is { } after ? new ValueTask<bool>(after.ContinueWith(static _ => true, TaskScheduler.Default)) : new ValueTask<bool>(true);
-                case nameof(ICache.TryFillAsync) when targetMethod.ReturnType == typeof(ValueTask<FillResult<string>>):
-                    // The common shape without reflection, so a test that measures allocations measures the cache.
-                    return FillString((CacheKey)args![0]!, (string?)args[1]);
-                case nameof(ICache.TryFillAsync):
-                    return FillOne.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(this, [args![0], args[1]]);
-                case nameof(ICache.SetAsync):
-                    WriteMany.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(null, [Store, args[0]]);
-                    return new ValueTask<bool>(true);
-                case nameof(ICache.RemoveAsync) when args![0] is CacheKey key:
-                    return RemoveAfter([key]);
-                case nameof(ICache.RemoveAsync):
-                    return RemoveAfter((CacheKey[])args[0]!);
-                default:
-                    throw new NotSupportedException(targetMethod.Name);
+                switch (targetMethod!.Name)
+                {
+                    case "get_Name":
+                        return "Redis";
+                    case "Dispose":
+                        return null;
+                    case nameof(ICache.GetCacheEntryAsync):
+                        return ReadOne.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(this, [args![0], args[2]]);
+                    case nameof(ICache.GetCacheEntriesAsync):
+                        return ReadMany.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(this, [args![0], args[2]]);
+                    case nameof(ICache.SetAsync) when args![0] is CacheKey key:
+                        Store.Values[key.Name] = args[1];
+                        Store.Changes.Pulse();
+                        return AfterWrite is { } after ? new ValueTask<bool>(after.ContinueWith(static _ => true, TaskScheduler.Default)) : new ValueTask<bool>(true);
+                    case nameof(ICache.TryFillAsync) when targetMethod.ReturnType == typeof(ValueTask<FillResult<string>>):
+                        // The common shape without reflection, so a test that measures allocations measures the cache.
+                        return FillString((CacheKey)args![0]!, (string?)args[1]);
+                    case nameof(ICache.TryFillAsync):
+                        return FillOne.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(this, [args![0], args[1]]);
+                    case nameof(ICache.SetAsync):
+                        WriteMany.MakeGenericMethod(targetMethod.GetGenericArguments()).Invoke(null, [Store, args[0]]);
+                        return new ValueTask<bool>(true);
+                    case nameof(ICache.RemoveAsync) when args![0] is CacheKey key:
+                        return RemoveAfter([key]);
+                    case nameof(ICache.RemoveAsync):
+                        return RemoveAfter((CacheKey[])args[0]!);
+                    default:
+                        throw new NotSupportedException(targetMethod.Name);
+                }
+            }
+            finally
+            {
+                OperationSignals.Shared.Completed();
             }
         }
 
@@ -740,6 +738,7 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
             Interlocked.Increment(ref _singleReads);
             Changed.Pulse();
             Changes.Pulse();
+            OperationSignals.Shared.Completed();
             await BeforeReadAsync(hold, ignoresCancellation, token);
             var entry = EntryFor<T>(Store, key);
             Store.Values.TryGetValue(key.Name, out var held);
@@ -747,6 +746,7 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
             if (Interlocked.Exchange(ref _afterNextRead, null) is { } afterRead)
             {
                 Changes.Pulse();
+                OperationSignals.Shared.Completed();
                 await afterRead;
             }
 

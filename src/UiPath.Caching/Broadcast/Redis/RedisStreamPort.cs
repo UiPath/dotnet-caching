@@ -1,7 +1,7 @@
 namespace UiPath.Caching.Broadcast.Redis;
 
 /// <summary>The stream on Redis, through the connector's current database.</summary>
-internal sealed class RedisStreamPort(RedisStreamContext context, IRedisConnector redis) : IStreamPort
+internal sealed class RedisStreamPort(RedisStreamContext context, IRedisConnector redis, TimeProvider? clock = null) : IStreamPort
 {
     // Runs on every read, so it returns only what the check needs: XINFO STREAM carries the first and last entries whole.
     // XINFO GROUPS grows with the number of groups, so a wake (ARGV[4] = 0) checks against the stream alone.
@@ -61,7 +61,7 @@ internal sealed class RedisStreamPort(RedisStreamContext context, IRedisConnecto
     // From the primary, as the group is made there: a replica behind it could still hold the stream the group lost.
     public Task<StreamEntry[]> RangeAsync(RedisValue minId, RedisValue maxId, int count) => redis.Database.StreamRangeAsync(context.Topic, minId, maxId, count, flags: CommandFlags.DemandMaster);
 
-    public Task<StreamHead?> HeadAsync() => ConsumerGroups.HeadAsync(redis.Database, context.Topic);
+    public Task<StreamHead?> HeadAsync() => ConsumerGroups.HeadAsync(redis.Database, context.Topic, clock);
 
     public Task<bool> CreateGroupAsync(RedisValue position, StreamHead? head) => ConsumerGroups.CreateAsync(redis.Database, context.Topic, context.ConsumerGroup, position, head);
 

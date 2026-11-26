@@ -82,7 +82,8 @@ public static class BroadcastExtensions
                 services.GetRequiredService<ILoggerFactory>(),
                 services.GetRequiredService<ICachingTelemetryProvider>(),
                 services.GetRequiredService<IRedisProfiler>(),
-                services.GetService<RedisPubSubTopicProvider>()));
+                services.GetService<RedisPubSubTopicProvider>(),
+                services.GetRequiredService<TimeProvider>()));
             builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ITopicProvider, RedisStreamsTopicProvider>(static services => services.GetRequiredService<RedisStreamsTopicProvider>()));
             if (options.StreamsUnsupported == StreamsUnsupportedAction.Fail)
             {
@@ -136,7 +137,8 @@ public static class BroadcastExtensions
                 services.GetRequiredService<IResiliencePipelineProvider>(),
                 services.GetRequiredService<ICachingTelemetryProvider>(),
                 services.GetRequiredService<IRedisProfiler>(),
-                services.GetRequiredService<ILoggerFactory>());
+                services.GetRequiredService<ILoggerFactory>(),
+                services.GetRequiredService<TimeProvider>());
         });
 
     private static void EnsureRegistry<TOptions>(ICachingBuilder builder, string sectionName)

@@ -95,7 +95,8 @@ public class MultilayerCacheRehydrateAdoptTests
     {
         using var peers = new CachePeers(_clock);
         var telemetry = new RecordingTelemetryProvider();
-        var b = peers.Add("b", new InMemoryRedisCacheOptions { Timeout = Timeout.InfiniteTimeSpan }, telemetry);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var b = peers.Add("b", new InMemoryRedisCacheOptions { Timeout = Timeout.InfiniteTimeSpan }, telemetry, clock: clock);
         await HoldingAged(peers, b, Warm);
         Refreshed(peers, "new");
         var late = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -107,7 +108,11 @@ public class MultilayerCacheRehydrateAdoptTests
         {
             await b.Cache.GetOrAddAsync<string>(Key, generated.Run, Rehydrating(Warm), Ct);
 
-            _clock.Advance(TimeSpan.FromSeconds(2));
+            var budget = RehydrationCoordinator.AdoptReadTimeout(Rehydrating(Warm).Rehydrate!, Duration);
+            await clock.WhenTimerAsync(() => clock.HasTimerDueIn(budget));
+            clock.Advance(budget);
+
+            // The read is still in flight: only the budget lets the run go on to the generator.
             await telemetry.Signal.UntilAsync(() => Tracked(telemetry, Succeeded), Ct);
             generated.Calls.Should().Be(1);
 

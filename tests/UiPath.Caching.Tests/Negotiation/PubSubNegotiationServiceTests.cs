@@ -155,7 +155,7 @@ public class PubSubNegotiationServiceTests
         // The confirmation of a subscription, or a tick, that was already on its way.
         await sut.AdvertiseAsync(Ct);
         _pubSub.Confirm(Channel);
-        await Task.Delay(100, Ct);
+        _clock.Advance(_options.AdvertiseInterval);
 
         _server.Hash["me"].Should().Contain("left=1", "a node that said it was leaving must not look alive again");
     }
@@ -165,9 +165,22 @@ public class PubSubNegotiationServiceTests
     {
         var sut = Service(out _);
         _pubSub.Confirm(Channel);
-        _server.WriteDelay = () => Task.Delay(30);
+        var entered = System.Threading.Channels.Channel.CreateUnbounded<TaskCompletionSource>();
+        _server.WriteDelay = () =>
+        {
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            entered.Writer.TryWrite(release);
+            return release.Task;
+        };
 
-        await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => sut.AdvertiseAsync(Ct)));
+        var writes = Enumerable.Range(0, 6).Select(_ => sut.AdvertiseAsync(Ct)).ToArray();
+        for (var i = 0; i < writes.Length; i++)
+        {
+            var release = await entered.Reader.ReadAsync(Ct);
+            _server.MaxConcurrentWrites.Should().Be(1);
+            release.SetResult();
+        }
+        await Task.WhenAll(writes);
 
         _server.MaxConcurrentWrites.Should().Be(1, "a write started earlier must not land over one started later");
     }
@@ -177,14 +190,14 @@ public class PubSubNegotiationServiceTests
     {
         var sut = Service(out _);
         _pubSub.Confirm(Channel);
-        var release = new TaskCompletionSource();
-        _server.WriteDelay = () => release.Task;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _server.WriteDelay = () => { entered.TrySetResult(); return release.Task; };
         var inFlight = sut.AdvertiseAsync(Ct);
-        await Task.Delay(50, Ct);
+        await entered.Task.WaitAsync(Ct);
         _server.WriteDelay = null;
 
         var stopping = sut.StopAsync(Ct);
-        await Task.Delay(50, Ct);
         stopping.IsCompleted.Should().BeFalse("it is behind the write in flight");
         release.SetResult();
         await Task.WhenAll(inFlight, stopping);
@@ -406,13 +419,19 @@ public class PubSubNegotiationServiceTests
         await sut.StopAsync(Ct);
     }
 
-    private static async Task UntilAsync(Func<bool> condition)
+    private async Task UntilAsync(Func<bool> condition)
     {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (!condition())
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Written() { if (condition()) { done.TrySetResult(); } }
+        _server.Written += Written;
+        try
         {
-            Assert.True(DateTime.UtcNow < until, "The condition did not hold in time.");
-            await Task.Delay(10, Ct);
+            Written();
+            await done.Task.WaitAsync(Ct);
+        }
+        finally
+        {
+            _server.Written -= Written;
         }
     }
 

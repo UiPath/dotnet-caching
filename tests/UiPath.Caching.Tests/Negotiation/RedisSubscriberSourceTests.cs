@@ -7,7 +7,9 @@ namespace UiPath.Caching.Tests.Negotiation;
 
 public class RedisSubscriberSourceTests
 {
+
     private const string Channel = "app:ps:orders";
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
 
     private readonly IConnectionMultiplexer _multiplexer = Substitute.For<IConnectionMultiplexer>();
     private readonly IRedisConnector _connector = Substitute.For<IRedisConnector>();
@@ -46,7 +48,7 @@ public class RedisSubscriberSourceTests
     public async Task With_one_server_down_the_view_fails_and_binary_events_are_not_enabled()
     {
         Wire(Server("a", true, count: 1), Server("b", connected: false));
-        var negotiator = new FormatNegotiator([], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, TimeProvider.System, events: new DesiredEvents(["02"]));
+        var negotiator = new FormatNegotiator([], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, Clock, events: new DesiredEvents(["02"]));
         var sut = new FormatNegotiationService(new FormatNegotiation
         {
             Negotiator = negotiator,

@@ -6,6 +6,8 @@ namespace UiPath.Caching.Tests.Negotiation;
 
 public class NodeAdvertisementTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly RedisKey Key = "ads";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -122,7 +124,7 @@ public class NodeAdvertisementTests
             Options.Create(redisOptions),
             Options.Create(cacheOptions),
             NullLogger<RedisStreamHealthMaintainer>.Instance,
-            TimeProvider.System);
+            Clock);
         maintainer.Initialize();
 
         var key = NodeListStore.KeyFor(cacheOptions, redisOptions).ToString();

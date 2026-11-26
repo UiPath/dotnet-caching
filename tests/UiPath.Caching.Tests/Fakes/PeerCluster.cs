@@ -23,10 +23,10 @@ internal sealed class PeerCluster(TimeProvider? defaultClock = null) : IDisposab
 
     /// <param name="monitorsConnection">The node follows <see cref="PeerInner.IsConnected"/>, and keeps its local tier when the connection returns.</param>
     /// <param name="timeout">The node's cache timeout, which also bounds a peer refresh's wait in the queue and its read; the options' default when null.</param>
-    /// <param name="clock">The node's clock, for its local expirations; the system clock when null.</param>
+    /// <param name="clock">The node's clock for local expirations, defaulting to a manual clock at the Unix epoch.</param>
     public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024, bool monitorsConnection = false, Telemetry.RecordingTelemetryProvider? telemetry = null, TimeSpan? timeout = null, TimeProvider? clock = null, TimeSpan? repeatInvalidationAfter = null)
     {
-        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry, timeout, clock ?? defaultClock ?? TimeProvider.System, repeatInvalidationAfter);
+        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry, timeout, clock ?? defaultClock ?? new ManualTimeProvider(DateTimeOffset.UnixEpoch), repeatInvalidationAfter);
         _nodes.Add(node);
         return node;
     }
@@ -362,7 +362,7 @@ internal sealed class PeerCluster(TimeProvider? defaultClock = null) : IDisposab
         public async Task Settled()
         {
             await CachePeers.BackgroundSettled(Cache);
-            await _telemetry.Changes.WaitUntil(() => Cache.RunsInFlight == 0);
+            await RunTables.RefreshesSettledAsync(Cache);
             Cache.FlushPeerRefreshMetrics();
         }
 
@@ -564,6 +564,7 @@ internal sealed class PeerCluster(TimeProvider? defaultClock = null) : IDisposab
         {
             var entry = ReadHold is { } hold ? ReadAfterAsync(hold, cacheKey.Name) : Task.FromResult(Store.Read(cacheKey.Name));
             Interlocked.Increment(ref _reads);
+            Broadcast.OperationSignals.Shared.Completed();
             Changes.Pulse();
             Changed.Pulse();
             return new(entry.ContinueWith(static read => (ICacheEntry<IDictionary<string, T?>>)(object)read.Result, TaskScheduler.Default));
@@ -583,6 +584,7 @@ internal sealed class PeerCluster(TimeProvider? defaultClock = null) : IDisposab
                         ? new ValueTask<ICacheEntry<IDictionary<string, string?>>>(ReadAfterAsync(hold, key))
                         : new ValueTask<ICacheEntry<IDictionary<string, string?>>>(Store.Read(key));
                     Interlocked.Increment(ref _reads);
+                    Broadcast.OperationSignals.Shared.Completed();
                     Changes.Pulse();
                     Changed.Pulse();
                     return read;

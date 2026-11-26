@@ -10,6 +10,8 @@ namespace UiPath.Caching.Tests.Broadcast;
 /// <summary>A server that refuses sharded Pub/Sub moves the Streams doorbell to the literal channel of the same name, once per connector.</summary>
 public class RedisStreamsShardedFallbackTests : IAsyncLifetime
 {
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+    private readonly System.Threading.Channels.Channel<bool> _changes = System.Threading.Channels.Channel.CreateUnbounded<bool>();
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private readonly List<RedisStreamsTopic<ICacheEvent>> _topics = [];
     private readonly List<RedisChannel> _subscribed = [];
@@ -24,6 +26,8 @@ public class RedisStreamsShardedFallbackTests : IAsyncLifetime
 
     public ValueTask InitializeAsync()
     {
+        _fixture.Inject<TimeProvider>(_clock);
+        _fixture.Customize<RedisStreamsTopic<ICacheEvent>>(c => c.FromFactory(new AutoFixture.Kernel.MethodInvoker(new AutoFixture.Kernel.GreedyConstructorQuery())));
         _database = _fixture.Freeze<IDatabase>();
         _database.Configure().StreamInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(Task.FromResult(default(StreamInfo)));
         _database.Configure().StreamGroupInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamGroupInfo>()));
@@ -43,6 +47,7 @@ public class RedisStreamsShardedFallbackTests : IAsyncLifetime
             lock (_published)
             {
                 _published.Add(channel);
+                _changes.Writer.TryWrite(true);
             }
 
             return channel.IsSharded && _shardedError is not null ? Task.FromException<long>(_shardedError) : Task.FromResult(1L);
@@ -57,6 +62,7 @@ public class RedisStreamsShardedFallbackTests : IAsyncLifetime
             lock (_subscribed)
             {
                 _subscribed.Add(channel);
+                _changes.Writer.TryWrite(true);
             }
 
             return channel.IsSharded && _shardedError is not null ? Task.FromException(_shardedError) : Task.CompletedTask;
@@ -149,7 +155,7 @@ public class RedisStreamsShardedFallbackTests : IAsyncLifetime
 
         var second = NewTopic(new TopicKey("second"));
         await WaitAsync(() => Subscribed().Count > before);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
 
         Subscribed().Skip(before).Should().OnlyContain(c => !c.IsSharded, "the connector already knows sharded Pub/Sub is refused");
         (await second.PublishAsync(_fixture.Create<ICacheEvent>(), TestContext.Current.CancellationToken)).Should().BeTrue();
@@ -166,7 +172,7 @@ public class RedisStreamsShardedFallbackTests : IAsyncLifetime
         _ = NewTopic(new TopicKey("second"));
 
         await WaitAsync(() => Subscribed().Count(c => !c.IsSharded) >= 2);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
 
         _recorded.Records.Count(r => r.Level == LogLevel.Warning && r.Message.Contains("Sharded Pub/Sub was refused", StringComparison.Ordinal)).Should().Be(1);
     }
@@ -187,7 +193,7 @@ public class RedisStreamsShardedFallbackTests : IAsyncLifetime
         await WaitAsync(() => Subscribed().Count >= 1);
         (await topic.PublishAsync(_fixture.Create<ICacheEvent>(), TestContext.Current.CancellationToken)).Should().BeTrue();
         await WaitAsync(() => Published().Count >= 1);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
 
         Subscribed().Should().OnlyContain(c => c.IsSharded);
         Published().Should().OnlyContain(c => c.IsSharded);
@@ -206,21 +212,19 @@ public class RedisStreamsShardedFallbackTests : IAsyncLifetime
         await WaitAsync(() => Subscribed().Count >= 1);
         (await topic.PublishAsync(_fixture.Create<ICacheEvent>(), TestContext.Current.CancellationToken)).Should().BeTrue();
         await WaitAsync(() => Published().Count >= 1);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
 
         Subscribed().Should().OnlyContain(c => c.IsSharded);
         Published().Should().OnlyContain(c => c.IsSharded);
         BroadcastCapability.For(_redis).ShardedPubSubIsRefused.Should().BeFalse();
     }
 
-    private static async Task WaitAsync(Func<bool> condition)
+    private async Task WaitAsync(Func<bool> condition)
     {
-        var until = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (!condition() && DateTime.UtcNow < until)
+        while (!condition())
         {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
+            await _changes.Reader.ReadAsync(TestContext.Current.CancellationToken);
         }
-
         condition().Should().BeTrue();
     }
 
@@ -229,6 +233,11 @@ public class RedisStreamsShardedFallbackTests : IAsyncLifetime
         _fixture.Inject(key ?? new TopicKey("first"));
         var topic = _fixture.Create<RedisStreamsTopic<ICacheEvent>>();
         _topics.Add(topic);
+        if (_options.NotifySubscriberDueTime < TimeSpan.FromMinutes(1))
+        {
+            _clock.Advance(_options.NotifySubscriberDueTime!.Value);
+            _clock.Advance(_options.NotifySubscriberDueTime!.Value);
+        }
         return topic;
     }
 

@@ -7,6 +7,7 @@ using UiPath.Caching.Negotiation;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Fakes;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.Broadcast;
 
@@ -15,6 +16,10 @@ public sealed class StreamsFallbackPubSubRefusedTests : IDisposable
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
     private static readonly TopicKey Key = "orders";
+
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+    private readonly RecordingTelemetryProvider _telemetry = new();
+    private readonly System.Threading.Channels.Channel<bool> _changes = System.Threading.Channels.Channel.CreateUnbounded<bool>();
 
     private readonly ITestContextAccessor _testContextAccessor;
     private readonly List<IDisposable> _disposables = [];
@@ -28,6 +33,7 @@ public sealed class StreamsFallbackPubSubRefusedTests : IDisposable
 
     public StreamsFallbackPubSubRefusedTests(ITestContextAccessor testContextAccessor)
     {
+        _telemetry.EventRecorded += _ => _changes.Writer.TryWrite(true);
         _testContextAccessor = testContextAccessor;
         _connector = StreamsFakes.Connector(out var database, out _);
         var multiplexer = Substitute.For<IConnectionMultiplexer>();
@@ -115,7 +121,7 @@ public sealed class StreamsFallbackPubSubRefusedTests : IDisposable
 
         await WaitForAsync(() => _capability.PubSubIsRefused);
         await WaitForAsync(() => observer.Missed.Contains(MissedEventsReason.Lost));
-        await Task.Delay(250, Token);
+        _clock.Advance(TimeSpan.FromMilliseconds(250));
 
         sut.IsSubscribed.Should().BeFalse();
         (await sut.PublishAsync(Event(), Token)).Should().BeTrue("Off publishes true");
@@ -169,7 +175,7 @@ public sealed class StreamsFallbackPubSubRefusedTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task A_subscription_that_times_out_or_meets_a_loading_server_leaves_the_topic_on_Pub_Sub(bool timeout)
+    public void A_subscription_that_times_out_or_meets_a_loading_server_leaves_the_topic_on_Pub_Sub(bool timeout)
     {
         Refuse(StreamsFakes.UnknownCommand());
         SubscribeFails(timeout ? new RedisTimeoutException(CommandFlags.None, "slow", CommandStatus.Unknown) : new RedisServerException(RedisErrorKind.None, CommandFlags.None, "LOADING Redis is loading the dataset in memory"));
@@ -177,7 +183,8 @@ public sealed class StreamsFallbackPubSubRefusedTests : IDisposable
         var observer = new Observer();
         sut.Subscribe(observer);
 
-        await Task.Delay(400, Token);
+        _clock.Advance(TimeSpan.Zero);
+        _clock.Advance(TimeSpan.FromMilliseconds(400));
 
         StaysOnPubSub(sut, observer);
         _subscriber.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ISubscriber.Subscribe)).Should().BeGreaterThan(1, "the topic keeps trying");
@@ -279,7 +286,7 @@ public sealed class StreamsFallbackPubSubRefusedTests : IDisposable
     private void SubscribeFails(Exception error, ManualResetEventSlim? after = null) =>
         _subscriber.When(s => s.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>())).Do(_ =>
         {
-            after?.Wait(Wait);
+            after?.Wait(Token);
             throw error;
         });
 
@@ -292,7 +299,8 @@ public sealed class StreamsFallbackPubSubRefusedTests : IDisposable
             _pubSub,
             _ => streams ?? Substitute.For<ITopic<ICacheEvent>>(),
             new KeyedSubject<ICacheEvent>(NullLogger<KeyedSubject<ICacheEvent>>.Instance),
-            NullLogger.Instance);
+            NullLogger.Instance,
+            telemetry: _telemetry);
         _disposables.Add(topic);
         return topic;
     }
@@ -310,16 +318,17 @@ public sealed class StreamsFallbackPubSubRefusedTests : IDisposable
             EmptyResiliencePipelineProvider.Instance,
             NullTelemetryProvider.Instance,
             Substitute.For<IRedisProfiler>(),
-            loggers);
+            loggers,
+            _clock);
     }
 
     private async Task WaitForAsync(Func<bool> condition)
     {
-        for (var attempt = 0; !condition() && attempt < (int)(Wait.TotalMilliseconds / 10); attempt++)
+        _clock.Advance(TimeSpan.Zero);
+        while (!condition())
         {
-            await Task.Delay(10, Token);
+            await _changes.Reader.ReadAsync(Token);
         }
-
         condition().Should().BeTrue();
     }
 

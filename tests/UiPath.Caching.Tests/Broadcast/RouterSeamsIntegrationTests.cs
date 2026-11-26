@@ -33,7 +33,8 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         var ownObserver = new MissedObserver();
         var ownTopic = Provider(publisherNode, transport).Create(key);
         using var ownSubscription = ownTopic.Subscribe(ownObserver);
-        (await UntilAsync(() => State(topic).IsSubscribed && State(ownTopic).IsSubscribed)).Should().BeTrue();
+        await ReadyAsync(subscriberNode, topic);
+        await ReadyAsync(publisherNode, ownTopic);
         var publisher = new CacheEventPublisher(
             "router",
             Provider(publisherNode, transport),
@@ -42,8 +43,10 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
 
         (await publisher.TopicInvalidatedAsync(key)).Should().BeTrue();
 
-        (await UntilAsync(() => observer.Reasons.Contains(MissedEventsReason.Lost))).Should().BeTrue("the other node's public invalidation expires every subscriber of the topic");
-        await Task.Delay(500, Ct);
+        await ReadAsync(subscriberNode, transport);
+        await observer.Lost.Task.WaitAsync(Ct);
+        observer.Reasons.Should().Contain(MissedEventsReason.Lost, "the other node's public invalidation expires every subscriber of the topic");
+        await ReadAsync(publisherNode, transport);
         ownObserver.Reasons.Should().NotContain(MissedEventsReason.Lost, "a node does not hear its own events, this one included");
     }
 
@@ -56,7 +59,8 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         var state = State(topic);
 
         state.IsSubscribed.Should().BeFalse("the subscription is made on the subscriber's first timer tick, 3 s away");
-        (await UntilAsync(() => state.IsSubscribed)).Should().BeTrue();
+        await ReadyAsync(node, topic, TimeSpan.FromSeconds(3));
+        state.IsSubscribed.Should().BeTrue();
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         (await RedisTestKeys.SubscribersAsync(redis, $"{_app}:ps:{topic.TopicKey}")).Should().BeGreaterThan(0, "a subscribed topic is one the server would deliver to");
 
@@ -74,7 +78,8 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         var topic = Provider(node, KnownTopicNames.RedisStreams).Create(new TopicKey($"orders-{Guid.NewGuid():N}"));
         var state = State(topic);
 
-        (await UntilAsync(() => state.IsSubscribed)).Should().BeTrue();
+        await ReadyAsync(node, topic);
+        state.IsSubscribed.Should().BeTrue();
         (await GroupsAsync()).Should().NotBeEmpty("a topic reports itself subscribed only with its consumer group in place");
 
         topic.Dispose();
@@ -90,7 +95,8 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         var node = Node("a", KnownTopicNames.RedisPubSub, pubSub: o => o.RedisChannelStrategy = new FixedChannel(pattern));
         var topic = Provider(node, KnownTopicNames.RedisPubSub).Create(new TopicKey("orders"));
 
-        (await UntilAsync(() => State(topic).IsSubscribed)).Should().BeTrue();
+        await ReadyAsync(node, topic);
+        State(topic).IsSubscribed.Should().BeTrue();
 
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var channels = (RedisResult[])(await redis.GetDatabase().ExecuteAsync("PUBSUB", "CHANNELS", "*"))!;
@@ -106,7 +112,8 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         var node = Node("a", KnownTopicNames.RedisStreams);
         var topic = Provider(node, KnownTopicNames.RedisStreams).Create(new TopicKey($"orders-{Guid.NewGuid():N}"));
         var state = State(topic);
-        (await UntilAsync(() => state.IsSubscribed)).Should().BeTrue();
+        await ReadyAsync(node, topic);
+        state.IsSubscribed.Should().BeTrue();
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var database = redis.GetDatabase();
         var stream = await StreamKeyAsync(redis);
@@ -115,13 +122,16 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         await database.KeyDeleteAsync(stream);
         await database.StringSetAsync(stream, "blocked");
 
-        (await UntilAsync(() => !state.IsSubscribed)).Should().BeTrue("the next read finds the group gone and fails");
-        await Task.Delay(1500, Ct);
+        await ReadAsync(node, KnownTopicNames.RedisStreams);
+        state.IsSubscribed.Should().BeFalse("the next read finds the group gone and fails");
+        await ReadAsync(node, KnownTopicNames.RedisStreams);
         state.IsSubscribed.Should().BeFalse("group creation stays blocked while the key holds a string");
 
         await database.KeyDeleteAsync(stream);
 
-        (await UntilAsync(() => state.IsSubscribed)).Should().BeTrue("the reader makes the group again once it can");
+        await ReadAsync(node, KnownTopicNames.RedisStreams);
+        await ReadAsync(node, KnownTopicNames.RedisStreams);
+        state.IsSubscribed.Should().BeTrue("the reader makes the group again once it can");
         (await GroupsAsync()).Should().NotBeEmpty();
     }
 
@@ -140,7 +150,8 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         var stackTopic = application.GetRequiredKeyedService<ITopicFactory>(Stack).Get(KnownTopicNames.RedisStreams).Create(key);
         using var applicationSubscription = applicationTopic.Subscribe(applicationObserver);
         using var stackSubscription = stackTopic.Subscribe(stackObserver);
-        (await UntilAsync(() => State(applicationTopic).IsSubscribed && State(stackTopic).IsSubscribed)).Should().BeTrue();
+        await ReadyAsync(application, applicationTopic);
+        await ReadyAsync(application, stackTopic);
         var publisher = new CacheEventPublisher(
             "router",
             Provider(publisherNode, KnownTopicNames.RedisStreams),
@@ -149,7 +160,9 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
 
         (await publisher.TopicInvalidatedAsync(key)).Should().BeTrue();
 
-        (await UntilAsync(() => applicationObserver.Reasons.Count > 0 && stackObserver.Reasons.Count > 0))
+        await ReadAsync(application, KnownTopicNames.RedisStreams);
+        await Task.WhenAll(applicationObserver.Lost.Task, stackObserver.Lost.Task).WaitAsync(Ct);
+        (applicationObserver.Reasons.Count > 0 && stackObserver.Reasons.Count > 0)
             .Should().BeTrue("one stream, a group each: neither splits the entries with the other");
     }
 
@@ -161,7 +174,9 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         var node = Node("a", transport, "127.0.0.1:1,connectTimeout=300,abortConnect=false");
         var topic = Provider(node, transport).Create(new TopicKey("orders"));
 
-        await Task.Delay(1500, Ct);
+        var clock = Clock(node);
+        await clock.WhenTimerAsync(() => clock.HasTimers);
+        clock.Advance(TimeSpan.FromMilliseconds(1500));
 
         State(topic).IsSubscribed.Should().BeFalse();
     }
@@ -180,20 +195,29 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
     private static ITopicProvider Provider(ServiceProvider node, string transport) =>
         node.GetRequiredService<ITopicFactory>().Get(transport);
 
-    private static async Task<bool> UntilAsync(Func<bool> condition)
+    private static ManualTimeProvider Clock(ServiceProvider node) => (ManualTimeProvider)node.GetRequiredService<TimeProvider>();
+
+    private static Task ReadyAsync(ServiceProvider node, ITopic<ICacheEvent> topic, TimeSpan? due = null)
     {
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (DateTime.UtcNow < until)
+        _ = node.GetRequiredService<IRedisConnector>().Subscriber;
+        return BroadcastNodeSignals.ReadyAsync(topic, Clock(node), due);
+    }
+
+    private static async Task ReadAsync(ServiceProvider node, string transport)
+    {
+        if (transport != KnownTopicNames.RedisStreams)
         {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(50, Ct);
+            return;
         }
-
-        return false;
+        var clock = Clock(node);
+        await clock.WhenTimerAsync(() => clock.HasTimers);
+        var timers = clock.TimersCreated;
+        clock.Advance(TimeSpan.FromSeconds(30));
+        foreach (var topic in node.GetRequiredService<RedisStreamsTopicProvider>().CreatedTopics())
+        {
+            BroadcastNodeSignals.Read(topic);
+        }
+        await clock.WaitForTimersAsync(timers + 1);
     }
 
     private static void Chain(ICachingBuilder b, bool pubSubEnabled, Action<RedisPubSubTopicOptions>? configurePubSub)
@@ -208,6 +232,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
         {
             o.Enabled = !pubSubEnabled;
             o.MaintainerEnabled = false;
+            o.NotifyEnabled = false;
         });
         b.AddBroadcast();
         b.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
@@ -240,6 +265,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
             })
             .Build();
         var services = new ServiceCollection();
+        services.AddSingleton<TimeProvider>(new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         services.AddLogging();
         services.AddCaching(configuration, b => Chain(b.AddRedisConnection(), pubSubEnabled: false, configurePubSub: null));
         services.AddNamedCachingOnPrimaryConnection(stack, configuration, b => Chain(b, pubSubEnabled: false, configurePubSub: null));
@@ -268,6 +294,7 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
     {
         var usesPubSub = transport == KnownTopicNames.RedisPubSub;
         var provider = new ServiceCollection()
+            .AddSingleton<TimeProvider>(new ManualTimeProvider(DateTimeOffset.UnixEpoch))
             .AddCaching(
                 b =>
                 {
@@ -294,6 +321,8 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
     {
         private readonly List<MissedEventsReason> _reasons = [];
 
+        public TaskCompletionSource Lost { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public IReadOnlyCollection<MissedEventsReason> Reasons
         {
             get
@@ -310,6 +339,10 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
             lock (_reasons)
             {
                 _reasons.Add(reason);
+                if (reason == MissedEventsReason.Lost)
+                {
+                    Lost.TrySetResult();
+                }
             }
         }
 

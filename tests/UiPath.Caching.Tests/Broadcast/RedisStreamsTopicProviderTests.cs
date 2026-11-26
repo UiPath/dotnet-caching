@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Tests.Broadcast;
-public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
+public class RedisStreamsTopicProviderTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private  RedisStreamsTopicOptions _redisStreamsTopicOptions = default!;
@@ -27,25 +27,19 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
     }
 
     [Fact]
-    public async Task Disposing_topic_removes_it_from_provider()
+    public void Disposing_topic_removes_it_from_provider()
     {
-        var token = testContextAccessor.Current.CancellationToken;
         TopicKey topicKey = _fixture.Create<string>();
         var topic = Sut.Create(topicKey);
         topic.Should().NotBeNull();
         Sut.Keys.Should().NotBeEmpty();
         topic.Dispose();
-        for (var attempt = 0; Sut.Keys.Count > 0 && attempt < 50; attempt++)
-        {
-            await Task.Delay(20, token);
-        }
         Sut.Keys.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task A_provider_that_makes_and_drops_topics_keeps_no_record_of_the_dropped_ones()
+    public void A_provider_that_makes_and_drops_topics_keeps_no_record_of_the_dropped_ones()
     {
-        var token = testContextAccessor.Current.CancellationToken;
         TopicKey[] keys = [.. Enumerable.Range(0, 20).Select(i => (TopicKey)$"topic-{i}")];
         foreach (var key in keys)
         {
@@ -65,10 +59,6 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
             Sut.Create(key).Dispose();
         }
 
-        for (var attempt = 0; Sut.StreamKeyCount > 0 && attempt < 50; attempt++)
-        {
-            await Task.Delay(20, token);
-        }
 
         Sut.StreamKeyCount.Should().Be(0);
     }

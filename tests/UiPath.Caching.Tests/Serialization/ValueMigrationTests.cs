@@ -8,6 +8,8 @@ namespace UiPath.Caching.Tests.Serialization;
 
 public class ValueMigrationTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly byte[] Json = "\"x\""u8.ToArray();
     private static readonly byte[] Fast = [0x10, (byte)'x'];
     private static readonly byte[] Other = [0x12, (byte)'x'];
@@ -151,7 +153,7 @@ public class ValueMigrationTests
     public void Json_a_custom_proxy_wrote_is_not_wanted_since_it_could_only_be_looked_at_and_left()
     {
         var registry = Registry();
-        var migrator = new FormatMigrator(new RecordingTelemetryProvider(), TimeProvider.System, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        var migrator = new FormatMigrator(new RecordingTelemetryProvider(), Clock, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
         var sut = new ValueMigration(migrator, new ValueRewriter(new SubclassedProxy(), registry), registry, effective: null);
 
         sut.Wants(_fast, Json).Should().BeFalse();
@@ -162,7 +164,7 @@ public class ValueMigrationTests
     public void Bytes_a_marked_proxy_wrote_are_wanted_and_an_unmarked_proxy_s_are_not()
     {
         var registry = Registry();
-        var migrator = new FormatMigrator(new RecordingTelemetryProvider(), TimeProvider.System, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        var migrator = new FormatMigrator(new RecordingTelemetryProvider(), Clock, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
         var envelope = new EnvelopeProxy().Serialize("x")!;
 
         new ValueMigration(migrator, new ValueRewriter(new HeaderFreeProxy(), registry), registry, effective: null).Wants(_fast, envelope).Should().BeTrue();
@@ -209,7 +211,7 @@ public class ValueMigrationTests
         var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", target)]);
         var logger = new RecordedLogger();
         using var sut = new ValueMigration(
-            new FormatMigrator(new RecordingTelemetryProvider(), TimeProvider.System, logger),
+            new FormatMigrator(new RecordingTelemetryProvider(), Clock, logger),
             new ValueRewriter(new SystemJsonByteSerializerProxy(), registry),
             registry,
             effective: null);
@@ -231,7 +233,7 @@ public class ValueMigrationTests
     private ValueMigration Migration(IEffectiveFormat? effective = null)
     {
         var registry = Registry();
-        var migrator = new FormatMigrator(new RecordingTelemetryProvider(), TimeProvider.System, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        var migrator = new FormatMigrator(new RecordingTelemetryProvider(), Clock, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
         return new(migrator, new ValueRewriter(new SystemJsonByteSerializerProxy(), registry), registry, effective);
     }
 

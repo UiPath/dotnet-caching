@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
@@ -17,6 +16,7 @@ internal sealed class RedisDistributedLock : IDistributedLock, IReportsLockConte
     private const string PollIntervalMustBePositive = "Must be greater than zero.";
     private const string MaxPollIntervalMustBeAtLeastPollInterval = "Must be greater than or equal to " + nameof(CacheOptions.DistributedLockPollInterval) + ".";
 
+    private readonly TimeProvider _clock;
     private readonly IRedisConnector _redis;
     private readonly ICachingTelemetryProvider _telemetry;
     private readonly string _tokenPrefix;
@@ -26,8 +26,10 @@ internal sealed class RedisDistributedLock : IDistributedLock, IReportsLockConte
     public RedisDistributedLock(
         IRedisConnector redis,
         IOptions<CacheOptions> cacheOptions,
-        ICachingTelemetryProvider telemetry)
+        ICachingTelemetryProvider telemetry,
+        TimeProvider? clock = null)
     {
+        _clock = clock ?? TimeProvider.System;
         _redis = redis;
         _telemetry = telemetry;
         var opts = cacheOptions.Value;
@@ -60,7 +62,7 @@ internal sealed class RedisDistributedLock : IDistributedLock, IReportsLockConte
         var redisKey = new RedisKey(key);
         var lockToken = BuildLockToken();
         var hasDeadline = waitTimeout > TimeSpan.Zero;
-        var startTimestamp = hasDeadline ? Stopwatch.GetTimestamp() : 0L;
+        var startTimestamp = hasDeadline ? _clock.GetTimestamp() : 0L;
         var contended = false;
         var pollInterval = _initialPollInterval;
 
@@ -94,7 +96,7 @@ internal sealed class RedisDistributedLock : IDistributedLock, IReportsLockConte
                 return (hasDeadline ? TrackTimeoutNoOp(key) : NoOpAsyncDisposable.Instance, true);
             }
 
-            await Task.Delay(delay, token).ConfigureAwait(false);
+            await Task.Delay(delay, _clock, token).ConfigureAwait(false);
             pollInterval = NextPollInterval(pollInterval, _maxPollInterval);
         }
     }
@@ -127,13 +129,13 @@ internal sealed class RedisDistributedLock : IDistributedLock, IReportsLockConte
             ? TimeSpan.FromTicks(Math.Min(current.Ticks * 2, max.Ticks))
             : max;
 
-    internal static TimeSpan ComputeRetryDelayWithJitter(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval, double jitterUnit)
+    internal static TimeSpan ComputeRetryDelayWithJitter(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval, double jitterUnit, TimeProvider? clock = null)
     {
         if (!hasDeadline)
         {
             return TimeSpan.Zero;
         }
-        var remaining = waitTimeout - Stopwatch.GetElapsedTime(startTimestamp);
+        var remaining = waitTimeout - (clock ?? TimeProvider.System).GetElapsedTime(startTimestamp);
         if (remaining <= TimeSpan.Zero)
         {
             return TimeSpan.Zero;
@@ -143,8 +145,8 @@ internal sealed class RedisDistributedLock : IDistributedLock, IReportsLockConte
         return jittered < remaining ? jittered : remaining;
     }
 
-    private static TimeSpan ComputeRetryDelay(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval) =>
-        ComputeRetryDelayWithJitter(hasDeadline, startTimestamp, waitTimeout, pollInterval, Random.Shared.NextDouble());
+    private TimeSpan ComputeRetryDelay(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval) =>
+        ComputeRetryDelayWithJitter(hasDeadline, startTimestamp, waitTimeout, pollInterval, Random.Shared.NextDouble(), _clock);
 
     private string BuildLockToken() =>
         string.Create(_tokenPrefix.Length + 32, _tokenPrefix, static (span, prefix) =>

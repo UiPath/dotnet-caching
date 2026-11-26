@@ -15,6 +15,8 @@ public static class TelemetryListeners
 [Collection(TelemetryListeners.Name)]
 public sealed class TelemetryListeningTests : IDisposable
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private readonly ConcurrentQueue<(string Instrument, double Value, Dictionary<string, object?> Tags)> _measurements = new();
     private readonly ConcurrentQueue<Activity> _activities = new();
     private readonly List<IDisposable> _listeners = [];
@@ -107,7 +109,7 @@ public sealed class TelemetryListeningTests : IDisposable
         provider.TrackMetric("unlistened", 1);
         provider.TrackEvent("unlistened");
         provider.TrackException(new InvalidOperationException());
-        provider.TrackDependency("t", "t", "unlistened", "d", DateTimeOffset.UtcNow, TimeSpan.Zero, "r", true);
+        provider.TrackDependency("t", "t", "unlistened", "d", Clock.GetUtcNow(), TimeSpan.Zero, "r", true);
         _measurements.Should().BeEmpty();
         _activities.Should().BeEmpty();
     }
@@ -138,7 +140,7 @@ public sealed class TelemetryListeningTests : IDisposable
 
         provider.IsListening.Should().BeTrue();
         provider.TrackMetric("m1", 2.5, [new("cache", "c1")]);
-        provider.TrackDependency("t", "t", "metrics-only", "d", DateTimeOffset.UtcNow, TimeSpan.Zero, "r", true);
+        provider.TrackDependency("t", "t", "metrics-only", "d", Clock.GetUtcNow(), TimeSpan.Zero, "r", true);
 
         var (_, value, tags) = _measurements.Single(m => m.Tags.GetValueOrDefault("metric.name") as string == "m1");
         value.Should().Be(2.5);
@@ -154,7 +156,7 @@ public sealed class TelemetryListeningTests : IDisposable
 
         provider.IsListening.Should().BeTrue();
         provider.TrackMetric("traces-only", 1);
-        provider.TrackDependency("Redis", "host", "GET", "key", DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(3), "Hit", true, [new("Outcome", "Hit")]);
+        provider.TrackDependency("Redis", "host", "GET", "key", Clock.GetUtcNow(), TimeSpan.FromMilliseconds(3), "Hit", true, [new("Outcome", "Hit")]);
 
         _measurements.Should().BeEmpty();
         var activity = _activities.Single(a => a.OperationName == "GET");
@@ -233,7 +235,7 @@ public sealed class TelemetryListeningTests : IDisposable
     }
 
     private static TelemetryScope NewScope(ICachingTelemetryProvider provider) =>
-        new(provider, TimeProvider.System, "P", "M", typeof(string));
+        new(provider, Clock, "P", "M", typeof(string));
 
     private void ListenToMeter(Func<Instrument, bool>? include = null)
     {

@@ -11,6 +11,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase, IPubSubSubscript
     private readonly IResiliencePipelineProvider _resiliencePipelineProvider;
     private readonly PerTopicOptionsRegistry<RedisPubSubTopicOptions> _registry;
     private readonly Uri _sourceUri;
+    private readonly TimeProvider _clock;
     private readonly IRedisChannelStrategy _defaultChannelStrategy;
     private readonly CancellationTokenSource _stopTokenSource = new();
     private readonly ILogger<RedisPubSubTopicProvider> _logger;
@@ -26,8 +27,24 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase, IPubSubSubscript
         ICachingTelemetryProvider telemetryProvider,
         IRedisProfiler redisProfiler,
         ILoggerFactory loggerFactory)
+        : this(optionsAccessor, cacheOptionsAccessor, registry, redis, formatter, resiliencePipelineProvider, telemetryProvider, redisProfiler, loggerFactory, TimeProvider.System)
+    {
+    }
+
+    public RedisPubSubTopicProvider(
+        IOptions<RedisPubSubTopicOptions> optionsAccessor,
+        IOptions<CacheOptions> cacheOptionsAccessor,
+        PerTopicOptionsRegistry<RedisPubSubTopicOptions> registry,
+        IRedisConnector redis,
+        IEventFormatterProxy<ICacheEvent> formatter,
+        IResiliencePipelineProvider resiliencePipelineProvider,
+        ICachingTelemetryProvider telemetryProvider,
+        IRedisProfiler redisProfiler,
+        ILoggerFactory loggerFactory,
+        TimeProvider clock)
         : base(redis, telemetryProvider, redisProfiler, loggerFactory, optionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
+        _clock = clock;
         _options = optionsAccessor.Value;
         var cacheOptions = cacheOptionsAccessor.Value;
         _registry = registry;
@@ -70,12 +87,13 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase, IPubSubSubscript
             ConnectionState,
             Redis,
             strategy,
-            () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold),
+            () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold, _clock),
             _formatter,
             _resiliencePipelineProvider,
             resolved,
             LoggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(),
-            _stopTokenSource.Token);
+            _stopTokenSource.Token,
+            _clock);
         topic.Subscribed += () => SubscriptionConfirmed?.Invoke();
         return topic;
     }

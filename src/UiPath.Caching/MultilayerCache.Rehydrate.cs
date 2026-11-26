@@ -153,9 +153,9 @@ internal sealed partial class MultilayerCache
         var rehydrate = policy.Rehydrate!;
         var targets = AdoptionTargets(states, byState, token);
         var keys = Array.ConvertAll(targets, static o => o.CacheKey);
-        using var read = CancellationTokenSource.CreateLinkedTokenSource(token);
         var budget = RehydrationCoordinator.AdoptReadTimeout(rehydrate, duration);
-        read.CancelAfter(budget);
+        using var timeout = new CancellationTokenSource(budget, _clock);
+        using var read = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
         var marks = MarkInnerReads(keys, targets[0].TopicKey);
         Task<ICacheEntry<T?>[]>? reading = null;
         ICacheEntry<T?>[] fetched;

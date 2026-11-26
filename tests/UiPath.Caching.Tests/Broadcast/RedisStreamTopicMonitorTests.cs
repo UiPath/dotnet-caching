@@ -9,6 +9,8 @@ using UiPath.Caching.Tests.Telemetry;
 namespace UiPath.Caching.Tests;
 public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private readonly bool _successStreamDeleteConsumerGroup = true;
     private IRedisConnector _redisConnector = default!;
@@ -37,7 +39,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         Options.Create(_redisCacheOptions),
         Options.Create(_cacheOptions),
         _logger,
-        TimeProvider.System);
+        Clock);
 
     [Fact]
     public async Task Works_as_expected_when_locked()
@@ -73,7 +75,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     public async Task StreamsWithNoConsumerGroups_and_new_message_are_not_deleted()
     {
         Sut.Initialize();
-        _lastGeneratedId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-0";
+        _lastGeneratedId = $"{Clock.GetUtcNow().ToUnixTimeMilliseconds()}-0";
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
@@ -83,7 +85,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     public async Task StreamsWithNoConsumerGroups_and_old_message_are_deleted()
     {
         Sut.Initialize();
-        _lastGeneratedId = $"{DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds()}-0";
+        _lastGeneratedId = $"{Clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds()}-0";
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.Received().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
@@ -128,7 +130,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         // A multi-key delete would need both keys on one Redis Cluster slot, which the configured
         // IRedisKeyStrategy and any connection key prefix are free to prevent.
         _streams = ["stream1"];
-        _lastGeneratedId = $"{DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds()}-0";
+        _lastGeneratedId = $"{Clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds()}-0";
         _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
 
         Sut.Initialize();
@@ -180,7 +182,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task Quarantine_Unknown_consumer_group()
     {
-        var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 0);
+        var g1 = GenerateGroupInfo(Clock.GetUtcNow().Subtract(TimeSpan.FromMilliseconds(10)), 0);
         _streamGroupInfos = [g1];
         Sut.Initialize();
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
@@ -191,7 +193,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     public async Task No_Quarantine_if_transaction_fails()
     {
         _transactionSuccess = false;
-        var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 0);
+        var g1 = GenerateGroupInfo(Clock.GetUtcNow().Subtract(TimeSpan.FromMilliseconds(10)), 0);
         _streamGroupInfos = [g1];
         Sut.Initialize();
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
@@ -203,9 +205,9 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     {
         // Every write to this hash demands the primary. A replica that has not caught up reports a timestamp the
         // primary already deleted, and the group is then deleted without ever serving its quarantine.
-        var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 0);
+        var g1 = GenerateGroupInfo(Clock.GetUtcNow().Subtract(TimeSpan.FromMilliseconds(10)), 0);
         _streamGroupInfos = [g1];
-        _quarantineValue = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMilliseconds(10)).ToString("O");
+        _quarantineValue = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMilliseconds(10)).ToString("O");
 
         Sut.Initialize();
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
@@ -217,9 +219,9 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task Consumer_group_delete()
     {
-        var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 0);
+        var g1 = GenerateGroupInfo(Clock.GetUtcNow().Subtract(TimeSpan.FromMilliseconds(10)), 0);
         _streamGroupInfos = [g1];
-        _quarantineValue = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMilliseconds(10)).ToString("O");
+        _quarantineValue = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMilliseconds(10)).ToString("O");
         Sut.Initialize();
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.Received().StreamDeleteConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
@@ -229,7 +231,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task Consumer_group_info()
     {
-        var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 1);
+        var g1 = GenerateGroupInfo(Clock.GetUtcNow().Subtract(TimeSpan.FromMilliseconds(10)), 1);
         _streamGroupInfos = [g1];
         var c1 = GenerateConsumerInfo();
         _streamConsumerInfos = [c1];
@@ -242,7 +244,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task Trim_stream()
     {
-        var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 1);
+        var g1 = GenerateGroupInfo(Clock.GetUtcNow().Subtract(TimeSpan.FromMilliseconds(10)), 1);
         _streamGroupInfos = [g1];
         var c1 = GenerateConsumerInfo();
         _streamConsumerInfos = [c1];
@@ -318,7 +320,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         // Stale = last-delivered older than MaintainerTrimInterval (default 1h). Consumer count > 0 so it
         // routes into CheckStreamGroupWithConsumersAsync, then the stale branch — and with no quarantine
         // record the group is added to quarantine via HashSet.
-        var stale = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var stale = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
         var g1 = GenerateGroupInfo(stale, consumerCount: 1);
         _streamGroupInfos = [g1];
         _quarantineValue = RedisValue.Null;
@@ -339,10 +341,10 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     public async Task Group_with_consumers_and_stale_LastDeliveredId_survives_a_quarantine_that_has_not_elapsed()
     {
         // A group recorded a moment ago has not served the wait; deleting on the record's presence collapsed it.
-        var stale = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var stale = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
         var g1 = GenerateGroupInfo(stale, consumerCount: 1);
         _streamGroupInfos = [g1];
-        _quarantineValue = DateTimeOffset.UtcNow.ToString("O");
+        _quarantineValue = Clock.GetUtcNow().ToString("O");
 
         Sut.Initialize();
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
@@ -353,10 +355,10 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task Group_with_consumers_and_stale_LastDeliveredId_is_deleted_once_the_quarantine_has_elapsed()
     {
-        var stale = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var stale = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
         var g1 = GenerateGroupInfo(stale, consumerCount: 1);
         _streamGroupInfos = [g1];
-        _quarantineValue = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToString("O");
+        _quarantineValue = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToString("O");
 
         Sut.Initialize();
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
@@ -374,7 +376,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task Group_with_consumers_caught_up_on_a_quiet_stream_is_not_quarantined()
     {
-        var quiet = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var quiet = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
         var g1 = GenerateGroupInfo(quiet, consumerCount: 1);
         _streamGroupInfos = [g1];
         _lastGeneratedId = g1.LastDeliveredId!;
@@ -394,11 +396,11 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task Group_with_consumers_caught_up_on_a_quiet_stream_leaves_quarantine_instead_of_being_deleted()
     {
-        var quiet = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var quiet = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
         var g1 = GenerateGroupInfo(quiet, consumerCount: 1);
         _streamGroupInfos = [g1];
         _lastGeneratedId = g1.LastDeliveredId!;
-        _quarantineValue = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToString("O");
+        _quarantineValue = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToString("O");
 
         Sut.Initialize();
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
@@ -413,7 +415,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task Group_with_consumers_behind_by_an_entry_of_the_same_millisecond_is_still_quarantined()
     {
-        var stale = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var stale = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
         var g1 = GenerateGroupInfo(stale, consumerCount: 1);
         _streamGroupInfos = [g1];
         _lastGeneratedId = $"{stale.ToUnixTimeMilliseconds()}-1";
@@ -435,7 +437,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [InlineData("not-an-id")]
     public async Task Group_with_consumers_and_stale_LastDeliveredId_is_quarantined_when_the_stream_head_is_unreadable(string lastGeneratedId)
     {
-        var stale = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var stale = Clock.GetUtcNow().Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
         var g1 = GenerateGroupInfo(stale, consumerCount: 1);
         _streamGroupInfos = [g1];
         _lastGeneratedId = lastGeneratedId;
@@ -631,7 +633,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     {
         // Both TrackStream and TrackStreamGroup early-return when TrackStatistics is false.
         _streamOptions.TrackStatistics = false;
-        var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), consumerCount: 1);
+        var g1 = GenerateGroupInfo(Clock.GetUtcNow().Subtract(TimeSpan.FromMilliseconds(10)), consumerCount: 1);
         _streamGroupInfos = [g1];
         _streamConsumerInfos = [GenerateConsumerInfo()];
 
@@ -679,7 +681,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
             AppShortName = "tst",
         };
         _logger = _fixture.Freeze<ILogger<RedisStreamHealthMaintainer>>();
-        _lastGeneratedId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-0";
+        _lastGeneratedId = $"{Clock.GetUtcNow().ToUnixTimeMilliseconds()}-0";
 
         _database.StreamInfoAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(c => GenerateStreamInfo(_streamGroupInfos.Length));
@@ -733,7 +735,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
 #pragma warning disable CS0618 // Deprecated but still honored, and the key shape it selects is what these tests cover.
     private void PrepareTrim()
     {
-        _streamGroupInfos = [GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 1)];
+        _streamGroupInfos = [GenerateGroupInfo(Clock.GetUtcNow().Subtract(TimeSpan.FromMilliseconds(10)), 1)];
         _streamConsumerInfos = [GenerateConsumerInfo()];
         _redisConnector.Version.Returns(Version.Parse("7.2.4"));
         Sut.Initialize();

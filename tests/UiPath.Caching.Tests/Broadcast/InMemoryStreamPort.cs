@@ -13,6 +13,8 @@ namespace UiPath.Caching.Tests.Broadcast;
 internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : IStreamPort
 {
     private readonly object _lock = new();
+    private readonly List<(Func<bool> Condition, TaskCompletionSource Done)> _observers = [];
+
     // Values are byte-backed, as the client parses them off the wire.
     private readonly List<(long Seq, RedisValue Payload, RedisValue Source)> _log = [];
     private readonly SortedSet<long> _pending = [];
@@ -84,6 +86,20 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
     /// <summary>How often <paramref name="op"/> was called; <see cref="Op.Info"/> and <see cref="Op.Groups"/> count the checks sent with a read.</summary>
     public int Calls(Op op) => Volatile.Read(ref _calls[(int)op]);
 
+    public Task WhenAsync(Func<bool> condition)
+    {
+        lock (_lock)
+        {
+            if (condition())
+            {
+                return Task.CompletedTask;
+            }
+
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _observers.Add((condition, done));
+            return done.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+    }
     /// <summary>Holds the next <paramref name="op"/> to start, before it touches the stream; a check is held with its read.</summary>
     public Held Hold(Op op)
     {
@@ -274,6 +290,18 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         finally
         {
             held?.Complete();
+            lock (_lock)
+            {
+                for (var i = _observers.Count - 1; i >= 0; i--)
+                {
+                    var observer = _observers[i];
+                    if (observer.Condition())
+                    {
+                        _observers.RemoveAt(i);
+                        observer.Done.TrySetResult();
+                    }
+                }
+            }
         }
     }
 

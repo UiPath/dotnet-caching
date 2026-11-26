@@ -1,41 +1,41 @@
-using System.Diagnostics;
 using StackExchange.Redis;
 
 namespace UiPath.Caching.Tests.Broadcast;
 
 public class ConsumerGroupsTests
 {
-    private static readonly long Joined = Stopwatch.GetTimestamp();
-    private static readonly long RepliedAt = Joined + Stopwatch.Frequency;    // the reply came 1 s after the join
+    private static readonly ManualTimeProvider Clock = new(DateTimeOffset.UnixEpoch);
+    private static readonly long Joined = Clock.GetTimestamp();
+    private static readonly long RepliedAt = Joined + Clock.TimestampFrequency;
 
     [Fact]
     public void An_unknown_head_counts_as_added() =>
-        ConsumerGroups.AddedSince(null, Joined).Should().BeTrue();
+        ConsumerGroups.AddedSince(null, Joined, Clock).Should().BeTrue();
 
     [Theory]
     [InlineData(false, 0L)]
     [InlineData(true, 0L)]
     public void A_missing_or_never_written_stream_had_nothing_added(bool exists, long added) =>
-        ConsumerGroups.AddedSince(Head(exists, lastMs: 0, added), Joined).Should().BeFalse();
+        ConsumerGroups.AddedSince(Head(exists, lastMs: 0, added), Joined, Clock).Should().BeFalse();
 
     [Fact]
     public void A_head_from_before_the_join_had_nothing_added() =>
-        ConsumerGroups.AddedSince(Head(lastMs: 100_000 - 1_000 - 50), Joined).Should().BeFalse();
+        ConsumerGroups.AddedSince(Head(lastMs: 100_000 - 1_000 - 50), Joined, Clock).Should().BeFalse();
 
     [Theory]
     [InlineData(100_000 - 1_000)]        // the join instant itself
     [InlineData(100_000 - 1_000 - 2)]    // within the truncation margin
     [InlineData(100_000)]
     public void A_head_from_the_join_on_was_added(long lastMs) =>
-        ConsumerGroups.AddedSince(Head(lastMs: lastMs), Joined).Should().BeTrue();
+        ConsumerGroups.AddedSince(Head(lastMs: lastMs), Joined, Clock).Should().BeTrue();
 
     [Fact]
     public void A_head_with_no_id_counts_as_added() =>
-        ConsumerGroups.AddedSince(Head(lastMs: null), Joined).Should().BeTrue();
+        ConsumerGroups.AddedSince(Head(lastMs: null), Joined, Clock).Should().BeTrue();
 
     [Fact]
     public void Below_Redis_7_with_no_entry_count_the_id_decides() =>
-        ConsumerGroups.AddedSince(Head(lastMs: 10, added: null), Joined).Should().BeFalse();
+        ConsumerGroups.AddedSince(Head(lastMs: 10, added: null), Joined, Clock).Should().BeFalse();
 
     [Fact]
     public async Task Below_Redis_7_the_group_is_made_at_the_id_the_head_read()

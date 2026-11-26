@@ -10,7 +10,7 @@ internal static class InMemoryMultilayer
 {
     public static MultilayerCache Cache(InMemoryCacheOptions? options = null, ICache? inner = null, bool connectionMonitor = false, TimeProvider? clock = null, ITopicFactory? topics = null, IChangeTokenFactory? tokens = null, IMemoryCacheFactory? memory = null, IDistributedLock? distributedLock = null)
     {
-        clock ??= TimeProvider.System;
+        clock ??= new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         options ??= new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = connectionMonitor };
         return RunTables.Track(new MultilayerCache(
@@ -32,7 +32,7 @@ internal static class InMemoryMultilayer
 
     public static MultilayerHashCache HashCache(InMemoryCacheOptions? options = null, IHashCache? inner = null, bool connectionMonitor = false, IMemoryCacheFactory? memory = null, IDistributedLock? distributedLock = null, TimeProvider? clock = null)
     {
-        clock ??= TimeProvider.System;
+        clock ??= new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         options ??= new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = connectionMonitor };
         return RunTables.Track(new MultilayerHashCache(

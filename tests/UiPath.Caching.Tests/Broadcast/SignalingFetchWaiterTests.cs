@@ -15,7 +15,7 @@ public class SignalingFetchWaiterTests
         await StillWaitingAsync(wait);
         clock.Advance(1.Milliseconds());
 
-        await wait.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await wait.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -28,20 +28,19 @@ public class SignalingFetchWaiterTests
         wait.IsCompleted.Should().BeFalse();
         sut.Signal();
 
-        await wait.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await wait.WaitAsync(TestContext.Current.CancellationToken);
         wait.IsCompletedSuccessfully.Should().BeTrue();
     }
 
     [Fact]
     public async Task Signal_before_wait_is_consumed_by_next_wait()
     {
-        using var sut = new SignalingFetchWaiter(30.Seconds());
+        using var sut = new SignalingFetchWaiter(30.Seconds(), timeProvider: NewClock());
         sut.Signal();
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await sut.WaitAsync(CancellationToken.None);
-
-        sw.Elapsed.Should().BeLessThan(5.Seconds());
+        var wait = sut.WaitAsync(CancellationToken.None);
+        wait.IsCompletedSuccessfully.Should().BeTrue();
+        await wait;
     }
 
     [Fact]
@@ -54,14 +53,14 @@ public class SignalingFetchWaiterTests
         sut.Signal();
         sut.Signal();
 
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
 
         var second = sut.WaitAsync(CancellationToken.None);
         await StillWaitingAsync(second);
         clock.Advance(interval - 1.Milliseconds());
         await StillWaitingAsync(second);
         clock.Advance(1.Milliseconds());
-        await second.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await second.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -91,11 +90,11 @@ public class SignalingFetchWaiterTests
         }
 
         thrown.Should().Be(0);
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
         var next = sut.WaitAsync(200.Milliseconds(), CancellationToken.None);
         await StillWaitingAsync(next);
         clock.Advance(200.Milliseconds());
-        await next.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await next.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -110,7 +109,7 @@ public class SignalingFetchWaiterTests
         var next = sut.WaitAsync(100.Milliseconds(), CancellationToken.None);
         await StillWaitingAsync(next);
         clock.Advance(100.Milliseconds());
-        await next.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await next.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -129,7 +128,7 @@ public class SignalingFetchWaiterTests
     [Fact]
     public async Task WaitAsync_throws_when_token_cancelled()
     {
-        using var sut = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new SignalingFetchWaiter(5.Seconds(), timeProvider: NewClock());
         using var cts = new CancellationTokenSource();
         var task = sut.WaitAsync(cts.Token);
         await cts.CancelAsync();
@@ -141,7 +140,7 @@ public class SignalingFetchWaiterTests
     [Fact]
     public async Task Signal_after_dispose_is_a_noop()
     {
-        var sut = new SignalingFetchWaiter(50.Milliseconds());
+        var sut = new SignalingFetchWaiter(50.Milliseconds(), timeProvider: NewClock());
         sut.Dispose();
 
         Action act = () => sut.Signal();
@@ -153,7 +152,7 @@ public class SignalingFetchWaiterTests
     [Fact]
     public async Task WaitAsync_after_dispose_does_not_throw()
     {
-        var sut = new SignalingFetchWaiter(50.Milliseconds());
+        var sut = new SignalingFetchWaiter(50.Milliseconds(), timeProvider: NewClock());
         sut.Dispose();
 
         Func<Task> act = async () => await sut.WaitAsync(CancellationToken.None);
@@ -163,7 +162,7 @@ public class SignalingFetchWaiterTests
     [Fact]
     public void Dispose_is_idempotent()
     {
-        var sut = new SignalingFetchWaiter(50.Milliseconds());
+        var sut = new SignalingFetchWaiter(50.Milliseconds(), timeProvider: NewClock());
         sut.Dispose();
 
         Action act = () => sut.Dispose();
@@ -174,23 +173,24 @@ public class SignalingFetchWaiterTests
     [Fact]
     public async Task A_wait_lasts_the_poll_interval_until_the_notify_is_live()
     {
-        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 30.Seconds());
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 30.Seconds(), clock);
 
-        Func<Task> act = () => sut.WaitAsync(CancellationToken.None);
-
-        await act.Should().CompleteWithinAsync(10.Seconds());
+        await TimeOutAsync(sut, clock, 100.Milliseconds());
     }
 
     [Fact]
     public async Task A_wait_lasts_the_notified_interval_while_the_notify_is_live()
     {
-        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 30.Seconds());
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 30.Seconds(), clock);
         sut.SetNotifyLive(true);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
         var wait = sut.WaitAsync(cts.Token);
 
-        (await Task.WhenAny(wait, Task.Delay(600.Milliseconds(), TestContext.Current.CancellationToken))).Should().NotBeSameAs(wait, "the short interval is 100 ms");
+        clock.Advance(600.Milliseconds());
+        wait.IsCompleted.Should().BeFalse("the short interval is 100 ms");
         await cts.CancelAsync();
         Func<Task> act = () => wait;
         await act.Should().ThrowAsync<OperationCanceledException>();
@@ -208,46 +208,52 @@ public class SignalingFetchWaiterTests
 
         sut.SetNotifyLive(false);
 
-        await wait.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+        await wait.WaitAsync(TestContext.Current.CancellationToken);
         var next = sut.WaitAsync(CancellationToken.None);
         await StillWaitingAsync(next);
         clock.Advance(299.Milliseconds());
         await StillWaitingAsync(next);
         clock.Advance(1.Milliseconds());
-        await next.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await next.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
     public async Task Gaining_the_notify_does_not_wake_the_wait_in_progress()
     {
-        using var sut = new SignalingFetchWaiter(30.Seconds(), 30.Seconds());
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(30.Seconds(), 30.Seconds(), clock);
         var wait = sut.WaitAsync(CancellationToken.None);
 
         sut.SetNotifyLive(true);
 
-        (await Task.WhenAny(wait, Task.Delay(300.Milliseconds(), TestContext.Current.CancellationToken))).Should().NotBeSameAs(wait);
+        clock.Advance(300.Milliseconds());
+        wait.IsCompleted.Should().BeFalse();
+        sut.Signal();
+        await wait;
     }
 
     [Fact]
     public async Task Without_a_notified_interval_a_live_notify_changes_nothing()
     {
-        using var sut = new SignalingFetchWaiter(100.Milliseconds());
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), timeProvider: clock);
         sut.SetNotifyLive(true);
 
-        Func<Task> act = () => sut.WaitAsync(CancellationToken.None);
-
-        await act.Should().CompleteWithinAsync(10.Seconds());
+        await TimeOutAsync(sut, clock, 100.Milliseconds());
     }
 
     [Fact]
     public async Task An_explicit_timeout_ignores_the_notify_state()
     {
-        using var sut = new SignalingFetchWaiter(30.Seconds(), 30.Seconds());
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(30.Seconds(), 30.Seconds(), clock);
         sut.SetNotifyLive(true);
 
-        Func<Task> act = () => sut.WaitAsync(100.Milliseconds(), CancellationToken.None);
-
-        await act.Should().CompleteWithinAsync(10.Seconds());
+        var wait = sut.WaitAsync(100.Milliseconds(), CancellationToken.None);
+        clock.Advance(99.Milliseconds());
+        await StillWaitingAsync(wait);
+        clock.Advance(1.Milliseconds());
+        await wait;
     }
 
     [Fact]
@@ -276,7 +282,7 @@ public class SignalingFetchWaiterTests
         await TimeOutAsync(sut, clock, 5.Seconds());
         sut.ObserveRead(fromOthers: true);
         sut.Ring();
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
         sut.ObserveRead(fromOthers: true);
         await TimeOutAsync(sut, clock, 5.Seconds());
 
@@ -296,7 +302,7 @@ public class SignalingFetchWaiterTests
         sut.ObserveRead(fromOthers: true);
         // The late doorbell wakes a read that finds the entry already taken.
         sut.Ring();
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
         sut.ObserveRead(fromOthers: false);
         await TimeOutAsync(sut, clock, 5.Seconds());
 
@@ -334,7 +340,7 @@ public class SignalingFetchWaiterTests
             sut.Ring();
             sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged);
             // The ring left a wake-up pending; the read it causes finds nothing.
-            await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+            await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
             sut.ObserveRead(fromOthers: false);
         }
 
@@ -370,7 +376,7 @@ public class SignalingFetchWaiterTests
         {
             var wait = sut.WaitAsync(1.Seconds(), CancellationToken.None);
             clock.Advance(1.Seconds());
-            await wait.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+            await wait.WaitAsync(TestContext.Current.CancellationToken);
             sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "a retry or a disconnected wait says nothing about the doorbell");
         }
     }
@@ -384,11 +390,11 @@ public class SignalingFetchWaiterTests
         await ShortenAsync(sut, clock);
 
         sut.Ring();
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
         sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "an unannounced entry is too recent");
         clock.Advance(60.Seconds());
         sut.Ring();
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
 
         sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Recovered);
         sut.Shortened.Should().BeFalse();
@@ -408,7 +414,7 @@ public class SignalingFetchWaiterTests
         sut.ObserveRead(fromOthers: true);
         clock.Advance(30.Seconds());
         sut.Ring();
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
 
         sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "some writer still does not ring");
         sut.Shortened.Should().BeTrue();
@@ -425,7 +431,7 @@ public class SignalingFetchWaiterTests
         sut.SetNotifyLive(false);
         sut.SetNotifyLive(true);
         // Losing the subscription left a wake-up pending; the read it causes is the one that reports.
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
 
         sut.Shortened.Should().BeFalse("the new subscription has missed nothing yet");
         sut.ObserveRead(fromOthers: false).Should().Be(DoorbellHealth.Recovered, "the fallback ended, so it is reported once");
@@ -461,12 +467,12 @@ public class SignalingFetchWaiterTests
 
         clock.Advance(60.Seconds() - 1.Milliseconds());
         sut.Ring();
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
         sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "12 notified intervals have not passed yet");
 
         clock.Advance(1.Milliseconds());
         sut.Ring();
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(TestContext.Current.CancellationToken);
         sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Recovered);
     }
 
@@ -490,13 +496,12 @@ public class SignalingFetchWaiterTests
         clock.Advance(interval - 1.Milliseconds());
         await StillWaitingAsync(wait);
         clock.Advance(1.Milliseconds());
-        await wait.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await wait.WaitAsync(TestContext.Current.CancellationToken);
     }
 
-    /// <summary>Gives a wait that should still be pending a real moment to finish wrongly, then asserts it has not.</summary>
-    private static async Task StillWaitingAsync(Task wait)
+    private static Task StillWaitingAsync(Task wait)
     {
-        await Task.Delay(100.Milliseconds(), TestContext.Current.CancellationToken);
         wait.IsCompleted.Should().BeFalse();
+        return Task.CompletedTask;
     }
 }

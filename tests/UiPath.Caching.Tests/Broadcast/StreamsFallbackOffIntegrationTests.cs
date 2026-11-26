@@ -1,7 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using UiPath.Caching.Config;
+using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Redis;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.Broadcast;
 
@@ -11,6 +13,9 @@ namespace UiPath.Caching.Tests.Broadcast;
 public sealed class StreamsFallbackOffIntegrationTests(RedisContainerFixture fixture) : IAsyncLifetime
 {
     private readonly string _app = $"off{Guid.NewGuid():N}"[..10];
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+    private readonly RecordingTelemetryProvider _telemetry = new();
+    private readonly TaskCompletionSource _off = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private ConnectionMultiplexer? _admin;
     private ServiceProvider? _node;
     private string? _user;
@@ -19,6 +24,13 @@ public sealed class StreamsFallbackOffIntegrationTests(RedisContainerFixture fix
 
     public async ValueTask InitializeAsync()
     {
+        _telemetry.EventRecorded += record =>
+        {
+            if (record.Name == Metrics.TransportChanged && record.Properties?[Metrics.TransportTo] == Metrics.TransportOff)
+            {
+                _off.TrySetResult();
+            }
+        };
         if (fixture.Enabled)
         {
             _admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
@@ -55,7 +67,8 @@ public sealed class StreamsFallbackOffIntegrationTests(RedisContainerFixture fix
 
         (await cache.SetAsync(key, "value", Ct)).Should().BeTrue("Off publishes true, so the write is not reported as unbroadcast");
 
-        (await EventuallyAsync(() => capability.PubSubIsRefused)).Should().BeTrue("the refused PUBLISH or SUBSCRIBE latched");
+        await _off.Task.WaitAsync(Ct);
+        capability.PubSubIsRefused.Should().BeTrue("the refused PUBLISH or SUBSCRIBE latched");
         var topics = _node.GetRequiredService<RedisStreamsTopicProvider>().CreatedTopics().OfType<StreamsFallbackTopic>().ToList();
         topics.Should().NotBeEmpty();
         topics.Should().OnlyContain(t => !t.OnStreams && !t.IsSubscribed, "the topic is Off");
@@ -64,24 +77,10 @@ public sealed class StreamsFallbackOffIntegrationTests(RedisContainerFixture fix
         (await cache.GetAsync<string>(key, Ct)).Should().Be("second");
     }
 
-    private static async Task<bool> EventuallyAsync(Func<bool> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (DateTime.UtcNow < until)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(50, Ct);
-        }
-
-        return condition();
-    }
-
     private ServiceProvider Node(string connectionString) =>
         new ServiceCollection()
+            .AddSingleton<TimeProvider>(_clock)
+            .AddSingleton<ICachingTelemetryProvider>(_telemetry)
             .AddCaching(
                 b =>
                 {

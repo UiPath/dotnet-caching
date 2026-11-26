@@ -8,6 +8,8 @@ namespace UiPath.Caching.Tests.Broadcast;
 
 public class ChangeTokenTests : IAsyncLifetime
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private readonly RecordingTelemetryProvider _telemetryProvider = new();
@@ -334,7 +336,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void A_peer_set_the_hook_declines_clears_a_refreshed_expiration()
     {
         ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => false, null);
-        Sut.OnNext(PeerEvent(KnownEventTypes.CacheRefreshed, new Dictionary<string, object?> { ["_expiration_"] = DateTimeOffset.Now.AddMinutes(5) }));
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheRefreshed, new Dictionary<string, object?> { ["_expiration_"] = Clock.GetUtcNow().AddMinutes(5) }));
         Sut.Expiration.Should().NotBeNull();
 
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
@@ -386,7 +388,7 @@ public class ChangeTokenTests : IAsyncLifetime
         ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => true, null);
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
 
-        Sut.OnNext(PeerEvent(KnownEventTypes.CacheRefreshed, new Dictionary<string, object?> { ["_expiration_"] = DateTimeOffset.Now }));
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheRefreshed, new Dictionary<string, object?> { ["_expiration_"] = Clock.GetUtcNow() }));
 
         Sut.HasChanged.Should().BeTrue();
         Sut.Expiration.Should().BeNull();
@@ -465,7 +467,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Source = new Uri("urn:machine"),
             Data = new CacheEventData(_key, new Dictionary<string, object?>
             {
-                ["_expiration_"] = DateTimeOffset.Now,
+                ["_expiration_"] = Clock.GetUtcNow(),
                 ["_metadata_"] = new Dictionary<string, string?> { ["key"] = _key },
             }),
             Type = _fixture.Create<string>(),
@@ -518,7 +520,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Source = new Uri("urn:machine"),
             Data = new CacheEventData(_key, new Dictionary<string, object?>
             {
-                ["_expiration_"] = DateTimeOffset.Now.AddMinutes(5),
+                ["_expiration_"] = Clock.GetUtcNow().AddMinutes(5),
                 ["_metadata_"] = new Dictionary<string, string?> { ["key"] = _key },
             }),
             Type = _fixture.Create<string>(),
@@ -557,7 +559,7 @@ public class ChangeTokenTests : IAsyncLifetime
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
-            Data = new CacheEventData(_key, new Dictionary<string, object?> { ["_expiration_"] = DateTimeOffset.Now.AddMinutes(5) }),
+            Data = new CacheEventData(_key, new Dictionary<string, object?> { ["_expiration_"] = Clock.GetUtcNow().AddMinutes(5) }),
             Type = _fixture.Create<string>(),
         });
 
@@ -591,7 +593,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Source = new Uri("urn:machine"),
             Data = new CacheEventData(_key, new Dictionary<string, object?>
             {
-                ["_expiration_"] = DateTimeOffset.Now,
+                ["_expiration_"] = Clock.GetUtcNow(),
                 ["_metadata_"] = new Dictionary<string, string?>
                 {
                     ["key"] = _key,
@@ -616,7 +618,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Source = new Uri("urn:machine"),
             Data = new CacheEventData(_key, new Dictionary<string, object?>
             {
-                ["_expiration_"] = DateTimeOffset.Now,
+                ["_expiration_"] = Clock.GetUtcNow(),
                 ["_metadata_"] = new Dictionary<string, string?>
                 {
                     ["key"] = _key,
@@ -643,7 +645,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Source = _source,
             Data = new CacheEventData(_key, new Dictionary<string, object?>
             {
-                ["_expiration_"] = DateTimeOffset.Now,
+                ["_expiration_"] = Clock.GetUtcNow(),
                 ["_metadata_"] = new Dictionary<string, string?>
                 {
                     ["key"] = _key,
