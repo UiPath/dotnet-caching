@@ -328,7 +328,7 @@ public sealed class DryRunTests(RedisFixture fixture)
     [Fact]
     public async Task A_paused_rate_holds_the_first_scan_and_pages_use_the_configured_interval()
     {
-        var clock = new ManualTimeProvider(TimeProvider.System.GetUtcNow());
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         await using var kit = await MoverKit.CreateAsync(fixture, clock: clock);
         var unit = (await kit.Units.ListAsync(Ct)).Should().ContainSingle().Subject;
         var server = ScanRecordingServer.Over(unit.Primary, out var recorder);
@@ -339,19 +339,27 @@ public sealed class DryRunTests(RedisFixture fixture)
         var options = MoverKit.Quick with { MinScanInterval = interval };
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var run = Runner(kit, rate: rate, units: units, moverOptions: options).RunAsync(stop.Token);
+
+        async Task<TimeSpan> NextTimerAsync()
+        {
+            var timer = clock.NextTimerAsync(stop.Token).AsTask();
+            (await Task.WhenAny(run, timer)).Should().BeSameAs(timer);
+            return await timer;
+        }
+
         try
         {
-            await MoverKit.WaitAsync(() => Task.FromResult(clock.HasTimers || run.IsCompleted));
+            (await NextTimerAsync()).Should().Be(options.PollInterval);
             recorder.Cursors.Should().BeEmpty();
             clock.Advance(options.PollInterval);
 
-            await MoverKit.WaitAsync(() => Task.FromResult(clock.HasTimers || run.IsCompleted));
+            (await NextTimerAsync()).Should().Be(interval);
             recorder.Cursors.Should().Equal("0");
             clock.Advance(interval - TimeSpan.FromMilliseconds(1));
             recorder.Cursors.Should().Equal("0");
             clock.Advance(TimeSpan.FromMilliseconds(1));
 
-            (await run.WaitAsync(TimeSpan.FromSeconds(3), TimeProvider.System, Ct)).Scanned.Should().Be(0);
+            (await run).Scanned.Should().Be(0);
             recorder.Cursors.Should().Equal("0", "42");
         }
         finally
