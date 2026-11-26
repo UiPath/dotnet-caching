@@ -125,6 +125,64 @@ public sealed class ClusterKitTests(RedisFixture fixture)
     }
 
     [Fact]
+    public async Task A_write_made_while_the_replica_cannot_follow_is_acknowledged_and_then_lost_to_the_takeover()
+    {
+        await using var kit = await ClusterKit.CreateAsync();
+        var key = (RedisKey)("kit:lost:" + Guid.NewGuid().ToString("N"));
+        var db = kit.Mux.GetDatabase();
+        await db.StringSetAsync(key, "v0");
+        await kit.MasterOf(key).ExecuteAsync("WAIT", "1", "5000");
+        var acknowledged = false;
+
+        await kit.LoseWritesAsync(key, async () => acknowledged = await db.StringSetAsync(key, "v1"));
+
+        acknowledged.Should().BeTrue();
+        ((string?)await db.StringGetAsync(key)).Should().Be("v0", "the write never reached the replica that took over");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_rejected_replica_disconnect_restores_anonymous_access(bool closeConnection)
+    {
+        await using var kit = await ClusterKit.CreateAsync();
+        var master = kit.MasterOf("kit:lost:rejected");
+        var replica = kit.ReplicaOf(master);
+        var options = new ConfigurationOptions { AllowAdmin = true };
+        options.EndPoints.Add(master.EndPoint);
+        await using var connection = await ConnectionMultiplexer.ConnectAsync(options);
+        var rejected = new RedisServerException(RedisErrorKind.None, CommandFlags.None, "Replica disconnect rejected.");
+        var faultingMaster = InterceptingProxy.Wrap(connection.GetServer(master.EndPoint), (method, args) =>
+            method.Name == nameof(IServer.ExecuteAsync) && Equals(args[0], "CLIENT")
+                ? RejectDisconnectAsync()
+                : InterceptingProxy.Proceed);
+        try
+        {
+            var failure = await Assert.ThrowsAsync<RedisServerException>(() =>
+                kit.LoseWritesAsync(faultingMaster, replica, () => throw new InvalidOperationException("Writes must not run.")));
+
+            failure.Should().BeSameAs(rejected);
+            (await master.ConfigGetAsync("requirepass")).Single().Value.Should().BeEmpty();
+            await using var anonymous = await ConnectionMultiplexer.ConnectAsync(options);
+            ((string?)await anonymous.GetServer(master.EndPoint).ExecuteAsync("PING")).Should().Be("PONG");
+        }
+        finally
+        {
+            await master.ConfigSetAsync("requirepass", string.Empty);
+        }
+
+        async Task<RedisResult> RejectDisconnectAsync()
+        {
+            if (closeConnection)
+            {
+                await connection.CloseAsync(allowCommandsToComplete: false);
+            }
+
+            throw rejected;
+        }
+    }
+
+    [Fact]
     public async Task A_paused_master_holds_a_write_for_the_pause()
     {
         await using var kit = await ClusterKit.CreateAsync();
