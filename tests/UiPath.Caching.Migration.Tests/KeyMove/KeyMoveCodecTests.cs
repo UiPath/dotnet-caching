@@ -524,6 +524,41 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         report.EstimatedDuration.Should().Be(TimeSpan.FromMilliseconds(500));
     }
 
+    [Fact]
+    public async Task The_operations_of_UseKeyMove_initialize_hold_approve_and_dry_run_a_group_and_read_its_status()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var (provider, _, _) = await HostAsync(InPlace.Envelope, rate: new Unpaced());
+        var operations = provider.GetRequiredService<IKeyMoveOperations>();
+
+        (await operations.GetStatusAsync(Group, Ct)).Should().BeNull();
+        (await operations.HoldAsync(Group, "maintenance", Ct)).Should().BeFalse("there is no state to hold");
+        (await operations.ApproveAsync(Group, KeyMoveApprovalKinds.Start, "release floor attested", "op", Ct)).Should().Be(KeyMoveApproval.NoState);
+        (await operations.InitializeAsync(Group, Ct)).Should().BeTrue();
+        (await operations.InitializeAsync(Group, Ct)).Should().BeTrue("a state that has not started takes the registered caches again");
+
+        (await operations.HoldAsync(Group, "maintenance", Ct)).Should().BeTrue();
+        (await operations.ApproveAsync(Group, KeyMoveApprovalKinds.Start, "release floor attested", "op", Ct)).Should().Be(KeyMoveApproval.Stored);
+        (await operations.ApproveAsync(Group, "invented", "x", "op", Ct)).Should().Be(KeyMoveApproval.UnknownKind);
+        var held = await operations.GetStatusAsync(Group, Ct);
+        held.Should().Match<KeyMoveStatus>(s => s.Group == Group && s.Stage == KeyMoveStage.NotStarted && !s.Reverse && s.OperatorHold == "maintenance");
+        held.Approvals.Should().Equal(KeyMoveApprovalKinds.Start);
+        (await Db.HashGetAsync($"{Library}mg:{{{Group}}}:state", StateFields.Caches)).ToString().Should().Be("items");
+
+        await Db.StringSetAsync(L("k1"), OldClientBytes(InPlace.Envelope, new Item("k1")), TimeSpan.FromDays(1));
+        var report = await operations.RunDryRunAsync(Group, cancellationToken: Ct);
+        report.Scanned.Should().BeGreaterThanOrEqualTo(1);
+        report.EstimatedNativeBytes.Should().BeGreaterThan(0);
+        report.Caches["items"].Counts[DryRunClasses.Movable].Should().Be(1);
+        report.Caches["items"].SizeBuckets.Should().HaveCount(KeyMoveDryRunCache.SizeBucketLimits.Count + 1).And.Contain(1);
+        (await operations.RunDryRunAsync(Group, reverse: true, Ct)).Caches.Should().NotContainKey("items", "no native key is there to count");
+        // The hold kept the group from starting while it was dry run; the resume lets it go on.
+        (await operations.ResumeAsync(Group, Ct)).Should().BeTrue();
+        (await operations.GetStatusAsync(Group, Ct))!.OperatorHold.Should().BeNull();
+        var unknown = () => operations.GetStatusAsync("nobody", Ct);
+        await unknown.Should().ThrowAsync<ArgumentException>();
+    }
+
     // Without an envelope the router's library keeps its own format, the library's JSON.
     private static byte[] OldClientBytes(InPlace inPlace, Item value) => inPlace switch
     {

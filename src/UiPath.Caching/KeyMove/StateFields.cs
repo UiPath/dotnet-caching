@@ -36,6 +36,12 @@ internal static class StateFields
     public const string CanaryAt = "canaryAt";
     public const string ResidueId = "resId";
     public const string T3At = "s3AckAt";
+
+    /// <summary>Why the leader's last step took no step: its wait and hold reasons, one per line, each as <c>code:detail</c>; absent once a step is taken.</summary>
+    public const string Blocked = "blocked";
+
+    /// <summary>When the leader first saw the reasons in <see cref="Blocked"/>, in Unix milliseconds.</summary>
+    public const string BlockedAt = "blockedAt";
     public const string Attested = "att";
     public const string Fg = "fg";
     public const string Rg = "rg";

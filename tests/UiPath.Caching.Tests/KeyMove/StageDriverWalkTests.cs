@@ -65,7 +65,7 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
         kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
         var drained = await kit.StepUntilAsync("S4");
         kit.Mover.Report = FakeMoverStatus.Drained(1, ("a", 0));
-        (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.CloseForce, "residue acknowledged", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
+        (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.CloseForce, ApprovalKinds.ConfirmTexts[ApprovalKinds.CloseForce], "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
         kit.Fence = new LeaseFence(kit.Kit.Names.Lead(kit.Group), "stale");
 
         var refused = await kit.StepAsync();
@@ -320,5 +320,30 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
         (await kit.StepAsync()).Should().BeNull();
 
         (await kit.StateAsync()).State.Should().Be("S0");
+    }
+
+    [Fact]
+    public async Task A_wait_is_stored_with_the_time_it_was_first_seen_and_cleared_by_the_next_step_taken()
+    {
+        await using var kit = await DriverKit.CreateAsync(fixture);
+        await kit.PrepareAsync();
+        await kit.StepUntilAsync("S3");
+        await kit.StepAsync();
+
+        await kit.StepAsync();
+        var waiting = await kit.StateAsync();
+        var since = waiting.Field(StateFields.BlockedAt);
+        waiting.Field(StateFields.Blocked).Should().Be("stage_pending:drained:drain.confirming_pass,drain.skipped_accounted");
+        long.Parse(since, System.Globalization.CultureInfo.InvariantCulture).Should().BeLessThan(kit.Kit.Time.GetUtcNow().ToUnixTimeMilliseconds());
+        await kit.StepAsync(TimeSpan.FromSeconds(30));
+        (await kit.StateAsync()).Field(StateFields.BlockedAt).Should().Be(since, "the same reasons keep the time they were first seen");
+
+        kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
+        kit.Mover.Inventory = new Dictionary<string, long> { ["a"] = 0 };
+        var drained = await kit.StepUntilAsync("S4");
+        drained.FieldNames.Should().NotContain([StateFields.Blocked, StateFields.BlockedAt]);
+
+        await kit.StepAsync(TimeSpan.FromSeconds(30));
+        (await kit.StateAsync()).Field(StateFields.Blocked).Split('\n').Should().ContainSingle(r => r.StartsWith("close_pending:", StringComparison.Ordinal) && r.Contains("close.consent:no_consent", StringComparison.Ordinal));
     }
 }

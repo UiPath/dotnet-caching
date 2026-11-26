@@ -255,8 +255,11 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     public async Task<StateRecord> StateAsync() =>
         await Runtime.Store.ReadAsync(Group, Ct) ?? throw new InvalidOperationException("The Redis state is absent.");
 
-    public async Task ApproveAsync(string kind) =>
-        (await Runtime.Commands.ApproveAsync(Group, kind, "verified by the operator", "operator", Ct)).Should().Be(ApproveResult.Stored);
+    public async Task ApproveAsync(string kind)
+    {
+        var confirmation = ApprovalKinds.ConfirmTexts.GetValueOrDefault(kind, "verified by the operator");
+        (await Runtime.Commands.ApproveAsync(Group, kind, confirmation, "operator", Ct)).Should().Be(ApproveResult.Stored);
+    }
 
     public async Task<TransitionOutcome> InterruptTransitionAsync(string next, int requestedStage)
     {

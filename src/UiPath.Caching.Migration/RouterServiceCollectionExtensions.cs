@@ -66,6 +66,11 @@ public static class RouterServiceCollectionExtensions
 
         var section = configuration.GetSection(sectionName);
         services.AddSingleton<IRouter>(root => CreateRouter(root, builder, predicate, processId, gate, section));
+        if (builder.KeyMove is { Groups.Count: > 0 } keyMove)
+        {
+            services.AddSingleton<IKeyMoveOperations>(root => new KeyMoveOperations((Router)root.GetRequiredService<IRouter>(), keyMove));
+        }
+
         services.AddHostedService<RouterHostedService>();
         return services;
     }

@@ -103,7 +103,7 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
         await kit.StepUntilAsync("S4");
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "residue acknowledged", "op", CancellationToken.None);
         await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
-        await kit.Commands.AbandonAsync(kit.Group, "cold start accepted", "op", CancellationToken.None);
+        await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
         await kit.StepUntilAsync("S0", "none");
         kit.Fleet.All(n => n.Recycles = true);
         kit.Fence = new LeaseFence(key, "stale");
@@ -132,7 +132,7 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
         await kit.StepUntilAsync("S4");
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "residue acknowledged", "op", CancellationToken.None);
         await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
-        await kit.Commands.AbandonAsync(kit.Group, "cold start accepted", "op", CancellationToken.None);
+        await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
         await kit.StepUntilAsync("S0", "none");
         kit.Fleet.All(n => n.Recycles = true);
         kit.Data.AfterNativePurge = async () =>

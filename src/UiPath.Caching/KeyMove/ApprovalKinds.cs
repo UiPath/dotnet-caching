@@ -19,6 +19,15 @@ internal static class ApprovalKinds
     /// <summary>Consent to pass the retire gate with markers of the retiring generation left; they stay as obsolete markers.</summary>
     public const string RetireMarkers = "retire_markers";
 
+    /// <summary>The exact texts an approval needs where it lets a step go past a check; every other kind takes free text.</summary>
+    public static readonly IReadOnlyDictionary<string, string> ConfirmTexts = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        [CloseForce] = "close without the full soak or with canary keys counted",
+        [ForceReverse] = "reverse although a node does not meet the reverse gates",
+        [SkipBarrier] = "go on although a replica did not confirm the barrier",
+        [Abandon] = "abandon the move and start every cache of the group cold",
+    };
+
     public static IReadOnlyList<string> All { get; } =
         [Start, StartUnsettled, StartNoDryRun, StartMemory, ControlRecordsEvictable, Close, CloseForce, Release, ForceReverse, SkipLsweptWait, SkipBarrier, Abandon, RetireMarkers];
 }
