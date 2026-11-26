@@ -27,17 +27,26 @@ public class KeyInventoryTests(RedisContainerFixture fixture)
     }
 
     [Fact]
-    public async Task A_reverse_inventory_counts_the_native_side()
+    public async Task A_reverse_inventory_counts_native_keys_without_measuring_a_canary()
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
-        await kit.SetAsync(MoveSide.Native, "b", "k1");
+        using var counted = new KeyMoveMeterRecorder("cache.keymove.canary_keys", kit.Group);
+        kit.Space.MaxTtl["b"] = TimeSpan.FromMinutes(10);
+        await kit.SetAsync(MoveSide.Native, "b", "k1", TimeSpan.FromHours(1));
+        await kit.SetAsync(MoveSide.Native, "b", "mv2");
         await kit.SetAsync(MoveSide.Legacy, "b", "k2");
-        await kit.MoveToAsync("S4", "rev", 1);
+        kit.Kit.Time.Advance(TimeSpan.FromMinutes(1));
+        var state = await kit.MoveToAsync("S4", "rev", 1);
+        var t3 = kit.Kit.Time.GetUtcNow().ToUnixTimeMilliseconds();
+        (await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, state.Id, [(StateFields.T3At, t3.ToString(CultureInfo.InvariantCulture)), (StateFields.AllAck, state.Id)], [])).Should().Be(1);
 
         var inventory = (await kit.Inventory.RunAsync(kit.Group, Ct))!;
 
-        inventory.Residue["b"].Should().Be(1);
-        KeyInventory.SourceOf(await kit.StateAsync()).Should().Be(MoveSide.Native);
+        inventory.Residue["b"].Should().Be(2);
+        inventory.Movable.Should().Be(1);
+        KeyInventory.SourceOf(state).Should().Be(MoveSide.Native);
+        inventory.Canary.Should().BeNull();
+        counted.Measured.Should().BeEmpty();
     }
 
     [Fact]
