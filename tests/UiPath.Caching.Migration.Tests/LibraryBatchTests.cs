@@ -4,6 +4,8 @@ namespace UiPath.Caching.Migration.Tests;
 
 public sealed class LibraryBatchTests
 {
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -11,7 +13,7 @@ public sealed class LibraryBatchTests
     {
         var (cache, script) = ScriptedCache.Create();
         var policy = WriteFormats.Envelope;
-        var path = new LibraryPathClient<Item>(new FakeMigrationCache(), new FakeConnection(), key => $"mapped:{key}", () => TimeSpan.FromSeconds(3), readPolicy: () => policy) { Cache = cache };
+        var path = new LibraryPathClient<Item>(new FakeMigrationCache(_clock), new FakeConnection(), key => $"mapped:{key}", () => TimeSpan.FromSeconds(3), readPolicy: () => policy) { Cache = cache };
         var batch = path.PlainBatch ?? throw new InvalidOperationException("Missing library batch.");
         path.PlainBatch.Should().BeSameAs(batch);
 
@@ -34,7 +36,7 @@ public sealed class LibraryBatchTests
     {
         var (cache, script) = ScriptedCache.Create();
         var policy = WriteFormats.Envelope;
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(4);
+        var deadline = _clock.ToDateTimeOffset(TimeSpan.FromMinutes(4));
         var batch = new LibraryBatch<Item>(cache, key => $"mapped:{key}", () => new WriteLease(policy, null), null);
         var seen = new List<DateTimeOffset>();
         script.Answers["SetAsync"] = args =>
@@ -68,7 +70,7 @@ public sealed class LibraryBatchTests
         var (cache, script) = ScriptedCache.Create();
         var batch = new LibraryBatch<Item>(cache, key => $"mapped:{key}", null, null);
         var relative = TimeSpan.FromMinutes(5);
-        var deadline = DateTimeOffset.UtcNow + relative;
+        var deadline = _clock.ToDateTimeOffset(relative);
         var seen = new List<object?>();
         script.Answers["GetOrAddAsync"] = args =>
         {

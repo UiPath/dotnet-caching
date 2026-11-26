@@ -3,22 +3,7 @@
 [*.cs]
 dotnet_diagnostic.RS0030.severity = error
 
-[UiPath.Caching.Migration.Tests/AdvertisementRedisTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/AdvertisementTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Migration.Tests/BridgeTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/ConformanceRedisTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/HardeningTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/HashCacheContractTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
 [UiPath.Caching.Migration.Tests/KeyMove/CacheTraffic.cs]
@@ -162,103 +147,16 @@ dotnet_diagnostic.RS0030.severity = none
 [UiPath.Caching.Migration.Tests/KeyMove/WritePermitsTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Migration.Tests/KeyMoveAdvertTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMoveHostTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/LibraryBatchTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/LibraryHashPathClientTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/LibraryPathOutcomeTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/LifecycleTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/ModeBoundsTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/ModeTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/PendingAndRetryTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/PinHostTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/PinRedisTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/RegistrationTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/RouterCleanupTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/RouterHashConformanceTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/RouterHostTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/RouterModeRedisTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/RouterRedisTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/SettleBoundDiTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/SingleFlightTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/StopAndFenceTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Migration.Tests/Support/ClusterKit.cs]
 dotnet_diagnostic.RS0030.severity = none
 
 [UiPath.Caching.Migration.Tests/Support/ClusterKitTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Migration.Tests/Support/FakeMigrationCache.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/Support/FakeMigrationHashCache.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/Support/LegacyClient.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Migration.Tests/Support/RouterTestBase.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Migration.Tests/Support/TestNode.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Migration.Tests/Support/TestPoll.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/WriteFormatMoveHoldTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/WriteFormatRedisTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.PluginContract.Tests/AcmeAutoSwitchTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.PluginContract.Tests/AcmeRedisTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.PluginContract.Tests/Support/AcmeNodeTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
 [UiPath.Caching.Tests/AutoFixtureCreator.cs]

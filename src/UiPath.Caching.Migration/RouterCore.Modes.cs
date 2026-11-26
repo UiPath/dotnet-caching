@@ -43,10 +43,10 @@ internal sealed partial class RouterCore
     /// <summary>The longest a source-path call runs; one deadline of this length bounds a transition's waits and drain.</summary>
     public TimeSpan SourceTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>How long router creation waits, in real time, for the first start of the library before it runs on the source.</summary>
+    /// <summary>How long router creation waits for the first library start before it runs on the source.</summary>
     public TimeSpan StartBound { get; init; } = TimeSpan.FromSeconds(5);
 
-    /// <summary>How long, in real time, a cleanup step that ignores its token is waited for before the router moves on.</summary>
+    /// <summary>How long a cleanup step that ignores its token is waited for before the router moves on.</summary>
     public TimeSpan CleanupBound { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>Completes once the router is stopped and every admitted transition has ended.</summary>
@@ -65,6 +65,9 @@ internal sealed partial class RouterCore
 
     /// <summary>The parts of the library start in force; null while none is.</summary>
     internal LibraryParts? StartedParts => Volatile.Read(ref _started);
+
+    /// <summary>The clock for the first library start bound. Null uses <see cref="TimeProvider.System"/>.</summary>
+    internal TimeProvider? StartupClock { get; init; }
 
     private bool WantBypass => Volatile.Read(ref _requested) == 1 || Volatile.Read(ref _flagSeen) == 1 || !LibraryStarted;
 
@@ -146,9 +149,8 @@ internal sealed partial class RouterCore
         }
 
         EnsureLibraryStarting(immediate: true);
+        BoundedStop.CompletesAsync(_firstAttempt.Task, StartBound, StartupClock ?? TimeProvider.System).GetAwaiter().GetResult();
 
-        // Real time on purpose: nothing else is running yet that could move the injected clock.
-        _firstAttempt.Task.Wait(StartBound, CancellationToken.None);
         if (!LibraryStarted)
         {
             BeginBypass();
@@ -629,7 +631,7 @@ internal sealed partial class RouterCore
         {
             try
             {
-                using var limit = new CancellationTokenSource(CleanupBound);
+                using var limit = new CancellationTokenSource(CleanupBound, Clock);
                 await BoundedAsync(parts.Started[i].StopAsync(limit.Token), "hosted service stop").ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -642,7 +644,7 @@ internal sealed partial class RouterCore
     /// <summary>A step that ignores its token is left running after the bound, counted and logged, and the next step goes ahead.</summary>
     private async Task BoundedAsync(Task step, string name)
     {
-        if (!await BoundedStop.CompletesAsync(step, CleanupBound).ConfigureAwait(false))
+        if (!await BoundedStop.CompletesAsync(step, CleanupBound, Clock).ConfigureAwait(false))
         {
             Interlocked.Increment(ref _unfinishedCleanup);
             RouterTelemetry.CountCleanupTimedOut();

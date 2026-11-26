@@ -70,7 +70,7 @@ public sealed class SingleFlightTests : RouterTestBase
         async Task<Item?> Slow(CancellationToken token)
         {
             entered.TrySetResult();
-            await Task.Delay(Timeout.Infinite, token);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token);
             return null;
         }
 

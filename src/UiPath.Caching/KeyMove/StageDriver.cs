@@ -12,6 +12,8 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
     private CancellationTokenSource? _stop;
     private Task[] _loops = [];
 
+    internal Action<StepOutcome?>? Stepped { get; init; }
+
     public static Func<Task<T>> Memoize<T>(Func<CancellationToken, Task<T>> read, CancellationToken cancellationToken)
     {
         Task<T>? task = null;
@@ -95,7 +97,8 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
             {
                 try
                 {
-                    await StepAsync(group, cancellationToken).ConfigureAwait(false);
+                    var step = await StepAsync(group, cancellationToken).ConfigureAwait(false);
+                    Stepped?.Invoke(step);
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {

@@ -10,6 +10,8 @@ internal sealed class GroupStateMonitor(IStateReader reader, KeyMoveStateOptions
     private CancellationTokenSource? _stop;
     private Task[] _loops = [];
 
+    internal Action<Task>? PollScheduled { get; init; }
+
     public void Start(IEnumerable<GroupRegistration> registrations, CancellationToken cancellationToken)
     {
         if (_stop is not null)
@@ -216,7 +218,9 @@ internal sealed class GroupStateMonitor(IStateReader reader, KeyMoveStateOptions
                     delay = options.RetryInterval;
                 }
 
-                await Task.Delay(delay, time, cancellationToken).ConfigureAwait(false);
+                var nextPoll = Task.Delay(delay, time, cancellationToken);
+                PollScheduled?.Invoke(nextPoll);
+                await nextPoll.ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)

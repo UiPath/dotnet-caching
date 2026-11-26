@@ -7,8 +7,13 @@ public sealed class LibraryHashPathClientTests : RouterTestBase
 {
     private static readonly TimeSpan Settle = TimeSpan.FromSeconds(7);
 
-    private readonly FakeMigrationHashCache _store = new();
+    private readonly FakeMigrationHashCache _store;
     private readonly FakeConnection _connection = new();
+
+    public LibraryHashPathClientTests()
+    {
+        _store = new FakeMigrationHashCache(Clock);
+    }
 
     [Fact]
     public async Task A_read_that_fails_is_unavailable_and_never_absent()
@@ -144,7 +149,7 @@ public sealed class LibraryHashPathClientTests : RouterTestBase
     public async Task A_write_hands_the_deadline_and_the_set_option_to_the_library_and_no_deadline_is_no_expiry()
     {
         var client = Client();
-        var deadline = DateTimeOffset.UtcNow.AddHours(1);
+        var deadline = Clock.ToDateTimeOffset(TimeSpan.FromHours(1));
 
         await client.SetAsync("k", Fields(), new HashWriteOptions(HashCacheSetOption.HashReplace, deadline), Ct);
         await client.SetAsync("k", Fields(), new HashWriteOptions(HashCacheSetOption.KeyReplace, null), Ct);
@@ -163,7 +168,7 @@ public sealed class LibraryHashPathClientTests : RouterTestBase
     public async Task The_expiry_only_refresh_is_the_librarys_expiry_only_renew_and_its_outcome_is_the_stores(StoreOutcome stored, WriteOutcome expected)
     {
         _store.Write = (_, _) => Task.FromResult(stored);
-        var deadline = DateTimeOffset.UtcNow.AddHours(1);
+        var deadline = Clock.ToDateTimeOffset(TimeSpan.FromHours(1));
 
         var result = await Client().RefreshAsync("k", CacheExpiry.At(deadline), Ct);
 
@@ -255,7 +260,7 @@ public sealed class LibraryHashPathClientTests : RouterTestBase
     [Fact]
     public async Task An_expiry_is_the_librarys_answer_and_none_when_it_cannot_say_or_there_is_no_connection()
     {
-        var expires = DateTimeOffset.UtcNow.AddHours(1);
+        var expires = Clock.ToDateTimeOffset(TimeSpan.FromHours(1));
         var broken = false;
         var cache = InterceptingProxy.Wrap<IHashCache>(null!, (method, _) => method.Name == nameof(IHashCache.ExpireTimeAsync) ? (broken ? throw new TimeoutException("redis timeout") : new ValueTask<DateTimeOffset?>(expires)) : InterceptingProxy.Proceed);
         var client = new LibraryHashPathClient<Item>(_store, _connection, key => key, Settle) { Cache = cache };

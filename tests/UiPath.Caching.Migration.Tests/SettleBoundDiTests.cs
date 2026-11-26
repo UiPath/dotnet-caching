@@ -16,16 +16,31 @@ public sealed class SettleBoundDiTests(RedisFixture fixture)
     [Fact]
     public async Task The_settle_bound_does_not_wait_for_a_connection_that_is_still_being_made()
     {
-        await using var provider = Build("127.0.0.1:1,connectTimeout=20000", "asyncTimeout=60000", null);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pending = new TaskCompletionSource<IConnectionMultiplexer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        await using var provider = Build("127.0.0.1:1,connectTimeout=20000", "asyncTimeout=60000", services =>
+            services.PostConfigure<RedisConnectionOptions>(options => options.ConnectionFactory = (_, token) =>
+            {
+                entered.TrySetResult();
+                return new ValueTask<IConnectionMultiplexer>(pending.Task.WaitAsync(token));
+            }));
         var connector = provider.GetRequiredService<IRedisConnector>();
-        var connecting = connector.ConnectAsync(Ct).AsTask();
-        var bound = RouterServiceCollectionExtensions.LibrarySettleWithin(provider, null);
+        var connecting = connector.ConnectAsync(cancel.Token).AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(Ct);
+            var bound = RouterServiceCollectionExtensions.LibrarySettleWithin(provider, null);
+            var read = Task.Run(() => bound(), Ct);
 
-        var read = Task.Run(() => bound(), Ct);
-
-        (await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(3), Ct))).Should().BeSameAs(read, "the lookup must not block on the connect");
-        (await read).Should().BeGreaterThanOrEqualTo(LibrarySettleBound.Ceiling, "nothing is known yet, so the largest bound is taken");
-        await Task.WhenAny(connecting, Task.Delay(100, Ct));
+            (await read.WaitAsync(Ct)).Should().BeGreaterThanOrEqualTo(LibrarySettleBound.Ceiling, "nothing is known yet, so the largest bound is taken");
+            connecting.IsCompleted.Should().BeFalse("the lookup must not block on the connect");
+        }
+        finally
+        {
+            await cancel.CancelAsync();
+            pending.TrySetCanceled(cancel.Token);
+        }
     }
 
     [Fact]

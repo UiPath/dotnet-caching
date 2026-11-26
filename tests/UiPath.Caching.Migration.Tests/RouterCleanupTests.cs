@@ -15,30 +15,36 @@ public sealed class RouterCleanupTests
     [Fact]
     public async Task The_drain_ends_on_a_completed_task_whose_removal_has_not_run()
     {
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+        var core = new RouterCore(new ManualTimeProvider(DateTimeOffset.UnixEpoch), _ => true, NullLogger.Instance);
         core.AddWithoutRemoval(Task.CompletedTask);
         core.AddWithoutRemoval(Task.FromException(new InvalidOperationException("ended badly")));
 
         // On the pool: a drain that spins without yielding would otherwise hold this thread.
         var drain = Task.Run(core.DrainAsync, Ct);
 
-        (await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(5), Ct))).Should().BeSameAs(drain, "completed tasks are removed by the drain itself");
+        await drain.WaitAsync(Ct);
         core.IsIdle.Should().BeTrue();
     }
 
     [Fact]
     public async Task The_drain_waits_for_a_running_task()
     {
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+        var core = new RouterCore(new ManualTimeProvider(DateTimeOffset.UnixEpoch), _ => true, NullLogger.Instance);
         var running = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        core.AddWithoutRemoval(running.Task);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        core.Run(async _ =>
+        {
+            entered.TrySetResult();
+            await running.Task;
+        });
+        await entered.Task.WaitAsync(Ct);
 
-        var drain = Task.Run(core.DrainAsync, Ct);
-        await Task.Delay(100, Ct);
+        var drain = core.DrainAsync();
         drain.IsCompleted.Should().BeFalse();
 
         running.SetResult();
-        await drain.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        await drain.WaitAsync(Ct);
+        core.IsIdle.Should().BeTrue();
     }
 
     [Fact]
@@ -46,11 +52,14 @@ public sealed class RouterCleanupTests
     {
         var source = new Uri($"urn:release-{Guid.NewGuid():N}");
         var connector = new NeverConnects();
-        using var bound = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        using var bound = new CancellationTokenSource(TimeSpan.FromMilliseconds(200), clock);
 
         var release = RouterServiceCollectionExtensions.ReleaseTopicAsync(new FakeBus().For(source), connector, "s", "g", new TopicKey("t"), bound.Token);
 
-        var act = () => release.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        release.IsCompleted.Should().BeFalse();
+        clock.Advance(TimeSpan.FromMilliseconds(200));
+        var act = () => release.WaitAsync(Ct);
         await act.Should().ThrowAsync<OperationCanceledException>();
         connector.DatabaseRead.Should().BeFalse("the database is read only after the connection is open");
     }
@@ -92,7 +101,7 @@ public sealed class RouterCleanupTests
 
         public ISubscriber Subscriber => throw new InvalidOperationException("Not used.");
 
-        public ValueTask ConnectAsync(CancellationToken cancellationToken = default) => new(Task.Delay(Timeout.Infinite, cancellationToken));
+        public ValueTask ConnectAsync(CancellationToken cancellationToken = default) => new(new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(cancellationToken));
 
         public void ForceReconnect()
         {

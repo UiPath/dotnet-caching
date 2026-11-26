@@ -45,12 +45,38 @@ public abstract class RouterTestBase : IAsyncDisposable
         condition().Should().BeTrue();
     }
 
+    internal static async Task WaitForLibraryAsync(IRouter router, CancellationToken token)
+    {
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Changed(RouterMode mode, RouterModeReason reason)
+        {
+            if (mode == RouterMode.Library)
+            {
+                ready.TrySetResult();
+            }
+        }
+
+        router.ModeChanged += Changed;
+        try
+        {
+            Changed(router.Mode, router.ModeReason);
+            await ready.Task.WaitAsync(token);
+        }
+        finally
+        {
+            router.ModeChanged -= Changed;
+        }
+    }
+
     internal static Task<RouterMode> NextMode(TestNode node)
     {
         var next = new TaskCompletionSource<RouterMode>(TaskCreationOptions.RunContinuationsAsynchronously);
         node.Router.ModeChanged += (mode, _) => next.TrySetResult(mode);
         return next.Task;
     }
+
+    internal static Task RunBackgroundAsync(TestNode node, TimeSpan step) =>
+        node.Time.AdvanceUntilAsync(node.Core.DrainAsync(), step, Ct);
 
     /// <summary>Hands a node to the test base, which disposes it when the test ends.</summary>
     internal TNode Own<TNode>(TNode node)
@@ -80,39 +106,12 @@ public abstract class RouterTestBase : IAsyncDisposable
         string? bridgeOrigin = null,
         Func<string, bool>? pinWhen = null,
         IPinStore? pinStore = null,
-        string? scope = null)
+        string? scope = null,
+        TimeProvider? startupClock = null)
     {
-        var node = TestNode.Create(Bus, Clock, Store, cacheName ?? CacheName, useLibrary, localCap, pendingWindow, defaultExpiry: defaultExpiry, sharedCore: sharing?.Core, library: library, bypass: bypass, sourceTimeout: sourceTimeout, lazyLibrary: lazyLibrary, lazyLibraryAsync: lazyLibraryAsync, startBound: startBound, cleanupBound: cleanupBound, version: version, cacheNulls: cacheNulls, bridge: bridge, bridgeOrigin: bridgeOrigin, pinWhen: pinWhen, pinStore: pinStore, scope: scope);
+        var node = TestNode.Create(Bus, Clock, Store, cacheName ?? CacheName, useLibrary, localCap, pendingWindow, defaultExpiry: defaultExpiry, sharedCore: sharing?.Core, library: library, bypass: bypass, sourceTimeout: sourceTimeout, lazyLibrary: lazyLibrary, lazyLibraryAsync: lazyLibraryAsync, startBound: startBound, cleanupBound: cleanupBound, version: version, cacheNulls: cacheNulls, bridge: bridge, bridgeOrigin: bridgeOrigin, pinWhen: pinWhen, pinStore: pinStore, scope: scope, startupClock: startupClock);
         _nodes.Add(node);
         return node;
-    }
-
-    /// <summary>Moves the clock in steps until the node has no background work left, waiting for each timer to be armed first.</summary>
-    internal async Task RunBackgroundAsync(TestNode node, TimeSpan step)
-    {
-        for (var rounds = 0; rounds < 200; rounds++)
-        {
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (!Clock.HasTimers && DateTime.UtcNow < deadline)
-            {
-                if (node.Core.IsIdle)
-                {
-                    return;
-                }
-
-                await Task.Delay(5, Ct);
-            }
-
-            if (!Clock.HasTimers)
-            {
-                return;
-            }
-
-            Clock.Advance(step);
-            await Task.Delay(20, Ct);
-        }
-
-        throw new TimeoutException("background work never finished");
     }
 
     internal LibraryParts Parts(FakeMigrationCache store, IReadOnlyList<IHostedService>? started = null)
@@ -126,29 +125,5 @@ public abstract class RouterTestBase : IAsyncDisposable
             source,
             () => TimeSpan.FromSeconds(30),
             started);
-    }
-
-    /// <summary>Waits for a timer to be armed, then moves the clock.</summary>
-    internal async Task AdvanceWhenArmedAsync(TimeSpan by)
-    {
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (!Clock.HasTimers && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
-
-        Clock.Advance(by);
-        await Task.Delay(20, Ct);
-    }
-
-    internal async Task AdvanceUntilAsync(Task task, TimeSpan step)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (!task.IsCompleted && DateTime.UtcNow < until)
-        {
-            await AdvanceWhenArmedAsync(step);
-        }
-
-        await task.WaitAsync(TimeSpan.FromSeconds(1), Ct);
     }
 }

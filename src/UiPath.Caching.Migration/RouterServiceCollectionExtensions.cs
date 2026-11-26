@@ -509,7 +509,7 @@ public static class RouterServiceCollectionExtensions
             {
                 try
                 {
-                    await BoundedStop.CompletesAsync(service.StopAsync(CancellationToken.None), builder.CleanupBound).ConfigureAwait(false);
+                    await BoundedStop.CompletesAsync(service.StopAsync(CancellationToken.None), builder.CleanupBound, core.Clock).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {

@@ -129,38 +129,36 @@ public sealed class WriteFormatMoveHoldTests
     public async Task A_node_restarted_during_S3_does_not_switch_before_its_first_read_of_the_state()
     {
         var reader = new HeldReader();
-        var monitor = new GroupStateMonitor(reader, new KeyMoveStateOptions { PollInterval = TimeSpan.FromMilliseconds(20) }, TimeProvider.System);
-        monitor.Start([new GroupRegistration("g", false, true, ["c"])], TestContext.Current.CancellationToken);
-        try
-        {
-            var pins = new PinCoordinator(new RouterCore(Clock, _ => true, NullLogger.Instance), _ => true, new FakePinStore(), null, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance);
-            var selector = new WriteFormatSelector(_ => "messagepack", pins, NullLogger.Instance) { MoveHold = WriteFormatSelector.HoldFrom(monitor, new HashSet<string>(StringComparer.Ordinal) { "g" }) };
-            var pin = pins.GroupFor("g");
+        var monitor = new GroupStateMonitor(reader, new KeyMoveStateOptions { PollInterval = TimeSpan.FromMilliseconds(20) }, Clock);
+        monitor.Register([new GroupRegistration("g", false, true, ["c"])]);
+        var token = TestContext.Current.CancellationToken;
+        var firstRead = monitor.StepAsync("g", token);
 
-            selector.Select(pin).Dispose();
-            monitor.HasRead("g").Should().BeFalse();
-            pin.Wanted.Should().BeFalse("the node has not read the state yet, so the group may be moving");
+        var pins = new PinCoordinator(new RouterCore(Clock, _ => true, NullLogger.Instance), _ => true, new FakePinStore(), null, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance);
+        var selector = new WriteFormatSelector(_ => "messagepack", pins, NullLogger.Instance) { MoveHold = WriteFormatSelector.HoldFrom(monitor, new HashSet<string>(StringComparer.Ordinal) { "g" }) };
+        var pin = pins.GroupFor("g");
 
-            reader.Answer(State("S3"));
-            await UntilAsync(() => monitor.HasRead("g"));
-            selector.Select(pin).Dispose();
-            pin.Wanted.Should().BeFalse("the state the node read is a move");
+        selector.Select(pin).Dispose();
+        monitor.HasRead("g").Should().BeFalse();
+        pin.Wanted.Should().BeFalse("the node has not read the state yet, so the group may be moving");
 
-            reader.Answer(State("S0"));
-            await UntilAsync(() => monitor.RulesFor("g").Acting is { State: "S0" });
-            selector.Select(pin).Dispose();
-            pin.Wanted.Should().BeTrue("the move is over");
-        }
-        finally
-        {
-            await monitor.StopAsync();
-        }
+        reader.Answer(State("S3"));
+        await firstRead;
+        monitor.HasRead("g").Should().BeTrue();
+        selector.Select(pin).Dispose();
+        pin.Wanted.Should().BeFalse("the state the node read is a move");
+
+        reader.Answer(State("S0"));
+        await monitor.StepAsync("g", token);
+        monitor.RulesFor("g").Acting.Should().Match<ActedState>(state => state.State == "S0");
+        selector.Select(pin).Dispose();
+        pin.Wanted.Should().BeTrue("the move is over");
     }
 
     [Fact]
     public void A_group_that_is_not_one_of_the_nodes_key_move_groups_is_never_held()
     {
-        var monitor = new GroupStateMonitor(new HeldReader(), new KeyMoveStateOptions(), TimeProvider.System);
+        var monitor = new GroupStateMonitor(new HeldReader(), new KeyMoveStateOptions(), Clock);
 
         WriteFormatSelector.HoldFrom(monitor, new HashSet<string>(StringComparer.Ordinal) { "g" })("other").Should().BeFalse();
         monitor.HasRead("other").Should().BeFalse("the monitor does not track it");
@@ -213,16 +211,6 @@ public sealed class WriteFormatMoveHoldTests
 
     private static StateRecord State(string state) =>
         new(state, "fwd", 1, "id1", true, 1, string.Empty, 7, "c", string.Empty, "id1", string.Empty, string.Empty, string.Empty);
-
-    private static async Task UntilAsync(Func<bool> condition)
-    {
-        var started = TimeProvider.System.GetTimestamp();
-        while (!condition())
-        {
-            TimeProvider.System.GetElapsedTime(started).Should().BeLessThan(TimeSpan.FromSeconds(10), "the monitor reads within its poll");
-            await Task.Delay(TimeSpan.FromMilliseconds(20), TimeProvider.System);
-        }
-    }
 
     // A reader that gives no answer until the test sets one, as a node that has restarted and not read the state yet; each read then returns the state set last.
     private sealed class HeldReader : IStateReader

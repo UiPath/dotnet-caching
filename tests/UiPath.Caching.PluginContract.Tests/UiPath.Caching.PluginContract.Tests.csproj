@@ -18,6 +18,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../UiPath.Caching.Migration.Tests/Support/ManualTimeProvider.cs" Link="Support/ManualTimeProvider.cs" />
+    <Compile Include="../UiPath.Caching.Migration.Tests/Support/SignalingTimeProvider.cs" Link="Support/SignalingTimeProvider.cs" />
+    <Compile Include="../UiPath.Caching.Migration.Tests/Support/InterceptingProxy.cs" Link="Support/InterceptingProxy.cs" />
+    <Compile Include="../UiPath.Caching.Migration.Tests/Support/RedisTopicSignals.cs" Link="Support/RedisTopicSignals.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\UiPath.Caching.Abstractions\UiPath.Caching.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching.CloudEvents\UiPath.Caching.CloudEvents.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching\UiPath.Caching.csproj" />

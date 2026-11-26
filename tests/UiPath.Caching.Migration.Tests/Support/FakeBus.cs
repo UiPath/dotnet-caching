@@ -32,6 +32,8 @@ internal sealed class FakeBus
     /// <summary>Publishes that reached the broker call, whether they were held, failed or went out.</summary>
     public int Attempts { get; private set; }
 
+    public Action? OnAttempt { get; set; }
+
     /// <summary>The next this many publishes report failure.</summary>
     public int FailNext { get; set; }
 
@@ -138,6 +140,7 @@ internal sealed class FakeBus
         public async ValueTask<bool> PublishAsync(ICacheEvent @event, CancellationToken token = default)
         {
             bus.Attempts++;
+            bus.OnAttempt?.Invoke();
             if (bus.Hold is { } hold)
             {
                 await hold.Task;

@@ -119,7 +119,7 @@ public sealed class RegistrationTests
             Version = () => ++calls == 1 ? "v1" : "v2",
         };
         var builder = new RouterBuilder().Add(registration);
-        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+        var core = new RouterCore(new ManualTimeProvider(DateTimeOffset.UnixEpoch), _ => true, NullLogger.Instance);
 
         var (_, _, cache) = builder.Registrations.Single()(core);
 
@@ -133,7 +133,7 @@ public sealed class RegistrationTests
         var builder = new RouterBuilder().Exclude("locks", "distributed locks differ between the two clients");
         RouterBanner.Describe(builder, "p").Should().Contain("excluded=locks (distributed locks differ between the two clients)");
 
-        var router = new Router(new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance), Array.Empty<(string, Type, object)>(), builder.Excluded);
+        var router = new Router(new RouterCore(new ManualTimeProvider(DateTimeOffset.UnixEpoch), _ => true, NullLogger.Instance), Array.Empty<(string, Type, object)>(), builder.Excluded);
         var act = () => router.Get<Item>("locks");
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*'locks' is excluded*distributed locks differ*");

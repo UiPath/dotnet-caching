@@ -10,6 +10,8 @@ internal sealed class StageFlagPoller(IMigrationStageSource source, Func<string,
     private CancellationTokenSource? _stop;
     private Task[] _loops = [];
 
+    internal Action<Task>? PollScheduled { get; init; }
+
     /// <summary>The last value read, null before the first successful read: a pod with no view advertises no <c>fl</c>.</summary>
     public int? ViewOf(string group) => _views.TryGetValue(group, out var value) ? value : null;
 
@@ -83,7 +85,9 @@ internal sealed class StageFlagPoller(IMigrationStageSource source, Func<string,
             while (true)
             {
                 await StepAsync(group, cancellationToken).ConfigureAwait(false);
-                await Task.Delay(IntervalFor(group), time, cancellationToken).ConfigureAwait(false);
+                var nextPoll = Task.Delay(IntervalFor(group), time, cancellationToken);
+                PollScheduled?.Invoke(nextPoll);
+                await nextPoll.ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

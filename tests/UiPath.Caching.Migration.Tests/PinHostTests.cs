@@ -21,7 +21,7 @@ public sealed class PinHostTests
         var read = async () => await router.Get<Item>("items").GetAsync("k", Ct);
         await read.Should().ThrowAsync<CacheUnavailableException>();
         source.Reads.Should().Be(0);
-        await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
+        await provider.DisposeAsync().AsTask().WaitAsync(Ct);
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public sealed class PinHostTests
         await read.Should().ThrowAsync<CacheUnavailableException>();
         source.Reads.Should().Be(0);
         source.Writes.Should().Be(0);
-        await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
+        await provider.DisposeAsync().AsTask().WaitAsync(Ct);
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public sealed class PinHostTests
 
         value.Should().Be(new Item("made"));
         source.Writes.Should().Be(1);
-        await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
+        await provider.DisposeAsync().AsTask().WaitAsync(Ct);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public sealed class PinHostTests
         await using var provider = Build(source, "g", router => router.UsePinWhen(_ => false), hold);
 
         provider.GetRequiredService<IRouter>().Should().NotBeNull();
-        await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
+        await provider.DisposeAsync().AsTask().WaitAsync(Ct);
     }
 
     [Fact]
@@ -139,17 +139,7 @@ public sealed class PinHostTests
         {
             var router = provider.GetRequiredService<IRouter>();
 
-            // Written only once the connector knows Redis cannot be reached: before that a first write may be sent and end unknown.
-            var connector = provider.GetRequiredService<IRedisConnector>();
-            await Task.Run(
-                async () =>
-                {
-                    while (connector.IsConnected)
-                    {
-                        await Task.Delay(20, Ct);
-                    }
-                },
-                Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+            await WaitForDisconnectAsync(provider.GetRequiredService<IRedisConnector>(), Ct);
 
             var write = await router.Get<Item>("items").SetAsync("k", new Item("v"), Ct);
             write.Should().BeFalse();
@@ -157,8 +147,54 @@ public sealed class PinHostTests
         }
         finally
         {
-            // One bounded dispose: a dispose that hangs fails the test instead of the run.
-            await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20), Ct);
+            await provider.DisposeAsync().AsTask().WaitAsync(Ct);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_first_connection_that_finishes_disconnected_needs_no_later_failure_event(bool raiseAfterSubscribe)
+    {
+        var connected = true;
+        EventHandler? onFailed = null;
+        var connector = InterceptingProxy.Wrap<IRedisConnector>(null!, (method, args) =>
+        {
+            switch (method.Name)
+            {
+                case "add_OnConnectionFailed":
+                    onFailed = (EventHandler)args[0]!;
+                    return null;
+                case "remove_OnConnectionFailed":
+                    onFailed = null;
+                    return null;
+                case "get_IsConnected":
+                    return connected;
+                case nameof(IRedisConnector.ConnectAsync):
+                    return FinishConnection();
+                default:
+                    throw new InvalidOperationException(method.Name);
+            }
+        });
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var bound = TimeSpan.FromSeconds(1);
+        using var cancellation = new CancellationTokenSource(bound, clock);
+
+        var disconnected = WaitForDisconnectAsync(connector, cancellation.Token);
+        clock.Advance(bound);
+        await disconnected;
+
+        connected.Should().BeFalse("the first connection completed without connecting");
+
+        object FinishConnection()
+        {
+            connected = false;
+            if (raiseAfterSubscribe)
+            {
+                onFailed?.Invoke(null, EventArgs.Empty);
+            }
+
+            return ValueTask.CompletedTask;
         }
     }
 
@@ -194,6 +230,27 @@ public sealed class PinHostTests
         banner.Should().Contain("pin=UsePinWhen").And.Contain("precedence, first wins: pin");
     }
 
+    private static async Task WaitForDisconnectAsync(IRedisConnector connector, CancellationToken token)
+    {
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Failed(object? sender, EventArgs args) => disconnected.TrySetResult();
+        connector.OnConnectionFailed += Failed;
+        try
+        {
+            await connector.ConnectAsync(token);
+            if (!connector.IsConnected)
+            {
+                disconnected.TrySetResult();
+            }
+
+            await disconnected.Task.WaitAsync(token);
+        }
+        finally
+        {
+            connector.OnConnectionFailed -= Failed;
+        }
+    }
+
     private static ServiceProvider Build(FakeBackend source, string group, Action<RouterBuilder> configure, Dictionary<string, string?>? extra = null)
     {
         var settings = new Dictionary<string, string?>
@@ -211,7 +268,7 @@ public sealed class PinHostTests
         }
 
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
-        var services = new ServiceCollection().AddLogging();
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(
             configuration,

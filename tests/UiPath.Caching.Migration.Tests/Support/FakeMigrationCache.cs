@@ -30,7 +30,7 @@ internal sealed class FakeConnection : IConnectionState
 #pragma warning restore CS0067
 
 /// <summary>The library cache as a script: a read answers a value, a <see cref="SnapshotOutcome"/> or nothing (absent), and a write answers a <see cref="StoreOutcome"/>.</summary>
-internal sealed class FakeMigrationCache : IMigrationCache
+internal sealed class FakeMigrationCache(TimeProvider? clock = null) : IMigrationCache
 {
     /// <summary>Returned by <see cref="Read"/> for a key that holds a cached null.</summary>
     public static readonly object StoredNull = new();
@@ -52,14 +52,16 @@ internal sealed class FakeMigrationCache : IMigrationCache
     /// <summary>The policy each create was given, in order.</summary>
     public List<CachePolicy?> CreatePolicies { get; } = [];
 
+    private DateTimeOffset Expiration => clock?.ToDateTimeOffset(TimeSpan.FromMinutes(1)) ?? DateTimeOffset.MaxValue;
+
     public async ValueTask<SnapshotRead<T>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         Keys.Add(cacheKey);
         ReadPolicies.Add(policy);
         return await Read(cacheKey, token) switch
         {
-            T typed => new SnapshotRead<T>(SnapshotOutcome.Found, new TestEntry<T>(typed, DateTimeOffset.UtcNow.AddMinutes(1))),
-            var stored when ReferenceEquals(stored, StoredNull) => new SnapshotRead<T>(SnapshotOutcome.Found, new TestEntry<T>(default, DateTimeOffset.UtcNow.AddMinutes(1))),
+            T typed => new SnapshotRead<T>(SnapshotOutcome.Found, new TestEntry<T>(typed, Expiration)),
+            var stored when ReferenceEquals(stored, StoredNull) => new SnapshotRead<T>(SnapshotOutcome.Found, new TestEntry<T>(default, Expiration)),
             SnapshotOutcome outcome => new SnapshotRead<T>(outcome, null),
             _ => new SnapshotRead<T>(SnapshotOutcome.Absent, null),
         };
