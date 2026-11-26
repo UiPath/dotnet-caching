@@ -18,19 +18,23 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
     public async Task A_live_cache_moves_across_the_three_cluster_primaries() => await MoveToClosedAsync(cluster: true);
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Moving_writes_refresh_UTC_without_advancing_fake_timers(bool expires)
+    [InlineData(false, -1)]
+    [InlineData(true, -1)]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    public async Task Moving_writes_refresh_UTC_without_advancing_fake_timers(bool expires, int offsetMinutes)
     {
         await using var host = await MovingCacheHost.CreateAsync(fixture);
         await EnterMovingAsync(host);
         var deadline = expires ? await KeyMoveKit.ServerTimeAsync(host.Db) + TimeSpan.FromMinutes(5) : (DateTimeOffset?)null;
-        host.Clock.UtcOffset -= TimeSpan.FromMinutes(1);
+        host.Clock.UtcOffset += TimeSpan.FromMinutes(offsetMinutes);
         var timestamp = host.Clock.GetTimestamp();
+        var utc = host.Clock.GetUtcNow();
 
         Assert.True(await host.SetAsync("clock-drift", [1], deadline, Ct));
 
         host.Clock.GetTimestamp().Should().Be(timestamp);
+        host.Clock.GetUtcNow().Should().BeOnOrAfter(utc);
         await host.AssertValueAsync("clock-drift", [1]);
         var ttl = await host.Db.KeyTimeToLiveAsync(host.Native("clock-drift")).WaitAsync(Ct);
         if (expires)
@@ -123,6 +127,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         (await host.NativeKeysAsync()).Should().BeEquivalentTo(host.Native("read-through"), host.Native("during-pause"), host.Native("during-pause-fill"));
 
         health.Recover();
+        await host.WaitForHealthCompletionAsync();
         host.RateClock.Advance(TimeSpan.FromSeconds(1));
         host.MoverClock.Advance(pause);
         await host.WaitForMoverPassAsync();

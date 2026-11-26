@@ -23,6 +23,8 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     private readonly string _name = $"move{Guid.NewGuid():N}";
     private readonly DateTimeOffset _dryRunAt;
     private readonly ConcurrentQueue<KeyMoveAlert> _alerts = new();
+    private readonly ConcurrentDictionary<string, DateTime> _expirations = new();
+    private readonly object _utcSync = new();
     private readonly LegacySource _legacy;
     private readonly KeyMoveValueClasses _values = new();
     private readonly RegisteredGroupFacts _facts;
@@ -194,6 +196,14 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     {
         var expiry = deadline is { } at ? new Expiration(at.UtcDateTime) : Expiration.Default;
         Assert.True(await Db.StringSetAsync(Legacy(key), LegacyEnvelope.Write(value), expiry).WaitAsync(Ct));
+        if (deadline is not null)
+        {
+            _expirations[key] = (await Db.KeyExpireTimeAsync(Legacy(key)).WaitAsync(Ct))!.Value;
+        }
+        else
+        {
+            _expirations.TryRemove(key, out _);
+        }
     }
 
     public async Task<DateTimeOffset> ClientDeadlineAsync(DateTimeOffset deadline) =>
@@ -403,6 +413,12 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     public Task StopMoverAsync() =>
         _router?.Library?.Started.OfType<MoverHostedService>().SingleOrDefault()?.StopAsync(CancellationToken.None) ?? Task.CompletedTask;
 
+    public Task WaitForHealthCompletionAsync()
+    {
+        var rate = Assert.IsType<AimdMoveRate>(_rate.Inner);
+        return Task.WhenAll(rate.HealthObservation, rate.HealthCancellation).WaitAsync(Ct);
+    }
+
     public async Task<string[]> LegacyKeysAsync() => await KeysAsync(Legacy("*"));
 
     public async Task<string[]> NativeKeysAsync() => await KeysAsync(Prefix + "native:*");
@@ -426,10 +442,32 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     {
         // The server checks marked-write deadlines against UTC; keep fake timers independent of that clock.
         var serverNow = await KeyMoveKit.ServerTimeAsync(Db);
-        Clock.UtcOffset = serverNow - Clock.Manual.GetUtcNow();
-        return deadline is { } at
-            ? await Cache.SetAsync(CacheKey.Verbatim(key), value, at, token)
+        DateTimeOffset? expires;
+        lock (_utcSync)
+        {
+            var offset = serverNow - Clock.Manual.GetUtcNow();
+            if (offset > Clock.UtcOffset)
+            {
+                Clock.UtcOffset = offset;
+            }
+
+            expires = deadline is { } at ? Clock.ToDateTimeOffset(at - serverNow) : null;
+        }
+
+        var acknowledged = expires is { } until
+            ? await Cache.SetAsync(CacheKey.Verbatim(key), value, until, token)
             : await Cache.SetAsync(CacheKey.Verbatim(key), value, token);
+        if (acknowledged && deadline is not null)
+        {
+            _expirations[key] = (await Db.KeyExpireTimeAsync(Native(key)).WaitAsync(token)
+                ?? await Db.KeyExpireTimeAsync(Legacy(key)).WaitAsync(token))!.Value;
+        }
+        else if (acknowledged)
+        {
+            _expirations.TryRemove(key, out _);
+        }
+
+        return acknowledged;
     }
 
     public async Task WriteAsync(string key, List<long> value) =>
@@ -444,11 +482,9 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         var bytesAfterMove = (byte[]?)(await Db.StringGetAsync(Native(key), CommandFlags.DemandMaster).WaitAsync(Ct));
         Assert.NotNull(bytesWrittenByLibrary);
         Assert.Equal(bytesWrittenByLibrary, bytesAfterMove);
-        var referenceLife = Db.KeyTimeToLiveAsync(reference, CommandFlags.DemandMaster);
-        var movedLife = Db.KeyTimeToLiveAsync(Native(key), CommandFlags.DemandMaster);
-        await Task.WhenAll(referenceLife, movedLife).WaitAsync(Ct);
-        (await referenceLife).Should().BeGreaterThan(TimeSpan.Zero);
-        (await movedLife).Should().BeCloseTo((await referenceLife)!.Value, TimeSpan.FromMilliseconds(250), $"the TTL for {key} must be preserved");
+        var movedExpiry = await Db.KeyExpireTimeAsync(Native(key), CommandFlags.DemandMaster).WaitAsync(Ct);
+        // Promotion subtracts the capture-to-snapshot time from the lifetime, so it may expire earlier but never later.
+        movedExpiry.Should().NotBeNull().And.BeOnOrBefore(_expirations[key], $"moving {key} must not extend its lifetime");
     }
 
     public async Task AssertNativeLedgerAsync(IReadOnlyDictionary<string, List<long>?> ledger)

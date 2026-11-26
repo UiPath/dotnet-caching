@@ -133,7 +133,7 @@ public sealed class KeyMoveRestoreTests(RedisFixture fixture)
         var writes = ledger.Select(async entry =>
         {
             List<long> value = [entry.Value![0], revision];
-            var acknowledged = await host.SetAsync(entry.Key, value, null, token);
+            var acknowledged = await host.Cache.SetAsync(entry.Key, value, token);
             return (entry.Key, Value: value, Acknowledged: acknowledged);
         });
         foreach (var (key, value, acknowledged) in await Task.WhenAll(writes))
