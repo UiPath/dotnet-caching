@@ -532,21 +532,25 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
         (await kit.FieldsAsync(kit.L("k"))).Should().BeEquivalentTo(Original);
     }
 
-    [Fact]
-    public async Task Metadata_is_refused_where_the_hash_is_kept_in_the_in_place_format_and_written_to_N_elsewhere()
+    [Theory]
+    [InlineData(KeyMoveStates.Ready, "fwd", "ready")]
+    [InlineData(KeyMoveStates.Barrier, "fwd", "barrier")]
+    [InlineData(KeyMoveStates.Moving, "rev", "moving (reverse)")]
+    [InlineData(KeyMoveStates.Drained, "rev", "drained (reverse)")]
+    public async Task Metadata_is_refused_where_the_hash_is_kept_in_the_in_place_format_and_written_to_N_elsewhere(string state, string direction, string stageName)
     {
         await using var kit = await KeyMoveHashKit.CreateAsync(fixture, nativeNulls: true);
         await kit.Kit.PrepareAsync("k");
-        await kit.Kit.SetStateAsync("S1", nPop: 0);
+        await kit.Kit.SetStateAsync(state, direction: direction, nPop: state is KeyMoveStates.Ready or KeyMoveStates.Barrier ? 0 : 1);
         var metadata = new Dictionary<string, string?> { ["owner"] = "me" };
 
         var refused = async () => await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("a", "1")), new HashWriteOptions(HashCacheSetOption.KeyReplace, null, metadata), Ct);
         var refresh = async () => await kit.Client.RefreshAsync("k", CacheExpiry.After(TimeSpan.FromMinutes(1)), metadata, Ct);
-        (await refused.Should().ThrowAsync<NotSupportedException>()).Which.Message.Should().Contain(kit.Kit.Cid);
-        (await refresh.Should().ThrowAsync<NotSupportedException>()).Which.Message.Should().Contain(kit.Kit.Cid);
+        (await refused.Should().ThrowAsync<NotSupportedException>()).Which.Message.Should().Contain(kit.Kit.Cid).And.Contain($"state {stageName}.");
+        (await refresh.Should().ThrowAsync<NotSupportedException>()).Which.Message.Should().Contain(kit.Kit.Cid).And.Contain($"state {stageName}.");
         (await kit.Kit.ExistsAsync(kit.L("k"))).Should().BeFalse("a refused write stores nothing");
 
-        await kit.Kit.SetStateAsync("S3");
+        await kit.Kit.SetStateAsync(KeyMoveStates.Moving);
         (await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("a", "1")), new HashWriteOptions(HashCacheSetOption.KeyReplace, null, metadata), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.AllFieldsAsync(kit.N("k"))).Should().ContainKey("_metadata_");
         (await kit.Client.ReadAsync("k", null, Ct)).Metadata.Should().ContainKey("owner");

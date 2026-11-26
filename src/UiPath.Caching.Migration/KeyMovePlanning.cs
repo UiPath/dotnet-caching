@@ -20,41 +20,41 @@ internal static class KeyMovePlanning
     /// <summary>The mode of a stage name, or <paramref name="otherwise"/> for any other name.</summary>
     public static KeyMoveMode ModeOf(string state, KeyMoveMode otherwise) => state switch
     {
-        "S1" => KeyMoveMode.S1,
-        "S2" => KeyMoveMode.S2,
-        "S3" => KeyMoveMode.S3,
-        "S4" => KeyMoveMode.S4,
-        "S5" => KeyMoveMode.S5,
+        KeyMoveStates.Ready => KeyMoveMode.Ready,
+        KeyMoveStates.Barrier => KeyMoveMode.Barrier,
+        KeyMoveStates.Moving => KeyMoveMode.Moving,
+        KeyMoveStates.Drained => KeyMoveMode.Drained,
+        KeyMoveStates.Closed => KeyMoveMode.Closed,
         _ => otherwise,
     };
 
-    /// <summary>True for a read of S3(rev) under the rules that follow the state: an N hit is promoted to L.</summary>
+    /// <summary>True for a read of moving(rev) under the rules that follow the state: an N hit is promoted to L.</summary>
     public static bool PromotesReverse(KeyMovePlan plan) =>
-        plan.Mode == KeyMoveMode.Union && plan.Rules.Reads == ReadRule.Follow && plan.Act is { State: "S3", Direction: "rev" };
+        plan.Mode == KeyMoveMode.Union && plan.Rules.Reads == ReadRule.Follow && plan.Act is { State: KeyMoveStates.Moving, Direction: "rev" };
 
     /// <summary>True for the write modes of the reverse direction, which only the clients that run their forms leave open.</summary>
     public static bool IsReverseWrite(KeyMoveMode mode) => mode is KeyMoveMode.ReverseS1 or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4;
 
     private static KeyMoveMode ReverseModeOf(string state) => state switch
     {
-        "S1" => KeyMoveMode.ReverseS1,
-        "S3" => KeyMoveMode.ReverseS3,
-        "S4" => KeyMoveMode.ReverseS4,
-        _ => KeyMoveMode.Closed,
+        KeyMoveStates.Ready => KeyMoveMode.ReverseS1,
+        KeyMoveStates.Moving => KeyMoveMode.ReverseS3,
+        KeyMoveStates.Drained => KeyMoveMode.ReverseS4,
+        _ => KeyMoveMode.Unavailable,
     };
 
     private static KeyMoveMode WriteMode(GroupRules rules)
     {
         if (rules.Writes != WriteRule.Follow)
         {
-            return rules.Writes == WriteRule.WaitThenFailClosed ? KeyMoveMode.Wait : KeyMoveMode.Closed;
+            return rules.Writes == WriteRule.WaitThenFailClosed ? KeyMoveMode.Wait : KeyMoveMode.Unavailable;
         }
 
         return rules.Acting switch
         {
-            null or { State: "S0" } => KeyMoveMode.Plain,
+            null or { State: KeyMoveStates.NotStarted } => KeyMoveMode.Plain,
             { Direction: "rev", State: var state } => ReverseModeOf(state),
-            { State: var state } => ModeOf(state, KeyMoveMode.Closed),
+            { State: var state } => ModeOf(state, KeyMoveMode.Unavailable),
         };
     }
 
@@ -65,7 +65,7 @@ internal static class KeyMovePlanning
             return KeyMoveMode.Union;
         }
 
-        if (rules.Acting is null or { State: "S0" })
+        if (rules.Acting is null or { State: KeyMoveStates.NotStarted })
         {
             return KeyMoveMode.Plain;
         }
@@ -77,14 +77,14 @@ internal static class KeyMovePlanning
         }
 
         var mode = ModeOf(act.State, KeyMoveMode.Union);
-        if (mode is KeyMoveMode.S1 or KeyMoveMode.S2 && act.NPop != 0)
+        if (mode is KeyMoveMode.Ready or KeyMoveMode.Barrier && act.NPop != 0)
         {
             return KeyMoveMode.Union;
         }
 
-        if (mode == KeyMoveMode.S4)
+        if (mode == KeyMoveMode.Drained)
         {
-            return plane.KeepsSourceFallback(group, cacheId) ? KeyMoveMode.Union : KeyMoveMode.S5;
+            return plane.KeepsSourceFallback(group, cacheId) ? KeyMoveMode.Union : KeyMoveMode.Closed;
         }
 
         return mode;

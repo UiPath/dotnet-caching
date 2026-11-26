@@ -10,7 +10,7 @@ internal enum ClaimCommandOutcome
     /// <summary>A field of the group is live (pend or open).</summary>
     Live,
 
-    /// <summary>The group is still in a build, or reached S5 without <c>lswept</c>.</summary>
+    /// <summary>The group is still in a build, or reached closed without <c>lswept</c>.</summary>
     NotRemovable,
 
     /// <summary>The record changed since it was shown; re-read and confirm again.</summary>
@@ -19,7 +19,7 @@ internal enum ClaimCommandOutcome
     /// <summary>The group shows a terminal state; run <c>CertifyClaim</c> instead.</summary>
     NeedsCertify,
 
-    /// <summary>No committed record shows a terminal state (or S5 without the sweep stored).</summary>
+    /// <summary>No committed record shows a terminal state (or closed without the sweep stored).</summary>
     NoEvidence,
 
     Refused,

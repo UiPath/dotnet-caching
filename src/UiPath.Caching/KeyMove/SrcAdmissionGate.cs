@@ -1,6 +1,6 @@
 namespace UiPath.Caching.KeyMove;
 
-// After a Src generation change, a settled mirror must carry an S0 certificate for the baseline token.
+// After a Src generation change, a settled mirror must carry a not-started certificate for the baseline token.
 internal sealed class SrcAdmissionGate(Func<bool> registered, IGenerationSource generations, IAdmissionBaselines baselines, Func<CancellationToken, Task<ClaimRecord>> readMirror, Action<string, string, string>? alert = null)
 {
     private const string MirrorKind = "imd:";
@@ -71,7 +71,7 @@ internal sealed class SrcAdmissionGate(Func<bool> registered, IGenerationSource 
             return AdmissionDecision.Passed;
         }
 
-        return fields.Any(f => f is { Status: ClaimGrammar.Idle, Cert: { } cert } && f.Token == baseline.Token && cert.EndsWith(":S0", StringComparison.Ordinal))
+        return fields.Any(f => f is { Status: ClaimGrammar.Idle, Cert: { } cert } && f.Token == baseline.Token && cert.EndsWith(":" + KeyMoveStates.NotStarted, StringComparison.Ordinal))
             ? AdmissionDecision.Passed
             : Refused(app, "the Dst mirror shows no fresh certificate that the move ended");
     }

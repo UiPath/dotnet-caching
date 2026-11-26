@@ -28,14 +28,26 @@ A group the application did not register throws `ArgumentException`. A call befo
 
 ## Stage flag
 
+Use `StringFlagStageSource` with a string flag getter. It accepts `not-started`, `ready`, `barrier`, `moving`, `drained`, and `closed`, case-insensitively.
+The numeric strings `0` through `5` remain accepted. `IntFlagStageSource` continues accepting integer flags.
+
+```csharp
+var stages = new StringFlagStageSource((group, fallback, cancellationToken) =>
+    ValueTask.FromResult<string?>(configuration[$"KeyMove:{group}:Stage"] ?? fallback));
+```
+
+Names map to the corresponding stage numbers. The existing advancement and rollback rules remain unchanged.
+
 | Flag | The group goes to |
 | --- | --- |
-| `2` | Not started. From Ready or Barrier it goes back at once; from Moving or Drained it moves the keys back first. |
-| `3` | Moving, through Ready and Barrier. From Drained it goes back to Moving. |
-| `4` | Drained, once the mover finds nothing left to move. |
-| `5` | Closed, once the close gates pass and the close approval is stored. |
+| `not-started` (`0`), `ready` (`1`), `barrier` (`2`) | Not started. From Ready or Barrier it goes back at once; from Moving or Drained it moves the keys back first. |
+| `moving` (`3`) | Moving, through Ready and Barrier. From Drained it goes back to Moving. |
+| `drained` (`4`) | Drained, once the mover finds nothing left to move. |
+| `closed` (`5`) | Closed, once the close gates pass and the close approval is stored. |
 
-A flag that cannot be read holds the group where it is. A flag below `5` on a closed group only raises the `flag_below_closed` alert.
+Ready and Barrier remain automatic intermediate stages. Their flag names do not pause a forward move at those stages.
+A missing, empty, or unknown flag retains the last valid view. Before any valid read, the node advertises no flag view.
+A flag below `closed` on a closed group only raises the `flag_below_closed` alert.
 
 ## Stages
 
@@ -86,9 +98,9 @@ Common codes:
 | From | How | What happens |
 | --- | --- | --- |
 | `NotStarted` | Nothing to do. | Nothing was written. |
-| `Ready`, `Barrier` | Set the flag to `2`. | The group returns to `NotStarted`. Nothing was moved. |
-| `Moving`, `Drained` | Set the flag to `2`. If a reverse gate fails, approve `force_reverse`. | The group steps back with `Reverse` set. It walks `Ready`, `Moving` and `Drained` again while the mover copies the native keys back. Approve `release` at the reverse `Drained` to sweep the native keys and return to `NotStarted`. If old markers block the step back, `retire_markers` lets it go on. |
-| `Drained` | Set the flag to `3`. | The group returns to `Moving`. |
+| `Ready`, `Barrier` | Set the flag to `not-started`. | The group returns to `NotStarted`. Nothing was moved. |
+| `Moving`, `Drained` | Set the flag to `not-started`. If a reverse gate fails, approve `force_reverse`. | The group steps back with `Reverse` set. It walks `Ready`, `Moving` and `Drained` again while the mover copies the native keys back. Approve `release` at the reverse `Drained` to sweep the native keys and return to `NotStarted`. If old markers block the step back, `retire_markers` lets it go on. |
+| `Drained` | Set the flag to `moving`. | The group returns to `Moving`. |
 | `Closed` | No step back. Approve `abandon` for caches that accept a refill. | Every cache of the group starts cold on its native keys. |
 
 Keep the code that reads the in-place keys deployed while a step back is possible. The `close.consent` gate checks for a valid close approval covering the stored residue and checks that caches without an origin accept a refill if they have residue. A step back from `Moving` or `Drained` needs that code, so attest that it is still deployed with `AttestInPlaceReadersDeployed(group, evidence)` on the key move builder. The `close.in_place_readers` gate refuses to close without it, and no approval overrides that gate.

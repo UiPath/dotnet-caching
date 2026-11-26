@@ -11,7 +11,7 @@ internal sealed partial class KeyMoveClient<T>
         return plan.Mode == KeyMoveMode.Plain ? _p.Plain.FillAsync(key, value, deadline, stored, cancellationToken) : FillManagedAsync(key, value, deadline, stored, plan, cancellationToken);
     }
 
-    private static bool FillsInPlace(KeyMoveMode mode) => mode is KeyMoveMode.S1 or KeyMoveMode.S2 or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4;
+    private static bool FillsInPlace(KeyMoveMode mode) => mode is KeyMoveMode.Ready or KeyMoveMode.Barrier or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4;
 
     private static long CreatedCode(bool created) => created ? MoveScripts.Published : MoveScripts.DestinationExists;
 
@@ -19,8 +19,8 @@ internal sealed partial class KeyMoveClient<T>
 
     private static SchedulePointStep FillPoint(KeyMoveMode mode) => mode switch
     {
-        KeyMoveMode.S1 or KeyMoveMode.S2 => SchedulePointStep.SourceSet,
-        KeyMoveMode.S5 => SchedulePointStep.NativeWrite,
+        KeyMoveMode.Ready or KeyMoveMode.Barrier => SchedulePointStep.SourceSet,
+        KeyMoveMode.Closed => SchedulePointStep.NativeWrite,
         _ => SchedulePointStep.Fill,
     };
 
@@ -100,7 +100,7 @@ internal sealed partial class KeyMoveClient<T>
 
     private async ValueTask<(WriteResult Result, bool Rerun)> FillOnceAsync(string key, T value, long px, KeyMoveMode mode, AdmittedUnit unit, FillBox<T>? box, CancellationToken cancellationToken)
     {
-        var source = mode is KeyMoveMode.S1 or KeyMoveMode.S2;
+        var source = mode is KeyMoveMode.Ready or KeyMoveMode.Barrier;
         var onL = FillsInPlace(mode);
         if (cancellationToken.IsCancellationRequested || Data is not { } data || !data.IsConnected() || SourceUnavailable(source))
         {
@@ -120,11 +120,11 @@ internal sealed partial class KeyMoveClient<T>
             await At(FillPoint(mode)).ConfigureAwait(false);
             code = mode switch
             {
-                KeyMoveMode.S1 or KeyMoveMode.S2 => await Source.SetAsync(key, unit.Id, bytes, px, true).ConfigureAwait(false),
-                KeyMoveMode.S5 => CreatedCode(await data.Db.StringSetAsync(Key(n), bytes, Expiry(px), When.NotExists, Master).ConfigureAwait(false)),
+                KeyMoveMode.Ready or KeyMoveMode.Barrier => await Source.SetAsync(key, unit.Id, bytes, px, true).ConfigureAwait(false),
+                KeyMoveMode.Closed => CreatedCode(await data.Db.StringSetAsync(Key(n), bytes, Expiry(px), When.NotExists, Master).ConfigureAwait(false)),
                 KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4 => await data.Scripts.FillAsync(ReverseFenced(data, key), unit.Id, bytes, px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
 
-                // S3 and S4, and S1(rev), whose Src is N: forward promoters on lagging nodes are refused by G.
+                // moving and drained, and ready(rev), whose Src is N: G refuses forward promoters on lagging nodes.
                 _ => await data.Scripts.FillAsync(Fenced(data, n), unit.Id, bytes, px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
             };
         }
@@ -145,8 +145,8 @@ internal sealed partial class KeyMoveClient<T>
         return WriteFillOutcome(code, unit);
     }
 
-    private bool CreateIsClosed(KeyMoveMode mode) => mode is KeyMoveMode.Closed or KeyMoveMode.Union ||
-        (_p.NoOrigin && (mode == KeyMoveMode.S2 || KeyMovePlanning.IsReverseWrite(mode)));
+    private bool CreateIsClosed(KeyMoveMode mode) => mode is KeyMoveMode.Unavailable or KeyMoveMode.Union ||
+        (_p.NoOrigin && (mode == KeyMoveMode.Barrier || KeyMovePlanning.IsReverseWrite(mode)));
 
     private byte[]? EncodeFill(T value, KeyMoveMode mode, out WriteLease lease)
     {

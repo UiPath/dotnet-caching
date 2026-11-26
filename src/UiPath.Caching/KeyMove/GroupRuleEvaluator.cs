@@ -2,14 +2,14 @@ namespace UiPath.Caching.KeyMove;
 
 internal static partial class GroupRuleEvaluator
 {
-    private const string Closed = "S5";
-    private const string Off = "S0";
+    private const string Closed = KeyMoveStates.Closed;
+    private const string Off = KeyMoveStates.NotStarted;
 
     public static bool IsRelevant(GroupView view) => view.Answer == StateAnswer.Unknown
         ? view.Registration.Flagged || view.Registration.Listed || view.RecordFound
         : view.Registration.Listed || view.Answer == StateAnswer.Present || view.RecordFound || view.EverPresent;
 
-    /// <summary>S1 to S4, a listed S0 and any state not yet durable are polled often, S5 and the rest slowly, by the state in force.</summary>
+    /// <summary>ready to drained, a listed not-started and any state not yet durable are polled often, closed and the rest slowly, by the state in force.</summary>
     public static TimeSpan PollInterval(GroupView view, KeyMoveStateOptions options)
     {
         if (view.State is { Durable: false })
@@ -86,7 +86,7 @@ internal static partial class GroupRuleEvaluator
         var ready = view.SinceStart < options.StartupWait;
         var alerts = view.SinceStart > staleAfter ? new[] { "no_snapshot", "node_blind" } : ["no_snapshot"];
 
-        // A closed group keeps serving: its terminal record counts as an answer, and S5 writers delete the source copy until the sweep is known to be done.
+        // A closed group keeps serving: its terminal record counts as an answer. Writers in closed delete the source copy until the sweep is confirmed done.
         if (view.LastKnown is null && view.Sample is { State: Closed, Durable: true } sample)
         {
             return new GroupRules(true, ReadRule.UnionNativeFirst, WriteRule.Follow, new ActedState(sample.State, sample.Direction, sample.Ep, sample.Id, 1, false), null, false, ready, []);

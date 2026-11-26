@@ -6,7 +6,7 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
 {
     private static readonly string[] AlwaysCleared = [StateFields.Fg, StateFields.Rg, StateFields.PrevFg, StateFields.PrevRg, StateFields.AllAck, StateFields.T3At, StateFields.Swept, StateFields.DrainedAt, StateFields.ClosedAt, StateFields.DryRun, StateFields.HoldAuto];
 
-    /// <param name="registeredCaches">The caches the nodes registered (<c>ca</c>), used only for S0; S1 to S5 take the set from the surviving records.</param>
+    /// <param name="registeredCaches">The caches the nodes registered (<c>ca</c>), used only for not-started; ready to closed take the set from the surviving records.</param>
     public async Task<RecoveryResult> RecreateAsync(string group, IReadOnlyList<PeerIdentity> peers, IReadOnlyList<string> registeredCaches, ClaimFields? claim, CancellationToken cancellationToken, SequenceOptions? sequenceOptions = null)
     {
         if (await store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is not null)
@@ -119,20 +119,20 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
         return StateExpectation.Holding(stored.Ep, stored.Id, stored.Durable ? 1 : 0);
     }
 
-    private static int DerivedNPop(string state, string direction) => state is "S3" or "S4" or "S5" || direction == "rev" ? 1 : 0;
+    private static int DerivedNPop(string state, string direction) => state is KeyMoveStates.Moving or KeyMoveStates.Drained or KeyMoveStates.Closed || direction == "rev" ? 1 : 0;
 
     // The generation comes from the committed record; with none shown, a forward run gets a new one, so the markers of the old one are obsolete.
     // The previous-generation fields are written with it, so the abandon of a recovery that stopped before its commit restores them.
     private static List<(string Field, string Value)> GenerationsAfterLoss(string state, string direction, string? recordedFg, string? recordedRg, string newId)
     {
         var set = new List<(string, string)>();
-        if (state != "S0" && direction == "fwd")
+        if (state != KeyMoveStates.NotStarted && direction == "fwd")
         {
             var fg = string.IsNullOrEmpty(recordedFg) ? newId : recordedFg;
             set.Add((StateFields.Fg, fg));
             set.Add((StateFields.PrevFg, fg));
         }
-        else if (state == "S1" && direction == "rev" && !string.IsNullOrEmpty(recordedRg))
+        else if (state == KeyMoveStates.Ready && direction == "rev" && !string.IsNullOrEmpty(recordedRg))
         {
             set.Add((StateFields.Rg, recordedRg));
             set.Add((StateFields.PrevRg, recordedRg));
@@ -202,7 +202,7 @@ internal sealed class StateRecovery(StateStore store, IStateReader samples, IRec
     private async Task<(string Caches, (string? Fg, string? Rg) Recorded, RecoveryResult? Failure)> ReadRecreationCachesAsync(
         string group, PeerIdentity identity, ControlSample? sample, IReadOnlyList<string> registeredCaches, CancellationToken cancellationToken)
     {
-        if (identity.State == "S0")
+        if (identity.State == KeyMoveStates.NotStarted)
         {
             return (StateRecord.EncodeCaches(registeredCaches), default, null);
         }

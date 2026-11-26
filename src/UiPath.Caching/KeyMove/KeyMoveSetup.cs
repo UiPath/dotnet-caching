@@ -27,10 +27,10 @@ internal sealed record KeyMoveSetup(
     /// <summary>Told of every alert of the node and the leader.</summary>
     public Action<KeyMoveAlert>? Alert { get; init; }
 
-    /// <summary>Whether the mover finished a pass for <c>(group, direction)</c> after the acknowledgement of S3; null uses the pass records the mover stores, which leaves the confirming pass pending while no mover has finished a pass.</summary>
+    /// <summary>Whether the mover finished a pass for <c>(group, direction)</c> after the acknowledgement of moving; null uses the pass records the mover stores, which leaves the confirming pass pending while no mover has finished a pass.</summary>
     public Func<string, string, CancellationToken, Task<bool>>? MoverFinishedPass { get; init; }
 
-    /// <summary>Closes the data connections and opens new ones, which a node does before it acknowledges the S0 of X11; null recycles the connector's.</summary>
+    /// <summary>Closes the data connections and opens new ones, which a node does before it acknowledges the not-started of X11; null recycles the connector's.</summary>
     public Action? RecycleConnections { get; init; }
 
     /// <summary>CLAIMDROP, for <c>RemoveGroup</c>; null when no group takes a claim.</summary>

@@ -370,9 +370,9 @@ public sealed class KeyMoveReverseHashWriteTests(RedisFixture fixture)
     }
 
     [Theory]
-    [InlineData("S1")]
-    [InlineData("S3")]
-    public async Task A_reverse_refresh_that_carries_metadata_is_refused_without_changing_the_expiry(string state)
+    [InlineData(KeyMoveStates.Ready, "ready")]
+    [InlineData(KeyMoveStates.Moving, "moving")]
+    public async Task A_reverse_refresh_that_carries_metadata_is_refused_without_changing_the_expiry(string state, string stageName)
     {
         await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
         await kit.Kit.PrepareAsync("k");
@@ -384,7 +384,7 @@ public sealed class KeyMoveReverseHashWriteTests(RedisFixture fixture)
 
         var refused = await refresh.Should().ThrowAsync<NotSupportedException>();
         (await kit.Db.KeyExpireTimeAsync(kit.L("k"))).Should().Be(expiry);
-        refused.Which.Message.Should().Contain($"the metadata field has no checked form for a refresh in state Reverse{state}");
+        refused.Which.Message.Should().Contain($"the metadata field has no checked form for a refresh in state {stageName} (reverse)");
     }
 
     [Theory]

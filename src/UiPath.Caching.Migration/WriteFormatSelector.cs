@@ -23,8 +23,8 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
     /// <summary>Told when a group's switch is held for its move, with the group and the pending format.</summary>
     public Action<KeyMoveAlert>? Alert { get; set; }
 
-    /// <summary>True while the node acts under a state in which the group's keys move (S1 to S4, either direction).</summary>
-    public static bool Moving(GroupRules rules) => rules.Acting is { State: "S1" or "S2" or "S3" or "S4" };
+    /// <summary>True while the node acts under a state in which the group's keys move (ready to drained, either direction).</summary>
+    public static bool Moving(GroupRules rules) => rules.Acting is { State: KeyMoveStates.Ready or KeyMoveStates.Barrier or KeyMoveStates.Moving or KeyMoveStates.Drained };
 
     /// <summary>The hold of the node's own key move groups: until the node has read a group's state it may be in the middle of a move, as a node that restarted during one is, so it holds then too.</summary>
     public static Func<string, bool> HoldFrom(GroupStateMonitor monitor, IReadOnlySet<string> groups) =>
@@ -32,7 +32,7 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
 
     /// <summary>The policy of one read: none while the group is ready for MessagePack, else the envelope, so a stack-wide rewrite on read never converts a group that is not.</summary>
     /// <remarks>
-    /// Ready is the group's own state: it asks for MessagePack and is applied, acknowledged, switched and durable. The gate is not asked, since the library holds a rewrite on its own gate, which covers every group that asks.
+    /// ready is the group's own state: it asks for MessagePack and is applied, acknowledged, switched and durable. The gate is not asked, since the library holds a rewrite on its own gate, which covers every group that asks.
     /// The envelope policy names no rewrite target, so a default <c>MigrateOnRead</c> does nothing for it.
     /// </remarks>
     public static CachePolicy? ReadPolicy(GroupPin pin) => pin.Wanted && pin.Applied && pin.Acked && pin.Switched && pin.Durable ? null : WriteFormats.Envelope;

@@ -70,11 +70,11 @@ internal sealed class KeyMoveOperations(Router router, KeyMoveSetup setup) : IKe
 
     internal static KeyMoveStage StageOf(string state) => state switch
     {
-        "S1" => KeyMoveStage.Ready,
-        "S2" => KeyMoveStage.Barrier,
-        "S3" => KeyMoveStage.Moving,
-        "S4" => KeyMoveStage.Drained,
-        "S5" => KeyMoveStage.Closed,
+        KeyMoveStates.Ready => KeyMoveStage.Ready,
+        KeyMoveStates.Barrier => KeyMoveStage.Barrier,
+        KeyMoveStates.Moving => KeyMoveStage.Moving,
+        KeyMoveStates.Drained => KeyMoveStage.Drained,
+        KeyMoveStates.Closed => KeyMoveStage.Closed,
         _ => KeyMoveStage.NotStarted,
     };
 

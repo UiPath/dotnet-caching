@@ -9,18 +9,18 @@ internal static partial class StepPlanner
         var fields = new List<(string, string)>();
         var (set, clear) = await PlanAutomaticHoldAsync(i, options, state).ConfigureAwait(false);
 
-        if (state is { State: "S4", Direction: "fwd" })
+        if (state is { State: KeyMoveStates.Drained, Direction: "fwd" })
         {
             await RepairForwardAsync(i, fields).ConfigureAwait(false);
         }
 
-        if (state is { State: "S3" or "S4", Direction: "fwd" } && await i.Drain().ConfigureAwait(false) is { Canary: > 0 })
+        if (state is { State: KeyMoveStates.Moving or KeyMoveStates.Drained, Direction: "fwd" } && await i.Drain().ConfigureAwait(false) is { Canary: > 0 })
         {
             // A pass that counts a post-transition write restarts the soak.
             fields.Add((StateFields.CanaryAt, Number(i.Now.ToUnixTimeMilliseconds())));
         }
 
-        if (state is { State: "S4", Direction: "rev" })
+        if (state is { State: KeyMoveStates.Drained, Direction: "rev" })
         {
             await RepairReverseAsync(i, fields).ConfigureAwait(false);
         }
@@ -32,13 +32,13 @@ internal static partial class StepPlanner
     {
         string? set = null;
         var clear = false;
-        if (state.State == "S0" && state.HoldAuto.Length > 0)
+        if (state.State == KeyMoveStates.NotStarted && state.HoldAuto.Length > 0)
         {
-            // Clear stale automatic holds in S0 because the node checks that would clear them are inactive.
+            // Clear stale automatic holds in not-started because the node checks that would clear them are inactive.
             clear = true;
         }
 
-        if (state.State is "S1" or "S2" or "S3" or "S4")
+        if (state.State is KeyMoveStates.Ready or KeyMoveStates.Barrier or KeyMoveStates.Moving or KeyMoveStates.Drained)
         {
             var cause = await AutoCauseAsync(i, options).ConfigureAwait(false);
             if (cause is not null && state.HoldAuto.Length == 0)
@@ -62,7 +62,7 @@ internal static partial class StepPlanner
             alerts.Add(new StageAlert("held", hold));
         }
 
-        return new StepSide(set, clear, AllAcknowledge(i) && state.AllAck != state.Id && state.State != "S0", fields, alerts, hold);
+        return new StepSide(set, clear, AllAcknowledge(i) && state.AllAck != state.Id && state.State != KeyMoveStates.NotStarted, fields, alerts, hold);
     }
 
     private static string? HoldReason(StateRecord state, string? set, bool clear)
@@ -93,7 +93,7 @@ internal static partial class StepPlanner
             return "no_kmg:" + string.Join(',', noKmg);
         }
 
-        if (i.State is { State: "S3" or "S4", Direction: "fwd" } && await i.Drain().ConfigureAwait(false) is { } drain && drain.Canary > options.CanaryThreshold)
+        if (i.State is { State: KeyMoveStates.Moving or KeyMoveStates.Drained, Direction: "fwd" } && await i.Drain().ConfigureAwait(false) is { } drain && drain.Canary > options.CanaryThreshold)
         {
             return "canary";
         }
@@ -105,7 +105,7 @@ internal static partial class StepPlanner
     private static async Task<bool> CleanPassAsync(StepInput i) =>
         i.State.Direction == "rev" || await i.Drain().ConfigureAwait(false) is { Canary: 0 };
 
-    // The residue and the drained time of a forward S4 are written after X4; when a crash or a failed write left them out, the leader writes them from a master inventory.
+    // Forward drained residue and drained time are written after X4. If a crash or failed write omitted them, the leader writes them from a master inventory.
     private static async Task RepairForwardAsync(StepInput i, List<(string, string)> fields)
     {
         var state = i.State;
@@ -122,7 +122,7 @@ internal static partial class StepPlanner
         }
     }
 
-    // The residue of a reverse S4 is the inventory of N under this identity. A complete report is written with the identity marker (a changed count voids the consent); a missing or incomplete one is no evidence and writes nothing.
+    // Reverse drained residue is N's inventory under this identity. Write a complete report with the identity marker; changed counts void consent. Missing or incomplete reports prove nothing and write nothing.
     private static async Task RepairReverseAsync(StepInput i, List<(string, string)> fields)
     {
         var state = i.State;

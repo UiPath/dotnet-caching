@@ -13,14 +13,14 @@ internal static partial class StepPlanner
 
         return (prev[0], prev[1], state.State, state.Direction) switch
         {
-            ("S0", _, "S1", "fwd") => "X1",
-            ("S1", "fwd", "S2", "fwd") => "X2",
-            ("S1" or "S2", "fwd", "S3", "fwd") => "X3",
-            ("S3", "fwd", "S4", "fwd") => "X4",
-            ("S4", "fwd", "S5", _) => "X5",
-            ("S1" or "S2", "fwd", "S0", _) => "X6",
-            ("S3" or "S4", "fwd", "S1", "rev") => "X7",
-            ("S4", "fwd", "S3", "fwd") => "X13",
+            (KeyMoveStates.NotStarted, _, KeyMoveStates.Ready, "fwd") => "X1",
+            (KeyMoveStates.Ready, "fwd", KeyMoveStates.Barrier, "fwd") => "X2",
+            (KeyMoveStates.Ready or KeyMoveStates.Barrier, "fwd", KeyMoveStates.Moving, "fwd") => "X3",
+            (KeyMoveStates.Moving, "fwd", KeyMoveStates.Drained, "fwd") => "X4",
+            (KeyMoveStates.Drained, "fwd", KeyMoveStates.Closed, _) => "X5",
+            (KeyMoveStates.Ready or KeyMoveStates.Barrier, "fwd", KeyMoveStates.NotStarted, _) => "X6",
+            (KeyMoveStates.Moving or KeyMoveStates.Drained, "fwd", KeyMoveStates.Ready, "rev") => "X7",
+            (KeyMoveStates.Drained, "fwd", KeyMoveStates.Moving, "fwd") => "X13",
             _ => null,
         };
     }

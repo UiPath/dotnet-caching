@@ -7,4 +7,6 @@ internal readonly record struct KeyMovePlan(KeyMoveMode Mode, GroupRules Rules)
     public ActedState? Act => Rules.Acting;
 
     public string Identity => Act is { } act ? $"{act.Ep}:{act.Id}:{act.Direction}" : string.Empty;
+
+    public string StageName => KeyMoveStates.NameOf(Act?.State ?? string.Empty) + (Act?.Direction == "rev" ? " (reverse)" : string.Empty);
 }

@@ -37,7 +37,7 @@ internal static partial class GroupRuleEvaluator
             return KeepLastKnown(last);
         }
 
-        // No state was ever read and the Src shows no newer identity: with a sample that was read and holds no record the group is S0; with none, the node is blind.
+        // No state was ever read, and Src shows no newer identity. An empty sample means not-started; no sample means the node is blind.
         return view.SampleKnown
             ? new GroupRules(true, ReadRule.Follow, WriteRule.Follow, null, null, false, true, [KeyMoveGateIds.DstUnreachable])
             : Unknown(view, staleAfter, options);

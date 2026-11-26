@@ -2,12 +2,12 @@ namespace UiPath.Caching.KeyMove;
 
 internal static partial class StepPlanner
 {
-    // The cache set the nodes registered against the stored one. In S1 and S2, once every fresh advert shows the same set, X12 brings it in under a new identity that every node acknowledges
-    // before X3; from S3 on the set is frozen, and a cache outside it stays unmanaged on every node. Anywhere else the drift is only reported.
+    // Compare registered and stored cache sets. In ready and barrier, once fresh adverts agree, X12 adopts the set under a new identity that every node acknowledges
+    // before X3. From moving onward, the set is frozen and outside caches stay unmanaged on every node. Elsewhere, only report drift.
     private static (StepPlan? Plan, IReadOnlyList<StageAlert> Alerts) CacheDrift(StepInput i)
     {
         var state = i.State;
-        if (state.State == "S0" || i.Fresh.Count == 0)
+        if (state.State == KeyMoveStates.NotStarted || i.Fresh.Count == 0)
         {
             return (null, []);
         }
@@ -22,7 +22,7 @@ internal static partial class StepPlanner
         var alert = new StageAlert("cache_set_drift", string.Join(',', drifting));
         var sets = i.Fresh.Select(a => a.CachesOf(i.Group)).ToArray();
         var agreed = sets[0];
-        var rebuildable = state is { State: "S1" or "S2", Direction: "fwd" }
+        var rebuildable = state is { State: KeyMoveStates.Ready or KeyMoveStates.Barrier, Direction: "fwd" }
             && agreed is { Count: > 0 }
             && sets.All(s => s is not null && s.SequenceEqual(agreed, StringComparer.Ordinal))
             && agreed.All(IsValidCacheName)

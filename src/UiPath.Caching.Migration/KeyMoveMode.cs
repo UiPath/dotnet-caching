@@ -3,30 +3,30 @@ namespace UiPath.Caching.Migration;
 /// <summary>Which forms a call of a managed cache runs under, from the rules of its group at admission.</summary>
 internal enum KeyMoveMode
 {
-    /// <summary>The router's per-group path: S0, an unmanaged cache, or a group that is not key move.</summary>
+    /// <summary>The router's per-group path: not-started, an unmanaged cache, or a group that is not key move.</summary>
     Plain,
 
     /// <summary>Unavailable, never origin.</summary>
-    Closed,
+    Unavailable,
 
-    /// <summary>Wait for a new snapshot, then closed.</summary>
+    /// <summary>Wait for a new snapshot, then unavailable.</summary>
     Wait,
 
-    S1,
-    S2,
-    S3,
-    S4,
-    S5,
+    Ready,
+    Barrier,
+    Moving,
+    Drained,
+    Closed,
 
-    /// <summary>A write in S1(rev): Src is N, then L is deleted under GL.</summary>
+    /// <summary>A write in ready(rev): Src is N, then L is deleted under GL.</summary>
     ReverseS1,
 
-    /// <summary>A write in S3(rev): N is deleted, then L is written under GL.</summary>
+    /// <summary>A write in moving(rev): N is deleted, then L is written under GL.</summary>
     ReverseS3,
 
-    /// <summary>A write in S4(rev), with the forms of S3(rev).</summary>
+    /// <summary>A write in drained(rev), with the forms of moving(rev).</summary>
     ReverseS4,
 
-    /// <summary>Union N-first with no promotion: the blind rule, a reverse state, and S4 with residue.</summary>
+    /// <summary>Union N-first with no promotion: the blind rule, a reverse state, and drained with residue.</summary>
     Union,
 }

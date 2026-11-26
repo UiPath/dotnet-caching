@@ -127,7 +127,7 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
     {
         var fresh = await FreshAsync(cancellationToken).ConfigureAwait(false);
         var stage = StepPlanner.StageFlagOf(state);
-        var verdict = flags.Sample(group, fresh, stage, state is { State: "S4", Direction: "fwd" } ? 5 : null);
+        var verdict = flags.Sample(group, fresh, stage, state is { State: KeyMoveStates.Drained, Direction: "fwd" } ? 5 : null);
         var stable = stability.Observe(group, fresh);
         var conflict = services.Monitor?.RulesFor(group).Alerts.FirstOrDefault(a => a is "identity_conflict" or "commit_mismatch");
         var zero = memory.DurZeroFor(state, time);

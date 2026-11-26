@@ -5,7 +5,7 @@ using UiPath.Caching.KeyMove;
 namespace UiPath.Caching.Migration;
 
 /// <summary>The promotion of one hash: the fields are staged in the target's slot, published by one rename under the fence, and the source is deleted by a compare of every field.</summary>
-/// <remarks>Forward, L to N in S3 with an <c>nx</c> publish. Reverse, N to L in S3(rev) with a <c>set</c> publish and user fields only; a reverse run always captures at once, as an ensure does, because its caller has already read N.</remarks>
+/// <remarks>Forward, L to N in moving with an <c>nx</c> publish. Reverse, N to L in moving(rev) with a <c>set</c> publish and user fields only; a reverse run always captures at once, as an ensure does, because its caller has already read N.</remarks>
 internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashReads<T> reads, NegativeHints hints, ISupersessionHandler helper, bool reverse = false)
     where T : class
 {
@@ -101,7 +101,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         try
         {
             var plan = KeyMovePlanning.PlanFor(parts.Plane, parts.Group, parts.CacheId, write: false);
-            var promotes = reverse ? KeyMovePlanning.PromotesReverse(plan) : plan.Mode is KeyMoveMode.S3 or KeyMoveMode.S4;
+            var promotes = reverse ? KeyMovePlanning.PromotesReverse(plan) : plan.Mode is KeyMoveMode.Moving or KeyMoveMode.Drained;
             if (!promotes || (move is not null && plan.Act?.Id != move.Identity))
             {
                 return HashPromotionResult<T>.Of(HashPromotionStatus.Replan);
@@ -127,7 +127,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
     }
 
     // N is the authority in reverse, so a reverse run never drops it.
-    private bool DropAllowed(KeyMovePlan plan) => !reverse && plan.Mode is KeyMoveMode.S3 or KeyMoveMode.S4 && KeyMoveValueClasses.Droppable(DecodeClass.TooLarge, parts.NoOrigin, false);
+    private bool DropAllowed(KeyMovePlan plan) => !reverse && plan.Mode is KeyMoveMode.Moving or KeyMoveMode.Drained && KeyMoveValueClasses.Droppable(DecodeClass.TooLarge, parts.NoOrigin, false);
 
     private void Count(string counter) => RouterTelemetry.CountMove(counter, parts.CacheId, parts.Group);
 
@@ -525,7 +525,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         }
     }
 
-    // Above the cap the hash is not promoted. A cache with an origin drops it by an unconditional delete of L (a compare would have to send more than the cap), which is safe because L has no writer but deletes once S3 has begun; a cache without one keeps it, and it is served from where it is.
+    // Oversized hashes are not promoted. With an origin, delete L unconditionally: comparing exceeds the cap, and L permits only deletes once moving begins. Without an origin, serve the hash in place.
     private async ValueTask<HashPromotionResult<T>> OverCapAsync(PromotionPass pass, HashRead<T>? served, CancellationToken cancellationToken)
     {
         var dropped = false;

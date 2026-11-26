@@ -25,7 +25,7 @@ internal sealed class RegisteredGroupFacts(
     public static string Join(string existing, IReadOnlyList<string> entries) =>
         string.Join(',', existing.Split(',', StringSplitOptions.RemoveEmptyEntries).Concat(entries).Distinct(StringComparer.Ordinal));
 
-    /// <summary>A NoOrigin cache among the managed ones makes the group take the S2 barrier.</summary>
+    /// <summary>A NoOrigin cache among the managed ones makes the group take the barrier.</summary>
     public bool HasNoOrigin(string group, IReadOnlyList<string> cacheIds) => Managed(group, cacheIds).Any(c => c.NoOrigin);
 
     public bool TakesClaim(string group) => true;
@@ -70,7 +70,7 @@ internal sealed class RegisteredGroupFacts(
         }
 
         var consumed = state.Field(StateFields.Attested).Split(',', StringSplitOptions.RemoveEmptyEntries).Contains(Entry(kind, id), StringComparer.Ordinal);
-        return state.State == "S0" ? !consumed : consumed;
+        return state.State == KeyMoveStates.NotStarted ? !consumed : consumed;
     }
 
     private IEnumerable<KeyMoveCache> Managed(string group, IReadOnlyList<string> cacheIds) =>

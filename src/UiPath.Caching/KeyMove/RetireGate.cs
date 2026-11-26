@@ -3,10 +3,7 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.KeyMove;
 
-/// <summary>
-/// The retire gate, passed before the reverse leaves S1: a discovery pass over every slot's control record that finds no marker of the retiring generation. A pass resumes where the last attempt stopped, with an HSCAN cursor,
-/// and each attempt stops after <see cref="KeyMoveStateOptions.RetireDiscoveryBudget"/>; a slot whose record holds no more than its fixed fields is skipped by its length.
-/// </summary>
+/// <summary>The retire gate, passed before the reverse leaves ready: a discovery pass over every slot's control record that finds no marker of the retiring generation. A pass resumes where the last attempt stopped, with an HSCAN cursor, and each attempt stops after <see cref="KeyMoveStateOptions.RetireDiscoveryBudget"/>; a slot whose record holds no more than its fixed fields is skipped by its length.</summary>
 internal sealed class RetireGate(IDatabase control, MoveKeyNames names, KeyMoveStateOptions options, TimeProvider time)
 {
     private const int ScanPage = 500;
@@ -18,7 +15,7 @@ internal sealed class RetireGate(IDatabase control, MoveKeyNames names, KeyMoveS
     public async Task<RetireVerdict> CheckAsync(string group, StateRecord state, CancellationToken cancellationToken)
     {
         var retiring = state.RetiringGeneration;
-        if (state is not { State: "S1", Direction: "rev" } || retiring.Length == 0)
+        if (state is not { State: KeyMoveStates.Ready, Direction: "rev" } || retiring.Length == 0)
         {
             return RetireVerdict.Done;
         }
