@@ -269,28 +269,40 @@ public sealed class MoverPaceTests(RedisFixture fixture)
     public async Task A_value_whose_debt_outlasts_the_fence_is_published_and_the_debt_is_paid_before_the_next_key_is_captured()
     {
         PublishFaultingDatabase? fault = null;
-        await using var kit = await MoverKit.CreateAsync(fixture, interceptDb: db => PublishFaultingDatabase.Over(db, out fault), moveOptions: new KeyMoveOptions { FenceTtl = TimeSpan.FromMilliseconds(300) });
+        await using var kit = await MoverKit.CreateAsync(fixture, interceptDb: db => PublishFaultingDatabase.Over(db, out fault));
         await kit.SeedAsync(Enumerable.Range(0, 4).ToDictionary(i => $"k{i}", i => (new string('x', 4000), (TimeSpan?)null)));
 
-        // A byte costs a tenth of a millisecond: a value of 4000 bytes asks for some 400 ms, longer than the 300 ms life of the fence.
+        // A byte costs a tenth of a millisecond: a value of 4000 bytes asks for some 400 ms, longer than a fence life of 300 ms.
+        // The wait runs on the fake clock and a fence's TTL on the server's, so the life is checked on the fake clock; the real fence keeps its default life, which a slow host cannot outlast.
+        var fenceLife = TimeSpan.FromMilliseconds(300);
         var rate = new RecordingRate { MillisecondsPer10Bytes = 1 };
         var started = kit.Kit.Clock.GetTimestamp();
         var published = new System.Collections.Concurrent.ConcurrentQueue<TimeSpan>();
-        fault!.AfterPublish = () => published.Enqueue(kit.Kit.Clock.GetElapsedTime(started));
+        fault!.AfterPublish = reply =>
+        {
+            if ((long)reply == MoveScripts.Published)
+            {
+                published.Enqueue(kit.Kit.Clock.GetElapsedTime(started));
+            }
+        };
         var starts = new StartTimes(kit.Target, kit.Kit.Clock, started);
         var host = kit.Host(rate: rate, wrap: _ => starts);
 
         await kit.RunOnePassAsync(host);
 
         var progress = await kit.ProgressAsync();
-        progress[MovedField].Should().Be(4, "the wait never sits between the capture and the publish, so the fence is alive at every publish");
+        progress[MovedField].Should().Be(4);
         progress.Keys.Should().NotContain(k => k.StartsWith("skipped:", StringComparison.Ordinal));
         var order = starts.Times.OrderBy(t => t).ToArray();
         var done = published.OrderBy(t => t).ToArray();
-        done.Should().HaveCount(4);
-        for (var i = 1; i < 4; i++)
+        done.Should().HaveCount(4, "each key is published once");
+        for (var i = 0; i < 4; i++)
         {
-            (order[i] - done[i - 1]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(350), "the debt of the value before is paid before the next key is captured");
+            (done[i] - order[i]).Should().BeLessThan(fenceLife, "the wait never sits between the capture and the publish, so the fence is alive at every publish");
+            if (i > 0)
+            {
+                (order[i] - done[i - 1]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(350), "the debt of the value before is paid before the next key is captured");
+            }
         }
     }
 
@@ -335,7 +347,7 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         var rate = new RecordingRate();
         var host = kit.Host(rate: rate);
         var stopping = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
-        fault!.AfterPublish = () => stopping.TrySetResult(host.StopAsync());
+        fault!.AfterPublish = _ => stopping.TrySetResult(host.StopAsync());
         host.Start();
         await (await stopping.Task.WaitAsync(Ct));
 
@@ -369,7 +381,7 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         {
             var host = kit.Host(rate: rate);
             var stopping = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
-            fault!.AfterPublish = () =>
+            fault!.AfterPublish = _ =>
             {
                 Interlocked.Increment(ref published);
                 stopping.TrySetResult(host.StopAsync());

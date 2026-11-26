@@ -14,10 +14,11 @@ public class PublishFaultingDatabase : DispatchProxy
 
     public int Faulted { get; private set; }
 
-    /// <summary>Called when a publish is about to run, and once it has run.</summary>
+    /// <summary>Called when a publish is about to run.</summary>
     public Action? BeforePublish { get; set; }
 
-    public Action? AfterPublish { get; set; }
+    /// <summary>Called with the script's reply once a publish has run; a reply other than 1 changed nothing.</summary>
+    public Action<RedisResult>? AfterPublish { get; set; }
 
     public static IDatabase Over(IDatabase inner, out PublishFaultingDatabase fake)
     {
@@ -53,7 +54,7 @@ public class PublishFaultingDatabase : DispatchProxy
                     t =>
                     {
                         var result = t.GetAwaiter().GetResult();
-                        after();
+                        after(result);
                         return result;
                     },
                     TaskScheduler.Default);
