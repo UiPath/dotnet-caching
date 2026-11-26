@@ -36,7 +36,7 @@ public sealed class DirectCacheKeyspaceTests(RedisContainerFixture fixture) : ID
         var library = _app + ":";
         var routed = Routed(library, kit.Group);
         var space = new RegisteredKeySpace([routed], library, null, [$"{_app}:{RedisKeyspaces.String}:*", $"{_app}:{RedisKeyspaces.Hash}:*"]);
-        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, string.Empty, TimeProvider.System, TimeSpan.Zero);
+        var scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, string.Empty, kit.Time, TimeSpan.Zero);
         var scripts = new MoveScripts(kit.ControlDb, true, kit.Mux.GetServers().Min(s => s.Version)!);
         var data = new GroupDataOps(scanner, space, kit.Store, kit.Scripts, scripts, kit.Names);
         var inventory = new KeyInventory(scanner, space, kit.Store, kit.Db, string.Empty, kit.Time);

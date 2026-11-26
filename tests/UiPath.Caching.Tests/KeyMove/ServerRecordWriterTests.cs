@@ -180,7 +180,7 @@ public sealed class ServerRecordWriterTests(TwoServerFixture fixture)
     {
         var master = new MasterCaps(new DnsEndPoint("m", 6379), new Version(7, 4), false, true, true, true, null, "noeviction");
         var caps = new SideCaps([master], ScanMode.PerShard, false, [], []);
-        return new ServerRecordWriter(new ServerBarrier(kit.DstDb, kit.DstRecord, TimeProvider.System, replicaFree: true) { Retries = 0 }, caps, read);
+        return new ServerRecordWriter(new ServerBarrier(kit.DstDb, kit.DstRecord, kit.Time, replicaFree: true) { Retries = 0 }, caps, read);
     }
 
     // Reads the record, then replaces it with what the change gives (when it gives something): a write that raced the read.

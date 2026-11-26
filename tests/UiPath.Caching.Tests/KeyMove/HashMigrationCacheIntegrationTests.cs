@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
+using UiPath.Caching.Redis;
 using UiPath.Caching.Tests.Redis;
 
 namespace UiPath.Caching.Tests.KeyMove;
@@ -12,7 +14,11 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
     private static readonly TimeSpan Life = TimeSpan.FromMinutes(5);
     private static readonly HashCacheEntryOptions Replace = new(TimeToLive: Life);
 
+    private ManualTimeProvider? _time;
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private ManualTimeProvider Time => _time!;
 
     public static TheoryData<bool, bool, bool, bool, bool> RenewCases()
     {
@@ -87,7 +93,7 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
         snapshot.Outcome.Should().Be(SnapshotOutcome.Found);
         snapshot.Entry!.Value.Should().BeEquivalentTo(new Dictionary<string, string?> { ["a"] = "x", ["b"] = "y" });
         snapshot.Entry.Metadata.Should().BeEquivalentTo(new Dictionary<string, string?> { ["owner"] = "me" });
-        snapshot.Entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Life, TimeSpan.FromSeconds(15));
+        snapshot.Entry.Expiration.Should().BeCloseTo(Time.ToDateTimeOffset(Life), TimeSpan.FromSeconds(15));
     }
 
     [Fact]
@@ -233,7 +239,7 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
 
         var options = expiry switch
         {
-            "past" => new HashCacheEntryOptions(ExpireTime: DateTimeOffset.UtcNow.AddMinutes(-1)),
+            "past" => new HashCacheEntryOptions(ExpireTime: Time.ToDateTimeOffset(TimeSpan.FromMinutes(-1))),
             "future" => new HashCacheEntryOptions(TimeToLive: TimeSpan.FromHours(2)),
             _ => new HashCacheEntryOptions(ExpireTime: DateTimeOffset.MaxValue),
         };
@@ -279,7 +285,7 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
         var migration = Migration(cache);
         var key = Key();
         await cache.SetAsync(key, new Dictionary<string, string?> { ["a"] = "x" }, Replace, null, Ct);
-        var past = new HashCacheEntryOptions(ExpireTime: DateTimeOffset.UtcNow.AddMinutes(-1));
+        var past = new HashCacheEntryOptions(ExpireTime: Time.ToDateTimeOffset(TimeSpan.FromMinutes(-1)));
 
         (await migration.RenewAsync<string>(key, past, null, Ct)).Should().Be(StoreOutcome.Committed);
         (await migration.ReadSnapshotAsync<string>(key, null, Ct)).Outcome.Should().Be(SnapshotOutcome.Absent);
@@ -324,9 +330,9 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
 
         var deadline = expiry switch
         {
-            "past" => DateTimeOffset.UtcNow.AddMinutes(-1),
+            "past" => Time.ToDateTimeOffset(TimeSpan.FromMinutes(-1)),
             "persistent" => DateTimeOffset.MaxValue,
-            _ => DateTimeOffset.UtcNow.AddHours(2),
+            _ => Time.ToDateTimeOffset(TimeSpan.FromHours(2)),
         };
         var outcome = await migration.RenewExpiryAsync<string>(byRenew, new HashCacheEntryOptions(ExpireTime: deadline, Metadata: new Dictionary<string, string?> { ["ignored"] = "9" }), null, Ct);
 
@@ -353,7 +359,7 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
 
             if (!layered)
             {
-                await AssertLibraryOverloadAgreesAsync(cache, db, byLibrary, (libraryKey!.Value, renewKey.Value), deadline, expiry);
+                await AssertLibraryOverloadAgreesAsync(cache, harness.Services.GetRequiredService<IRedisConnector>().Database, byLibrary, (libraryKey!.Value, renewKey.Value), deadline, expiry);
             }
         }
         else if (kind == "string")
@@ -580,11 +586,8 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
     private static async Task AssertLibraryOverloadAgreesAsync(IHashCache cache, IDatabase db, string byLibrary, (RedisKey Library, RedisKey Renewed) keys, DateTimeOffset deadline, string expiry)
     {
         await cache.RefreshAsync<string>(byLibrary, deadline, null, Ct);
-        var until = DateTime.UtcNow.AddSeconds(5);
-        while (DateTime.UtcNow < until && !Reached(await db.KeyTimeToLiveAsync(keys.Library), expiry))
-        {
-            await Task.Delay(50, Ct);
-        }
+        await db.PingAsync();
+        Reached(await db.KeyTimeToLiveAsync(keys.Library), expiry).Should().BeTrue();
 
         (await FieldsAsync(db, keys.Renewed)).Should().BeEquivalentTo(await FieldsAsync(db, keys.Library), "the same fields, the metadata included");
         (await db.KeyTimeToLiveAsync(keys.Library) is null).Should().Be(expiry == "persistent");
@@ -593,6 +596,8 @@ public sealed class HashMigrationCacheIntegrationTests(RedisContainerFixture fix
     private MigrateOnReadHarness Harness(bool layered, bool cacheNulls = false)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        return MigrateOnReadHarness.Build(fixture.ConnectionString, FormatNegotiationMode.Force, $"hm{Guid.NewGuid():N}"[..10], layered, cacheNulls: cacheNulls);
+        using var raw = ConnectionMultiplexer.Connect(fixture.ConnectionString);
+        _time ??= new(new DateTimeOffset(DateTime.SpecifyKind(raw.GetServer(raw.GetEndPoints()[0]).Time(), DateTimeKind.Utc)));
+        return MigrateOnReadHarness.Build(fixture.ConnectionString, FormatNegotiationMode.Force, $"hm{Guid.NewGuid():N}"[..10], layered, cacheNulls: cacheNulls, clock: Time);
     }
 }

@@ -425,14 +425,18 @@ public class GroupStateMonitorTests
         var monitor = new GroupStateMonitor(_reader, _options, _time);
         _reader.Fail = true;
         monitor.Start([new GroupRegistration("a", false, true), new GroupRegistration("b", false, true)], CancellationToken.None);
-        await Until(() => _reader.Samples >= 2);
+        await _time.WaitForTimersAsync(() => _time.TimerCount == 2);
+        _reader.Samples.Should().Be(2);
 
         _reader.Fail = false;
         _reader.State = FakeStateReader.Record("S1", 5);
-        await AdvancingUntil(() => monitor.RulesFor("a").Writes == WriteRule.Follow && monitor.RulesFor("b").Writes == WriteRule.Follow);
+        await AdvancePollsAsync(2);
+        monitor.RulesFor("a").Writes.Should().Be(WriteRule.Follow);
+        monitor.RulesFor("b").Writes.Should().Be(WriteRule.Follow);
 
         var reads = _reader.Reads;
-        await AdvancingUntil(() => _reader.Reads >= reads + 2);
+        await AdvancePollsAsync(2);
+        _reader.Reads.Should().BeGreaterThanOrEqualTo(reads + 2);
         await monitor.StopAsync();
     }
 
@@ -477,14 +481,17 @@ public class GroupStateMonitorTests
         var monitor = new GroupStateMonitor(_reader, _options, _time, (_, _) => throw new InvalidOperationException("the callback is broken"));
         _reader.Fail = true;
         monitor.Start([new GroupRegistration("a", false, true)], CancellationToken.None);
-        await TimeSteps.UntilAsync(() => _reader.Samples >= 1);
+        await TimeSteps.ArmedAsync(_time);
+        _reader.Samples.Should().Be(1);
 
         _reader.Fail = false;
         _reader.State = FakeStateReader.Record("S1", 5);
-        await AdvancingUntil(() => monitor.RulesFor("a").Writes == WriteRule.Follow);
+        await AdvancePollsAsync(1);
+        monitor.RulesFor("a").Writes.Should().Be(WriteRule.Follow);
 
         var reads = _reader.Reads;
-        await AdvancingUntil(() => _reader.Reads >= reads + 2);
+        await AdvancePollsAsync(1, 2);
+        _reader.Reads.Should().BeGreaterThanOrEqualTo(reads + 2);
         await monitor.StopAsync();
     }
 
@@ -494,9 +501,11 @@ public class GroupStateMonitorTests
         var reader = new ThrowingReader();
         var monitor = new GroupStateMonitor(reader, _options, _time);
         monitor.Start([new GroupRegistration("a", false, true)], CancellationToken.None);
-        await TimeSteps.UntilAsync(() => reader.Reads >= 1);
+        await TimeSteps.ArmedAsync(_time);
+        reader.Reads.Should().Be(1);
 
-        await AdvancingUntil(() => reader.Reads >= 3);
+        await AdvancePollsAsync(1, 2);
+        reader.Reads.Should().Be(3);
 
         await monitor.StopAsync();
     }
@@ -527,23 +536,14 @@ public class GroupStateMonitorTests
         act.Should().Throw<ArgumentException>();
     }
 
-    private static async Task Until(Func<bool> condition)
+    private async Task AdvancePollsAsync(int groups, int polls = 1)
     {
-        for (var tries = 0; !condition(); tries++)
+        for (var poll = 0; poll < polls; poll++)
         {
-            tries.Should().BeLessThan(1000);
-            await Task.Delay(10);
-        }
-    }
-
-    // The loop may not have armed its next delay when the clock moves, so the clock moves again until the condition holds.
-    private async Task AdvancingUntil(Func<bool> condition)
-    {
-        for (var tries = 0; !condition(); tries++)
-        {
-            tries.Should().BeLessThan(1000);
+            await _time.WaitForTimersAsync(() => _time.TimerCount == groups);
+            var created = _time.TimersCreated;
             _time.Advance(TimeSpan.FromSeconds(2));
-            await Task.Delay(10);
+            await _time.WaitForTimersAsync(() => _time.TimersCreated >= created + groups && _time.TimerCount == groups);
         }
     }
 

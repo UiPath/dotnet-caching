@@ -29,7 +29,7 @@ public sealed class SideConnectionsCancellationTests
         disposed.Task.IsCompleted.Should().BeFalse("it has not connected yet");
         connect.SetResult(late);
 
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -64,6 +64,6 @@ public sealed class SideConnectionsCancellationTests
         await waiting.Invoking(w => w).Should().ThrowAsync<OperationCanceledException>();
         connect.SetException(new InvalidOperationException("late failure"));
 
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await SideConnections.DisposeLateAsync(connect.Task);
     }
 }

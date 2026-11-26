@@ -75,14 +75,16 @@ public class LeaderLeaseTests(RedisContainerFixture fixture)
         var lease = new LeaderLease(kit.Scripts, key, kit.Options, kit.Time);
         using var stop = new CancellationTokenSource();
         var loop = lease.RunAsync(stop.Token);
-        await TimeSteps.UntilAsync(() => lease.HoldsLease);
+        await TimeSteps.ArmedAsync(kit.Time);
+        lease.HoldsLease.Should().BeTrue();
 
         // A renewal is seen by the key coming back after it was deleted behind the loop's back.
         await kit.Db.KeyDeleteAsync(key);
         await TimeSteps.AdvanceArmedAsync(kit.Time, TimeSpan.FromSeconds(9));
         (await kit.Db.KeyExistsAsync(key)).Should().BeFalse("ten seconds have not passed");
         await TimeSteps.AdvanceArmedAsync(kit.Time, TimeSpan.FromSeconds(1));
-        await TimeSteps.UntilAsync(() => kit.Db.KeyExists(key));
+        await TimeSteps.ArmedAsync(kit.Time);
+        (await kit.Db.KeyExistsAsync(key)).Should().BeTrue();
 
         await stop.CancelAsync();
         await loop;

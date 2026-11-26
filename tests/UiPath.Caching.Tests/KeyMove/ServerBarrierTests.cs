@@ -575,8 +575,8 @@ public sealed class ServerBarrierTests
                 _ => throw new NotSupportedException(method.Name),
             });
             return timeout is { } explicitTimeout
-                ? new ServerBarrier(db, "barriertest:{fake}", TimeProvider.System, replicaFree) { Retries = retries, Timeout = explicitTimeout }
-                : new ServerBarrier(db, "barriertest:{fake}", TimeProvider.System, replicaFree) { Retries = retries };
+                ? new ServerBarrier(db, "barriertest:{fake}", new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree) { Retries = retries, Timeout = explicitTimeout }
+                : new ServerBarrier(db, "barriertest:{fake}", new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree) { Retries = retries };
         }
 
         private static Task<RedisResult> Busy() =>

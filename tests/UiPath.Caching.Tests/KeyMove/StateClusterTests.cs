@@ -286,7 +286,7 @@ public class StateClusterTests
         var small = layout.Masters[^1];
         var held = Enumerable.Range(0, 16384).Where(s => layout.OwnerOf(s).Equals(small.Endpoint)).ToArray();
         await Task.WhenAll(held.Select(s => kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, s), MoveTestEnvironment.Record(init.Ep + 5, "newer", ("a", "n")))));
-        var monitor = new GroupStateMonitor(kit.Store, kit.Options, TimeProvider.System);
+        var monitor = new GroupStateMonitor(kit.Store, kit.Options, kit.Time);
         monitor.Register([new GroupRegistration(kit.Group, false, true)]);
 
         await monitor.StepAsync(kit.Group, CancellationToken.None);
@@ -326,7 +326,7 @@ public class StateClusterTests
         await WriteMasterAsync(kit, layout, layout.Masters[1], 61, "same", durable: true);
         var init = await kit.InitAsync("a");
         await kit.Db.HashSetAsync(kit.StateKey, [new("ep", 61), new("id", "same"), new("dur", "0"), new("st", "S3"), new("dir", "fwd")]);
-        var monitor = new GroupStateMonitor(kit.Store, kit.Options, TimeProvider.System);
+        var monitor = new GroupStateMonitor(kit.Store, kit.Options, kit.Time);
         monitor.Register([new GroupRegistration(kit.Group, false, true)]);
 
         var sample = await kit.Sampler.SampleAsync(kit.Group, CancellationToken.None);

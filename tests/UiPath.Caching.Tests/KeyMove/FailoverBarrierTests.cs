@@ -27,14 +27,14 @@ public class FailoverBarrierTests(RedisContainerFixture fixture)
         var init = await kit.InitAsync("a");
 
         // The spare holds the initial state and is the master the primary will lose its write to; the primary keeps no replica, and the WAIT is answered with one, as after a failover.
-        await CopyAndDetachAsync(spare, admin.GetEndPoints()[0], kit.StateKey);
+        await CopyAndDetachAsync(spare, admin.GetServer(admin.GetEndPoints()[0]), kit.StateKey);
         var waits = 0;
         kit.Topology.Wait = (_, _) => 1;
         kit.Topology.BeforeWait = async (endpoint, _) =>
         {
             if (Interlocked.Increment(ref waits) == 1)
             {
-                await DemoteResyncAndPromoteAsync(admin.GetServer(endpoint), spareEndpoint);
+                await DemoteResyncAndPromoteAsync(admin.GetServer(endpoint), spare.GetServer(spareEndpoint));
             }
         };
 
@@ -50,39 +50,38 @@ public class FailoverBarrierTests(RedisContainerFixture fixture)
     }
 
     // The spare follows the primary until it holds the key, then stops following: two masters with the same data and different replication histories.
-    private static async Task CopyAndDetachAsync(ConnectionMultiplexer spare, EndPoint primary, RedisKey key)
+    private static async Task CopyAndDetachAsync(ConnectionMultiplexer spare, IServer primary, RedisKey key)
     {
         var server = spare.GetServer(spare.GetEndPoints()[0]);
-        await server.ExecuteAsync("REPLICAOF", HostOf(primary), PortOf(primary));
-        await WaitUntilAsync(async () => FieldOf((string)(await server.ExecuteAsync("INFO", "replication"))!, "master_link_status:") == "up" && await spare.GetDatabase().KeyExistsAsync(key));
+        await server.ExecuteAsync("REPLICAOF", HostOf(primary.EndPoint), PortOf(primary.EndPoint));
+        await SynchronizeAsync(primary);
+        (await spare.GetDatabase().KeyExistsAsync(key, CommandFlags.DemandReplica)).Should().BeTrue();
         await server.ExecuteAsync("REPLICAOF", "NO", "ONE");
     }
 
     // The primary becomes a replica of the spare and takes its data, losing whatever it alone held, and then a master again: the client connections stay, the replication id is a new one.
-    private static async Task DemoteResyncAndPromoteAsync(IServer primary, EndPoint spare)
+    private static async Task DemoteResyncAndPromoteAsync(IServer primary, IServer spare)
     {
-        await primary.ExecuteAsync("REPLICAOF", HostOf(spare), PortOf(spare));
-        await WaitUntilAsync(async () =>
-        {
-            var info = (string)(await primary.ExecuteAsync("INFO", "replication"))!;
-            return FieldOf(info, "master_link_status:") == "up" && FieldOf(info, "master_sync_in_progress:") == "0";
-        });
+        await primary.ExecuteAsync("REPLICAOF", HostOf(spare.EndPoint), PortOf(spare.EndPoint));
+        await SynchronizeAsync(spare);
+        var info = (string)(await primary.ExecuteAsync("INFO", "replication"))!;
+        FieldOf(info, "master_link_status:").Should().Be("up");
+        FieldOf(info, "master_sync_in_progress:").Should().Be("0");
         await primary.ExecuteAsync("REPLICAOF", "NO", "ONE");
     }
 
-    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    private static async Task SynchronizeAsync(IServer primary)
     {
-        for (var i = 0; i < 200; i++)
+        var key = $"failover-sync:{Guid.NewGuid():N}";
+        try
         {
-            if (await condition())
-            {
-                return;
-            }
-
-            await Task.Delay(100);
+            await primary.ExecuteAsync("SET", key, "ready");
+            ((long)await primary.ExecuteAsync("WAIT", 1, 10000)).Should().Be(1);
         }
-
-        throw new TimeoutException("The servers did not reach the state the test needs.");
+        finally
+        {
+            await primary.ExecuteAsync("DEL", key);
+        }
     }
 
     private static string HostOf(EndPoint endpoint) => endpoint is IPEndPoint ip ? ip.Address.ToString() : ((DnsEndPoint)endpoint).Host;

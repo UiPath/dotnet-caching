@@ -121,31 +121,31 @@ public class StageFlagPollerTests
     [Fact]
     public async Task A_group_in_S0_to_S4_is_polled_every_2_seconds_and_any_other_every_60()
     {
+        var observed = System.Threading.Channels.Channel.CreateUnbounded<int>();
         var reads = 0;
         var active = true;
         var createdAtRead = 0;
-        var poller = new StageFlagPoller(new Source(() => { createdAtRead = _time.TimersCreated; return ++reads; }), _ => active, _options, _time);
+        var poller = new StageFlagPoller(new Source(() => { createdAtRead = _time.TimersCreated; observed.Writer.TryWrite(++reads); return reads; }), _ => active, _options, _time);
         poller.IntervalFor(Group).Should().Be(TimeSpan.FromSeconds(2));
         poller.Start([Group], CancellationToken.None);
         try
         {
-            await TimeSteps.UntilAsync(() => reads == 1);
+            (await observed.Reader.ReadAsync(TestContext.Current.CancellationToken)).Should().Be(1);
             await TimeSteps.DelayArmedAfterAsync(_time, createdAtRead);
             _time.Advance(TimeSpan.FromSeconds(2));
-            await TimeSteps.UntilAsync(() => reads == 2);
+            (await observed.Reader.ReadAsync(TestContext.Current.CancellationToken)).Should().Be(2);
 
             // The 2 s delay must be armed before the group turns slow, or the loop would arm 60 s instead.
             await TimeSteps.DelayArmedAfterAsync(_time, createdAtRead);
             active = false;
             poller.IntervalFor(Group).Should().Be(TimeSpan.FromSeconds(60));
             _time.Advance(TimeSpan.FromSeconds(2));
-            await TimeSteps.UntilAsync(() => reads == 3);
+            (await observed.Reader.ReadAsync(TestContext.Current.CancellationToken)).Should().Be(3);
             await TimeSteps.DelayArmedAfterAsync(_time, createdAtRead);
             _time.Advance(TimeSpan.FromSeconds(59));
-            await Task.Delay(50, TestContext.Current.CancellationToken);
             reads.Should().Be(3, "the slow interval has not elapsed");
             _time.Advance(TimeSpan.FromSeconds(1));
-            await TimeSteps.UntilAsync(() => reads == 4);
+            (await observed.Reader.ReadAsync(TestContext.Current.CancellationToken)).Should().Be(4);
         }
         finally
         {

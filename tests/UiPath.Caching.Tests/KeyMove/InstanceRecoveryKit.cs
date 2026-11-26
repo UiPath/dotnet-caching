@@ -25,11 +25,11 @@ internal sealed class InstanceRecoveryKit : IAsyncDisposable
         Recovery = new InstanceClaimRecovery(Steps, Mirror, Reader, kit.Options, time, Alert, Baselines, TwoServerKit.App, Tokens, kit.Generations, Tokens, g => Fence?.Invoke(g));
         var topology = new MultiplexerTopology(kit.DstMux, string.Empty, true, kit.DstCaps.Version);
         var sampler = new ControlSampler(kit.RawDst, dstNames, topology);
-        Store = new StateStore(kit.RawDst, dstNames, new MoveScripts(kit.RawDst, true, kit.DstCaps.Version), sampler, TimeProvider.System);
+        Store = new StateStore(kit.RawDst, dstNames, new MoveScripts(kit.RawDst, true, kit.DstCaps.Version), sampler, time);
         StateReader = new TwoServerStateReader(Store, sampler, new SrcRecordReader(kit.RawSrc, srcNames));
         Records = new InstanceRecordReader(new ControlRecordReader(kit.RawSrc, srcNames), new ControlRecordReader(kit.RawDst, dstNames), kit.Views.Changes);
         Upkeep = new InstanceControlUpkeep(Records, kit.Sequence, Store, Recovery, kit.Options, time, (kind, detail) => Reports.Add((kind, detail)));
-        StateRecovery = new StateRecovery(Store, StateReader, Records, kit.Sequence, TimeProvider.System, Reader, Recovery);
+        StateRecovery = new StateRecovery(Store, StateReader, Records, kit.Sequence, time, Reader, Recovery);
     }
 
     public TwoServerKit Kit { get; }
@@ -78,7 +78,7 @@ internal sealed class InstanceRecoveryKit : IAsyncDisposable
     public static async Task<InstanceRecoveryKit> CreateAsync(TwoServerFixture fixture, TwoServerKit.KitOptions? options = null)
     {
         var kit = await TwoServerKit.CreateAsync(fixture, options);
-        return new InstanceRecoveryKit(kit, new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+        return new InstanceRecoveryKit(kit, kit.Time);
     }
 
     /// <summary>A move that ran to S1: the claim pended and opened with <see cref="Token"/>, the state at S1 <c>dur=1</c> carrying <c>ct</c> and <c>mv</c>, and the records on both servers.</summary>

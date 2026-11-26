@@ -58,7 +58,7 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
         _ = ReplicaString();
         await using var replica = await ConnectionMultiplexer.ConnectAsync(ReplicaString() + ",allowAdmin=true");
         var init = await kit.InitAsync("a");
-        var stall = await ReplicaStall.StartAsync(replica, 3);
+        await using var stall = await ReplicaStall.StartAsync(replica, 3);
 
         var stuck = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
 
@@ -78,15 +78,24 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
         var init = await kit.InitAsync("a");
         var target = StateKit.TargetFrom(init, "S1", "fwd", 0);
         (await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), target, null, CancellationToken.None)).Outcome.Should().Be(TransitionOutcome.Completed);
-        var stall = await ReplicaStall.StartAsync(replica, 3);
+        await using var stall = await ReplicaStall.StartAsync(replica, 3);
 
         // The controller crashed after DURABLE executed and before its WAIT: the state is durable, its replication unconfirmed.
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Topology.BeforeWait = async (_, server) =>
+        {
+            ((long)await server.ExecuteAsync("WAIT", 1, 1)).Should().Be(0);
+            waiting.TrySetResult();
+            await release.Task;
+        };
         var resume = kit.Sequence.ResumeAsync(kit.Group, null, CancellationToken.None);
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        await waiting.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         resume.IsCompleted.Should().BeFalse("the repeated DURABLE write has a WAIT to wait for");
-        (await resume).Should().Be(new TransitionResult(TransitionOutcome.Completed));
         await stall.FinishedAsync();
+        release.TrySetResult();
+        (await resume).Should().Be(new TransitionResult(TransitionOutcome.Completed));
     }
 
     [Fact]
@@ -97,24 +106,32 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
         var init = await kit.InitAsync("a");
         ReplicaStall? stall = null;
 
-        // The epoch sync is confirmed by the real replica; the replica then stops just before the WAIT of the commit marker.
-        kit.Topology.Wait = (_, n) =>
+        // Pause before dispatching the commit marker, after the epoch sync has been confirmed.
+        kit.Topology.LoseBeforeApply = number =>
         {
-            if (n == 3)
+            if (number == 3)
             {
                 stall = ReplicaStall.StartAsync(replica, 4).GetAwaiter().GetResult();
             }
 
-            return null;
+            return false;
         };
-        var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
+        try
+        {
+            var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
+            result.Outcome.Should().Be(TransitionOutcome.BarrierStuck);
+            (await kit.ControlAsync(0)).Should().NotContain(e => e.Name == "dur" && e.Value == "1");
+            (await kit.Db.HashGetAsync(kit.StateKey, "cmt")).HasValue.Should().BeTrue();
+        }
+        finally
+        {
+            kit.Topology.LoseBeforeApply = null;
+            if (stall is not null)
+            {
+                await stall.FinishedAsync();
+            }
+        }
 
-        result.Outcome.Should().Be(TransitionOutcome.BarrierStuck);
-        (await kit.ControlAsync(0)).Should().NotContain(e => e.Name == "dur" && e.Value == "1");
-        (await kit.Db.HashGetAsync(kit.StateKey, "cmt")).HasValue.Should().BeTrue();
-        await stall!.FinishedAsync();
-
-        kit.Topology.Wait = null;
         (await kit.Sequence.ResumeAsync(kit.Group, null, CancellationToken.None)).Outcome.Should().Be(TransitionOutcome.Completed);
     }
 
@@ -180,16 +197,14 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
 
         public async Task Confirmed() => (await WaitAsync(5000, CancellationToken.None)).Should().BeGreaterThanOrEqualTo(1);
 
-        // The replica stops answering; the repeat runs; the WAIT is started and either is still pending half a second later or has returned.
+        // The server reports whether the repeat still needs the paused replica to acknowledge.
         public async Task<bool> WaitedAfterAsync(Func<Task> repeat, CancellationToken cancellationToken)
         {
-            var stall = await ReplicaStall.StartAsync(replica, 4);
+            await using var stall = await ReplicaStall.StartAsync(replica, 4);
             await repeat();
-            var wait = WaitAsync(5000, cancellationToken);
-            await Task.WhenAny(wait, Task.Delay(500, cancellationToken));
-            var pending = !wait.IsCompleted;
-            (await wait).Should().BeGreaterThanOrEqualTo(1);
+            var pending = await WaitAsync(1, cancellationToken) == 0;
             await stall.FinishedAsync();
+            (await WaitAsync(5000, cancellationToken)).Should().BeGreaterThanOrEqualTo(1);
             return pending;
         }
 

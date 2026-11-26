@@ -153,7 +153,8 @@ public class ControlUpkeepTests(RedisContainerFixture fixture)
         (await kit.Db.KeyExistsAsync(control)).Should().BeFalse("sixty seconds have not passed since the last check");
         await lease.TryHoldAsync();
         await TimeSteps.AdvanceArmedAsync(kit.Time, TimeSpan.FromSeconds(1));
-        await TimeSteps.UntilAsync(() => kit.Db.KeyExists(control));
+        await TimeSteps.ArmedAsync(kit.Time);
+        (await kit.Db.KeyExistsAsync(control)).Should().BeTrue();
 
         (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Ep.Should().Be(state.Ep + 1);
         kit.Reports.Select(r => r.Kind).Should().Contain("rebuild");

@@ -152,7 +152,7 @@ public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
         caps.Replicas.Should().Be(1);
         caps.Failures("src").Should().BeEmpty();
 
-        var barrier = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: false);
+        var barrier = new ServerBarrier(db, "sidetest:k", new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree: false);
         (await barrier.WriteAndWaitAsync(transaction => transaction.StringSetAsync("sidetest:k", "v"), wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
     }
 
@@ -164,10 +164,9 @@ public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
         await using var replica = await ConnectionMultiplexer.ConnectAsync($"{Replica},allowAdmin=true,syncTimeout=10000");
         var db = mux.GetDatabase();
         var written = 0;
-        var barrier = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: false) { Timeout = TimeSpan.FromMilliseconds(200), Retries = 2 };
+        var barrier = new ServerBarrier(db, "sidetest:k", new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree: false) { Timeout = TimeSpan.FromMilliseconds(200), Retries = 2 };
 
-        var sleeping = replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", "2");
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await using var stall = await ReplicaStall.StartAsync(replica, 2);
         var outcome = await barrier.WriteAndWaitAsync(
             transaction =>
             {
@@ -179,7 +178,7 @@ public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
         outcome.Should().Be(BarrierOutcome.NotConfirmed, "0 or a timeout is not a confirmation");
         written.Should().Be(3, "attempt 0 and one transaction per retry, with no extra backoff");
         (await barrier.WriteAndWaitAsync(transaction => transaction.StringSetAsync("sidetest:k", "v"), wayBack: true)).Should().Be(BarrierOutcome.SkippedAfterRecentFailure);
-        await sleeping;
+        await stall.FinishedAsync();
     }
 
     [Fact]
@@ -192,8 +191,8 @@ public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
 
         var db = mux.GetDatabase();
 
-        var free = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: true);
-        var expecting = new ServerBarrier(db, "sidetest:k", TimeProvider.System, replicaFree: false) { Retries = 1 };
+        var free = new ServerBarrier(db, "sidetest:k", new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree: true);
+        var expecting = new ServerBarrier(db, "sidetest:k", new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree: false) { Retries = 1 };
 
         (await free.WriteAndWaitAsync(transaction => transaction.StringSetAsync("sidetest:k", "v"), wayBack: false))
             .Should().Be(BarrierOutcome.NoReplica);
@@ -548,8 +547,21 @@ public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
             var mark = views.Changes.Current;
             var before = current();
 
-            connector.ForceReconnect();
-            await WaitUntilAsync(() => !ReferenceEquals(current(), before) && views.Changes.ChangedSince(mark), TimeSpan.FromSeconds(30), ct);
+            var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnReconnected(object? sender, EventArgs args) => reconnected.TrySetResult();
+            connector.OnReconnected += OnReconnected;
+            try
+            {
+                connector.ForceReconnect();
+                await reconnected.Task.WaitAsync(ct);
+            }
+            finally
+            {
+                connector.OnReconnected -= OnReconnected;
+            }
+
+            current().Should().NotBeSameAs(before);
+            views.Changes.ChangedSince(mark).Should().BeTrue();
 
             await views.Destination.PingAsync();
             await views.SourcePrefixed.PingAsync();
@@ -557,9 +569,8 @@ public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
 
             // The new connection's failure moves the counter again: its events are subscribed.
             var afterReconnect = views.Changes.Current;
-            var id = (long)await current().GetServer(current().GetEndPoints()[0]).ExecuteAsync("CLIENT", "ID");
-            await killer.GetServer(killer.GetEndPoints()[0]).ExecuteAsync("CLIENT", "KILL", "ID", id);
-            await WaitUntilAsync(() => views.Changes.ChangedSince(afterReconnect), TimeSpan.FromSeconds(30), ct);
+            await RedisSignals.ReplaceConnectionAsync(current(), killer, current().GetServer(current().GetEndPoints()[0]));
+            views.Changes.ChangedSince(afterReconnect).Should().BeTrue();
         }
     }
 
@@ -574,9 +585,7 @@ public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
         changes.ChangedSince(mark).Should().BeFalse();
 
         // Kills the Dst's connections: it fails, reconnects, and the counter moves.
-        var id = (long)await dst.GetServer(dst.GetEndPoints()[0]).ExecuteAsync("CLIENT", "ID");
-        await src.GetServer(src.GetEndPoints()[0]).ExecuteAsync("CLIENT", "KILL", "ID", id);
-        await WaitUntilAsync(() => changes.ChangedSince(mark), TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await RedisSignals.ReplaceConnectionAsync(dst, src, dst.GetServer(dst.GetEndPoints()[0]));
 
         changes.ChangedSince(mark).Should().BeTrue();
     }
@@ -601,18 +610,6 @@ public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
 
     private static SideCaps Side(MasterCaps master, ScanMode scan = ScanMode.PerShard) => new([master], scan, SlotEnforced: false, [], []);
 
-    /// <summary>A bounded wait on a condition, on the task scheduler's own clock instead of the wall clock.</summary>
-    private static Task WaitUntilAsync(Func<bool> condition, TimeSpan limit, CancellationToken cancellationToken) =>
-        Task.Run(
-            async () =>
-            {
-                while (!condition())
-                {
-                    await Task.Delay(10, cancellationToken);
-                }
-            },
-            cancellationToken).WaitAsync(limit, cancellationToken);
-
     [GeneratedRegex(@"^side:probe:\{[^}]+\}:[0-9a-f]{32}:[ab]$")]
     private static partial Regex ProbeKey();
 
@@ -621,6 +618,6 @@ public sealed partial class MoveSidesTests(RedisContainerFixture fixture)
         var options = Options.Create(new RedisConnectionOptions { ConnectionString = $"{fixture.ConnectionString},allowAdmin=true", EnableHangDetection = false });
         var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
         var factory = new ConnectionMultiplexerFactory(options, NullRedisProfiler.Instance);
-        return new RedisConnector(NullTelemetryProvider.Instance, optionsProvider, factory, options);
+        return new RedisConnector(NullTelemetryProvider.Instance, optionsProvider, factory, options, configurators: null, clock: new ManualTimeProvider(DateTimeOffset.UnixEpoch));
     }
 }

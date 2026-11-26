@@ -32,7 +32,7 @@ public class StateBarrierProofTests(RedisContainerFixture fixture)
         {
             if (Interlocked.Increment(ref waits) == site)
             {
-                await ReplaceConnectionAsync(admin, endpoint, server);
+                await RedisSignals.ReplaceConnectionAsync(kit.Topology.ConnectionFor(endpoint), admin, server);
             }
         };
 
@@ -58,7 +58,7 @@ public class StateBarrierProofTests(RedisContainerFixture fixture)
         {
             if (Interlocked.Increment(ref waits) is var n && n >= site && n < site + WithReplica.BarrierRetries)
             {
-                await ReplaceConnectionAsync(admin, endpoint, server);
+                await RedisSignals.ReplaceConnectionAsync(kit.Topology.ConnectionFor(endpoint), admin, server);
             }
         };
 
@@ -215,7 +215,7 @@ public class StateBarrierProofTests(RedisContainerFixture fixture)
         {
             if (Interlocked.Increment(ref waits) == 2)
             {
-                await ReplaceConnectionAsync(admin, endpoint, server);
+                await RedisSignals.ReplaceConnectionAsync(kit.Topology.ConnectionFor(endpoint), admin, server);
             }
         };
 
@@ -374,7 +374,15 @@ public class StateBarrierProofTests(RedisContainerFixture fixture)
         var first = 1 + kit.Names.SlotSet().Count + 1 + 1;
         var fired = 0;
         var paused = new SemaphoreSlim(0);
-        var reported = new TaskCompletionSource();
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.OnReport = (kind, _) =>
+        {
+            if (kind == "barrier_failed")
+            {
+                failure.TrySetResult();
+            }
+        };
         kit.Topology.Wait = (_, _) => Volatile.Read(ref fired) == 1 ? 0 : 1;
 
         // The uncertain master holds its lost EXEC until a retrying master is paused between its loop check and its dispatch, then reports.
@@ -386,7 +394,7 @@ public class StateBarrierProofTests(RedisContainerFixture fixture)
             }
 
             Volatile.Write(ref fired, 1);
-            Assert.True(paused.Wait(TimeSpan.FromSeconds(60)), "no master reached a retry");
+            paused.Wait(TestContext.Current.CancellationToken);
             return true;
         };
 
@@ -396,14 +404,11 @@ public class StateBarrierProofTests(RedisContainerFixture fixture)
             if (number >= 2 && Volatile.Read(ref fired) == 1)
             {
                 paused.Release();
-                await reported.Task.WaitAsync(TimeSpan.FromSeconds(60));
+                await reported.Task.WaitAsync(TestContext.Current.CancellationToken);
             }
         };
         var run = kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
-        while (!run.IsCompleted && !kit.Reports.Any(r => r.Kind == "barrier_failed"))
-        {
-            await Task.Delay(20, TestContext.Current.CancellationToken);
-        }
+        await Task.WhenAny(run, failure.Task).WaitAsync(TestContext.Current.CancellationToken);
 
         reported.TrySetResult();
         var result = await run;
@@ -421,7 +426,15 @@ public class StateBarrierProofTests(RedisContainerFixture fixture)
         var stateOwner = await kit.Db.IdentifyEndpointAsync(kit.StateKey);
         var unwaited = layout.Masters.First(m => !m.Endpoint.Equals(stateOwner));
         var probe = unwaited.Slots[0].From;
-        var reported = new TaskCompletionSource();
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.OnReport = (kind, _) =>
+        {
+            if (kind == "barrier_failed")
+            {
+                failure.TrySetResult();
+            }
+        };
 
         // The way back skips the barrier of a master that failed recently: its writes go out alone. That master is held while it opens its connection, until another master reports an uncertain write.
         kit.Ledger.Record(unwaited.Endpoint);
@@ -431,14 +444,11 @@ public class StateBarrierProofTests(RedisContainerFixture fixture)
         {
             if (endpoint.Equals(unwaited.Endpoint))
             {
-                await reported.Task.WaitAsync(TimeSpan.FromSeconds(60));
+                await reported.Task.WaitAsync(TestContext.Current.CancellationToken);
             }
         };
         var run = kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), new SequenceOptions(WayBack: true, Ledger: kit.Ledger), CancellationToken.None);
-        while (!run.IsCompleted && !kit.Reports.Any(r => r.Kind == "barrier_failed"))
-        {
-            await Task.Delay(20, TestContext.Current.CancellationToken);
-        }
+        await Task.WhenAny(run, failure.Task).WaitAsync(TestContext.Current.CancellationToken);
 
         reported.TrySetResult();
         var result = await run;
@@ -502,31 +512,6 @@ public class StateBarrierProofTests(RedisContainerFixture fixture)
 
         result.Should().Be(new TransitionResult(TransitionOutcome.Completed, WaitSkipped: true), $"site {site}");
         kit.Topology.Waits.Should().Be(Sites - 1 + extraWaits);
-    }
-
-    // Kills the dedicated connection and waits until the client has a new one: the next command, the WAIT, runs on a connection the write never used.
-    private static async Task ReplaceConnectionAsync(ConnectionMultiplexer admin, EndPoint endpoint, IServer server)
-    {
-        var id = (long)await server.ExecuteAsync("CLIENT", "ID");
-        await admin.GetServer(endpoint).ExecuteAsync("CLIENT", "KILL", "ID", id);
-        for (var i = 0; i < 100; i++)
-        {
-            try
-            {
-                if ((long)await server.ExecuteAsync("CLIENT", "ID") != id)
-                {
-                    return;
-                }
-            }
-            catch (RedisException)
-            {
-                // Reconnecting.
-            }
-
-            await Task.Delay(50);
-        }
-
-        throw new TimeoutException("The killed connection was never replaced.");
     }
 
     private async Task<ConnectionMultiplexer> AdminAsync()

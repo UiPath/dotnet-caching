@@ -8,6 +8,8 @@ namespace UiPath.Caching.Tests.KeyMove;
 internal sealed class HookedTopology(IStateTopology inner) : IStateTopology
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<EndPoint, int> _openings = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<EndPoint, IConnectionMultiplexer> _connections = new();
+
     private int _reads;
     private int _opened;
     private int _waits;
@@ -58,6 +60,8 @@ internal sealed class HookedTopology(IStateTopology inner) : IStateTopology
 
     public int Waits => Volatile.Read(ref _waits);
 
+    public IConnectionMultiplexer ConnectionFor(EndPoint endpoint) => _connections[endpoint];
+
     public async Task<ClusterLayout> ReadLayoutAsync(CancellationToken cancellationToken)
     {
         var real = await inner.ReadLayoutAsync(cancellationToken);
@@ -75,7 +79,9 @@ internal sealed class HookedTopology(IStateTopology inner) : IStateTopology
             await before(master, _openings.AddOrUpdate(master, 1, (_, n) => n + 1));
         }
 
-        return new HookedChannel(await inner.OpenAsync(master, cancellationToken), this);
+        var channel = await inner.OpenAsync(master, cancellationToken);
+        _connections[master] = channel.StateDatabase.Multiplexer;
+        return new HookedChannel(channel, this);
     }
 
     private sealed class HookedChannel(IMasterChannel channel, HookedTopology owner) : IMasterChannel

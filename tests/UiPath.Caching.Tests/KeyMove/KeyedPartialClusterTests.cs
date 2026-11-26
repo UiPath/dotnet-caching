@@ -15,7 +15,7 @@ public sealed class KeyedPartialClusterTests
         var (a, b) = await KeysOnTwoMastersAsync(db);
         await Task.WhenAll(db.KeyDeleteAsync(a), db.KeyDeleteAsync(b));
         await db.StringSetAsync(b, "taken");
-        var barrier = new ServerBarrier(db, a, TimeProvider.System, replicaFree: true) { Retries = 1 };
+        var barrier = new ServerBarrier(db, a, new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree: true) { Retries = 1 };
 
         // A commits; B is conditioned on a key that does not exist, and it does, so B commits nothing on any attempt.
         var outcome = await barrier.WriteManyByKeyAndWaitAsync(
@@ -64,7 +64,7 @@ public sealed class KeyedPartialClusterTests
 
         var master = new MasterCaps(new DnsEndPoint("m", 6379), new Version(7, 4), false, true, true, true, null, "noeviction");
         var caps = new SideCaps([master], ScanMode.PerShard, false, [], []);
-        var barrier = new ServerBarrier(db, a, TimeProvider.System, replicaFree: true) { Retries = 0 };
+        var barrier = new ServerBarrier(db, a, new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree: true) { Retries = 0 };
         var writer = new ServerRecordWriter(barrier, caps, Read);
 
         var write = await writer.RunManyAsync([MoveScripts.ControlSyncOp(a, Record(5, "id5")), MoveScripts.ControlSyncOp(b, Record(5, "id5"))], false);

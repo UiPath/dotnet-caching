@@ -549,7 +549,7 @@ public sealed class ServerBarrierManyTests
                 nameof(IDatabase.CreateTransaction) => Transaction(),
                 _ => throw new NotSupportedException(method.Name),
             });
-            return new ServerBarrier(db, "barriertest:{fake}", TimeProvider.System, replicaFree) { Retries = retries };
+            return new ServerBarrier(db, "barriertest:{fake}", new ManualTimeProvider(DateTimeOffset.UnixEpoch), replicaFree) { Retries = retries };
         }
 
         private static Task<RedisResult> Info(string runId, string replicationId) =>
