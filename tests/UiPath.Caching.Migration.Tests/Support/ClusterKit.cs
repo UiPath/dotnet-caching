@@ -11,6 +11,7 @@ internal sealed class ClusterKit : IAsyncDisposable
     private static readonly TimeSpan Settle = TimeSpan.FromSeconds(30);
 
     private static readonly string LostWritePassword = "lost-" + Guid.NewGuid().ToString("N");
+    private SlotMigration? _migration;
 
     private ClusterKit(ConnectionMultiplexer mux) => Mux = mux;
 
@@ -89,9 +90,10 @@ internal sealed class ClusterKit : IAsyncDisposable
         var source = nodes.Single(n => !n.IsReplica && n.Slots.Any(r => r.From <= slot && slot <= r.To));
         var target = nodes.First(n => !n.IsReplica && n.Slots.Count > 0 && n.NodeId != source.NodeId);
         var (from, to) = (Mux.GetServer(source.EndPoint!), Mux.GetServer(target.EndPoint!));
-        await to.ExecuteAsync("CLUSTER", "SETSLOT", slot, "IMPORTING", source.NodeId);
-        await from.ExecuteAsync("CLUSTER", "SETSLOT", slot, "MIGRATING", target.NodeId);
         var migration = new SlotMigration(slot, from, to, source.NodeId, target.NodeId);
+        await to.ExecuteAsync("CLUSTER", "SETSLOT", slot, "IMPORTING", source.NodeId);
+        _migration = migration;
+        await from.ExecuteAsync("CLUSTER", "SETSLOT", slot, "MIGRATING", target.NodeId);
         await MigrateAsync(migration, keys);
         return migration;
     }
@@ -115,6 +117,7 @@ internal sealed class ClusterKit : IAsyncDisposable
             await master.ExecuteAsync("CLUSTER", "SETSLOT", migration.Slot, "NODE", migration.TargetId);
         }
 
+        _migration = null;
         await WaitSettledAsync();
     }
 
@@ -150,7 +153,20 @@ internal sealed class ClusterKit : IAsyncDisposable
         return true;
     });
 
-    public ValueTask DisposeAsync() => Mux.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_migration is { } migration)
+            {
+                await FinishMigrationAsync(migration);
+            }
+        }
+        finally
+        {
+            await Mux.DisposeAsync();
+        }
+    }
 
     internal static async Task<ClusterKit> CreateAsync(ConnectionMultiplexer mux, Func<ClusterKit, Task> settle)
     {

@@ -110,7 +110,7 @@ internal sealed partial class KeyMoveClient<T>
         return missing;
     }
 
-    // A key that expires between MGET and PTTL is a miss. If PTTL fails, the local cap bounds any cached hit.
+    // A key that expires between MGET and PTTL is a miss.
     // The remaining life of each hit; null for a hit whose life could not be read, which is never taken as no expiry.
     private async Task<long?[]> ReadBatchLifetimesAsync(KeyMoveData data, List<string> missing, int[] hits, bool replica, CancellationToken cancellationToken)
     {
