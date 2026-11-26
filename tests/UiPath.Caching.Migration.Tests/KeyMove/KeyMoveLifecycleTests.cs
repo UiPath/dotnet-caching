@@ -17,6 +17,32 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
     [Fact]
     public async Task A_live_cache_moves_across_the_three_cluster_primaries() => await MoveToClosedAsync(cluster: true);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Moving_writes_refresh_UTC_without_advancing_fake_timers(bool expires)
+    {
+        await using var host = await MovingCacheHost.CreateAsync(fixture);
+        await EnterMovingAsync(host);
+        var deadline = expires ? await KeyMoveKit.ServerTimeAsync(host.Db) + TimeSpan.FromMinutes(5) : (DateTimeOffset?)null;
+        host.Clock.UtcOffset -= TimeSpan.FromMinutes(1);
+        var timestamp = host.Clock.GetTimestamp();
+
+        Assert.True(await host.SetAsync("clock-drift", [1], deadline, Ct));
+
+        host.Clock.GetTimestamp().Should().Be(timestamp);
+        await host.AssertValueAsync("clock-drift", [1]);
+        var ttl = await host.Db.KeyTimeToLiveAsync(host.Native("clock-drift")).WaitAsync(Ct);
+        if (expires)
+        {
+            ttl.Should().NotBeNull().And.BeGreaterThan(TimeSpan.Zero).And.BeLessThanOrEqualTo(TimeSpan.FromMinutes(5));
+        }
+        else
+        {
+            ttl.Should().BeNull();
+        }
+    }
+
     [Fact]
     public async Task A_completed_write_wins_over_a_mover_holding_an_older_value()
     {
@@ -195,11 +221,11 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         await host.ExpectAlertAsync("start_blocked", KeyMoveGateIds.StartNativeEmpty);
         await host.Db.KeyDeleteAsync(unexpectedNative).WaitAsync(Ct);
         await host.AdvanceAsync("S1");
-        Assert.True(await host.Cache.SetAsync("ready", [71], await host.ClientDeadlineAsync(deadline), Ct));
+        Assert.True(await host.SetAsync("ready", [71], deadline, Ct));
         ledger["ready"] = [71];
         await host.AdvanceAsync("S2");
         await host.AssertValueAsync("ready", ledger["ready"]);
-        Assert.False(await host.Cache.SetAsync("ready", [72], Ct));
+        Assert.False(await host.SetAsync("ready", [72], null, Ct));
         await host.AdvanceAsync("S3");
 
         var mutateDuringMove = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -250,7 +276,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         await host.AdvanceAsync("S5");
 
         List<long> closedValue = [301];
-        Assert.True(await host.Cache.SetAsync("closed", closedValue, await host.ClientDeadlineAsync(deadline), Ct));
+        Assert.True(await host.SetAsync("closed", closedValue, deadline, Ct));
         ledger["closed"] = closedValue;
         await host.AssertValueAsync("closed", closedValue);
 
@@ -271,7 +297,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
             foreach (var key in keys)
             {
                 List<long> next = [ledger[key]![0] + 1, -11];
-                Assert.True(await host.Cache.SetAsync(key, next, await host.ClientDeadlineAsync(deadline), token));
+                Assert.True(await host.SetAsync(key, next, deadline, token));
                 ledger[key] = next;
                 await host.AssertValueCoreAsync(key, next, token);
             }

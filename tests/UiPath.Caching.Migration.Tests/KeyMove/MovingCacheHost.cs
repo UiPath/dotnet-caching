@@ -422,8 +422,18 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         }
     }
 
+    public async Task<bool> SetAsync(string key, List<long> value, DateTimeOffset? deadline, CancellationToken token)
+    {
+        // The server checks marked-write deadlines against UTC; keep fake timers independent of that clock.
+        var serverNow = await KeyMoveKit.ServerTimeAsync(Db);
+        Clock.UtcOffset = serverNow - Clock.Manual.GetUtcNow();
+        return deadline is { } at
+            ? await Cache.SetAsync(CacheKey.Verbatim(key), value, at, token)
+            : await Cache.SetAsync(CacheKey.Verbatim(key), value, token);
+    }
+
     public async Task WriteAsync(string key, List<long> value) =>
-        Assert.True(await Cache.SetAsync(CacheKey.Verbatim(key), value, Ct), $"The write for {key} was refused.");
+        Assert.True(await SetAsync(key, value, null, Ct), $"The write for {key} was refused.");
 
     public async Task AssertNativeBytesMatchLibraryWriteAsync(string key, List<long> value, DateTimeOffset deadline)
     {
