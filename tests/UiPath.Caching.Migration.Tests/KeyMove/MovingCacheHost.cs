@@ -42,6 +42,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     private readonly RedisRouterMoveClaim _claim;
     private readonly SwitchableMoveRate _rate = new();
     private readonly SwitchableSchedulePoint _moverSchedule = new();
+    private readonly ManualTimeProvider _inventoryRetryClock;
     private ServiceProvider? _services;
     private Router _router = null!;
     private int _stage;
@@ -53,6 +54,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         Clock = clock;
         MoverClock = new ObservedClock(clock.GetUtcNow());
         RateClock = new ObservedClock(MoverClock.Manual);
+        _inventoryRetryClock = new ManualTimeProvider(clock.GetUtcNow());
         _dryRunAt = clock.GetUtcNow();
         _legacy = new LegacySource(redis, _name);
         _stateOptions = new KeyMoveStateOptions
@@ -128,7 +130,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
 
     private MoverHostedService Mover => _router.Library!.Started.OfType<MoverHostedService>().Single();
 
-    public static async Task<MovingCacheHost> CreateAsync(RedisFixture fixture, bool cluster = false, bool acceptRefill = false)
+    public static async Task<MovingCacheHost> CreateAsync(RedisFixture fixture, bool cluster = false, bool acceptRefill = false, Func<IStateTopology, IStateTopology>? wrapInventoryTopology = null)
     {
         var connection = cluster ? Environment.GetEnvironmentVariable("REDIS_CLUSTER_CONNECTION_STRING") : fixture.ConnectionString;
         var requireCluster = Environment.GetEnvironmentVariable("KEYMOVE_E2E_REQUIRE_CLUSTER") == "1";
@@ -164,7 +166,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         var host = new MovingCacheHost(redis, new ObservedClock(await KeyMoveKit.ServerTimeAsync(redis.GetDatabase())), cluster, acceptRefill);
         try
         {
-            await host.StartRouterAsync(redisOptions.ToString());
+            await host.StartRouterAsync(redisOptions.ToString(), wrapInventoryTopology);
             return host;
         }
         catch
@@ -209,10 +211,11 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     public async Task<DateTimeOffset> ClientDeadlineAsync(DateTimeOffset deadline) =>
         Clock.ToDateTimeOffset(deadline - await KeyMoveKit.ServerTimeAsync(Db));
 
-    public async Task PrepareMoveAsync()
+    public async Task PrepareMoveAsync(IStateTopology? inventoryTopology = null)
     {
         var state = await StateAsync();
-        var inventory = await Inventory().RunAsync(Group, Ct);
+        var retryClock = new ManualTimeProvider(Clock.GetUtcNow());
+        var inventory = await CompleteInventoryAsync(Inventory(retryClock, inventoryTopology).RunAsync(Group, Ct), retryClock);
         var estimate = 1024L * inventory!.Movable;
         var dryRun = new DryRunStamp(_dryRunAt, estimate, "legacy keys scanned");
         await Scripts.FieldsAsync(Names.State(Group), state.Id, [(StateFields.DryRun, dryRun.Encode())], []).WaitAsync(Ct);
@@ -260,7 +263,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         Clock.Advance(_stateOptions.ReplicaLagMax);
         (await Node.HoldLeaseAsync(Group)).Should().BeTrue();
         await ApplyStateAsync();
-        var step = await Driver.StepAsync(Group, Ct);
+        var step = await CompleteInventoryAsync(Driver.StepAsync(Group, Ct), _inventoryRetryClock);
         await ApplyStateAsync();
         return step;
     }
@@ -348,7 +351,8 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         var advert = new NodeAdvert(advertiser.Field, TimeSpan.Zero, advertiser.Current().Tokens);
         advert.Acknowledges(Group, state).Should().BeTrue();
         var passes = new MoverPasses(Node.ScanUnits!, Db, Names, Runtime.Store.ReadAsync);
-        var mover = new InventoryMoverStatus(Inventory(), Clock, passes.FinishedAfterAckAsync);
+        var retryClock = new ManualTimeProvider(Clock.GetUtcNow());
+        var mover = new InventoryMoverStatus(Inventory(retryClock), Clock, passes.FinishedAfterAckAsync);
         var input = new StepInput(
             Group,
             state,
@@ -366,7 +370,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             () => mover.DrainAsync(Group, state, Ct),
             () => mover.ResidueInventoryAsync(Group, Ct),
             () => throw new InvalidOperationException("This test only interrupts forward transitions."));
-        var plan = await StepPlanner.DecideAsync(input, _driverOptions);
+        var plan = await CompleteInventoryAsync(StepPlanner.DecideAsync(input, _driverOptions), retryClock);
         Assert.Equal(StepKind.Transit, plan.Kind);
         var spec = Assert.IsType<TransitionSpec>(plan.Spec);
         Assert.Equal(next, spec.State);
@@ -542,6 +546,24 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     private static string? Parse(string key, string prefix) =>
         key.StartsWith(prefix, StringComparison.Ordinal) ? key[prefix.Length..] : null;
 
+    private static async Task<T> CompleteInventoryAsync<T>(Task<T> operation, ManualTimeProvider retryClock)
+    {
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        while (!operation.IsCompleted)
+        {
+            var timer = retryClock.NextTimerAsync(waiting.Token).AsTask();
+            if (await Task.WhenAny(operation, timer) == operation)
+            {
+                await waiting.CancelAsync();
+                break;
+            }
+
+            retryClock.Advance(await timer);
+        }
+
+        return await operation;
+    }
+
     private async Task ApplyStateAsync()
     {
         await Node.Monitor.StepAsync(Group, Ct);
@@ -564,7 +586,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         await _services!.DisposeAsync();
     }
 
-    private async Task StartRouterAsync(string connection)
+    private async Task StartRouterAsync(string connection, Func<IStateTopology, IStateTopology>? wrapInventoryTopology)
     {
         var state = new KeyMoveSetup(
             [new GroupRegistration(Group, true, true, [CacheId])],
@@ -579,6 +601,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             State = _stateOptions,
             Driver = _driverOptions,
             Alert = _alerts.Enqueue,
+            InventoryScanOverride = (_inventoryRetryClock, wrapInventoryTopology),
         };
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -660,9 +683,9 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         return [.. results.Order(StringComparer.Ordinal)];
     }
 
-    private KeyInventory Inventory()
+    private KeyInventory Inventory(ManualTimeProvider retryClock, IStateTopology? topology = null)
     {
-        var scanner = new MasterScanner(() => _redis.GetServers().Where(server => !server.IsReplica).ToArray(), Topology, Db.Database, string.Empty, Clock, Poll);
+        var scanner = new MasterScanner(() => _redis.GetServers().Where(server => !server.IsReplica).ToArray(), topology ?? Topology, Db.Database, string.Empty, retryClock, Poll);
         return new KeyInventory(scanner, _space, Runtime.Store, Db, string.Empty, Clock, values: _values);
     }
 

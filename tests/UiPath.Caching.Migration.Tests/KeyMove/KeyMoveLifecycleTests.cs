@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using StackExchange.Redis;
 using UiPath.Caching.KeyMove;
 using UiPath.Caching.Migration.Tests.Support;
@@ -16,6 +17,33 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
 
     [Fact]
     public async Task A_live_cache_moves_across_the_three_cluster_primaries() => await MoveToClosedAsync(cluster: true);
+
+    [Fact]
+    public async Task Preparing_a_move_completes_inventory_after_a_topology_retry()
+    {
+        await using var host = await MovingCacheHost.CreateAsync(fixture);
+        await host.SeedAsync("retry", [1]);
+        var topology = new SettlingInventoryTopology(host.Topology.ReadLayoutAsync);
+
+        await host.PrepareMoveAsync(topology);
+
+        topology.Reads.Should().Be(3);
+        var stamp = await host.Db.HashGetAsync(host.Names.State(MovingCacheHost.Group), StateFields.DryRun).WaitAsync(Ct);
+        (DryRunStamp.TryParse(stamp.ToString())?.EstimatedBytes).Should().Be(1024);
+    }
+
+    [Fact]
+    public async Task The_router_step_completes_drain_inventory_after_a_topology_retry()
+    {
+        SettlingInventoryTopology? topology = null;
+        await using var host = await MovingCacheHost.CreateAsync(
+            fixture, wrapInventoryTopology: inner => topology = new SettlingInventoryTopology(inner.ReadLayoutAsync));
+
+        await EnterMovingAsync(host);
+
+        Assert.NotNull(topology);
+        topology.Reads.Should().Be(3);
+    }
 
     [Theory]
     [InlineData(false, -1)]
@@ -330,5 +358,20 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
 
             legacyHitsRead.TrySetResult();
         }
+    }
+
+    private sealed class SettlingInventoryTopology(Func<CancellationToken, Task<ClusterLayout>> readLayout) : IStateTopology
+    {
+        public int Reads { get; private set; }
+
+        public async Task<ClusterLayout> ReadLayoutAsync(CancellationToken cancellationToken)
+        {
+            var layout = await readLayout(cancellationToken);
+            return ++Reads == 1 ? layout.WithUnsettled([5]) : layout;
+        }
+
+        public Task<MasterProbe> ProbeAsync(EndPoint master, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IMasterChannel> OpenAsync(EndPoint master, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }
