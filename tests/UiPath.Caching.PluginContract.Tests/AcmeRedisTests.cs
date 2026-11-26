@@ -152,17 +152,20 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
     {
         Assert.SkipUnless(Fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var readerEvents = new AcmeEventFormat();
+        var telemetry = new RecordingTelemetry();
         var writerNode = Node(new("a"));
-        var readerNode = Node(new("b") { Events = readerEvents, ObservedTopic = nameof(Profile) });
+        var readerNode = Node(new("b") { Events = readerEvents, Telemetry = telemetry, ObservedTopic = nameof(Profile) });
         var writer = Cache(writerNode, KnownCacheProviderNames.InMemoryRedis);
         var reader = Cache(readerNode, KnownCacheProviderNames.InMemoryRedis);
         var policy = PolicyOf(Nodes[0], Policy);
         var key = Unique();
         await writer.SetAsync(key, new Profile("first", 1), policy, Ct);
-        (await reader.GetAsync<Profile>(key, policy, Ct)).Should().Be(new Profile("first", 1));
 
+        // Drain the first write before priming so only the second write can refresh the reader's copy.
+        _ = Topic<Profile>(readerNode);
         await ReadyAsync(readerNode);
         await BarrierAsync<Profile>(writerNode, readerNode);
+        (await reader.GetAsync<Profile>(key, policy, Ct)).Should().Be(new Profile("first", 1));
         var decoded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         readerEvents.OnDecode = message =>
         {
@@ -174,8 +177,9 @@ public sealed class AcmeRedisTests(RedisFixture fixture) : AcmeNodeTests(fixture
 
         await writer.SetAsync(key, new Profile("second", 2), policy, Ct);
         await decoded.Task.WaitAsync(Ct);
-        await BarrierAsync<Profile>(writerNode, readerNode);
-        (await reader.GetAsync<Profile>(key, policy, Ct)).Should().Be(new Profile("second", 2), "the invalidation dropped the reader's copy");
+        // A topic barrier ends dispatch, but the refresh installs the value asynchronously.
+        await telemetry.WaitForMetricAsync("cache.peer_refresh.kept", "cache.name", KnownCacheProviderNames.InMemoryRedis, Ct);
+        (await reader.GetAsync<Profile>(key, policy, Ct)).Should().Be(new Profile("second", 2), "the reader applied the peer's write");
         readerEvents.Decoded.Should().NotBeEmpty("the reader's plugin decoded a body that started with its id, so the writer did not fall back to JSON");
     }
 

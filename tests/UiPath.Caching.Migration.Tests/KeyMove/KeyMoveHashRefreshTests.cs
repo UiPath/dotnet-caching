@@ -41,7 +41,7 @@ public sealed class KeyMoveHashRefreshTests(RedisFixture fixture)
         await kit.SetAsync(kit.N("k"), Original, TimeSpan.FromMinutes(1));
         var before = await kit.Kit.FenceAsync("k");
 
-        (await kit.Client.RefreshAsync("k", CacheExpiry.At(DateTimeOffset.UtcNow.AddHours(3)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.RefreshAsync("k", CacheExpiry.At(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromHours(3))), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
 
         (await kit.Db.KeyTimeToLiveAsync(kit.N("k")))!.Value.Should().BeGreaterThan(TimeSpan.FromHours(2));
         (await kit.Kit.FenceAsync("k")).Should().NotBe(before);
@@ -248,7 +248,7 @@ public sealed class KeyMoveHashRefreshTests(RedisFixture fixture)
         }
 
         var control = kit.Kit.Names.ControlFor(kit.Kit.Group, kit.N("k"));
-        var past = DateTimeOffset.UtcNow.AddSeconds(-1).ToUnixTimeMilliseconds();
+        var past = kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromSeconds(-1)).ToUnixTimeMilliseconds();
         var fence = new FenceBump(kit.Kit.Names.ForwardFence(kit.N("k")), "nonce", 60_000);
 
         var code = await kit.Kit.Scripts.HashExpireAsync(kit.N("k"), control, kit.Kit.Id, past, fence, clear);
@@ -276,7 +276,7 @@ public sealed class KeyMoveHashRefreshTests(RedisFixture fixture)
         await kit.Db.KeyExpireAsync(kit.N("k"), TimeSpan.FromMinutes(5));
         var control = kit.Kit.Names.ControlFor(kit.Kit.Group, kit.N("k"));
 
-        var code = await kit.Kit.Scripts.HashExpireAsync(kit.N("k"), control, kit.Kit.Id, DateTimeOffset.UtcNow.AddHours(2).ToUnixTimeMilliseconds(), new FenceBump(kit.Kit.Names.ForwardFence(kit.N("k")), "nonce", 60_000), clear);
+        var code = await kit.Kit.Scripts.HashExpireAsync(kit.N("k"), control, kit.Kit.Id, kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromHours(2)).ToUnixTimeMilliseconds(), new FenceBump(kit.Kit.Names.ForwardFence(kit.N("k")), "nonce", 60_000), clear);
 
         code.Should().Be(1);
         var fields = await kit.AllFieldsAsync(kit.N("k"));
@@ -297,7 +297,7 @@ public sealed class KeyMoveHashRefreshTests(RedisFixture fixture)
         (await kit.Db.KeyTimeToLiveAsync(kit.N("k")))!.Value.Should().BeGreaterThan(TimeSpan.FromHours(1));
     }
 
-    // Through the client: the deadline passes after the refresh has been decided and before its command runs; with nulls cached the options refresh marks the metadata, and the expired hash must stay gone.
+    // The deadline is already past on Redis when the command runs, while the client clock still sees it ahead.
     [Theory]
     [InlineData(true, true)]
     [InlineData(false, true)]
@@ -309,16 +309,12 @@ public sealed class KeyMoveHashRefreshTests(RedisFixture fixture)
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync("S3");
         await kit.SetAsync(kit.N("k"), Original, TimeSpan.FromMinutes(5));
-        kit.Kit.Schedule.Hook = async (step, _) =>
-        {
-            if (step == SchedulePointStep.HashExpire)
-            {
-                await Task.Delay(900, Ct);
-            }
-        };
+        kit.Kit.Time.UtcOffset = TimeSpan.FromSeconds(-2);
 
-        var refreshed = await kit.Client.RefreshAsync("k", CacheExpiry.At(DateTimeOffset.UtcNow.AddMilliseconds(500)), (IDictionary<string, string?>?)null, Ct);
+        var beforeRefresh = kit.Kit.Clock.GetUtcNow();
+        var refreshed = await kit.Client.RefreshAsync("k", CacheExpiry.At(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromSeconds(1))), (IDictionary<string, string?>?)null, Ct);
 
+        kit.Kit.Clock.GetUtcNow().Should().Be(beforeRefresh);
         refreshed.Outcome.Should().Be(WriteOutcome.Committed, "the hash was there when the refresh ran");
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse("it expired, and nothing made a key of the marker");
         (await kit.Db.KeyTimeToLiveAsync(kit.N("k"))).Should().BeNull();
@@ -375,7 +371,7 @@ public sealed class KeyMoveHashRefreshTests(RedisFixture fixture)
 
         var unresolved = async () => await kit.Client.RefreshAsync("k", CacheExpiry.Default, Ct);
         await unresolved.Should().ThrowAsync<ArgumentException>();
-        (await kit.Client.RefreshAsync("k", CacheExpiry.At(DateTimeOffset.UtcNow.AddSeconds(-1)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.RefreshAsync("k", CacheExpiry.At(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromSeconds(-1))), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
 
         (await kit.Kit.ExistsAsync(kit.L("k"))).Should().BeFalse();
     }
@@ -402,7 +398,7 @@ public sealed class KeyMoveHashRefreshTests(RedisFixture fixture)
         await kit.SetAsync(kit.L("k"), Original, TimeSpan.FromMinutes(10));
         await kit.SetAsync(kit.N("m"), Original);
 
-        (await kit.Client.ExpireTimeAsync("k", Ct)).Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(10), TimeSpan.FromSeconds(30));
+        (await kit.Client.ExpireTimeAsync("k", Ct)).Should().BeCloseTo(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10)), TimeSpan.FromSeconds(30));
         (await kit.Client.ContainsAsync("k", Ct)).Should().BeTrue();
         (await kit.Client.ExpireTimeAsync("m", Ct)).Should().BeNull("no expiry");
         (await kit.Client.ContainsAsync("m", Ct)).Should().BeTrue();

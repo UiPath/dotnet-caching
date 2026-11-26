@@ -26,7 +26,7 @@ public sealed class MoverOwnershipTests(RedisFixture fixture)
     public async Task A_holder_whose_lease_lapses_and_is_taken_during_one_keys_promotion_sends_no_further_write_and_the_next_owner_moves_the_key(string step)
     {
         var pausedAt = Enum.Parse<SchedulePointStep>(step);
-        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch.AddDays(1));
+        var clock = new ObservedClock(DateTimeOffset.UnixEpoch.AddDays(1));
         var pause = new PausingSchedule(pausedAt);
         KeyRecordingDatabase? recorder = null;
         await using var kit = await MoverKit.CreateAsync(fixture, schedule: pause, clock: clock, interceptDb: db => KeyRecordingDatabase.Over(db, out recorder));
@@ -46,7 +46,7 @@ public sealed class MoverOwnershipTests(RedisFixture fixture)
             (await kit.Kit.Scripts.LeaseAsync(lease, "the-next-holder", 600_000)).Should().Be(MoveScripts.LeaseAcquired);
             var before = recorder!.Touched.Count;
             pause.Release();
-            await MoverKit.WaitAsync(() => Task.FromResult(done.Results.Count == 1));
+            await done.ResultEnqueued.WaitAsync(Ct);
 
             done.Results.Single().SkipReason.Should().Be(MoveResult.OwnershipLost);
             var sent = recorder.Touched.Skip(before).ToArray();
@@ -59,8 +59,7 @@ public sealed class MoverOwnershipTests(RedisFixture fixture)
 
             // The next owner leaves the unit, and the holder takes it again from where it stands: the key is moved.
             await kit.Db.KeyDeleteAsync(lease);
-            clock.Advance(Options.PollInterval);
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            await kit.WaitForPassAsync(host);
         }
         finally
         {
@@ -88,7 +87,7 @@ public sealed class MoverOwnershipTests(RedisFixture fixture)
             kit.Kit.ApplyRules("S4");
             var before = recorder!.Touched.Count;
             pause.Release();
-            await MoverKit.WaitAsync(() => Task.FromResult(done.Results.Count == 1));
+            await done.ResultEnqueued.WaitAsync(Ct);
 
             done.Results.Single().SkipReason.Should().Be(MoveResult.OwnershipLost);
             recorder.Touched.Skip(before).Where(k => k.Contains(kit.Kit.N("k0"), StringComparison.Ordinal)).Should().BeEmpty();
@@ -106,7 +105,7 @@ public sealed class MoverOwnershipTests(RedisFixture fixture)
     [Fact]
     public async Task A_promotion_that_outlasts_a_third_of_the_lease_renews_it_before_it_writes_and_goes_on()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch.AddDays(1));
+        var clock = new ObservedClock(DateTimeOffset.UnixEpoch.AddDays(1));
         var pause = new PausingSchedule(SchedulePointStep.Publish);
         KeyRecordingDatabase? recorder = null;
         await using var kit = await MoverKit.CreateAsync(fixture, schedule: pause, clock: clock, interceptDb: db => KeyRecordingDatabase.Over(db, out recorder));
@@ -123,7 +122,7 @@ public sealed class MoverOwnershipTests(RedisFixture fixture)
             clock.Advance(Options.LeaseTtl / 2);
             var before = recorder!.Touched.Count;
             pause.Release();
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            await kit.WaitForPassAsync(host);
             sent = [.. recorder.Touched.Skip(before)];
         }
         finally
@@ -178,7 +177,7 @@ public sealed class MoverOwnershipTests(RedisFixture fixture)
             await kit.Db.KeyDeleteAsync(lease);
             (await kit.Kit.Scripts.LeaseAsync(lease, "the-next-holder", 600_000)).Should().Be(MoveScripts.LeaseAcquired);
             released.SetResult();
-            await MoverKit.WaitAsync(() => Task.FromResult(done.Results.Count == 1));
+            await done.ResultEnqueued.WaitAsync(Ct);
 
             done.Results.Single().SkipReason.Should().Be(MoveResult.OwnershipLost);
             recorder.Touched.Skip(before).Where(k => k.Contains(kit.Kit.N("k0"), StringComparison.Ordinal)).Should().BeEmpty("no publish after the lease was lost");

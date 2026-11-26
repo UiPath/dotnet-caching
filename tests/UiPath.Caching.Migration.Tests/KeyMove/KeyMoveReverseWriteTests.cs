@@ -21,7 +21,7 @@ public sealed class KeyMoveReverseWriteTests(RedisFixture fixture)
         await kit.Db.StringSetAsync(kit.L("k"), "l:v0");
         await kit.Db.StringSetAsync(ReverseFence(kit, "k"), "before");
 
-        var result = await kit.Client.SetAsync("k", new Item("v1"), In(TimeSpan.FromMinutes(10)), Ct);
+        var result = await kit.Client.SetAsync("k", new Item("v1"), kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10)), Ct);
 
         result.Outcome.Should().Be(WriteOutcome.Committed);
         kit.Schedule.Steps.Should().Equal(SchedulePointStep.SourceSet, SchedulePointStep.FenceObserve, SchedulePointStep.Bump);
@@ -124,7 +124,7 @@ public sealed class KeyMoveReverseWriteTests(RedisFixture fixture)
         await kit.Db.StringSetAsync(kit.N("k"), "n:v0");
         await kit.Db.StringSetAsync(ReverseFence(kit, "k"), "before");
 
-        var result = await kit.Client.SetAsync("k", new Item("v1"), In(TimeSpan.FromMinutes(10)), Ct);
+        var result = await kit.Client.SetAsync("k", new Item("v1"), kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10)), Ct);
 
         result.Outcome.Should().Be(WriteOutcome.Committed);
         kit.Schedule.Steps.Should().Equal(SchedulePointStep.SourceDelete, SchedulePointStep.FenceObserve, SchedulePointStep.Bump);
@@ -278,8 +278,6 @@ public sealed class KeyMoveReverseWriteTests(RedisFixture fixture)
     }
 
     private static string ReverseFence(KeyMoveKit kit, string key) => kit.Names.ReverseFence(kit.L(key)).ToString();
-
-    private static DateTimeOffset In(TimeSpan span) => DateTimeOffset.UtcNow + span;
 
     private Task<KeyMoveKit> CreateAsync(bool scripts, bool noOrigin = false) =>
         KeyMoveKit.CreateAsync(fixture, scripts, noOrigin, inPlace: new TaggedItemCodec("l:"), native: new TaggedItemCodec("n:"));

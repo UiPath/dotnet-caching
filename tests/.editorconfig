@@ -6,52 +6,7 @@ dotnet_diagnostic.RS0030.severity = error
 [UiPath.Caching.Migration.Tests/BridgeTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Migration.Tests/KeyMove/CacheTraffic.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/ClearKit.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Migration.Tests/KeyMove/DryRunTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/Harness/StepScheduler.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/InfoHealthTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveBatchClusterTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveClearGateTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveClearOutcomeTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveCodecTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveContractTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveFillTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashConformanceTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashFillRefreshOutcomeTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashFillTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashMarkerTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashOutcomeTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
 [UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashPromotionOutcomeTests.cs]
@@ -60,91 +15,13 @@ dotnet_diagnostic.RS0030.severity = none
 [UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashPromotionTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashRefreshTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashRouterTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashWaitTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHashWriteTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveHotPathTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveKit.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveLifecycleTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveMarkerSettleTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReadTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReverseHashPromotionTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReverseHashWriteTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReversePromotionTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReverseWriteTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveReviewTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/KeyMoveWriteTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/LastGoodOptionsTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
 [UiPath.Caching.Migration.Tests/KeyMove/MoveRateTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
-[UiPath.Caching.Migration.Tests/KeyMove/MoveRetrySetTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/MoverAdmissionTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/MoverIdleTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/MoverKit.cs]
-dotnet_diagnostic.RS0030.severity = none
-
 [UiPath.Caching.Migration.Tests/KeyMove/MoverLeaseTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/MoverPaceTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/MoverReverseTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/MoverStateWindowTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/MovingCacheHost.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/PendingHoldTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/UnmarkQueueTests.cs]
-dotnet_diagnostic.RS0030.severity = none
-
-[UiPath.Caching.Migration.Tests/KeyMove/WritePermitsTests.cs]
 dotnet_diagnostic.RS0030.severity = none
 
 [UiPath.Caching.Migration.Tests/Support/ClusterKit.cs]

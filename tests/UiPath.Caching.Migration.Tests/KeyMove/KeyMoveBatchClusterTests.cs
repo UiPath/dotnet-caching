@@ -198,7 +198,7 @@ public sealed class KeyMoveBatchClusterTests(RedisFixture fixture)
             }
 
             read[key].Value!.Name.Should().Be("n-" + key);
-            read[key].Expiration.Should().NotBeNull($"{key} has a life").And.BeAfter(DateTimeOffset.UtcNow.AddMinutes(9));
+            read[key].Expiration.Should().NotBeNull($"{key} has a life").And.BeAfter(kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(9)));
         }
     }
 

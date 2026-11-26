@@ -23,18 +23,19 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         var keys = Enumerable.Range(0, 20).Select(i => $"k{i}").ToArray();
         await kit.SeedAsync(keys);
         var health = new MoveRateTests.FakeHealth { State = KeyMoveHealthState.Red };
-        var host = kit.Host(rate: Fast(health, new MoveRateTests.FakeMemory()));
+        var host = kit.Host(rate: Fast(kit.Kit.Time, health, new MoveRateTests.FakeMemory()));
         host.Start();
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(200), TimeProvider.System, Ct);
+            var pause = await kit.Kit.Time.NextTimerAsync(Ct);
 
             (await kit.Db.HashLengthAsync(kit.Kit.Names.Progress(kit.Kit.Group))).Should().Be(0, "nothing is published while the health is red");
             (await kit.Kit.ExistsAsync(kit.Kit.N("k0"))).Should().BeFalse();
             (await kit.Kit.ExistsAsync(kit.Kit.L("k0"))).Should().BeTrue();
 
             health.State = KeyMoveHealthState.Green;
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            kit.Kit.Time.Advance(pause);
+            await kit.WaitForPassAsync(host);
         }
         finally
         {
@@ -54,16 +55,17 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedAsync(Enumerable.Range(0, 20).Select(i => $"k{i}").ToArray());
         var memory = new MoveRateTests.FakeMemory { Reason = reason };
-        var host = kit.Host(rate: Fast(new MoveRateTests.FakeHealth(), memory));
+        var host = kit.Host(rate: Fast(kit.Kit.Time, new MoveRateTests.FakeHealth(), memory));
         host.Start();
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(200), TimeProvider.System, Ct);
+            var pause = await kit.Kit.Time.NextTimerAsync(Ct);
 
             (await kit.Db.HashLengthAsync(kit.Kit.Names.Progress(kit.Kit.Group))).Should().Be(0);
 
             memory.Reason = null;
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            kit.Kit.Time.Advance(pause);
+            await kit.WaitForPassAsync(host);
         }
         finally
         {
@@ -79,29 +81,48 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedAsync(Enumerable.Range(0, 30).Select(i => $"k{i}").ToArray());
         var health = new MoveRateTests.FakeHealth();
-        var counting = new SlowCounter(kit.Target);
-        var rate = Fast(health, new MoveRateTests.FakeMemory());
+        var fifth = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var counting = new CountingTarget(kit.Target)
+        {
+            Before = async (_, _) =>
+            {
+                if (Interlocked.Increment(ref calls) == 5)
+                {
+                    fifth.SetResult();
+                    await release.Task.WaitAsync(Ct);
+                }
+
+                return null;
+            },
+        };
+        var rate = Fast(kit.Kit.Time, health, new MoveRateTests.FakeMemory());
         var host = kit.Host(rate: rate, wrap: _ => counting);
         var unit = (await kit.UnitIdsAsync()).Single();
         host.Start();
         try
         {
-            await MoverKit.WaitAsync(() => Task.FromResult(counting.Total >= 5));
+            await fifth.Task.WaitAsync(Ct);
             health.State = KeyMoveHealthState.Red;
-            await MoverKit.WaitAsync(async () => await rate.PauseReasonAsync(unit, Ct) == "red");
-            await Task.Delay(TimeSpan.FromMilliseconds(100), TimeProvider.System, Ct);
+            kit.Kit.Time.Advance(TimeSpan.FromMilliseconds(20));
+            (await rate.PauseReasonAsync(unit, Ct)).Should().Be("red");
+            release.SetResult();
+            await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
             var frozen = counting.Total;
-            await Task.Delay(TimeSpan.FromMilliseconds(150), TimeProvider.System, Ct);
+            var pause = await kit.Kit.Time.NextTimerAsync(Ct);
 
             counting.Total.Should().Be(frozen, "no key is moved while paused");
             frozen.Should().BeLessThan(30);
             (await kit.Db.KeyExistsAsync(kit.Kit.Names.UnitLease(kit.Kit.Group, unit))).Should().BeTrue("the pause renews the lease");
 
             health.State = KeyMoveHealthState.Green;
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            kit.Kit.Time.Advance(pause);
+            await kit.WaitForPassAsync(host);
         }
         finally
         {
+            release.TrySetResult();
             await host.StopAsync();
         }
 
@@ -115,26 +136,23 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture, interceptDb: db => PublishFaultingDatabase.Over(db, out fault));
         await kit.SeedAsync(Enumerable.Range(0, 10).Select(i => $"k{i}").ToArray());
         fault!.Fail(Oom(), 1);
-        var rate = Fast(new MoveRateTests.FakeHealth(), new MoveRateTests.FakeMemory(), o => o.OomBackoff = TimeSpan.FromMilliseconds(300));
+        var rate = Fast(kit.Kit.Time, new MoveRateTests.FakeHealth(), new MoveRateTests.FakeMemory(), o => o.OomBackoff = TimeSpan.FromMilliseconds(300));
         var host = kit.Host(rate: rate);
-        var started = TimeProvider.System.GetTimestamp();
-        var sawBackoff = false;
+        var started = kit.Kit.Clock.GetTimestamp();
         host.Start();
         try
         {
-            await MoverKit.WaitAsync(async () =>
-            {
-                sawBackoff |= await rate.PauseReasonAsync("probe", Ct) == "oom_backoff";
-                return await kit.PassedAsync();
-            });
+            var pause = await kit.Kit.Time.NextTimerAsync(Ct);
+            (await rate.PauseReasonAsync("probe", Ct)).Should().Be("oom_backoff");
+            kit.Kit.Time.Advance(pause);
+            await kit.WaitForPassAsync(host);
         }
         finally
         {
             await host.StopAsync();
         }
 
-        TimeProvider.System.GetElapsedTime(started).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(250), "the mover stopped for the backoff");
-        sawBackoff.Should().BeTrue();
+        kit.Kit.Clock.GetElapsedTime(started).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(250), "the mover stopped for the backoff");
         fault.Faulted.Should().Be(1);
         var progress = await kit.ProgressAsync();
         progress[MovedField].Should().Be(10, "the refused key was published after the backoff");
@@ -148,7 +166,7 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture, interceptDb: db => PublishFaultingDatabase.Over(db, out fault));
         await kit.SeedAsync(Enumerable.Range(0, 10).Select(i => $"k{i}").ToArray());
         fault!.Fail(Oom(), 2);
-        var host = kit.Host(rate: Fast(new MoveRateTests.FakeHealth(), new MoveRateTests.FakeMemory(), o => o.OomBackoff = TimeSpan.FromMilliseconds(100)));
+        var host = kit.Host(rate: Fast(kit.Kit.Time, new MoveRateTests.FakeHealth(), new MoveRateTests.FakeMemory(), o => o.OomBackoff = TimeSpan.FromMilliseconds(100)));
 
         await RunBatchAsync(kit, host, OomSkipField);
 
@@ -164,8 +182,8 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture, interceptDb: db => PublishFaultingDatabase.Over(db, out fault));
         await kit.SeedAsync(Enumerable.Range(0, 10).Select(i => $"k{i}").ToArray());
         fault!.Fail(new TimeoutException("Timeout performing EVAL"), 1);
-        var latency = new MoverLatency(TimeProvider.System);
-        var rate = new AimdMoveRate(new MoveRateTests.FakeHealth(), null, Quiet(), TimeProvider.System, latency);
+        var latency = new MoverLatency(kit.Kit.Clock);
+        var rate = new AimdMoveRate(new MoveRateTests.FakeHealth(), null, Quiet(), kit.Kit.Time.Manual, latency);
         var host = kit.Host(rate: rate);
 
         await RunBatchAsync(kit, host, "skipped:timeout");
@@ -256,10 +274,10 @@ public sealed class MoverPaceTests(RedisFixture fixture)
 
         // A byte costs a tenth of a millisecond: a value of 4000 bytes asks for some 400 ms, longer than the 300 ms life of the fence.
         var rate = new RecordingRate { MillisecondsPer10Bytes = 1 };
-        var started = TimeProvider.System.GetTimestamp();
+        var started = kit.Kit.Clock.GetTimestamp();
         var published = new System.Collections.Concurrent.ConcurrentQueue<TimeSpan>();
-        fault!.AfterPublish = () => published.Enqueue(TimeProvider.System.GetElapsedTime(started));
-        var starts = new StartTimes(kit.Target, started);
+        fault!.AfterPublish = () => published.Enqueue(kit.Kit.Clock.GetElapsedTime(started));
+        var starts = new StartTimes(kit.Target, kit.Kit.Clock, started);
         var host = kit.Host(rate: rate, wrap: _ => starts);
 
         await kit.RunOnePassAsync(host);
@@ -316,11 +334,10 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         await kit.SeedAsync(Enumerable.Range(0, 8).ToDictionary(i => $"k{i}", i => (new string('x', 4000), (TimeSpan?)null)));
         var rate = new RecordingRate();
         var host = kit.Host(rate: rate);
-        Task? stopping = null;
-        fault!.AfterPublish = () => stopping ??= Task.Run(host.StopAsync, CancellationToken.None);
+        var stopping = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        fault!.AfterPublish = () => stopping.TrySetResult(host.StopAsync());
         host.Start();
-        await MoverKit.WaitAsync(() => Task.FromResult(stopping is not null));
-        await stopping!;
+        await (await stopping.Task.WaitAsync(Ct));
 
         var published = 0;
         long size = 0;
@@ -351,15 +368,14 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         for (var round = 0; round < 3; round++)
         {
             var host = kit.Host(rate: rate);
-            Task? stopping = null;
+            var stopping = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
             fault!.AfterPublish = () =>
             {
                 Interlocked.Increment(ref published);
-                stopping ??= Task.Run(host.StopAsync, CancellationToken.None);
+                stopping.TrySetResult(host.StopAsync());
             };
             host.Start();
-            await MoverKit.WaitAsync(() => Task.FromResult(stopping is not null));
-            await stopping!;
+            await (await stopping.Task.WaitAsync(Ct));
         }
 
         published.Should().BeGreaterThanOrEqualTo(3);
@@ -379,7 +395,8 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         await kit.SeedAsync(Enumerable.Range(0, 24).ToDictionary(i => $"k{i:D2}", i => (new string('x', 4000), (TimeSpan?)null)));
         var options = new StaticOptionsMonitor<KeyMoveMoverOptions>(new KeyMoveMoverOptions
         {
-            StartKeysPerSecond = 1_000_000,
+            StartKeysPerSecond = 1e12,
+            MaxKeysPerSecond = 1e12,
             StartBytesPerSecond = 20_000,
             MinBytesPerSecond = 20_000,
             MaxBytesPerSecond = 20_000,
@@ -387,16 +404,16 @@ public sealed class MoverPaceTests(RedisFixture fixture)
             MoverP99Amber = TimeSpan.FromMilliseconds(100),
             MoverP99Red = TimeSpan.FromMilliseconds(150),
         });
-        var latency = new MoverLatency(TimeProvider.System);
-        var watch = new RedisInfoWatch(_ => Task.FromResult<IReadOnlyList<NodeInfo>>([new NodeInfo("u1", false, 1024, 0, "allkeys-lru", 0, 1, 100, null)]), options, TimeProvider.System);
-        var rate = new AimdMoveRate(new RedisInfoHealthSource(watch, latency, options), watch, options, TimeProvider.System, latency);
+        var latency = new MoverLatency(kit.Kit.Clock);
+        var watch = new RedisInfoWatch(_ => Task.FromResult<IReadOnlyList<NodeInfo>>([new NodeInfo("u1", false, 1024, 0, "allkeys-lru", 0, 1, 100, null)]), options, kit.Kit.Time.Manual);
+        var rate = new AimdMoveRate(new RedisInfoHealthSource(watch, latency, options), watch, options, kit.Kit.Time.Manual, latency);
         var unit = (await kit.UnitIdsAsync()).Single();
         var host = kit.Host(rate: rate);
-        var started = TimeProvider.System.GetTimestamp();
+        var started = kit.Kit.Clock.GetTimestamp();
 
         await kit.RunOnePassAsync(host);
 
-        TimeProvider.System.GetElapsedTime(started).Should().BeGreaterThan(TimeSpan.FromSeconds(3), "each value waits some 200 ms at 20 KB a second, longer than the red limit of the p99");
+        kit.Kit.Clock.GetElapsedTime(started).Should().BeGreaterThan(TimeSpan.FromSeconds(3), "each value waits some 200 ms at 20 KB a second, longer than the red limit of the p99");
         latency.P99(TimeSpan.FromMinutes(1)).Should().NotBeNull().And.BeLessThan(TimeSpan.FromMilliseconds(100), "the samples are the time Redis took, not the waits");
         rate.RateOf(unit).BytesPerSecond.Should().Be(20_000);
         (await rate.PauseReasonAsync(unit, Ct)).Should().BeNull("the health stayed green: the pace did not halve the rate or pause the unit");
@@ -451,11 +468,11 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture);
         await kit.SeedAsync(Enumerable.Range(0, 3).Select(i => $"k{i}").ToArray());
         var rate = new RecordingRate { FirstDelay = TimeSpan.FromSeconds(30), Left = TimeSpan.Zero };
-        var started = TimeProvider.System.GetTimestamp();
+        var started = kit.Kit.Clock.GetTimestamp();
 
         await kit.RunOnePassAsync(kit.Host(rate: rate));
 
-        TimeProvider.System.GetElapsedTime(started).Should().BeLessThan(TimeSpan.FromSeconds(15), "a reload that raised the rate ended the wait of 30 s at the next slice");
+        kit.Kit.Clock.GetElapsedTime(started).Should().BeLessThan(TimeSpan.FromSeconds(15), "a reload that raised the rate ended the wait of 30 s at the next slice");
         (await kit.ProgressAsync())[MovedField].Should().Be(3);
     }
 
@@ -482,7 +499,8 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         host.Start();
         try
         {
-            var seen = await atCapture.Task.WaitAsync(TimeSpan.FromSeconds(20), TimeProvider.System, Ct);
+            await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
+            var seen = await atCapture.Task.WaitAsync(Ct);
 
             atReserve.Should().BeGreaterThanOrEqualTo(0);
             seen.Should().BeGreaterThan(atReserve, "a pace shorter than one poll is followed by a look at the state before the key is captured");
@@ -497,21 +515,21 @@ public sealed class MoverPaceTests(RedisFixture fixture)
     public async Task Two_runners_with_large_values_keep_to_one_byte_cap()
     {
         await using var first = await MoverKit.CreateAsync(fixture);
-        await using var second = await MoverKit.CreateAsync(fixture);
+        await using var second = await MoverKit.CreateAsync(fixture, clock: new ObservedClock(first.Kit.Time.Manual));
         var big = Enumerable.Range(0, 5).ToDictionary(i => $"k{i}", i => (new string('x', 40_000), (TimeSpan?)null));
         await first.SeedAsync(big);
         await second.SeedAsync(big);
 
         // 400 KB in all at 200 KB a second under one cap take 2 s; two caps, one for each runner, would take 1 s.
-        var shared = Fast(new MoveRateTests.FakeHealth(), new MoveRateTests.FakeMemory(), o => o.GlobalBytesPerSecond = 200_000);
-        var hostA = first.Host(rate: shared);
-        var hostB = second.Host(rate: shared);
-        var started = TimeProvider.System.GetTimestamp();
+        var shared = Fast(first.Kit.Time, new MoveRateTests.FakeHealth(), new MoveRateTests.FakeMemory(), o => o.GlobalBytesPerSecond = 200_000);
+        var hostA = first.Host(rate: new NamedRate(shared, "first"));
+        var hostB = second.Host(rate: new NamedRate(shared, "second"));
+        var started = first.Kit.Clock.GetTimestamp();
         hostA.Start();
         hostB.Start();
         try
         {
-            await MoverKit.WaitAsync(async () => await first.PassedAsync() && await second.PassedAsync());
+            await WaitForSharedPassesAsync(first, second);
         }
         finally
         {
@@ -519,35 +537,62 @@ public sealed class MoverPaceTests(RedisFixture fixture)
             await hostB.StopAsync();
         }
 
-        TimeProvider.System.GetElapsedTime(started).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(1700));
+        first.Kit.Clock.GetElapsedTime(started).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(1700));
     }
 
     [Fact]
     public async Task A_pace_longer_than_the_lease_renews_the_lease_so_no_takeover_happens()
     {
-        await using var kit = await MoverKit.CreateAsync(fixture);
+        var capture = new PausingSchedule(SchedulePointStep.Capture);
+        KeyRecordingDatabase? recorder = null;
+        await using var kit = await MoverKit.CreateAsync(fixture, schedule: capture, interceptDb: db => KeyRecordingDatabase.Over(db, out recorder));
         await kit.SeedAsync(Enumerable.Range(0, 5).Select(i => $"k{i}").ToArray());
         var unit = (await kit.UnitIdsAsync()).Single();
+        var lease = kit.Kit.Names.UnitLease(kit.Kit.Group, unit).ToString();
+        var options = MoverKit.Quick with { PollInterval = TimeSpan.FromMilliseconds(200), LeaseTtl = TimeSpan.FromMilliseconds(600) };
         var rate = new RecordingRate { FirstDelay = TimeSpan.FromMilliseconds(1800) };
-        var host = kit.Host(rate: rate, options: MoverKit.Quick with { LeaseTtl = TimeSpan.FromMilliseconds(600) });
+        var host = kit.Host(rate: rate, options: options);
         host.Start();
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(1300), TimeProvider.System, Ct);
+            var clock = kit.Kit.Time;
+            var slices = new List<TimeSpan>();
+            var slice = await clock.NextTimerAsync(Ct);
+            var before = LeaseWrites();
+            var remaining = rate.FirstDelay;
+            while (remaining > slice)
+            {
+                slice.Should().BePositive();
+                slices.Add(slice);
+                clock.Advance(slice);
+                remaining -= slice;
+                slice = await clock.NextTimerAsync(Ct);
+                LeaseWrites().Should().Be(before + slices.Count, "each completed pace slice renews the lease");
+            }
 
-            (await kit.Db.KeyExistsAsync(kit.Kit.Names.UnitLease(kit.Kit.Group, unit))).Should().BeTrue("the pace renews the lease in slices, three times the lease long");
+            slice.Should().Be(remaining);
+            slices.Add(slice);
+            slices.Count.Should().BeGreaterThanOrEqualTo(3);
+            slices.Should().OnlyContain(delay => delay < options.LeaseTtl);
             (await kit.Kit.ExistsAsync(kit.Kit.N("k0"))).Should().BeFalse("nothing is published before the reservation has been waited out");
 
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            clock.Advance(slice);
+            await capture.ReachedAsync.WaitAsync(Ct);
+            LeaseWrites().Should().Be(before + slices.Count, "the final slice renews the lease before the key is captured");
+            capture.Release();
+            await kit.WaitForPassAsync(host);
         }
         finally
         {
+            capture.Release();
             await host.StopAsync();
         }
 
         var progress = await kit.ProgressAsync();
         progress[MovedField].Should().Be(5);
         progress.Should().NotContainKey("lease_takeovers", "the lease never lapsed");
+
+        int LeaseWrites() => recorder!.Touched.Count(key => key == lease);
     }
 
     [Fact]
@@ -561,9 +606,10 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         host.Start();
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(300), TimeProvider.System, Ct);
+            var waiting = await kit.Kit.Time.NextTimerAsync(Ct);
             acked = false;
-            await Task.Delay(TimeSpan.FromMilliseconds(2000), TimeProvider.System, Ct);
+            kit.Kit.Time.Advance(waiting);
+            await kit.Kit.Time.NextTimerAsync(Ct);
         }
         finally
         {
@@ -579,20 +625,20 @@ public sealed class MoverPaceTests(RedisFixture fixture)
     public async Task Two_hosts_that_share_one_rate_keep_to_one_cap_of_the_node()
     {
         await using var first = await MoverKit.CreateAsync(fixture);
-        await using var second = await MoverKit.CreateAsync(fixture);
+        await using var second = await MoverKit.CreateAsync(fixture, clock: new ObservedClock(first.Kit.Time.Manual));
         await first.SeedAsync(Enumerable.Range(0, 15).Select(i => $"k{i}").ToArray());
         await second.SeedAsync(Enumerable.Range(0, 15).Select(i => $"k{i}").ToArray());
 
         // 30 keys at 50 a second under one cap take 0.6 s; two caps of 50, one for each host, would take 0.3 s.
-        var shared = Fast(new MoveRateTests.FakeHealth(), new MoveRateTests.FakeMemory(), o => o.GlobalKeysPerSecond = 50);
-        var hostA = first.Host(rate: shared);
-        var hostB = second.Host(rate: shared);
-        var started = TimeProvider.System.GetTimestamp();
+        var shared = Fast(first.Kit.Time, new MoveRateTests.FakeHealth(), new MoveRateTests.FakeMemory(), o => o.GlobalKeysPerSecond = 50);
+        var hostA = first.Host(rate: new NamedRate(shared, "first"));
+        var hostB = second.Host(rate: new NamedRate(shared, "second"));
+        var started = first.Kit.Clock.GetTimestamp();
         hostA.Start();
         hostB.Start();
         try
         {
-            await MoverKit.WaitAsync(async () => await first.PassedAsync() && await second.PassedAsync());
+            await WaitForSharedPassesAsync(first, second);
         }
         finally
         {
@@ -600,9 +646,42 @@ public sealed class MoverPaceTests(RedisFixture fixture)
             await hostB.StopAsync();
         }
 
-        TimeProvider.System.GetElapsedTime(started).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(550));
+        first.Kit.Clock.GetElapsedTime(started).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(550));
         (await first.ProgressAsync())[MovedField].Should().Be(15);
         (await second.ProgressAsync())[MovedField].Should().Be(15);
+    }
+
+    private static async Task WaitForSharedPassesAsync(MoverKit first, MoverKit second)
+    {
+        var completed = MoverKit.Quick.PassPause;
+        var clock = first.Kit.Time;
+        var firstAlarm = await clock.NextAlarmAsync(Ct);
+        var secondAlarm = await second.Kit.Time.NextAlarmAsync(Ct);
+        while (firstAlarm.Delay != completed || secondAlarm.Delay != completed)
+        {
+            if (secondAlarm.Delay == completed || (firstAlarm.Delay != completed && firstAlarm.Due <= secondAlarm.Due))
+            {
+                AdvancePace(clock, firstAlarm.Due);
+                firstAlarm = await clock.NextAlarmAsync(Ct);
+            }
+            else
+            {
+                AdvancePace(clock, secondAlarm.Due);
+                secondAlarm = await second.Kit.Time.NextAlarmAsync(Ct);
+            }
+        }
+
+        (await first.PassedAsync()).Should().BeTrue();
+        (await second.PassedAsync()).Should().BeTrue();
+    }
+
+    private static void AdvancePace(ObservedClock clock, long due)
+    {
+        var remaining = clock.GetElapsedTime(clock.GetTimestamp(), due);
+        if (remaining >= TimeSpan.Zero)
+        {
+            clock.Advance(remaining + TimeSpan.FromMilliseconds(1));
+        }
     }
 
     // A key the server refused is not an accepted class, so the pass leaves no finished record: the batch is done when its counters are in.
@@ -611,7 +690,10 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         host.Start();
         try
         {
-            await MoverKit.WaitAsync(async () => await kit.ProgressAsync() is { } p && p.ContainsKey(field) && p.GetValueOrDefault(MovedField) == 9);
+            await kit.WaitPassAttemptAsync(host);
+            var counters = await kit.ProgressAsync();
+            counters.Should().ContainKey(field);
+            counters.GetValueOrDefault(MovedField).Should().Be(9);
         }
         finally
         {
@@ -628,16 +710,33 @@ public sealed class MoverPaceTests(RedisFixture fixture)
         // Fast enough that a test is never waiting on the pace, and a reading every 20 ms so a change of the fakes shows at once.
         var options = new KeyMoveMoverOptions
         {
-            StartKeysPerSecond = 1_000_000,
-            StartBytesPerSecond = 1e12,
+            StartKeysPerSecond = 1e12,
+            MaxKeysPerSecond = 1e12,
+            StartBytesPerSecond = 1e15,
+            MaxBytesPerSecond = 1e15,
             EvaluationInterval = TimeSpan.FromMilliseconds(20),
         };
         configure?.Invoke(options);
         return new StaticOptionsMonitor<KeyMoveMoverOptions>(options);
     }
 
-    private static AimdMoveRate Fast(IKeyMoveHealthSource health, IMoverMemory memory, Action<KeyMoveMoverOptions>? configure = null) =>
-        new(health, memory, Quiet(configure), TimeProvider.System);
+    private static AimdMoveRate Fast(ObservedClock clock, IKeyMoveHealthSource health, IMoverMemory memory, Action<KeyMoveMoverOptions>? configure = null) =>
+        new(health, memory, Quiet(configure), clock.Manual);
+
+    private sealed class NamedRate(IMoveRate inner, string name) : IMoveRate
+    {
+        public ValueTask<string?> PauseReasonAsync(string unit, CancellationToken cancellationToken) => inner.PauseReasonAsync(name, cancellationToken);
+
+        public TimeSpan Reserve(string unit, int keys, long bytes) => inner.Reserve(name, keys, bytes);
+
+        public void Owe(string unit, long bytes) => inner.Owe(name, bytes);
+
+        public long TakeDebt(string unit) => inner.TakeDebt(name);
+
+        public TimeSpan? Remaining(string unit) => inner.Remaining(name);
+
+        public void Observed(string unit, MoveResult result, TimeSpan elapsed) => inner.Observed(name, result, elapsed);
+    }
 
     // Charges are recorded, and the first reservation can ask for a long wait.
     private sealed class RecordingRate : IMoveRate
@@ -744,7 +843,7 @@ public sealed class MoverPaceTests(RedisFixture fixture)
     }
 
     // When each key's promotion began.
-    private sealed class StartTimes(IMoveTarget inner, long started) : IMoveTarget
+    private sealed class StartTimes(IMoveTarget inner, TimeProvider clock, long started) : IMoveTarget
     {
         private readonly System.Collections.Concurrent.ConcurrentQueue<TimeSpan> _times = new();
 
@@ -758,30 +857,8 @@ public sealed class MoverPaceTests(RedisFixture fixture)
 
         public ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
         {
-            _times.Enqueue(TimeProvider.System.GetElapsedTime(started));
+            _times.Enqueue(clock.GetElapsedTime(started));
             return inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
-        }
-    }
-
-    // Counts the keys the mover handles and takes a moment for each, so a test can act in the middle of a batch.
-    private sealed class SlowCounter(IMoveTarget inner) : IMoveTarget
-    {
-        private int _total;
-
-        public int Total => Volatile.Read(ref _total);
-
-        public string CacheId => inner.CacheId;
-
-        public bool NoOrigin => inner.NoOrigin;
-
-        public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
-
-        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
-        {
-            var result = await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
-            Interlocked.Increment(ref _total);
-            await Task.Delay(TimeSpan.FromMilliseconds(15), TimeProvider.System, cancellationToken);
-            return result;
         }
     }
 }

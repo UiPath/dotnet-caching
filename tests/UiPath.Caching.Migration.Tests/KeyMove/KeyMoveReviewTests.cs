@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Caching.Broadcast;
 using UiPath.Caching.KeyMove;
 using UiPath.Caching.Migration.Tests.KeyMove.Harness;
@@ -25,9 +26,10 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         // The gate and the records already hold the S3 identity; the rules of the node do not, yet.
         await kit.MoveGateAsync();
         var write = kit.Client.SetAsync("k", new Item("v1"), null, Ct).AsTask();
-        await Task.Delay(250, Ct);
+        var admission = await kit.Time.NextTimerAsync(Ct);
         write.IsCompleted.Should().BeFalse("the plan of S1 is not run with the identity of S3");
         kit.ApplyRules("S3");
+        kit.Time.Advance(admission);
 
         (await write).Outcome.Should().Be(WriteOutcome.Committed);
 
@@ -45,9 +47,13 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         await kit.SetStateAsync("S1", nPop: 0);
         await kit.MoveGateAsync();
 
-        var write = async () => await kit.Client.SetAsync("k", new Item("v1"), null, Ct);
+        var write = kit.Client.SetAsync("k", new Item("v1"), null, Ct).AsTask();
+        for (var rerun = 0; rerun < 3; rerun++)
+        {
+            await kit.Time.AdvanceNextTimerAsync(Ct);
+        }
 
-        await write.Should().ThrowAsync<CacheUnavailableException>();
+        await Assert.ThrowsAsync<CacheUnavailableException>(() => write);
         kit.Schedule.Steps.Should().BeEmpty();
         (await kit.ExistsAsync(kit.L("k"))).Should().BeFalse();
     }
@@ -138,9 +144,10 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
     [Fact]
     public async Task The_key_stays_pending_until_its_retry_ends_and_then_for_one_window_more()
     {
-        var clock = NewClock();
+        var clock = new ObservedClock(NewClock().GetUtcNow());
         await using var kit = await KeyMoveKit.CreateAsync(fixture, clock: clock);
-        await using var node = TestNode.Create(new FakeBus(), clock, [], "kmr" + kit.Unique, library: kit.Client, pendingWindow: TimeSpan.FromSeconds(5));
+        var node = CreateNode(new FakeBus(), clock, kit);
+        var awaitingHold = ObservePendingHold(node);
         await kit.PrepareAsync("k");
         await kit.SetStateAsync("S3");
         await kit.Db.StringSetAsync(kit.Names.ForwardFence(kit.N("k")), "token-before");
@@ -158,34 +165,27 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         node.Cache.PendingKeyCount.Should().Be(1);
 
         // The settle window passes while the retry is still waiting: the key stays off the local tier.
-        for (var i = 0; i < 4; i++)
-        {
-            clock.Advance(TimeSpan.FromSeconds(10));
-            await Task.Delay(50, Ct);
-        }
+        (await awaitingHold.WaitAsync(Ct)).IsCompleted.Should().BeFalse();
+        clock.Advance(TimeSpan.FromSeconds(40));
 
         node.Cache.PendingKeyCount.Should().Be(1);
 
         kit.Schedule.Hook = null;
         kit.Connected = true;
         await kit.Client.Retries.RunDueAsync(all: true);
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (node.Cache.PendingKeyCount > 0 && DateTime.UtcNow < until)
-        {
-            clock.Advance(TimeSpan.FromSeconds(10));
-            await Task.Delay(20, Ct);
-        }
+        await SettleAsync(node, clock);
 
         node.Cache.PendingKeyCount.Should().Be(0);
         (await kit.GetAsync(kit.N("k"))).Should().Be("v1");
+        await node.Router.DisposeAsync();
     }
 
     [Fact]
     public async Task Disposal_during_an_outage_with_a_day_long_retry_pending_ends_within_the_bound_and_one_window()
     {
-        var clock = NewClock();
+        var clock = new ObservedClock(NewClock().GetUtcNow());
         await using var kit = await KeyMoveKit.CreateAsync(fixture, clock: clock);
-        var node = TestNode.Create(new FakeBus(), clock, [], "kmr" + kit.Unique, library: kit.Client, pendingWindow: TimeSpan.FromSeconds(5));
+        var node = CreateNode(new FakeBus(), clock, kit);
         await kit.PrepareAsync("k");
         await kit.SetStateAsync("S3");
         await kit.Db.StringSetAsync(kit.Names.ForwardFence(kit.N("k")), "token-before");
@@ -204,12 +204,8 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
 
         // The outage lasts: the retry could wait for its day, and disposal must not.
         var disposal = node.Router.DisposeAsync().AsTask();
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (!disposal.IsCompleted && DateTime.UtcNow < until)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(20, Ct);
-        }
+        await SettleAsync(node, clock);
+        await disposal.WaitAsync(Ct);
 
         disposal.IsCompleted.Should().BeTrue("a retry that will never be sent is not waited for");
         kit.Client.Retries.Count.Should().Be(0);
@@ -219,10 +215,11 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
     [Fact]
     public async Task Disposal_waits_for_a_retry_that_is_running_past_the_settlement_window_and_invalidates_only_after_it_returns()
     {
-        var clock = NewClock();
+        var clock = new ObservedClock(NewClock().GetUtcNow());
         var bus = new FakeBus();
         await using var kit = await KeyMoveKit.CreateAsync(fixture, clock: clock);
-        var node = TestNode.Create(bus, clock, [], "kmr" + kit.Unique, library: kit.Client, pendingWindow: TimeSpan.FromSeconds(5));
+        var node = CreateNode(bus, clock, kit);
+        var awaitingHold = ObservePendingHold(node);
         await kit.PrepareAsync("k");
         await kit.SetStateAsync("S3");
         await kit.Db.StringSetAsync(kit.Names.ForwardFence(kit.N("k")), "token-before");
@@ -248,16 +245,14 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         (await node.Cache.SetAsync("k", new Item("v1"), CacheExpiry.After(TimeSpan.FromDays(1)), Ct)).Should().Be(WriteOutcome.Unknown);
         kit.Connected = true;
         var retry = kit.Client.Retries.RunDueAsync(all: true);
-        await inRetry.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await inRetry.Task.WaitAsync(Ct);
         int Removals() => bus.Events.OfType<CacheEvent>().Count(e => e.Key == "k" && e.Type?.Contains("remove", StringComparison.OrdinalIgnoreCase) == true);
         var before = Removals();
 
         var disposal = node.Router.DisposeAsync().AsTask();
-        for (var i = 0; i < 60; i++)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(20, Ct);
-        }
+        await ReachStopBoundAsync(node.Router.StopAsync(Ct), clock);
+        (await awaitingHold.WaitAsync(Ct)).IsCompleted.Should().BeFalse();
+        clock.Advance(TimeSpan.FromSeconds(60));
 
         disposal.IsCompleted.Should().BeFalse("a write is still in flight, and disposal waits for real writes");
         node.Cache.PendingKeyCount.Should().Be(1, "protection lasts until the command has returned and one window has passed");
@@ -265,12 +260,8 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
 
         gate.SetResult();
         await retry;
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (!disposal.IsCompleted && DateTime.UtcNow < until)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(20, Ct);
-        }
+        await SettleAsync(node, clock);
+        await disposal.WaitAsync(Ct);
 
         disposal.IsCompleted.Should().BeTrue();
         Removals().Should().Be(before + 1, "and it is announced once, after the command has returned: " + string.Join(",", bus.Events.OfType<CacheEvent>().Select(e => e.Type)));
@@ -279,10 +270,10 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
     [Fact]
     public async Task A_key_stays_protected_and_is_invalidated_after_a_superseded_running_attempt_returns_even_when_the_newer_write_is_dropped_at_stop()
     {
-        var clock = NewClock();
+        var clock = new ObservedClock(NewClock().GetUtcNow());
         var bus = new FakeBus();
         await using var kit = await KeyMoveKit.CreateAsync(fixture, clock: clock);
-        var node = TestNode.Create(bus, clock, [], "kmr" + kit.Unique, library: kit.Client, pendingWindow: TimeSpan.FromSeconds(5));
+        var node = CreateNode(bus, clock, kit);
         await kit.PrepareAsync("k");
         await kit.SetStateAsync("S3");
         await kit.Db.StringSetAsync(kit.Names.ForwardFence(kit.N("k")), "token-before");
@@ -316,7 +307,7 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         (await node.Cache.SetAsync("k", new Item("v1"), CacheExpiry.After(TimeSpan.FromDays(1)), Ct)).Should().Be(WriteOutcome.Unknown);
         kit.Connected = true;
         var attempt = kit.Client.Retries.RunDueAsync(all: true);
-        await inAttempt.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await inAttempt.Task.WaitAsync(Ct);
 
         // A newer write supersedes A while A runs, and its own retry (B) registers a hold of its own.
         (await node.Cache.SetAsync("k", new Item("v2"), CacheExpiry.After(TimeSpan.FromDays(1)), Ct)).Should().Be(WriteOutcome.Unknown);
@@ -326,21 +317,13 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
 
         // The stop drops the waiting B; A has not returned.
         var disposal = node.Router.DisposeAsync().AsTask();
-        for (var i = 0; i < 80; i++)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(15, Ct);
-        }
-
+        await ReachStopBoundAsync(node.Router.StopAsync(Ct), clock);
+        var awaitingHold = ObservePendingHold(node);
         waiterGate.SetResult();
-        await Task.Delay(100, Ct);
 
         // Longer than the settle window the library reports, so a waiter that lost A's hold would retire the key in this time.
-        for (var i = 0; i < 60; i++)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(15, Ct);
-        }
+        (await awaitingHold.WaitAsync(Ct)).IsCompleted.Should().BeFalse();
+        clock.Advance(TimeSpan.FromSeconds(60));
 
         disposal.IsCompleted.Should().BeFalse();
         node.Cache.PendingKeyCount.Should().Be(1, "A can still write, so the key is still protected");
@@ -348,12 +331,8 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
 
         gate.SetResult();
         await attempt;
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (!disposal.IsCompleted && DateTime.UtcNow < until)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(15, Ct);
-        }
+        await SettleAsync(node, clock);
+        await disposal.WaitAsync(Ct);
 
         disposal.IsCompleted.Should().BeTrue();
         Removals().Should().Be(before + 1, "and the key is announced removed once A has returned");
@@ -362,10 +341,11 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
     [Fact]
     public async Task The_foreground_stop_returns_within_its_bound_and_warns_while_disposal_waits_for_a_write_that_does_not_return()
     {
-        var clock = NewClock();
+        var clock = new ObservedClock(NewClock().GetUtcNow());
         var logger = new RecordingLogger();
         await using var kit = await KeyMoveKit.CreateAsync(fixture, clock: clock);
-        var node = TestNode.Create(new FakeBus(), clock, [], "kmr" + kit.Unique, library: kit.Client, pendingWindow: TimeSpan.FromSeconds(5), logger: logger);
+        var node = CreateNode(new FakeBus(), clock, kit, logger: logger);
+        var awaitingHold = ObservePendingHold(node);
         await kit.PrepareAsync("hang-key");
         await kit.SetStateAsync("S3");
         await kit.Db.StringSetAsync(kit.Names.ForwardFence(kit.N("hang-key")), "token-before");
@@ -390,35 +370,23 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         (await node.Cache.SetAsync("hang-key", new Item("v1"), CacheExpiry.After(TimeSpan.FromDays(1)), Ct)).Should().Be(WriteOutcome.Unknown);
         kit.Connected = true;
         var attempt = kit.Client.Retries.RunDueAsync(all: true);
-        await inAttempt.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await inAttempt.Task.WaitAsync(Ct);
 
         var stop = node.Router.StopAsync(CancellationToken.None);
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (!stop.IsCompleted && DateTime.UtcNow < until)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(15, Ct);
-        }
+        await ReachStopBoundAsync(stop, clock);
 
         stop.IsCompleted.Should().BeTrue("the foreground stop is released at its bound whatever an attempt does");
         logger.Entries.Should().Contain(e => e.Level == LogLevel.Warning && e.Message.Contains("hang-key", StringComparison.Ordinal), "the stop names the key still in flight");
 
         var disposal = node.Router.DisposeAsync().AsTask();
-        for (var i = 0; i < 40; i++)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(15, Ct);
-        }
+        (await awaitingHold.WaitAsync(Ct)).IsCompleted.Should().BeFalse();
+        clock.Advance(TimeSpan.FromSeconds(40));
 
         disposal.IsCompleted.Should().BeFalse("disposal waits for a write that is really in flight, however long it takes");
         gate.SetResult();
         await attempt;
-        until = DateTime.UtcNow.AddSeconds(20);
-        while (!disposal.IsCompleted && DateTime.UtcNow < until)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(15, Ct);
-        }
+        await SettleAsync(node, clock);
+        await disposal.WaitAsync(Ct);
 
         disposal.IsCompleted.Should().BeTrue();
     }
@@ -426,10 +394,10 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
     [Fact]
     public async Task The_foreground_stop_is_released_at_one_shared_bound_when_the_settlement_and_the_invalidation_both_stall()
     {
-        var clock = NewClock();
+        var clock = new ObservedClock(NewClock().GetUtcNow());
         var bus = new FakeBus();
         await using var kit = await KeyMoveKit.CreateAsync(fixture, clock: clock);
-        var node = TestNode.Create(bus, clock, [], "kmr" + kit.Unique, library: kit.Client, pendingWindow: TimeSpan.FromSeconds(5));
+        var node = CreateNode(bus, clock, kit);
         await kit.PrepareAsync("k");
         await kit.SetStateAsync("S3");
         await kit.Db.StringSetAsync(kit.Names.ForwardFence(kit.N("k")), "token-before");
@@ -454,20 +422,14 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         (await node.Cache.SetAsync("k", new Item("v1"), CacheExpiry.After(TimeSpan.FromDays(1)), Ct)).Should().Be(WriteOutcome.Unknown);
         kit.Connected = true;
         var attempt = kit.Client.Retries.RunDueAsync(all: true);
-        await inAttempt.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await inAttempt.Task.WaitAsync(Ct);
 
         // The pending key cannot settle, and the cache-level invalidation cannot be published.
         var hold = new TaskCompletionSource();
         bus.Hold = hold;
         var began = clock.GetUtcNow();
         var stop = node.Router.StopAsync(CancellationToken.None);
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (!stop.IsCompleted && DateTime.UtcNow < until)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            // Give a stop that is now due the chance to complete before the clock moves again, so at most one step overshoots.
-            await Task.WhenAny(stop, Task.Delay(200, Ct));
-        }
+        await ReachStopBoundAsync(stop, clock);
 
         stop.IsCompleted.Should().BeTrue();
         (clock.GetUtcNow() - began).Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(6), "one bound of 5 seconds for the whole stop, not 5 for the settlement and 5 more for the invalidation; one poll step of slack");
@@ -475,13 +437,9 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
         hold.SetResult();
         gate.SetResult();
         await attempt;
-        until = DateTime.UtcNow.AddSeconds(30);
         var disposal = node.Router.DisposeAsync().AsTask();
-        while (!disposal.IsCompleted && DateTime.UtcNow < until)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(15, Ct);
-        }
+        await SettleAsync(node, clock);
+        await disposal.WaitAsync(Ct);
 
         disposal.IsCompleted.Should().BeTrue();
     }
@@ -717,6 +675,46 @@ public sealed class KeyMoveReviewTests(RedisFixture fixture)
 
         // Same: a miss, because the identity is the one the unit runs under. Absent and different: the key may have moved, so N is found.
         read.Kind.Should().Be(record == "same" ? ReadOutcome.Absent : ReadOutcome.Found);
+    }
+
+    private static TestNode CreateNode(FakeBus bus, ObservedClock clock, KeyMoveKit kit, ILogger? logger = null) =>
+        TestNode.Create(bus, clock.Manual, [], "kmr" + kit.Unique, library: kit.Client, pendingWindow: TimeSpan.FromSeconds(5), sharedCore: new RouterCore(clock, _ => true, logger ?? NullLogger.Instance));
+
+    private static Task<Task> ObservePendingHold(TestNode node)
+    {
+        var awaiting = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        node.Cache.Pending.AwaitingHold = hold => awaiting.TrySetResult(hold);
+        return awaiting.Task;
+    }
+
+    private static async Task ReachStopBoundAsync(Task stop, ObservedClock clock)
+    {
+        var bound = TimeSpan.FromSeconds(5);
+        clock.Advance(await clock.NextTimerAsync(delay => delay == bound, Ct));
+        await stop.WaitAsync(Ct);
+    }
+
+    private static async Task SettleAsync(TestNode node, ObservedClock clock)
+    {
+        var settled = node.Cache.WhenPendingSettledAsync();
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        while (!settled.IsCompleted)
+        {
+            var alarm = clock.NextAlarmAsync(waiting.Token).AsTask();
+            if (await Task.WhenAny(settled, alarm) == settled)
+            {
+                await waiting.CancelAsync();
+                break;
+            }
+
+            var remaining = clock.GetElapsedTime(clock.GetTimestamp(), (await alarm).Due);
+            if (remaining > TimeSpan.Zero)
+            {
+                clock.Advance(remaining);
+            }
+        }
+
+        await settled.WaitAsync(Ct);
     }
 
     private static ManualTimeProvider NewClock() => new(new DateTimeOffset(2026, 11, 18, 12, 0, 0, TimeSpan.Zero));

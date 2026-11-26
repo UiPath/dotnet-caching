@@ -380,13 +380,13 @@ public static class RouterServiceCollectionExtensions
         return new RouterAdvertiser(setup.Store, setup.NodeId, setup.Build, sources, setup.RefreshInterval, setup.LivenessWindow, core.Clock, logger);
     }
 
-    private static List<MoverHost> MoverHosts(IServiceProvider root, KeyMoveSetup setup, KeyMoveNode node, IKeyMovePlane plane, MoveTargets movers, MoverOptions? options)
+    private static List<MoverHost> MoverHosts(IServiceProvider root, KeyMoveSetup setup, KeyMoveNode node, IKeyMovePlane plane, MoveTargets movers, RouterBuilder builder)
     {
         var prefix = root.GetService<IOptions<RedisCacheOptions>>()?.Value.KeyPrefix ?? string.Empty;
         var units = root.GetRequiredService<IScanUnits>();
         var rate = root.GetRequiredService<IMoveRate>();
         var time = root.GetRequiredService<TimeProvider>();
-        return [.. setup.Groups.Select(g => new MoverHost(g.Name, plane, setup.KeySpace, movers.Of(g.Name), units, ct => node.ReadStateAsync(g.Name, ct), prefix, time, rate, options))];
+        return [.. setup.Groups.Select(g => new MoverHost(g.Name, plane, setup.KeySpace, movers.Of(g.Name), units, ct => node.ReadStateAsync(g.Name, ct), prefix, builder.MoverClock ?? time, rate, builder.MoverOptions) { PollClock = time })];
     }
 
     private static DryRunService DryRunServiceOf(IServiceProvider root, KeyMoveSetup setup, KeyMoveNode node, IKeyMovePlane plane, MoveTargets movers, MoverOptions? moverOptions)
@@ -501,7 +501,7 @@ public static class RouterServiceCollectionExtensions
                 dryRuns = DryRunServiceOf(root, moveSetup, keyMove, plane, movers, builder.MoverOptions);
 
                 // After the node, so the router stops the movers first.
-                var mover = new MoverHostedService(MoverHosts(root, moveSetup, keyMove, plane, movers, builder.MoverOptions));
+                var mover = new MoverHostedService(MoverHosts(root, moveSetup, keyMove, plane, movers, builder));
                 await mover.StartAsync(cancellationToken).ConfigureAwait(false);
                 started.Add(mover);
             }

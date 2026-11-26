@@ -48,6 +48,9 @@ public sealed class RouterBuilder
     /// <summary>The schedule point of the mover's promotions, which tests hold steps at; null for none.</summary>
     internal ISchedulePoint? MoverSchedule { get; set; }
 
+    /// <summary>Test seam: overrides the clock used by mover units.</summary>
+    internal TimeProvider? MoverClock { get; set; }
+
     internal Func<IDatabase>? SourceDatabase { get; private set; }
 
     internal IChannelBridge? Bridge { get; private set; }

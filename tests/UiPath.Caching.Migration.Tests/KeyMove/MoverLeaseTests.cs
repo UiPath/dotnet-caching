@@ -18,6 +18,8 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         LeaseTtl = TimeSpan.FromSeconds(2),
     };
 
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     [Fact]
     public async Task The_cursor_is_stored_after_each_batch_under_the_lease_and_a_finished_pass_leaves_none_and_releases_the_lease()
     {
@@ -39,7 +41,7 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
             (await kit.Db.StringGetAsync(names.UnitLease(kit.Kit.Group, unit))).IsNull.Should().BeFalse();
             (await kit.Db.KeyTimeToLiveAsync(names.UnitLease(kit.Kit.Group, unit)))!.Value.Should().BeLessThanOrEqualTo(Small.LeaseTtl);
             gate.Release();
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            await kit.WaitForPassAsync(host);
         }
         finally
         {
@@ -64,26 +66,36 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         var cursorKey = names.UnitCursor(kit.Kit.Group, unit, "fwd", MoverKit.MoveId);
         var (planeA, freezer) = kit.FreezablePlane();
         string? cursorAtCrash = null;
+        var crashed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var crash = new CrashTarget(moves, 15, async () =>
         {
             cursorAtCrash = await kit.Db.StringGetAsync(cursorKey);
 
             // The process is gone: nothing it sends reaches Redis again, so its lease stays held and its cursor stays where it was stored.
             freezer.Frozen = true;
+            crashed.SetResult();
         });
         var holder = kit.Host(Small, _ => crash, plane: planeA);
         ScanRecordingServer? scans = null;
         var other = kit.Host(Small, _ => moves, units: new ProxyUnits(kit.Units, u => u with { Primary = ScanRecordingServer.Over(u.Primary, out scans) }));
         holder.Start();
-        await MoverKit.WaitAsync(() => Task.FromResult(cursorAtCrash is not null || moves.Total >= 40));
+        await crashed.Task.WaitAsync(Ct);
         cursorAtCrash.Should().NotBeNull("an earlier batch had stored its cursor before the holder died");
-        (await kit.Db.KeyExistsAsync(names.UnitLease(kit.Kit.Group, unit))).Should().BeTrue("a crash releases nothing");
+        var lease = names.UnitLease(kit.Kit.Group, unit);
+        (await kit.Db.KeyExistsAsync(lease)).Should().BeTrue("a crash releases nothing");
         await holder.StopAsync();
 
+        var remaining = await kit.Db.KeyTimeToLiveAsync(lease);
+        if (remaining is { } ttl)
+        {
+            await Task.Delay(ttl + TimeSpan.FromMilliseconds(2), Ct);
+        }
+
+        (await kit.Db.KeyExistsAsync(lease)).Should().BeFalse("the lease lapses on the server");
         other.Start();
         try
         {
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            await kit.WaitForPassAsync(other);
         }
         finally
         {
@@ -163,7 +175,7 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
     public async Task A_holder_that_is_paused_past_its_lease_promotes_nothing_when_it_resumes_after_another_runner_took_the_unit()
     {
         // The lease lifetime runs on the manual clock: the holder is stalled past it, and the unit is taken the way a lapsed lease is.
-        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch.AddDays(1));
+        var clock = new ObservedClock(DateTimeOffset.UnixEpoch.AddDays(1));
         await using var kit = await MoverKit.CreateAsync(fixture, clock: clock);
         var keys = Enumerable.Range(0, 40).Select(i => $"k{i}").ToArray();
         await kit.SeedAsync(keys);
@@ -188,21 +200,18 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         var lease = kit.Kit.Names.UnitLease(kit.Kit.Group, (await kit.UnitIdsAsync()).Single());
 
         holder.Start();
-        await paused.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await paused.Task.WaitAsync(Ct);
         var before = holderMoves.Total;
         clock.Advance(whole.LeaseTtl + TimeSpan.FromSeconds(1));
         await kit.Db.KeyDeleteAsync(lease);
         other.Start();
-        int idle;
         try
         {
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            await kit.WaitForPassAsync(other);
             await other.StopAsync();
 
-            // What waits now is the holder's own poll; a holder that gave up its pass adds the wait of the pass that ended.
-            idle = clock.TimerCount;
             release.SetResult();
-            await MoverKit.WaitAsync(() => Task.FromResult(clock.TimerCount > idle));
+            (await clock.NextTimerAsync(Ct)).Should().Be(whole.PollInterval);
         }
         finally
         {
@@ -221,21 +230,39 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture);
         var keys = Enumerable.Range(0, 16).Select(i => $"k{i}").ToArray();
         await kit.SeedAsync(keys);
-        var slow = new CountingTarget(kit.Target) { Before = async (_, _) => { await Task.Delay(150); return null; } };
+        var firstMove = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slow = new CountingTarget(kit.Target)
+        {
+            Before = async (_, _) =>
+            {
+                if (firstMove.TrySetResult())
+                {
+                    await resume.Task.WaitAsync(Ct);
+                }
+
+                kit.Kit.Time.Advance(TimeSpan.FromMilliseconds(150));
+                return null;
+            },
+        };
         var bystander = new CountingTarget(kit.Target);
         var whole = Small with { ScanCount = 500 };
         var holder = kit.Host(whole, _ => slow);
         var other = kit.Host(whole, _ => bystander);
 
         holder.Start();
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await firstMove.Task.WaitAsync(Ct);
         other.Start();
         try
         {
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            (await kit.Kit.Time.NextTimerAsync(Ct)).Should().Be(whole.PollInterval);
+            resume.SetResult();
+            await kit.Kit.Time.NextTimerAsync(delay => delay == whole.PassPause, Ct);
+            (await kit.PassedAsync()).Should().BeTrue();
         }
         finally
         {
+            resume.TrySetResult();
             await holder.StopAsync();
             await other.StopAsync();
         }
@@ -274,7 +301,10 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
         two.Start();
         try
         {
-            await MoverKit.WaitAsync(kit.PassedAsync);
+            await kit.PollClock(one).NextTimerAsync(Ct);
+            await kit.PollClock(two).NextTimerAsync(Ct);
+            await kit.Kit.Time.NextTimerAsync(delay => delay == Small.PassPause, Ct);
+            (await kit.PassedAsync()).Should().BeTrue();
             (one.RunningUnits.Count + two.RunningUnits.Count).Should().Be(2, "each host has a runner for the unit, one of which waits for the lease");
         }
         finally

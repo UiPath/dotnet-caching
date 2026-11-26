@@ -198,10 +198,12 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
             () => { },
             () => ValueTask.CompletedTask,
             ck.Options.ClearRetries,
-            TimeProvider.System,
+            ck.RetryTime,
             TimeSpan.FromMilliseconds(10));
 
-        await clear.ClearAsync(Ct);
+        var running = clear.ClearAsync(Ct);
+        await ck.RetryTime.AdvanceNextTimerAsync(Ct);
+        await running;
 
         gatedCalls.Should().Be(2);
         sweeps.Should().Be(1, "nothing ran while the state was not durable");
@@ -221,11 +223,12 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
             return ValueTask.CompletedTask;
         }
 
-        var clear = new KeyMoveClear(kit.Group, kit.Cid, ck.Coordinator.ClearAsync, ck.Sweep.SweepAsync, SourceClear, () => { }, () => ValueTask.CompletedTask, 2, TimeProvider.System, TimeSpan.FromMilliseconds(5));
+        var clear = new KeyMoveClear(kit.Group, kit.Cid, ck.Coordinator.ClearAsync, ck.Sweep.SweepAsync, SourceClear, () => { }, () => ValueTask.CompletedTask, 2, ck.RetryTime, TimeSpan.FromMilliseconds(5));
 
-        var act = () => clear.ClearAsync(Ct);
+        var act = clear.ClearAsync(Ct);
+        await ck.RetryTime.AdvanceNextTimerAsync(Ct);
 
-        await act.Should().ThrowAsync<CacheUnavailableException>();
+        await Assert.ThrowsAsync<CacheUnavailableException>(() => act);
         ran.Should().BeFalse();
         (await ck.GateAsync()).Should().StartWith("OPEN:");
     }
@@ -253,7 +256,7 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
             () => { },
             () => ValueTask.CompletedTask,
             ck.Options.ClearRetries,
-            TimeProvider.System);
+            ck.RetryTime);
         var second = new KeyMoveClear(
             kit.Group,
             kit.Cid,
@@ -276,18 +279,21 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
             () => { },
             () => ValueTask.CompletedTask,
             1000,
-            TimeProvider.System,
+            ck.RetryTime,
             TimeSpan.FromMilliseconds(5));
 
         var winning = first.ClearAsync(Ct);
         await inSweep.Task.WaitAsync(Ct);
         var waiting = second.ClearAsync(Ct);
-        await WaitAsync(() => Volatile.Read(ref unavailable) >= 2);
+        await ck.RetryTime.AdvanceNextTimerAsync(Ct);
+        var nextAttempt = await ck.RetryTime.NextTimerAsync(Ct);
+        Volatile.Read(ref unavailable).Should().Be(2);
 
         (await ck.GateAsync()).Should().StartWith("CLOSED:", "the second Clear never reopens the first one's gate");
         Volatile.Read(ref sweeps).Should().Be(1, "the second Clear swept nothing while the first held the lock");
         release.SetResult();
         await winning;
+        ck.RetryTime.Advance(nextAttempt);
         await waiting;
 
         Volatile.Read(ref sweeps).Should().Be(2);
@@ -308,14 +314,15 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
             await release.Task.WaitAsync(token);
         }
 
-        var holder = new KeyMoveClear(kit.Group, kit.Cid, ck.Coordinator.ClearAsync, ck.Sweep.SweepAsync, Hold, () => { }, () => ValueTask.CompletedTask, 3, TimeProvider.System);
-        var loser = new KeyMoveClear(kit.Group, kit.Cid, ck.Coordinator.ClearAsync, ck.Sweep.SweepAsync, _ => ValueTask.CompletedTask, () => { }, () => ValueTask.CompletedTask, 2, TimeProvider.System, TimeSpan.FromMilliseconds(5));
+        var holder = new KeyMoveClear(kit.Group, kit.Cid, ck.Coordinator.ClearAsync, ck.Sweep.SweepAsync, Hold, () => { }, () => ValueTask.CompletedTask, 3, ck.RetryTime);
+        var loser = new KeyMoveClear(kit.Group, kit.Cid, ck.Coordinator.ClearAsync, ck.Sweep.SweepAsync, _ => ValueTask.CompletedTask, () => { }, () => ValueTask.CompletedTask, 2, ck.RetryTime, TimeSpan.FromMilliseconds(5));
 
         var holding = holder.ClearAsync(Ct);
         await inSweep.Task.WaitAsync(Ct);
-        var act = () => loser.ClearAsync(Ct);
+        var act = loser.ClearAsync(Ct);
+        await ck.RetryTime.AdvanceNextTimerAsync(Ct);
 
-        await act.Should().ThrowAsync<CacheUnavailableException>();
+        await Assert.ThrowsAsync<CacheUnavailableException>(() => act);
         (await ck.GateAsync()).Should().StartWith("CLOSED:");
         release.SetResult();
         await holding;
@@ -362,24 +369,13 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
         var rival = ck.Cache with { Name = "rival" };
         var sweep = ck.SweepWith(ck.Cache, rival);
         await kit.Db.StringSetAsync(kit.N("k"), "v", Life);
-        var clear = new KeyMoveClear(kit.Group, kit.Cid, ck.Coordinator.ClearAsync, sweep.SweepAsync, _ => ValueTask.CompletedTask, () => { }, () => ValueTask.CompletedTask, 1, TimeProvider.System, TimeSpan.Zero);
+        var clear = new KeyMoveClear(kit.Group, kit.Cid, ck.Coordinator.ClearAsync, sweep.SweepAsync, _ => ValueTask.CompletedTask, () => { }, () => ValueTask.CompletedTask, 1, ck.RetryTime, TimeSpan.Zero);
 
         var act = () => clear.ClearAsync(Ct);
 
         await act.Should().ThrowAsync<CacheUnavailableException>().WithMessage("*owned by*rival*");
         (await kit.ExistsAsync(kit.N("k"))).Should().BeTrue();
         (await ck.GateAsync()).Should().StartWith("OPEN:");
-    }
-
-    private static async Task WaitAsync(Func<bool> condition)
-    {
-        var tries = 0;
-        while (!condition())
-        {
-            tries.Should().BeLessThan(2000, "the condition never held");
-            await Task.Delay(5, Ct);
-            tries++;
-        }
     }
 
     // The source's own Clear stands for the application's: it takes every L key of the cache, after what the test wants to see while the gate is closed.
@@ -415,7 +411,7 @@ public sealed class KeyMoveClearGateTests(RedisFixture fixture)
                 return ValueTask.CompletedTask;
             },
             ck.Options.ClearRetries,
-            TimeProvider.System,
+            ck.RetryTime,
             TimeSpan.FromMilliseconds(10));
     }
 

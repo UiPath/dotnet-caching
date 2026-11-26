@@ -12,6 +12,7 @@ internal sealed class MoverKit : IAsyncDisposable
     private readonly string _lPrefix;
     private readonly string _nHead;
     private readonly string _nTail;
+    private readonly Dictionary<MoverHost, (MoverOptions Options, ObservedClock Poll)> _hosts = [];
 
     private MoverKit(KeyMoveKit kit, bool twoOwners, bool hashCache, bool noOrigin, TimeSpan? groupMin, TimeSpan? cacheMin, string? excluded, ISupersessionHandler? supersession, Func<MoverKit, IMoveSide<Item>>? source, ISchedulePoint? schedule, KeyMoveOptions? moveOptions, IKeyMoveCodec<Item>? nativeCodec)
     {
@@ -87,19 +88,8 @@ internal sealed class MoverKit : IAsyncDisposable
         }
     }
 
-    public static async Task WaitAsync(Func<Task<bool>> done, int seconds = 30)
-    {
-        var started = TimeProvider.System.GetTimestamp();
-        while (!await done())
-        {
-            if (TimeProvider.System.GetElapsedTime(started) > TimeSpan.FromSeconds(seconds))
-            {
-                throw new TimeoutException("The condition did not hold in time.");
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(25), TimeProvider.System);
-        }
-    }
+    public static Task WaitAsync(Func<Task<bool>> done) =>
+        TestPoll.WaitAsync(done, () => "The condition did not hold in time.");
 
     /// <summary>Values by key; the keys get control records, then the group goes to S3.</summary>
     public async Task SeedAsync(IReadOnlyDictionary<string, (string Value, TimeSpan? Ttl)> keys)
@@ -142,7 +132,9 @@ internal sealed class MoverKit : IAsyncDisposable
     public MoverHost Host(MoverOptions? options = null, Func<IMoveTarget, IMoveTarget>? wrap = null, Func<StateRecord?>? state = null, IKeyMovePlane? plane = null, IScanUnits? units = null, Func<CancellationToken, Task<StateRecord?>>? readState = null, IMoveRate? rate = null)
     {
         IMoveTarget target = Target;
-        return new MoverHost(
+        var polling = new ObservedClock(Kit.Clock.GetUtcNow());
+        var settings = options ?? Quick;
+        var host = new MoverHost(
             Kit.Group,
             plane ?? Kit.Plane,
             Space,
@@ -152,7 +144,39 @@ internal sealed class MoverKit : IAsyncDisposable
             string.Empty,
             Kit.Clock,
             rate ?? NoLimit.Instance,
-            options ?? Quick);
+            settings)
+        {
+            PollClock = Kit.Clock is ObservedClock ? polling : null,
+        };
+        _hosts.Add(host, (settings, polling));
+        return host;
+    }
+
+    public ObservedClock PollClock(MoverHost host) => _hosts[host].Poll;
+
+    public async Task WaitPassAttemptAsync(MoverHost host)
+    {
+        var (options, _) = _hosts[host];
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var units = (await UnitIdsAsync()).Length;
+        while (units > 0)
+        {
+            var wait = await Kit.Time.NextTimerAsync(cancellationToken);
+            if (wait == options.PassPause)
+            {
+                units--;
+            }
+            else
+            {
+                Kit.Time.Advance(wait + TimeSpan.FromMilliseconds(1));
+            }
+        }
+    }
+
+    public async Task WaitForPassAsync(MoverHost host, string direction = "fwd")
+    {
+        await WaitPassAttemptAsync(host);
+        (await PassedAsync(direction)).Should().BeTrue();
     }
 
     public StateRecord State(string state = "S3", bool acked = true, string direction = "fwd") => new(
@@ -188,7 +212,7 @@ internal sealed class MoverKit : IAsyncDisposable
         host.Start();
         try
         {
-            await WaitAsync(async () => await PassedAsync(direction));
+            await WaitForPassAsync(host, direction);
         }
         finally
         {
@@ -214,26 +238,8 @@ internal sealed class MoverKit : IAsyncDisposable
     public async Task<Dictionary<string, long>> ProgressAsync() =>
         (await Db.HashGetAllAsync(Kit.Names.Progress(Kit.Group))).ToDictionary(e => e.Name.ToString(), e => (long)e.Value);
 
-    /// <summary>Waits, bounded, until the progress hash holds exactly <paramref name="expected"/>; the counters are written after the keys are moved, so a Redis effect is no sign that they are there.</summary>
-    public async Task WaitProgressAsync(IReadOnlyDictionary<string, long> expected)
-    {
-        var started = TimeProvider.System.GetTimestamp();
-        while (true)
-        {
-            var now = await ProgressAsync();
-            if (now.Count == expected.Count && expected.All(e => now.GetValueOrDefault(e.Key, -1) == e.Value))
-            {
-                return;
-            }
-
-            if (TimeProvider.System.GetElapsedTime(started) > TimeSpan.FromSeconds(30))
-            {
-                throw new TimeoutException("The counters did not reach the expected values: " + string.Join(", ", now.Select(e => $"{e.Key}={e.Value}")));
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(25), TimeProvider.System);
-        }
-    }
+    public async Task WaitProgressAsync(IReadOnlyDictionary<string, long> expected) =>
+        (await ProgressAsync()).Should().BeEquivalentTo(expected);
 
     public ValueTask DisposeAsync() => Kit.DisposeAsync();
 

@@ -36,7 +36,6 @@ internal sealed class StepScheduler
     {
         var tasks = StartActors(actors);
         var trace = new List<(int, int)>();
-        var deadline = DateTime.UtcNow.AddSeconds(60);
         while (true)
         {
             var ready = ParkedActors(tasks);
@@ -47,10 +46,7 @@ internal sealed class StepScheduler
 
             if (ready.Length == 0)
             {
-                if (!await _changed.WaitAsync(TimeSpan.FromSeconds(30)))
-                {
-                    throw new TimeoutException("An actor neither parked nor finished.");
-                }
+                await _changed.WaitAsync(TestContext.Current.CancellationToken);
 
                 continue;
             }
@@ -65,10 +61,6 @@ internal sealed class StepScheduler
             }
 
             go.SetResult();
-            if (DateTime.UtcNow > deadline)
-            {
-                throw new TimeoutException("The schedule did not end.");
-            }
         }
 
         await Task.WhenAll(tasks);

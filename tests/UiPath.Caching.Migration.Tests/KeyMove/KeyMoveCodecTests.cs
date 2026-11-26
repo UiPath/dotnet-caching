@@ -31,6 +31,7 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
     private readonly List<ServiceProvider> _providers = [];
     private readonly List<(RedisKey Node, string Field)> _entries = [];
     private ConnectionMultiplexer? _redis;
+    private ManualTimeProvider _clock = null!;
 
     public enum InPlace
     {
@@ -56,6 +57,7 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         if (fixture.Enabled)
         {
             _redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString + ",allowAdmin=true");
+            _clock = new ManualTimeProvider(await KeyMoveKit.ServerTimeAsync(Db));
         }
     }
 
@@ -145,7 +147,7 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         (await kit.ExistsAsync(kit.L("k"))).Should().BeFalse("the promotion moved it");
         var app = provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis);
         (await app.GetAsync<Item>(CacheKey.Verbatim(AppKey("k")), Ct)).Should().Be(value);
-        (await app.AsMigrationCache().ReadSnapshotAsync<Item>(CacheKey.Verbatim(AppKey("k")), null, Ct)).Entry!.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Life, TimeSpan.FromSeconds(15), "the expiry comes from the source's px");
+        (await app.AsMigrationCache().ReadSnapshotAsync<Item>(CacheKey.Verbatim(AppKey("k")), null, Ct)).Entry!.Expiration.Should().BeCloseTo(_clock.ToDateTimeOffset(Life), TimeSpan.FromSeconds(15), "the expiry comes from the source's px");
         (await kit.Db.KeyTimeToLiveAsync(kit.N("k")))!.Value.Should().BeGreaterThan(Life - TimeSpan.FromSeconds(30));
     }
 
@@ -457,7 +459,7 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         var rate = new Unpaced(async token =>
         {
             reached.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, TimeProvider.System, token);
+            await new TaskCompletionSource().Task.WaitAsync(token);
             return null;
         });
         var router = await ReadyDryRunRouterAsync(rate);
@@ -465,10 +467,10 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         var run = router.DryRunAsync(Group, cancellationToken: runStop.Token);
         try
         {
-            await reached.Task.WaitAsync(TimeSpan.FromSeconds(3), router.Clock, Ct);
+            await reached.Task.WaitAsync(Ct);
             await router.StopAsync(Ct);
 
-            var result = () => run.WaitAsync(TimeSpan.FromSeconds(3), router.Clock, Ct);
+            var result = () => run.WaitAsync(Ct);
             await result.Should().ThrowAsync<OperationCanceledException>();
             (await Db.KeyExistsAsync(ReportKey)).Should().BeFalse();
         }
@@ -586,7 +588,7 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
     private async Task WriteOnLibraryPathAsync(ServiceProvider provider, string key, Item value)
     {
         var routerCache = provider.GetRequiredKeyedService<ICacheFactory>(RouterServiceCollectionExtensions.StackName).CreateCache(KnownCacheProviderNames.Redis).AsMigrationCache();
-        (await routerCache.WriteAsync(CacheKey.Verbatim(L(key)), value, DateTimeOffset.UtcNow + Life, null, Ct)).Should().Be(StoreOutcome.Committed);
+        (await routerCache.WriteAsync(CacheKey.Verbatim(L(key)), value, _clock.ToDateTimeOffset(Life), null, Ct)).Should().Be(StoreOutcome.Committed);
     }
 
     private string L(string key) => InPlacePrefix + key;
@@ -622,7 +624,7 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         }
 
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
-        var services = new ServiceCollection().AddLogging();
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(_clock);
         services.AddCaching(configuration, builder =>
         {
             builder.AddRedisConnection();
@@ -678,10 +680,30 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         _providers.Add(provider);
         var router = (Router)provider.GetRequiredService<IRouter>();
         var cache = (RoutedCache<Item>)router.Get<Item>("items");
-        var until = DateTime.UtcNow.AddSeconds(20);
-        while (cache.Library is not KeyMoveClient<Item> && DateTime.UtcNow < until)
+        if (cache.Library is not KeyMoveClient<Item>)
         {
-            await Task.Delay(25, Ct);
+            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnMode(RouterMode mode, RouterModeReason _)
+            {
+                if (mode == RouterMode.Library)
+                {
+                    ready.TrySetResult();
+                }
+            }
+
+
+            router.ModeChanged += OnMode;
+            try
+            {
+                if (cache.Library is not KeyMoveClient<Item>)
+                {
+                    await ready.Task.WaitAsync(Ct);
+                }
+            }
+            finally
+            {
+                router.ModeChanged -= OnMode;
+            }
         }
 
         var client = cache.Library as KeyMoveClient<Item> ?? throw new InvalidOperationException("The router never bound the key move client.");

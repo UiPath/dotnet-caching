@@ -23,7 +23,7 @@ public sealed class KeyMoveReverseHashWriteTests(RedisFixture fixture)
         await kit.SetAsync(kit.L("k"), Original);
         await kit.Db.StringSetAsync(ReverseFence(kit, "k"), "before");
 
-        var result = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(DateTimeOffset.UtcNow.AddMinutes(10)), Ct);
+        var result = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10))), Ct);
 
         result.Outcome.Should().Be(WriteOutcome.Committed);
         kit.Kit.Schedule.Steps.Should().Equal(SchedulePointStep.SourceSet, SchedulePointStep.FenceObserve, SchedulePointStep.Bump);
@@ -47,7 +47,7 @@ public sealed class KeyMoveReverseHashWriteTests(RedisFixture fixture)
         await kit.SetAsync(kit.N("k"), Original);
         await kit.Db.StringSetAsync(ReverseFence(kit, "k"), "before");
 
-        var result = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(DateTimeOffset.UtcNow.AddMinutes(10)), Ct);
+        var result = await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(10))), Ct);
 
         result.Outcome.Should().Be(WriteOutcome.Committed);
         kit.Kit.Schedule.Steps.Should().Equal(SchedulePointStep.SourceDelete, SchedulePointStep.FenceObserve, SchedulePointStep.HashWrite);

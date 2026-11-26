@@ -34,12 +34,20 @@ public sealed class MoverSupersessionTests(RedisFixture fixture)
         await using var kit = await MoverKit.CreateAsync(fixture, interceptDb: db => CapFakingDatabase.Over(db, out fake));
         await kit.SeedAsync("k");
         fake!.Supersede(1);
-        var host = kit.Host(new MoverOptions { PollInterval = TimeSpan.FromMilliseconds(40), PassPause = TimeSpan.FromMilliseconds(300) });
+        var pause = TimeSpan.FromMilliseconds(300);
+        var host = kit.Host(new MoverOptions { PollInterval = TimeSpan.FromMilliseconds(40), PassPause = pause, MinScanInterval = TimeSpan.Zero });
 
         host.Start();
         try
         {
-            await kit.WaitProgressAsync(new Dictionary<string, long> { ["skipped:superseded"] = 1, ["moved"] = 1 });
+            await kit.WaitPassAttemptAsync(host);
+            var counters = await kit.ProgressAsync();
+            counters.Should().Contain("skipped:superseded", 1);
+            var unit = (await kit.UnitIdsAsync()).Single();
+            await kit.Db.KeyExpireAsync(kit.Kit.Names.UnitPace(kit.Kit.Group, unit, "fwd", MoverKit.MoveId), DateTimeOffset.UnixEpoch.UtcDateTime);
+            kit.Kit.Time.Advance(pause);
+            await kit.WaitForPassAsync(host);
+            (await kit.ProgressAsync()).Should().BeEquivalentTo(new Dictionary<string, long> { ["skipped:superseded"] = 1, ["moved"] = 1 });
         }
         finally
         {

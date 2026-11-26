@@ -65,23 +65,21 @@ public sealed class KeyMoveClearOutcomeTests
     [Fact]
     public async Task The_wait_between_attempts_doubles_and_a_cancelled_call_stops_waiting()
     {
-        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var time = new ObservedClock(DateTimeOffset.UnixEpoch);
         var calls = 0;
         using var stop = new CancellationTokenSource();
         var clear = new KeyMoveClear("g", "c", (_, _, _, _) => Task.FromResult(Count(ref calls, ClearOutcome.Unavailable)), (_, _, _, _) => Task.FromResult(0L), _ => ValueTask.CompletedTask, () => { }, () => ValueTask.CompletedTask, 5, time, TimeSpan.FromSeconds(1));
 
         var running = clear.ClearAsync(stop.Token);
-        await ArmedAsync(time);
+        (await time.NextTimerAsync(Ct)).Should().Be(TimeSpan.FromSeconds(1));
         calls.Should().Be(1);
         time.Advance(TimeSpan.FromSeconds(1));
-        await WaitAsync(() => Volatile.Read(ref calls) == 2);
-        await ArmedAsync(time);
+        (await time.NextTimerAsync(Ct)).Should().Be(TimeSpan.FromSeconds(2));
         time.Advance(TimeSpan.FromSeconds(1));
-        await Task.Delay(50, Ct);
         calls.Should().Be(2, "the second wait is two seconds");
         time.Advance(TimeSpan.FromSeconds(1));
-        await WaitAsync(() => Volatile.Read(ref calls) == 3);
-        await ArmedAsync(time);
+        (await time.NextTimerAsync(Ct)).Should().Be(TimeSpan.FromSeconds(4));
+        calls.Should().Be(3);
         await stop.CancelAsync();
 
         var waiting = async () => await running;
@@ -92,22 +90,6 @@ public sealed class KeyMoveClearOutcomeTests
     {
         calls++;
         return outcome;
-    }
-
-    private static async Task ArmedAsync(ManualTimeProvider time)
-    {
-        await WaitAsync(() => time.HasTimers);
-    }
-
-    private static async Task WaitAsync(Func<bool> condition)
-    {
-        var tries = 0;
-        while (!condition())
-        {
-            tries.Should().BeLessThan(2000, "the condition never held");
-            await Task.Delay(5, Ct);
-            tries++;
-        }
     }
 
     private static KeyMoveClear Build(Func<ClearHooks, CancellationToken, Task<ClearOutcome>> gated, List<string> order, int attempts = 3) =>
@@ -132,6 +114,6 @@ public sealed class KeyMoveClearOutcomeTests
                 return ValueTask.CompletedTask;
             },
             attempts,
-            TimeProvider.System,
+            new ManualTimeProvider(DateTimeOffset.UnixEpoch),
             TimeSpan.Zero);
 }

@@ -21,10 +21,11 @@ internal sealed class MovingCacheHost : IAsyncDisposable
 
     private readonly ConnectionMultiplexer _redis;
     private readonly string _name = $"move{Guid.NewGuid():N}";
-    private readonly DateTimeOffset _dryRunAt = Clock.GetUtcNow();
+    private readonly DateTimeOffset _dryRunAt;
     private readonly ConcurrentQueue<KeyMoveAlert> _alerts = new();
+    private readonly ConcurrentDictionary<string, DateTime> _expirations = new();
+    private readonly object _utcSync = new();
     private readonly LegacySource _legacy;
-    private readonly MoveTestClock _nodeClock = new();
     private readonly KeyMoveValueClasses _values = new();
     private readonly RegisteredGroupFacts _facts;
     private readonly StageDriverOptions _driverOptions = new()
@@ -44,10 +45,15 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     private ServiceProvider? _services;
     private Router _router = null!;
     private int _stage;
+    private string? _observedPass;
 
-    private MovingCacheHost(ConnectionMultiplexer redis, bool cluster, bool acceptRefill)
+    private MovingCacheHost(ConnectionMultiplexer redis, ObservedClock clock, bool cluster, bool acceptRefill)
     {
         _redis = redis;
+        Clock = clock;
+        MoverClock = new ObservedClock(clock.GetUtcNow());
+        RateClock = new ObservedClock(MoverClock.Manual);
+        _dryRunAt = clock.GetUtcNow();
         _legacy = new LegacySource(redis, _name);
         _stateOptions = new KeyMoveStateOptions
         {
@@ -56,7 +62,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             PollInterval = Poll,
             SlowPollInterval = Poll,
             ReplicaLagMax = Poll * 2,
-            UpkeepInterval = cluster ? TimeSpan.FromHours(1) : Poll * 10,
+            UpkeepInterval = Timeout.InfiniteTimeSpan,
         };
         Names = new MoveKeyNames(string.Empty, Prefix, cluster);
         var version = redis.GetServers().Where(server => !server.IsReplica).Min(server => server.Version)!;
@@ -88,7 +94,11 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         _claim = new RedisRouterMoveClaim(new ClaimStore(Db, Names.Claim(_name), true, version), _facts);
     }
 
-    public static TimeProvider Clock => TimeProvider.System;
+    public ObservedClock Clock { get; }
+
+    public ObservedClock MoverClock { get; }
+
+    public ObservedClock RateClock { get; }
 
     public IDatabase Db => _redis.GetDatabase();
 
@@ -151,7 +161,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             throw;
         }
 
-        var host = new MovingCacheHost(redis, cluster, acceptRefill);
+        var host = new MovingCacheHost(redis, new ObservedClock(await KeyMoveKit.ServerTimeAsync(redis.GetDatabase())), cluster, acceptRefill);
         try
         {
             await host.StartRouterAsync(redisOptions.ToString());
@@ -164,6 +174,20 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         }
     }
 
+    public static async Task AdvanceMoverPollAsync(ObservedClock clock)
+    {
+        var poll = MoverKit.Quick.PollInterval;
+        while (true)
+        {
+            var (delay, due) = await clock.NextAlarmAsync(Ct);
+            if (delay == poll && due > clock.GetTimestamp())
+            {
+                clock.Advance(poll);
+                return;
+            }
+        }
+    }
+
     public string Legacy(string key) => _legacy.RedisKey(key);
 
     public string Native(string key) => Prefix + "native:{" + key + "}";
@@ -172,7 +196,18 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     {
         var expiry = deadline is { } at ? new Expiration(at.UtcDateTime) : Expiration.Default;
         Assert.True(await Db.StringSetAsync(Legacy(key), LegacyEnvelope.Write(value), expiry).WaitAsync(Ct));
+        if (deadline is not null)
+        {
+            _expirations[key] = (await Db.KeyExpireTimeAsync(Legacy(key)).WaitAsync(Ct))!.Value;
+        }
+        else
+        {
+            _expirations.TryRemove(key, out _);
+        }
     }
+
+    public async Task<DateTimeOffset> ClientDeadlineAsync(DateTimeOffset deadline) =>
+        Clock.ToDateTimeOffset(deadline - await KeyMoveKit.ServerTimeAsync(Db));
 
     public async Task PrepareMoveAsync()
     {
@@ -187,70 +222,100 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     public async Task SetStageAsync(int stage)
     {
         Volatile.Write(ref _stage, stage);
-        await TestPoll.WaitAsync(
-            async () =>
-            {
-                var advertiser = _router.Advertiser!;
-                var advert = new NodeAdvert(advertiser.Field, TimeSpan.Zero, advertiser.Current().Tokens);
-                return advert.FlagOf(Group) == stage && await advertiser.WriteAsync(Ct);
-            },
-            () => $"The router did not advertise stage request {stage}. {Diagnostics()}");
+        (await Node.Stages.StepAsync(Group, Ct)).Should().BeTrue();
+        await AdvertiseAsync();
     }
 
     public async Task<StateRecord> AdvanceAsync(string target, string direction = "fwd")
     {
-        StateRecord? state = null;
+        await ApplyStateAsync();
+        var state = await StateAsync();
         StepOutcome? step = null;
-        await TestPoll.WaitAsync(
-            async () =>
+        for (var i = 0; i < 5 && (state.State != target || state.Direction != direction || !state.Durable || (target == "S3" && state.AllAck != state.Id)); i++)
+        {
+            if (state is { State: "S3" } && target == "S4")
             {
-                state = await StateAsync();
-                if (state is { Durable: true } && state.State == target && state.Direction == direction && (target != "S3" || state.AllAck == state.Id))
-                {
-                    return MoveClient.PlanFor(write: false).Act?.Id == state.Id && Node.Monitor.AckedFor(Group)?.Id == state.Id;
-                }
+                await WaitForMoverPassAsync(state.Direction);
+            }
 
-                step = await StepAsync();
-                return false;
-            },
-            () => $"Expected durable {target}/{direction}, saw {state?.State}/{state?.Direction} (durable={state?.Durable}). {step?.Plan} {step?.Result} {Diagnostics()}");
-        return state!;
+            step = await StepAsync();
+            state = await StateAsync();
+        }
+
+        state.State.Should().Be(target, $"{step?.Plan} {step?.Result} {Diagnostics()}");
+        state.Direction.Should().Be(direction);
+        state.Durable.Should().BeTrue();
+        if (target == "S3")
+        {
+            state.AllAck.Should().Be(state.Id);
+        }
+
+        MoveClient.PlanFor(write: false).Act?.Id.Should().Be(state.Id);
+        Node.Monitor.AckedFor(Group)?.Id.Should().Be(state.Id);
+        return state;
     }
 
-    public Task<StepOutcome?> StepAsync() => Driver.StepAsync(Group, Ct);
-
-    public Task WaitForPendingRulesAsync(string id) =>
-        TestPoll.WaitAsync(
-            () => Task.FromResult(Node.Monitor.CurrentState(Group) is { Durable: false } state
-                && state.Id == id && MoveClient.PlanFor(write: false).Rules.Reads == ReadRule.UnionNativeFirst),
-            () => $"The router did not apply pending rules for {id}. {Diagnostics()}");
-
-    public Task WaitForMoverPassAsync()
+    public async Task<StepOutcome?> StepAsync()
     {
-        var passes = new MoverPasses(Node.ScanUnits!, Db, Names, Runtime.Store.ReadAsync);
-        return TestPoll.WaitAsync(() => passes.FinishedAfterAckAsync(Group, "fwd", Ct), () => "The mover did not record a clean pass.");
+        Clock.Advance(_stateOptions.ReplicaLagMax);
+        (await Node.HoldLeaseAsync(Group)).Should().BeTrue();
+        await ApplyStateAsync();
+        var step = await Driver.StepAsync(Group, Ct);
+        await ApplyStateAsync();
+        return step;
     }
 
-    public Task ExpectAlertAsync(string code, string? gate = null, string? detail = null) =>
-        TestPoll.WaitAsync(
-            async () =>
+    public async Task WaitForPendingRulesAsync(string id)
+    {
+        await ApplyStateAsync();
+        Node.Monitor.CurrentState(Group).Should().Match<StateRecord>(state => !state.Durable && state.Id == id);
+        MoveClient.PlanFor(write: false).Rules.Reads.Should().Be(ReadRule.UnionNativeFirst);
+    }
+
+    public async Task WaitForMoverPassAsync(string direction = "fwd")
+    {
+        var state = await StateAsync();
+        if (_observedPass != state.Id)
+        {
+            await AdvanceMoverPollAsync(Clock);
+            var units = (await Node.ScanUnits!.ListAsync(Ct)).Count;
+            for (var i = 0; i < units; i++)
             {
-                var step = await StepAsync();
-                Assert.False(step?.Plan.Kind is StepKind.Transit or StepKind.ColdStart, $"The driver advanced instead of reporting {code}.");
-                return step?.Plan.AlertList.Any(alert => alert.Code == code
-                    && (detail is null || alert.Detail == detail)
-                    && (gate is null || alert.Detail.Split(',').Any(entry => entry.StartsWith(gate + ":", StringComparison.Ordinal)))) == true;
-            },
-            () => $"The stage driver did not report {code} with gate {gate ?? "(any)"} and detail {detail ?? "(any)"}. {Diagnostics()}");
+                await MoverClock.NextTimerAsync(delay => delay == MoverPassPause, Ct);
+            }
+
+            _observedPass = state.Id;
+        }
+
+        var passes = new MoverPasses(Node.ScanUnits!, Db, Names, Runtime.Store.ReadAsync);
+        (await passes.FinishedAfterAckAsync(Group, direction, Ct)).Should().BeTrue();
+    }
+
+    public async Task ExpectAlertAsync(string code, string? gate = null, string? detail = null)
+    {
+        if (code == "flag_below_closed")
+        {
+            (await StepAsync())?.Plan.Kind.Should().Be(StepKind.None);
+        }
+
+        var step = await StepAsync() ?? throw new InvalidOperationException(Diagnostics());
+        Assert.False(step.Plan.Kind is StepKind.Transit or StepKind.ColdStart, $"The driver advanced instead of reporting {code}.");
+        step.Plan.AlertList.Should().Contain(alert => alert.Code == code
+            && (detail == null || alert.Detail == detail)
+            && (gate == null || alert.Detail.Split(',', StringSplitOptions.None).Any(entry => entry.StartsWith(gate + ":", StringComparison.Ordinal))),
+            Diagnostics());
+    }
 
     public async Task ExpectDrainBlockedAsync()
     {
         await ExpectAlertAsync("stage_pending");
-        _nodeClock.Advance(_stateOptions.ReplicaLagMax);
+        Clock.Advance(_stateOptions.ReplicaLagMax);
         await ExpectAlertAsync("stage_pending");
     }
 
-    public void ExpireDrainInventory() => _nodeClock.Advance(InventoryMoverStatus.ReuseFor);
+    public Task UpkeepAsync() => Node.StepUpkeepAsync(Group, Ct);
+
+    public void ExpireDrainInventory() => Clock.Advance(InventoryMoverStatus.ReuseFor);
 
     public async Task<StateRecord> StateAsync() =>
         await Runtime.Store.ReadAsync(Group, Ct) ?? throw new InvalidOperationException("The Redis state is absent.");
@@ -269,15 +334,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             _claim.InterruptOpen = true;
             try
             {
-                TransitionOutcome? result = null;
-                await TestPoll.WaitAsync(
-                    async () =>
-                    {
-                        result = (await StepAsync())?.Result?.Outcome;
-                        return result is not null;
-                    },
-                    () => $"The driver did not attempt to start. {Diagnostics()}");
-                return result!.Value;
+                return (await StepAsync())?.Result?.Outcome ?? throw new InvalidOperationException(Diagnostics());
             }
             finally
             {
@@ -287,14 +344,9 @@ internal sealed class MovingCacheHost : IAsyncDisposable
 
         var state = await StateAsync();
         var advertiser = _router.Advertiser!;
-        NodeAdvert advert = null!;
-        await TestPoll.WaitAsync(
-            () =>
-            {
-                advert = new NodeAdvert(advertiser.Field, TimeSpan.Zero, advertiser.Current().Tokens);
-                return Task.FromResult(advert.Acknowledges(Group, state));
-            },
-            () => $"The advert did not acknowledge {state.Identity}.");
+        await ApplyStateAsync();
+        var advert = new NodeAdvert(advertiser.Field, TimeSpan.Zero, advertiser.Current().Tokens);
+        advert.Acknowledges(Group, state).Should().BeTrue();
         var passes = new MoverPasses(Node.ScanUnits!, Db, Names, Runtime.Store.ReadAsync);
         var mover = new InventoryMoverStatus(Inventory(), Clock, passes.FinishedAfterAckAsync);
         var input = new StepInput(
@@ -346,16 +398,26 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         {
             HealthTimeout = TimeSpan.FromSeconds(1),
             EvaluationInterval = TimeSpan.FromSeconds(1),
+            StartKeysPerSecond = 1e12,
+            MaxKeysPerSecond = 1e12,
+            StartBytesPerSecond = 1e15,
+            MaxBytesPerSecond = 1e15,
         });
         _rate.Inner = health is null
-            ? AimdMoveRate.CreateDefault(units, options, Clock)
-            : new AimdMoveRate(health, RedisInfoWatch.Over(units, options, Clock), options, Clock);
+            ? AimdMoveRate.CreateDefault(units, options, RateClock)
+            : new AimdMoveRate(health, RedisInfoWatch.Over(units, options, RateClock), options, RateClock);
         _moverSchedule.Inner = schedule ?? NoSchedulePoint.Instance;
         await Mover.StartAsync(Ct);
     }
 
     public Task StopMoverAsync() =>
         _router?.Library?.Started.OfType<MoverHostedService>().SingleOrDefault()?.StopAsync(CancellationToken.None) ?? Task.CompletedTask;
+
+    public Task WaitForHealthCompletionAsync()
+    {
+        var rate = Assert.IsType<AimdMoveRate>(_rate.Inner);
+        return Task.WhenAll(rate.HealthObservation, rate.HealthCancellation).WaitAsync(Ct);
+    }
 
     public async Task<string[]> LegacyKeysAsync() => await KeysAsync(Legacy("*"));
 
@@ -376,22 +438,53 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         }
     }
 
+    public async Task<bool> SetAsync(string key, List<long> value, DateTimeOffset? deadline, CancellationToken token)
+    {
+        // The server checks marked-write deadlines against UTC; keep fake timers independent of that clock.
+        var serverNow = await KeyMoveKit.ServerTimeAsync(Db);
+        DateTimeOffset? expires;
+        lock (_utcSync)
+        {
+            var offset = serverNow - Clock.Manual.GetUtcNow();
+            if (offset > Clock.UtcOffset)
+            {
+                Clock.UtcOffset = offset;
+            }
+
+            expires = deadline is { } at ? Clock.ToDateTimeOffset(at - serverNow) : null;
+        }
+
+        var acknowledged = expires is { } until
+            ? await Cache.SetAsync(CacheKey.Verbatim(key), value, until, token)
+            : await Cache.SetAsync(CacheKey.Verbatim(key), value, token);
+        if (acknowledged && deadline is not null)
+        {
+            _expirations[key] = (await Db.KeyExpireTimeAsync(Native(key)).WaitAsync(token)
+                ?? await Db.KeyExpireTimeAsync(Legacy(key)).WaitAsync(token))!.Value;
+        }
+        else if (acknowledged)
+        {
+            _expirations.TryRemove(key, out _);
+        }
+
+        return acknowledged;
+    }
+
     public async Task WriteAsync(string key, List<long> value) =>
-        Assert.True(await Cache.SetAsync(CacheKey.Verbatim(key), value, Ct), $"The write for {key} was refused.");
+        Assert.True(await SetAsync(key, value, null, Ct), $"The write for {key} was refused.");
 
     public async Task AssertNativeBytesMatchLibraryWriteAsync(string key, List<long> value, DateTimeOffset deadline)
     {
         var reference = Prefix + "reference:" + key;
-        Assert.True(await Library.SetAsync(CacheKey.Verbatim(reference), value, deadline, policy: null, token: Ct));
+        var expires = await ClientDeadlineAsync(deadline);
+        Assert.True(await Library.SetAsync(CacheKey.Verbatim(reference), value, expires, policy: null, token: Ct));
         var bytesWrittenByLibrary = (byte[]?)(await Db.StringGetAsync(reference, CommandFlags.DemandMaster).WaitAsync(Ct));
         var bytesAfterMove = (byte[]?)(await Db.StringGetAsync(Native(key), CommandFlags.DemandMaster).WaitAsync(Ct));
         Assert.NotNull(bytesWrittenByLibrary);
         Assert.Equal(bytesWrittenByLibrary, bytesAfterMove);
-        var referenceLife = Db.KeyTimeToLiveAsync(reference, CommandFlags.DemandMaster);
-        var movedLife = Db.KeyTimeToLiveAsync(Native(key), CommandFlags.DemandMaster);
-        await Task.WhenAll(referenceLife, movedLife).WaitAsync(Ct);
-        (await referenceLife).Should().BeGreaterThan(TimeSpan.Zero);
-        (await movedLife).Should().BeCloseTo((await referenceLife)!.Value, TimeSpan.FromMilliseconds(250), $"the TTL for {key} must be preserved");
+        var movedExpiry = await Db.KeyExpireTimeAsync(Native(key), CommandFlags.DemandMaster).WaitAsync(Ct);
+        // Promotion subtracts the capture-to-snapshot time from the lifetime, so it may expire earlier but never later.
+        movedExpiry.Should().NotBeNull().And.BeOnOrBefore(_expirations[key], $"moving {key} must not extend its lifetime");
     }
 
     public async Task AssertNativeLedgerAsync(IReadOnlyDictionary<string, List<long>?> ledger)
@@ -426,7 +519,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             {
                 if (_services is not null)
                 {
-                    await _services.DisposeAsync();
+                    await DisposeServicesAsync();
                 }
             }
             finally
@@ -448,6 +541,28 @@ internal sealed class MovingCacheHost : IAsyncDisposable
 
     private static string? Parse(string key, string prefix) =>
         key.StartsWith(prefix, StringComparison.Ordinal) ? key[prefix.Length..] : null;
+
+    private async Task ApplyStateAsync()
+    {
+        await Node.Monitor.StepAsync(Group, Ct);
+        new AckCoordinator(Node.Monitor, Node.Gate, _driverOptions, Clock).Tick(Group);
+        // Expire the data path's cached rules after applying the snapshot.
+        Clock.Advance(TimeSpan.FromMilliseconds(100));
+        await AdvertiseAsync();
+    }
+
+    private async Task AdvertiseAsync() => (await _router.Advertiser!.WriteAsync(Ct)).Should().BeTrue();
+
+    private async Task DisposeServicesAsync()
+    {
+        if (_router?.Find<List<long>>(CacheId) is { } cache)
+        {
+            await cache.StopRetriesAsync();
+            await cache.Pending.FlushAsync();
+        }
+
+        await _services!.DisposeAsync();
+    }
 
     private async Task StartRouterAsync(string connection)
     {
@@ -477,7 +592,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             ["RouterCaching:Redis:FormatNegotiation:LivenessWindow"] = "00:00:02",
             ["RouterCaching:Redis:FormatNegotiation:UpgradeHold"] = "00:00:03",
         }).Build();
-        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(_nodeClock).AddSingleton<IMoveRate>(_rate);
+        var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(Clock).AddSingleton<IMoveRate>(_rate);
         var adverts = Db.WithKeyPrefix(Prefix);
         services.AddCaching(configuration, builder => builder.AddRedisConnection().AddRedis(options =>
             options.RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance));
@@ -487,6 +602,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
             {
                 builder.MoverOptions = MoverKit.Quick with { PassPause = MoverPassPause };
                 builder.MoverSchedule = _moverSchedule;
+                builder.MoverClock = MoverClock;
                 builder
                 .UseLibraryWhen(_ => true)
                 .UsePinWhen(_ => true)
@@ -499,11 +615,33 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         _services = services.BuildServiceProvider();
         _router = (Router)_services.GetRequiredService<IRouter>();
 
-        await TestPoll.WaitAsync(
-            () => Task.FromResult(_router.KeyMove?.Runtime?.Driver is not null && _router.Mode == RouterMode.Library),
-            () => $"The key move router did not start. Mode {_router.ModeReason}.");
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnMode(RouterMode mode, RouterModeReason reason)
+        {
+            if (mode == RouterMode.Library)
+            {
+                ready.TrySetResult();
+            }
+        }
+
+        _router.ModeChanged += OnMode;
+        try
+        {
+            if (_router.Mode != RouterMode.Library)
+            {
+                await ready.Task.WaitAsync(Ct);
+            }
+        }
+        finally
+        {
+            _router.ModeChanged -= OnMode;
+        }
+
         await Driver.StopAsync();
+        await Node.Monitor.StopAsync();
+        await Node.Stages.StopAsync();
         await StopMoverAsync();
+        await Node.Monitor.StepAsync(Group, Ct);
         (await Runtime.Commands.InitAsync(Group, [CacheId], Ct)).Code.Should().Be(MoveScripts.StateCreated);
         await AdvanceAsync("S0", "none");
     }
@@ -529,15 +667,4 @@ internal sealed class MovingCacheHost : IAsyncDisposable
     }
 
     private string Diagnostics() => string.Join(" ", _alerts.TakeLast(8).Select(alert => $"{alert.Code}({alert.Detail})"));
-
-    private sealed class MoveTestClock : TimeProvider
-    {
-        private long _offset;
-
-        public override long TimestampFrequency => Clock.TimestampFrequency;
-
-        public override long GetTimestamp() => Clock.GetTimestamp() + Interlocked.Read(ref _offset);
-
-        public void Advance(TimeSpan by) => Interlocked.Add(ref _offset, (long)(by.TotalSeconds * TimestampFrequency));
-    }
 }

@@ -18,6 +18,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
     private readonly string _unique = Guid.NewGuid().ToString("N")[..10];
     private readonly List<ServiceProvider> _providers = [];
     private ConnectionMultiplexer? _redis;
+    private ManualTimeProvider _clock = null!;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -28,6 +29,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         if (fixture.Enabled)
         {
             _redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+            _clock = new ManualTimeProvider(await KeyMoveKit.ServerTimeAsync(Db));
         }
     }
 
@@ -73,7 +75,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         stored.Value!.Keys.Should().BeEquivalentTo(cacheNulls ? ["a", "b", "n"] : ["a", "b"], "a null field is left out where the library does not cache nulls");
         stored.Value["a"].Should().Be(new Item("1"));
         stored.Value["b"].Should().Be(new Item("2"));
-        stored.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Life, TimeSpan.FromSeconds(30), "the expiry comes from the source's px");
+        stored.Expiration.Should().BeCloseTo(_clock.ToDateTimeOffset(Life), TimeSpan.FromSeconds(30), "the expiry comes from the source's px");
         (await app.GetMetadataAsync<Item>(CacheKey.Verbatim(AppKey("k")), Ct)).Should().BeNull();
         (await Db.HashGetAllAsync(nativePrefix + "k")).Select(e => e.Name.ToString()).Should().NotContain("_version_", "no version is minted by a promotion");
         var raw = (await Db.HashGetAllAsync(nativePrefix + "k")).ToDictionary(e => e.Name.ToString(), e => ((byte[]?)e.Value)!);
@@ -97,7 +99,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         counted.Version.Should().BeGreaterThan(0);
 
         var read = await kit.Client.ReadAsync("k", null, Ct);
-        var merged = await kit.Client.SetAsync("k", new Dictionary<string, Item?> { ["b"] = new("2") }, new HashWriteOptions(HashCacheSetOption.HashReplace, DateTimeOffset.UtcNow + Life), Ct);
+        var merged = await kit.Client.SetAsync("k", new Dictionary<string, Item?> { ["b"] = new("2") }, new HashWriteOptions(HashCacheSetOption.HashReplace, _clock.ToDateTimeOffset(Life)), Ct);
 
         read.Fields!.Keys.Should().BeEquivalentTo("a");
         read.Metadata.Should().ContainKey("owner");
@@ -108,7 +110,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         after.Metadata.Should().ContainKey("owner", "a merge keeps the metadata the hash holds");
         (await Db.HashGetAsync(nativePrefix + "k", "_version_")).IsNull.Should().BeFalse("the write counts, as the library's does");
 
-        var replaced = await kit.Client.SetAsync("k", new Dictionary<string, Item?> { ["z"] = new("9") }, new HashWriteOptions(HashCacheSetOption.KeyReplace, DateTimeOffset.UtcNow + Life, new Dictionary<string, string?> { ["owner"] = "you" }), Ct);
+        var replaced = await kit.Client.SetAsync("k", new Dictionary<string, Item?> { ["z"] = new("9") }, new HashWriteOptions(HashCacheSetOption.KeyReplace, _clock.ToDateTimeOffset(Life), new Dictionary<string, string?> { ["owner"] = "you" }), Ct);
         replaced.Outcome.Should().Be(WriteOutcome.Committed);
         (await app.GetAsync<Item>(CacheKey.Verbatim(AppKey("k")), Ct)).Keys.Should().BeEquivalentTo("z");
         (await app.GetMetadataAsync<Item>(CacheKey.Verbatim(AppKey("k")), Ct))!["owner"].Should().Be("you");
@@ -153,7 +155,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         read.Kind.Should().Be(ReadOutcome.Found);
         read.Fields.Should().BeEquivalentTo(expected);
         read.Uncached.Should().BeTrue();
-        read.Expiration.Should().BeCloseTo(TimeProvider.System.GetUtcNow() + Life, TimeSpan.FromSeconds(30));
+        read.Expiration.Should().BeCloseTo(_clock.ToDateTimeOffset(Life), TimeSpan.FromSeconds(30));
         (await kit.Client.ReadAsync("k", ["broken", "missing"], Ct)).Kind.Should().Be(ReadOutcome.Unreadable);
         (await kit.Client.ReadAsync("k", null, Ct)).Kind.Should().Be(ReadOutcome.Unreadable);
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().Be(native, "a partially decoded hash is never promoted");
@@ -241,20 +243,20 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
 
         (await client.ReadAsync(key, null, Ct)).Kind.Should().Be(ReadOutcome.Absent);
         (await client.ContainsAsync(key, Ct)).Should().BeFalse();
-        (await client.SetAsync(key, fields, new HashWriteOptions(HashCacheSetOption.KeyReplace, DateTimeOffset.UtcNow + Life), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await client.SetAsync(key, fields, new HashWriteOptions(HashCacheSetOption.KeyReplace, _clock.ToDateTimeOffset(Life)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
 
         var read = await client.ReadAsync(key, null, Ct);
         read.Fields!.Keys.Should().BeEquivalentTo("a", "b");
-        read.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Life, TimeSpan.FromSeconds(30));
+        read.Expiration.Should().BeCloseTo(_clock.ToDateTimeOffset(Life), TimeSpan.FromSeconds(30));
         (await client.ReadAsync(key, ["b"], Ct)).Fields!.Keys.Should().BeEquivalentTo("b");
         (await client.ContainsAsync(key, Ct)).Should().BeTrue();
-        (await client.ExpireTimeAsync(key, Ct)).Should().BeCloseTo(DateTimeOffset.UtcNow + Life, TimeSpan.FromSeconds(30));
+        (await client.ExpireTimeAsync(key, Ct)).Should().BeCloseTo(_clock.ToDateTimeOffset(Life), TimeSpan.FromSeconds(30));
 
-        (await client.SetAsync(key, new Dictionary<string, Item?> { ["c"] = new("3") }, new HashWriteOptions(HashCacheSetOption.HashReplace, DateTimeOffset.UtcNow + Life), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await client.SetAsync(key, new Dictionary<string, Item?> { ["c"] = new("3") }, new HashWriteOptions(HashCacheSetOption.HashReplace, _clock.ToDateTimeOffset(Life)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await client.RemoveFieldsAsync(key, ["a"], Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await client.ReadAsync(key, null, Ct)).Fields!.Keys.Should().BeEquivalentTo("b", "c");
         (await client.RefreshAsync(key, CacheExpiry.After(TimeSpan.FromHours(2)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
-        (await client.ExpireTimeAsync(key, Ct)).Should().BeCloseTo(DateTimeOffset.UtcNow.AddHours(2), TimeSpan.FromSeconds(30));
+        (await client.ExpireTimeAsync(key, Ct)).Should().BeCloseTo(_clock.ToDateTimeOffset(TimeSpan.FromHours(2)), TimeSpan.FromSeconds(30));
 
         var box = new HashFillBox<Item>();
         (await client.FillAsync(key, fields, new HashWriteOptions(HashCacheSetOption.KeyReplace, null), box, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
@@ -291,7 +293,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
             metadata = new Dictionary<string, string?> { ["owner"] = "you" };
         }
 
-        var deadline = DateTimeOffset.UtcNow.AddHours(2);
+        var deadline = _clock.ToDateTimeOffset(TimeSpan.FromHours(2));
         foreach (var key in new[] { "k", "twin" })
         {
             await app.SetAsync(CacheKey.Verbatim(AppKey(key)), new Dictionary<string, Item?> { ["a"] = new("1") }, new HashCacheEntryOptions(TimeToLive: Life, Metadata: new Dictionary<string, string?> { ["owner"] = "me" }), null, Ct);
@@ -367,7 +369,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
             await Db.KeyDeleteAsync(nativePrefix + "k");
         }
 
-        var deadline = DateTimeOffset.UtcNow.AddHours(2);
+        var deadline = _clock.ToDateTimeOffset(TimeSpan.FromHours(2));
         var refreshed = await kit.Client.RefreshAsync("k", CacheExpiry.At(deadline), (IDictionary<string, string?>?)null, Ct);
         await app.RefreshAsync<Item>(CacheKey.Verbatim(AppKey("twin")), new HashCacheEntryOptions(deadline, null, null), null, Ct);
 
@@ -406,7 +408,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         }
 
         var before = (await Db.HashGetAllAsync(held)).ToDictionary(e => e.Name.ToString(), e => e.Value.ToString());
-        var refreshed = await kit.Client.RefreshAsync("k", CacheExpiry.At(DateTimeOffset.UtcNow.AddHours(2)), Ct);
+        var refreshed = await kit.Client.RefreshAsync("k", CacheExpiry.At(_clock.ToDateTimeOffset(TimeSpan.FromHours(2))), Ct);
 
         refreshed.Outcome.Should().Be(WriteOutcome.Committed);
         before.Should().ContainKey("_metadata_");
@@ -430,7 +432,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         await Db.HashSetAsync(kit.L("k"), [new HashEntry("a", "x")]);
         await Db.KeyExpireAsync(kit.L("k"), Life);
 
-        var refreshed = await kit.Client.RefreshAsync("k", CacheExpiry.At(DateTimeOffset.UtcNow.AddHours(2)), (IDictionary<string, string?>?)null, Ct);
+        var refreshed = await kit.Client.RefreshAsync("k", CacheExpiry.At(_clock.ToDateTimeOffset(TimeSpan.FromHours(2))), (IDictionary<string, string?>?)null, Ct);
 
         refreshed.Outcome.Should().Be(WriteOutcome.Committed);
         (await Db.HashGetAllAsync(kit.L("k"))).Select(e => e.Name.ToString()).Should().BeEquivalentTo("a");
@@ -450,7 +452,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         await kit.Kit.SetStateAsync("S1", nPop: 0);
         var metadata = new Dictionary<string, string?> { ["owner"] = "me" };
 
-        var written = await kit.Client.SetAsync("k", new Dictionary<string, Item?> { ["a"] = new("1") }, new HashWriteOptions(HashCacheSetOption.KeyReplace, DateTimeOffset.UtcNow + Life, metadata), Ct);
+        var written = await kit.Client.SetAsync("k", new Dictionary<string, Item?> { ["a"] = new("1") }, new HashWriteOptions(HashCacheSetOption.KeyReplace, _clock.ToDateTimeOffset(Life), metadata), Ct);
         (await kit.AllFieldsAsync(kit.L("k"))).Keys.Should().Contain("_metadata_");
         await kit.Kit.SetStateAsync("S3");
         var promoted = await kit.Client.ReadAsync("k", null, Ct);
@@ -519,8 +521,8 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         await using var kit = await KeyMoveHashKit.CreateAsync(fixture, inPlace: binding.InPlace, native: binding.Native, nativePrefix: nativePrefix, nativeNulls: cacheNulls, inPlaceNulls: cacheNulls);
         await kit.Kit.PrepareAsync("k", "f", "e");
         await kit.Kit.SetStateAsync(state, nPop: 0);
-        var replace = new HashWriteOptions(HashCacheSetOption.KeyReplace, DateTimeOffset.UtcNow + Life);
-        var merge = new HashWriteOptions(HashCacheSetOption.HashReplace, DateTimeOffset.UtcNow + Life);
+        var replace = new HashWriteOptions(HashCacheSetOption.KeyReplace, _clock.ToDateTimeOffset(Life));
+        var merge = new HashWriteOptions(HashCacheSetOption.HashReplace, _clock.ToDateTimeOffset(Life));
         async Task NoSystemFieldAsync(string key, string step)
         {
             (await kit.AllFieldsAsync(kit.L(key))).Keys.Where(f => f.StartsWith('_')).Should().BeEmpty(step);
@@ -532,9 +534,9 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
         await NoSystemFieldAsync("k", "after a merge");
         (await kit.Client.FillAsync("f", new Dictionary<string, Item?> { ["a"] = new("1") }, replace, null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         await NoSystemFieldAsync("f", "after a fill");
-        (await kit.Client.RefreshAsync("k", CacheExpiry.At(DateTimeOffset.UtcNow.AddHours(2)), (IDictionary<string, string?>?)null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.RefreshAsync("k", CacheExpiry.At(_clock.ToDateTimeOffset(TimeSpan.FromHours(2))), (IDictionary<string, string?>?)null, Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         await NoSystemFieldAsync("k", "after a refresh with options");
-        (await kit.Client.RefreshAsync("k", CacheExpiry.At(DateTimeOffset.UtcNow.AddHours(3)), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
+        (await kit.Client.RefreshAsync("k", CacheExpiry.At(_clock.ToDateTimeOffset(TimeSpan.FromHours(3))), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         await NoSystemFieldAsync("k", "after an expiry-only refresh");
         (await kit.Client.RemoveFieldsAsync("k", ["a"], Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         await NoSystemFieldAsync("k", "after a field delete");
@@ -568,7 +570,7 @@ public sealed class KeyMoveHashConformanceTests(RedisFixture fixture) : IAsyncLi
 
     private ServiceProvider Provider(bool cacheNulls)
     {
-        var provider = new ServiceCollection()
+        var provider = new ServiceCollection().AddSingleton<TimeProvider>(_clock)
             .AddCaching(
                 b =>
                 {

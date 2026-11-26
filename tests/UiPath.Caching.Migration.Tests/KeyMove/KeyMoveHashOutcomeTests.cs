@@ -96,7 +96,10 @@ public sealed class KeyMoveHashOutcomeTests(RedisFixture fixture)
         await kit.Kit.SetStateAsync("S3");
         await kit.Kit.MoveGateAsync();
 
-        await FluentActions.Awaiting(async () => await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(), Ct)).Should().ThrowAsync<CacheUnavailableException>();
+        var refused = kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(), Ct).AsTask();
+        await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
+        await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
+        await Assert.ThrowsAsync<CacheUnavailableException>(() => refused);
 
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse("nothing was sent under rules that are not the gate's");
     }
@@ -110,9 +113,10 @@ public sealed class KeyMoveHashOutcomeTests(RedisFixture fixture)
         await kit.Kit.MoveGateAsync();
 
         var write = kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(), Ct).AsTask();
-        await Task.Delay(150, Ct);
+        var admission = await kit.Kit.Time.NextTimerAsync(Ct);
         write.IsCompleted.Should().BeFalse("the write waits for the rules to follow the gate");
         kit.Kit.ApplyRules("S3");
+        kit.Kit.Time.Advance(admission);
 
         (await write).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.FieldsAsync(kit.N("k"))).Should().BeEquivalentTo(new Dictionary<string, string> { ["x"] = "9" });
@@ -146,7 +150,7 @@ public sealed class KeyMoveHashOutcomeTests(RedisFixture fixture)
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync("S3");
         kit.Kit.Plane.RefuseEntry = true;
-        await FluentActions.Awaiting(async () => await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(), Ct)).Should().ThrowAsync<CacheUnavailableException>();
+        await Assert.ThrowsAsync<CacheUnavailableException>(() => kit.Client.SetAsync("k", KeyMoveHashKit.Items(("x", "9")), Replace(), Ct).AsTask());
         kit.Kit.Plane.RefuseEntry = false;
         kit.Kit.Schedule.Hook = async (step, _) =>
         {
@@ -310,8 +314,8 @@ public sealed class KeyMoveHashOutcomeTests(RedisFixture fixture)
     [Fact]
     public async Task A_retry_of_a_write_whose_life_has_passed_is_never_sent()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, clock: clock);
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
+        var clock = kit.Kit.Time;
         await kit.Kit.PrepareAsync("k");
         await kit.Kit.SetStateAsync("S3");
         await kit.SetAsync(kit.L("k"), Original);

@@ -189,8 +189,8 @@ public sealed class KeyMoveHashPromotionOutcomeTests(RedisFixture fixture)
     [Fact]
     public async Task A_promotion_whose_snapshot_came_late_after_the_capture_serves_the_hash_uncached_and_counts_it()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        await using var kit = await StagedAsync(clock: clock);
+        await using var kit = await StagedAsync();
+        var clock = kit.Kit.Time;
         using var meter = new MeterCollector(kit.Kit.Cid);
         kit.Kit.Schedule.Hook = (step, _) =>
         {
@@ -363,7 +363,7 @@ public sealed class KeyMoveHashPromotionOutcomeTests(RedisFixture fixture)
         {
             if (step == SchedulePointStep.Publish)
             {
-                await Task.Delay(1800, Ct);
+                await Task.Delay(1550, Ct);
             }
         };
 

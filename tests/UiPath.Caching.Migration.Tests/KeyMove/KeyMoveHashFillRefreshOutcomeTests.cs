@@ -20,7 +20,10 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
         await using var kit = await StagedAsync(options: new KeyMoveOptions { AdmissionPoll = TimeSpan.FromMilliseconds(5), MaxReruns = 2 });
         await kit.Kit.MoveGateAsync();
 
-        await FluentActions.Awaiting(async () => await kit.Client.FillAsync("k", Items(), Fill(), null, Ct)).Should().ThrowAsync<CacheUnavailableException>();
+        var refused = kit.Client.FillAsync("k", Items(), Fill(), null, Ct).AsTask();
+        await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
+        await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
+        await Assert.ThrowsAsync<CacheUnavailableException>(() => refused);
 
         (await kit.Kit.ExistsAsync(kit.N("k"))).Should().BeFalse();
     }
@@ -32,9 +35,10 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
         await kit.Kit.MoveGateAsync();
 
         var fill = kit.Client.FillAsync("k", Items(), Fill(), null, Ct).AsTask();
-        await Task.Delay(150, Ct);
+        var admission = await kit.Kit.Time.NextTimerAsync(Ct);
         fill.IsCompleted.Should().BeFalse("the fill waits for the rules to follow the gate");
         kit.Kit.ApplyRules("S3");
+        kit.Kit.Time.Advance(admission);
 
         (await fill).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.FieldsAsync(kit.N("k"))).Should().BeEquivalentTo(Original);
@@ -45,7 +49,7 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
     {
         await using var kit = await StagedAsync();
 
-        (await kit.Client.FillAsync("k", Items(), Fill(DateTimeOffset.UtcNow.AddMinutes(-1)), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
+        (await kit.Client.FillAsync("k", Items(), Fill(kit.Kit.Clock.ToDateTimeOffset(TimeSpan.FromMinutes(-1))), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
         kit.Kit.Connected = false;
         (await kit.Client.FillAsync("k", Items(), Fill(), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent);
 
@@ -96,8 +100,8 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
     [Fact]
     public async Task A_fill_whose_life_passes_while_it_is_staged_is_not_sent_by_the_client_or_by_the_script()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        await using var kit = await StagedAsync(clock: clock);
+        await using var kit = await StagedAsync();
+        var clock = kit.Kit.Time;
         kit.Kit.Schedule.Hook = (step, _) =>
         {
             if (step == SchedulePointStep.Fill)
@@ -110,17 +114,11 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
 
         (await kit.Client.FillAsync("k", Items(), Fill(clock.GetUtcNow().AddMinutes(1)), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent, "the client judges the deadline itself");
 
-        var behind = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        await using var late = await StagedAsync(clock: behind);
-        late.Kit.Schedule.Hook = async (step, _) =>
-        {
-            if (step == SchedulePointStep.Fill)
-            {
-                await Task.Delay(400, Ct);
-            }
-        };
+        await using var late = await StagedAsync();
+        var behind = late.Kit.Time;
+        behind.UtcOffset = TimeSpan.FromSeconds(-2);
 
-        (await late.Client.FillAsync("k", Items(), Fill(behind.GetUtcNow().AddMilliseconds(200)), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent, "the script refuses a fill whose deadline has passed");
+        (await late.Client.FillAsync("k", Items(), Fill(behind.ToDateTimeOffset(TimeSpan.FromSeconds(1))), null, Ct)).Outcome.Should().Be(WriteOutcome.NotSent, "the script refuses a fill whose deadline has passed");
         (await late.Kit.ExistsAsync(late.N("k"))).Should().BeFalse();
         (await StagingKeysAsync(late)).Should().BeEmpty();
     }
@@ -177,15 +175,19 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
     {
         await using var strict = await StagedAsync(options: new KeyMoveOptions { AdmissionPoll = TimeSpan.FromMilliseconds(5), MaxReruns = 2 });
         await strict.Kit.MoveGateAsync();
-        await FluentActions.Awaiting(async () => await strict.Client.RefreshAsync("k", CacheExpiry.After(TimeSpan.FromHours(1)), Ct)).Should().ThrowAsync<CacheUnavailableException>();
+        var refused = strict.Client.RefreshAsync("k", CacheExpiry.After(TimeSpan.FromHours(1)), Ct).AsTask();
+        await strict.Kit.Time.AdvanceNextTimerAsync(Ct);
+        await strict.Kit.Time.AdvanceNextTimerAsync(Ct);
+        await Assert.ThrowsAsync<CacheUnavailableException>(() => refused);
 
         await using var kit = await StagedAsync(options: new KeyMoveOptions { AdmissionPoll = TimeSpan.FromMilliseconds(20), MaxReruns = 100 });
         await kit.SetAsync(kit.N("k"), Original, TimeSpan.FromMinutes(1));
         await kit.Kit.MoveGateAsync();
         var refresh = kit.Client.RefreshAsync("k", CacheExpiry.After(TimeSpan.FromHours(1)), Ct).AsTask();
-        await Task.Delay(150, Ct);
+        var admission = await kit.Kit.Time.NextTimerAsync(Ct);
         refresh.IsCompleted.Should().BeFalse();
         kit.Kit.ApplyRules("S3");
+        kit.Kit.Time.Advance(admission);
 
         (await refresh).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.Db.KeyTimeToLiveAsync(kit.N("k")))!.Value.Should().BeGreaterThan(TimeSpan.FromMinutes(50));
@@ -295,8 +297,8 @@ public sealed class KeyMoveHashFillRefreshOutcomeTests(RedisFixture fixture)
     [Fact]
     public async Task A_pending_retry_that_runs_out_of_life_is_counted_alerted_and_dropped()
     {
-        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        await using var kit = await StagedAsync(clock: clock);
+        await using var kit = await StagedAsync();
+        var clock = kit.Kit.Time;
         using var meter = new MeterCollector(kit.Kit.Cid);
         kit.Kit.Schedule.Hook = (step, _) =>
         {

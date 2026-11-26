@@ -323,7 +323,7 @@ public sealed class KeyMoveReadTests(RedisFixture fixture)
         {
             if (step == SchedulePointStep.Publish)
             {
-                await Task.Delay(600, Ct);
+                await Task.Delay(450, Ct);
             }
         };
 

@@ -55,9 +55,10 @@ public sealed class KeyMoveHashWaitTests(RedisFixture fixture)
         // The group is held when the write starts: its plan is a wait, which refuses nothing yet.
         kit.Kit.Plane.Rules = open with { Writes = WriteRule.WaitThenFailClosed, WriteWait = TimeSpan.FromSeconds(5) };
         var write = operation == "set" ? kit.Client.SetAsync("k", fields, options, Ct).AsTask() : kit.Client.FillAsync("k", fields, options, null, Ct).AsTask();
-        await Task.Delay(100, Ct);
+        var admission = await kit.Kit.Time.NextTimerAsync(Ct);
         write.IsCompleted.Should().BeFalse("the write is waiting");
         kit.Kit.Plane.Rules = open;
+        kit.Kit.Time.Advance(admission);
 
         if (envelope && metadata is not null)
         {

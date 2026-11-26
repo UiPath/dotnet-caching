@@ -133,8 +133,11 @@ internal sealed class PausingSchedule(SchedulePointStep target) : ISchedulePoint
 internal sealed class DoneTarget(IMoveTarget inner) : IMoveTarget
 {
     private readonly System.Collections.Concurrent.ConcurrentQueue<MoveResult> _results = new();
+    private readonly TaskCompletionSource _resultEnqueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public IReadOnlyCollection<MoveResult> Results => _results;
+
+    public Task ResultEnqueued => _resultEnqueued.Task;
 
     public string CacheId => inner.CacheId;
 
@@ -146,6 +149,7 @@ internal sealed class DoneTarget(IMoveTarget inner) : IMoveTarget
     {
         var result = await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
         _results.Enqueue(result);
+        _resultEnqueued.TrySetResult();
         return result;
     }
 }

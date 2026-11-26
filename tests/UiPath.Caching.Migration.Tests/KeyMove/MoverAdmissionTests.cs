@@ -44,7 +44,7 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         host.Start();
         try
         {
-            await Task.Delay(700, Ct);
+            await kit.Kit.Time.NextTimerAsync(Ct);
         }
         finally
         {
@@ -86,7 +86,7 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         host.Start();
         try
         {
-            await Task.Delay(700, Ct);
+            await kit.Kit.Time.NextTimerAsync(Ct);
         }
         finally
         {
@@ -174,7 +174,18 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         };
         var host = kit.Host(new MoverOptions { PollInterval = TimeSpan.FromMilliseconds(40), MinScanInterval = TimeSpan.FromMilliseconds(1), PassPause = TimeSpan.FromMilliseconds(400) }, _ => flaky);
 
-        await kit.RunOnePassAsync(host);
+        host.Start();
+        try
+        {
+            await kit.WaitPassAttemptAsync(host);
+            await kit.Db.KeyExpireAsync(kit.Kit.Names.UnitPace(kit.Kit.Group, unit, "fwd", MoverKit.MoveId), DateTimeOffset.UnixEpoch.UtcDateTime);
+            kit.Kit.Time.Advance(TimeSpan.FromMilliseconds(400));
+            await kit.WaitForPassAsync(host);
+        }
+        finally
+        {
+            await host.StopAsync();
+        }
 
         recordedAtSecondPass.Should().BeFalse("the first pass had a failed key, so it left no record");
         flaky.Calls("b").Should().Be(2);
@@ -225,13 +236,18 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         await kit.SeedAsync(Enumerable.Range(0, 30).Select(i => $"k{i}").ToArray());
         ScanRecordingServer? scans = null;
         var host = kit.Host(Small with { MinScanInterval = TimeSpan.FromMilliseconds(60) }, units: new ProxyUnits(kit.Units, u => u with { Primary = ScanRecordingServer.Over(u.Primary, out scans) }));
-        var started = TimeProvider.System.GetTimestamp();
+        var started = kit.Kit.Clock.GetTimestamp();
 
         // Five scans are enough to show the spacing, whatever else the server holds.
         host.Start();
         try
         {
-            await MoverKit.WaitAsync(() => Task.FromResult(scans is { Cursors.Count: >= 5 }));
+            for (var i = 0; i < 4; i++)
+            {
+                await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
+            }
+
+            await kit.Kit.Time.NextTimerAsync(Ct);
         }
         finally
         {
@@ -239,7 +255,7 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         }
 
         var count = scans!.Cursors.Count;
-        var elapsed = TimeProvider.System.GetElapsedTime(started);
+        var elapsed = kit.Kit.Clock.GetElapsedTime(started);
         count.Should().BeGreaterThan(3);
         elapsed.Should().BeGreaterThan(TimeSpan.FromMilliseconds(60 * (count - 1) * 0.8));
     }
@@ -258,7 +274,7 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         second.Start();
         try
         {
-            await Task.Delay(500, Ct);
+            await kit.Kit.Time.NextTimerAsync(Ct);
         }
         finally
         {
@@ -284,7 +300,12 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         broken.Start();
         try
         {
-            await Task.Delay(600, Ct);
+            for (var poll = 0; poll < 15; poll++)
+            {
+                await kit.Kit.Time.AdvanceNextTimerAsync(Ct);
+            }
+
+            await kit.Kit.Time.NextTimerAsync(Ct);
         }
         finally
         {
@@ -304,7 +325,7 @@ public sealed class MoverAdmissionTests(RedisFixture fixture)
         untargeted.Start();
         try
         {
-            await Task.Delay(600, Ct);
+            await kit.Kit.Time.NextTimerAsync(Ct);
         }
         finally
         {

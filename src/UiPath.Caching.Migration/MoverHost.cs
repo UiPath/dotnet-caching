@@ -62,6 +62,9 @@ internal sealed class MoverHost
         }
     }
 
+    /// <summary>Test seam: overrides the clock for reconciliation polls.</summary>
+    internal TimeProvider? PollClock { get; init; }
+
     public void Start()
     {
         lock (_lifetimeGate)
@@ -153,6 +156,7 @@ internal sealed class MoverHost
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
+        var clock = PollClock ?? _time;
         try
         {
             while (true)
@@ -167,7 +171,7 @@ internal sealed class MoverHost
                     _alerts.Raise(new KeyMoveAlert(_group, "mover_reconcile_failed", ex.GetType().Name));
                 }
 
-                await Task.Delay(_options.PollInterval, _time, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(_options.PollInterval, clock, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
