@@ -37,10 +37,7 @@ internal static class FakeTimeBroadcast
                 continue;
             }
 
-            clock.Advance(TimeSpan.Zero);
-
-            // The reader starts a timed wait after each read, so the state is looked at again then.
-            await clock.WhenTimerAsync(() => Listening(topic));
+            await ListeningAsync(topic, clock);
         }
     }
 
@@ -72,6 +69,40 @@ internal static class FakeTimeBroadcast
     private static bool Listening(ITopic<ICacheEvent> topic) =>
         ((ITopicSubscriptionState)topic).IsSubscribed
         && BroadcastNodeSignals.Inner(topic) is not RedisStreamsTopic<ICacheEvent> { NotifyLive: false };
+
+    private static async Task ListeningAsync(ITopic<ICacheEvent> topic, ManualTimeProvider clock)
+    {
+        var live = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Lit() => live.TrySetResult();
+        var streams = BroadcastNodeSignals.Inner(topic) as RedisStreamsTopic<ICacheEvent>;
+        if (streams is not null)
+        {
+            streams.NotifyLiveSet += Lit;
+        }
+
+        try
+        {
+            clock.Advance(TimeSpan.Zero);
+            if (Listening(topic))
+            {
+                return;
+            }
+
+            // The reader starts a timed wait after each read, so the state is looked at again then; the doorbell going live creates no timer.
+            var timer = clock.WhenTimerAsync(() => Listening(topic));
+            if (await Task.WhenAny(timer, live.Task) == live.Task && !Listening(topic))
+            {
+                await timer;
+            }
+        }
+        finally
+        {
+            if (streams is not null)
+            {
+                streams.NotifyLiveSet -= Lit;
+            }
+        }
+    }
 
     private static async Task SubscribedAsync(RedisPubSubTopic<ICacheEvent> channel, ManualTimeProvider clock)
     {

@@ -175,6 +175,13 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
+    /// <summary>Raised when this topic's doorbell subscription turns live.</summary>
+    internal event Action? NotifyLiveSet
+    {
+        add => _waiter.BecameLive += value;
+        remove => _waiter.BecameLive -= value;
+    }
+
     public TopicKey TopicKey { get; }
 
     public EventHandler? OnDisposed { get; set; }
