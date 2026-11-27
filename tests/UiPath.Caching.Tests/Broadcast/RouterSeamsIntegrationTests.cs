@@ -197,10 +197,10 @@ public sealed class RouterSeamsIntegrationTests(RedisContainerFixture fixture) :
 
     private static ManualTimeProvider Clock(ServiceProvider node) => (ManualTimeProvider)node.GetRequiredService<TimeProvider>();
 
-    private static Task ReadyAsync(ServiceProvider node, ITopic<ICacheEvent> topic, TimeSpan? due = null)
+    private static async Task ReadyAsync(ServiceProvider node, ITopic<ICacheEvent> topic, TimeSpan? due = null)
     {
-        _ = node.GetRequiredService<IRedisConnector>().Subscriber;
-        return BroadcastNodeSignals.ReadyAsync(topic, Clock(node), due);
+        await node.SubscriptionConnectedAsync();
+        await BroadcastNodeSignals.ReadyAsync(topic, Clock(node), due);
     }
 
     private static async Task ReadAsync(ServiceProvider node, string transport)

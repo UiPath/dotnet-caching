@@ -98,6 +98,26 @@ internal sealed class SignalingTimeProvider(ManualTimeProvider clock) : TimeProv
         await completion.WaitAsync(token);
     }
 
+    /// <summary>Runs the timers scheduled as due at once, until <paramref name="completion"/> ends. The clock does not move.</summary>
+    public async Task RunDueTimersUntilAsync(Task completion, CancellationToken token)
+    {
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(token);
+        while (!completion.IsCompleted)
+        {
+            var due = WaitForTimerAsync(TimeSpan.Zero, waiting.Token);
+            if (await Task.WhenAny(completion, due) == completion)
+            {
+                await waiting.CancelAsync();
+                break;
+            }
+
+            await due;
+            Advance(TimeSpan.Zero);
+        }
+
+        await completion.WaitAsync(token);
+    }
+
     private void AdvanceTo(ScheduledTimer timer, TimeSpan step)
     {
         if (timer.Active)

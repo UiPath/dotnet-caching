@@ -218,7 +218,7 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
     private static ITopic<ICacheEvent> Topic(ServiceProvider node) =>
         ((Router)node.GetRequiredService<IRouter>()).Library!.Topics.Create(((IRouterParticipant)Cache(node)).Topic!.Value);
 
-    private static Task ReadyAsync(ServiceProvider node) => node.GetRequiredService<RedisTopicSignals>().WaitAsync(Ct);
+    private static Task ReadyAsync(ServiceProvider node) => RedisTopicSignals.ReadyAsync(node, Ct);
 
     private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
 
@@ -236,7 +236,7 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
             ["Caching:DefaultTopic"] = transport,
             ["Caching:Broadcast:RedisPubSub:Enabled"] = pubSub ? "true" : "false",
             ["Caching:Broadcast:RedisStreams:Enabled"] = pubSub ? "false" : "true",
-        }).AddInMemoryCollection(extra ?? []).Build();
+        }).AddInMemoryCollection(RedisTopicSignals.SubscribeAtOnce).AddInMemoryCollection(extra ?? []).Build();
         var source = new LegacySource(_redis!, _cacheName);
         var services = new ServiceCollection().AddLogging().AddSingleton<TimeProvider>(new SignalingTimeProvider(_serverTime));
         RedisTopicSignals.Add(services, "router:lists", streams: !pubSub);

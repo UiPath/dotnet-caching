@@ -75,7 +75,7 @@ public abstract class AcmeNodeTests(RedisFixture fixture) : IDisposable
     protected static ITopic<ICacheEvent> Topic<T>(ServiceProvider node) =>
         node.GetRequiredService<ITopicFactory>().Get().Create(new DefaultTopicKeyStrategy().GetTopicKey(typeof(T)));
 
-    protected static Task ReadyAsync(ServiceProvider node) => node.GetRequiredService<RedisTopicSignals>().WaitAsync(Ct);
+    protected static Task ReadyAsync(ServiceProvider node) => RedisTopicSignals.ReadyAsync(node, Ct);
 
     protected static Task BarrierAsync<T>(ServiceProvider writer, ServiceProvider peer) =>
         RedisTopicSignals.BarrierAsync(Topic<T>(writer), Topic<T>(peer), Ct);

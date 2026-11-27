@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using UiPath.Caching.Config;
+using UiPath.Caching.Tests.Broadcast;
 
 namespace UiPath.Caching.Tests.Redis;
 
@@ -120,9 +121,11 @@ public sealed class FailSafeIntegrationTests(RedisContainerFixture fixture) : ID
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                 })
             .ObserveRedisSignals(_signals)
+            .SubscribeBroadcastAtOnce()
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);
+        provider.Listen();
         return provider.GetRequiredService<ICacheFactory>().CreateCache(providerName);
     }
 }

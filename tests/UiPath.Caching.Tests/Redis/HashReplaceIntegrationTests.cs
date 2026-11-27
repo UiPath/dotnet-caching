@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using UiPath.Caching.Config;
+using UiPath.Caching.Tests.Broadcast;
 
 namespace UiPath.Caching.Tests.Redis;
 
@@ -237,9 +238,11 @@ public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) :
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                 })
             .ObserveRedisSignals(_signals)
+            .SubscribeBroadcastAtOnce()
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);
+        provider.Listen();
         return provider.GetRequiredService<ICacheFactory>().CreateHashCache(fieldBatch == 1000 ? KnownCacheProviderNames.InMemoryRedis : KnownCacheProviderNames.Redis);
     }
 }

@@ -32,7 +32,7 @@ internal sealed class BroadcastNodeSignals : IObserver<ICacheEvent>, IMissedEven
         {
             signals._topics.Add(topic);
             signals._subscriptions.Add(topic.Subscribe(signals));
-            _ = node.GetRequiredService<IRedisConnector>().Subscriber;
+            await node.SubscriptionConnectedAsync();
             await ReadyAsync(topic, clock);
 
             signals._markerId = Guid.NewGuid().ToString("N");
@@ -82,13 +82,21 @@ internal sealed class BroadcastNodeSignals : IObserver<ICacheEvent>, IMissedEven
         }
     }
 
+    /// <summary>The topic a Streams topic with a Pub/Sub fallback runs on now; any other topic is its own.</summary>
+    public static ITopic<ICacheEvent>? Inner(ITopic<ICacheEvent> topic)
+    {
+        if (topic is not StreamsFallbackTopic)
+        {
+            return topic;
+        }
+
+        var state = typeof(StreamsFallbackTopic).GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(topic)!;
+        return (ITopic<ICacheEvent>?)state.GetType().GetProperty("Inner")!.GetValue(state);
+    }
+
     public static void Read(ITopic<ICacheEvent> topic)
     {
-        if (topic is StreamsFallbackTopic)
-        {
-            var state = typeof(StreamsFallbackTopic).GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(topic)!;
-            topic = (ITopic<ICacheEvent>)state.GetType().GetProperty("Inner")!.GetValue(state)!;
-        }
+        topic = Inner(topic)!;
         if (topic is RedisStreamsTopic<ICacheEvent>)
         {
             var waiter = (SignalingFetchWaiter)typeof(RedisStreamsTopic<ICacheEvent>).GetField("_waiter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(topic)!;

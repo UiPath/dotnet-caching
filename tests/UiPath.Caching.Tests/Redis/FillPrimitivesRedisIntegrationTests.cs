@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 using UiPath.Caching.Config;
 using UiPath.Caching.MessagePack;
+using UiPath.Caching.Tests.Broadcast;
 using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Redis;
@@ -747,8 +748,12 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         return Task.FromResult(RedisTestKeys.Keys(_raw!, $"*{key}*").Single());
     }
 
-    private ICache Node(string source, bool scripts = false, bool pubsub = false) =>
-        Provider(source, scripts, pubsub: pubsub).GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
+    private ICache Node(string source, bool scripts = false, bool pubsub = false)
+    {
+        var provider = Provider(source, scripts, pubsub: pubsub);
+        provider.Listen();
+        return provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
+    }
 
     private ICache RedisOnly(string source, bool scripts, TimeProvider? clock = null, bool nulls = false, ILoggerProvider? logs = null) =>
         Provider(source, scripts, clock, nulls, logs: logs, restricted: logs is not null).GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis);
@@ -798,6 +803,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
                     }
                 })
             .ObserveRedisSignals(_signals)
+            .SubscribeBroadcastAtOnce()
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);

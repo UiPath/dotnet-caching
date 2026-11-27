@@ -397,9 +397,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     private static Dictionary<string, string?> Fields(params (string Field, string Value)[] fields) =>
         fields.ToDictionary(f => f.Field, f => (string?)f.Value);
 
-    private Task<bool> UntilAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
-
-    private async Task WarmAsync(Peer writer, Peer node)
+    private static async Task WarmAsync(Peer writer, Peer node)
     {
         Assert.SkipUnless(node.OnStreams, "Waits for the node's XREADGROUP, and this server's topics broadcast over Pub/Sub, not Streams.");
         var key = Unique();
@@ -415,6 +413,8 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
             delivered = await node.Signals.DeliveredSinceAsync(probe, missed, Ct);
         }
     }
+
+    private Task<bool> UntilAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
 
     // The write that made the hash is announced too: its event drops a copy read before it arrived, so the test starts from a copy read after it.
 

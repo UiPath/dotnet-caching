@@ -110,7 +110,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         var provider = (RedisPubSubTopicProvider)node.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub);
         var subscriptions = (IPubSubSubscriptions)provider;
         var channel = $"{app}:ps:string";
-        _ = node.GetRequiredService<IRedisConnector>().Subscriber;
+        await node.SubscriptionConnectedAsync();
         provider.Create(new TopicKey("string"));
         subscriptions.Channels().Should().Equal(channel);
         subscriptions.Confirmed().Should().BeEmpty("the subscription goes in place on a timer, not when the topic is made");
@@ -171,8 +171,8 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         var nodeListKey = NodeListStore.KeyFor(new CacheOptions { AppShortName = app }, new RedisCacheOptions());
         try
         {
-            _ = a.GetRequiredService<IRedisConnector>().Subscriber;
-            _ = b.GetRequiredService<IRedisConnector>().Subscriber;
+            await a.SubscriptionConnectedAsync();
+            await b.SubscriptionConnectedAsync();
             var topicA = a.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub).Create(topic);
             var topicB = b.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub).Create(topic);
             await BroadcastNodeSignals.ReadyAsync(topicA, Clock(a));
