@@ -13,7 +13,12 @@ internal sealed class RedisTestSignals(Action? changed = null)
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _delivered = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ITopic<ICacheEvent>, Lazy<ObservedTopic>> _topics = new();
 
+    private int _missed;
+
     public Action? TransactionQueued { get; set; }
+
+    /// <summary>How many times the node was told it missed events.</summary>
+    public int Missed => Volatile.Read(ref _missed);
 
     public void Pulse()
     {
@@ -22,7 +27,14 @@ internal sealed class RedisTestSignals(Action? changed = null)
     }
 
     public Task<bool> DeliveredAsync(string key, int count, CancellationToken token) => UntilAsync(
-        () => Task.FromResult(_delivered.Any(pair => pair.Key.EndsWith(key, StringComparison.Ordinal) && pair.Value >= count)), token);
+        () => Task.FromResult(Delivered(key, count)), token);
+
+    /// <summary>True once the key is delivered; false when a loss is told past <paramref name="missed"/> first.</summary>
+    public async Task<bool> DeliveredSinceAsync(string key, int missed, CancellationToken token)
+    {
+        await UntilAsync(() => Task.FromResult(Delivered(key, 1) || Missed != missed), token);
+        return Delivered(key, 1);
+    }
 
     public async Task<bool> UntilAsync(Func<Task<bool>> condition, CancellationToken token)
     {
@@ -92,6 +104,9 @@ internal sealed class RedisTestSignals(Action? changed = null)
         return result;
     }
 
+    private bool Delivered(string key, int count) =>
+        _delivered.Any(pair => pair.Key.EndsWith(key, StringComparison.Ordinal) && pair.Value >= count);
+
     private sealed class ObservedTopic(ITopic<ICacheEvent> inner, RedisTestSignals signals) : ITopic<ICacheEvent>, ITopicSubscriptionState
     {
         private readonly IDisposable _subscription = inner.Subscribe(new Observer(signals));
@@ -136,6 +151,10 @@ internal sealed class RedisTestSignals(Action? changed = null)
 
         public void OnError(Exception error) => signals.Pulse();
 
-        public void OnEventsMissed(MissedEventsReason reason) => signals.Pulse();
+        public void OnEventsMissed(MissedEventsReason reason)
+        {
+            Interlocked.Increment(ref signals._missed);
+            signals.Pulse();
+        }
     }
 }

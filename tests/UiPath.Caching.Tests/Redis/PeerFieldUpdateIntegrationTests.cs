@@ -77,6 +77,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var nodes = new[] { Node("a", peerFieldUpdates: true), Node("b", peerFieldUpdates: true) };
         await WarmAsync(nodes[0], nodes[1]);
+        await WarmAsync(nodes[1], nodes[0]);
         var keys = Enumerable.Range(0, 20).Select(_ => Unique()).ToArray();
 
         // An update applied under the change token's lock waited for the merge lock, while a read keeping its value held the merge lock
@@ -107,6 +108,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var nodes = new[] { Node("a", peerFieldUpdates: true), Node("b", peerFieldUpdates: true) };
         await WarmAsync(nodes[0], nodes[1]);
+        await WarmAsync(nodes[1], nodes[0]);
         var keys = Enumerable.Range(0, 6).Select(_ => Unique()).ToArray();
         var background = new CachePolicy { BackgroundDistributedWrite = true };
 
@@ -403,12 +405,15 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         var key = Unique();
         await writer.Hashes.SetAsync<string>(key, Fields(("w", "1")), TimeSpan.FromMinutes(10), Ct);
         await node.Hashes.GetAsync<string>(key, Ct);
-        var seen = new List<string>();
-        (await UntilAsync(() =>
+
+        // A write published before the node's group exists is skipped and told as a loss, so one is written until it arrives.
+        for (var delivered = false; !delivered;)
         {
-            seen.AddRange(node.Profiler.Session.FinishProfiling().Select(c => c.Command));
-            return Task.FromResult(seen.Contains("XREADGROUP"));
-        })).Should().BeTrue("the node's reader of the topic is up");
+            var missed = node.Signals.Missed;
+            var probe = Unique();
+            await writer.Hashes.SetAsync<string>(probe, Fields(("w", "1")), TimeSpan.FromMinutes(10), Ct);
+            delivered = await node.Signals.DeliveredSinceAsync(probe, missed, Ct);
+        }
     }
 
     // The write that made the hash is announced too: its event drops a copy read before it arrived, so the test starts from a copy read after it.
