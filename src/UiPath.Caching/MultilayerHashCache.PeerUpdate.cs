@@ -76,6 +76,8 @@ internal sealed partial class MultilayerHashCache
                 if (_memoryCache.TryGetValue(name, out object? current) && current is not null && !_awaitingRefresh.TryGetValue(current, out _)
                     && HashVersions.TryGet(current, out var version) && version.Apply(this, state, current, update))
                 {
+                    // Pairs with MarkDropped: either this sees the copy marked, or the drop sees the merge written.
+                    Interlocked.MemoryBarrier();
                     if (!_awaitingRefresh.TryGetValue(current, out _))
                     {
                         return true;
@@ -179,6 +181,8 @@ internal sealed partial class MultilayerHashCache
         while (_memoryCache.TryGetValue(name, out object? held) && held is not null && !_awaitingRefresh.TryGetValue(held, out _))
         {
             _awaitingRefresh.AddOrUpdate(held, held);
+            // Pairs with the update: either this sees the merge written, or the update sees the copy marked.
+            Interlocked.MemoryBarrier();
         }
     }
 
