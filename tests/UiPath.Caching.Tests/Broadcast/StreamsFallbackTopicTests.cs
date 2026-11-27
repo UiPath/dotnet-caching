@@ -245,13 +245,15 @@ public class StreamsFallbackTopicTests : IDisposable
         var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         database.StreamCreateConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), Arg.Any<bool>(), Arg.Any<CommandFlags>()).Returns(_ => answer.Task);
         var capability = StreamsFakes.Capability(connector);
-        var sut = Create(capability: capability);
+        var telemetry = new RecordingTelemetryProvider();
+        var sut = Create(capability: capability, telemetry: telemetry);
         var observer = new Observer();
         sut.Subscribe(observer);
         Read();
         answer.SetException(StreamsFakes.UnknownCommand());
 
-        await WaitForAsync(() => _pubSub.Subscribers.Count == 1);
+        // The switch is tracked after it tells the observers what they lost, while the new topic is subscribed before that.
+        await WaitForAsync(() => telemetry.Events.Any(e => e.Name == Metrics.TransportChanged));
 
         observer.Missed.Should().Equal(MissedEventsReason.Lost);
         _fallback.Created.Should().Be(1);
