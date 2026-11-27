@@ -1,4 +1,5 @@
 using System.Reflection;
+using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Tests;
 
@@ -33,6 +34,7 @@ public class MockableInterfaceTests
 
     // On Castle.Core 5.2.1 an NSubstitute substitute throws on any call to an overridable default member (castleproject/Core#684).
     [Theory]
+    [InlineData(typeof(IGroupKeySpace))]
     [InlineData(typeof(ICacheFactory))]
     [InlineData(typeof(ICache))]
     [InlineData(typeof(ICache<>))]

@@ -18,16 +18,20 @@ internal sealed class RegisteredKeySpace(IReadOnlyList<KeyMoveCache> caches, str
     public IReadOnlyList<string> PatternsOf(string group, string cacheId, MoveSide side) =>
         [.. caches.Where(c => c.Group == group && c.Name == cacheId).Select(c => c.PatternOf(side)).Distinct(StringComparer.Ordinal)];
 
-    public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key) =>
-        Accepting(side, key).Select(c => c.Name).Order(StringComparer.Ordinal).ToArray();
+    public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key, KeyMoveKind? kind = null) =>
+        Accepting(side, key, kind).Select(c => c.Name).Order(StringComparer.Ordinal).ToArray();
 
     public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) =>
-        Accepting(side, key).ToArray() is [{ } only] && only.Name == cacheId && only.RoundTrips(side, key) && !IsShort(group, only, side, timeToLive) && DestinationIsOwned(group, only, side, key);
+        Accepting(side, key, KindOf(group, cacheId)).ToArray() is [{ } only] && only.Name == cacheId && only.RoundTrips(side, key) && !IsShort(group, only, side, timeToLive) && DestinationIsOwned(group, only, side, key);
 
     public bool HasValidDestination(string group, MoveSide side, string cacheId, string key) =>
-        Accepting(side, key).ToArray() is not [{ } only] || only.Name != cacheId || !CanBeParsed(only, side, key) || DestinationIsOwned(group, only, side, key);
+        Accepting(side, key, KindOf(group, cacheId)).ToArray() is not [{ } only] || only.Name != cacheId || !CanBeParsed(only, side, key) || DestinationIsOwned(group, only, side, key);
 
-    public bool HasHashCache(string group) => caches.Any(c => c.Group == group && c.Hash);
+    public bool HoldsHashes(string group, MoveSide side, string pattern) =>
+        caches.Any(c => c.Group == group && c.PatternOf(side) == pattern && c.Kind == KeyMoveKind.Hash);
+
+    public bool HoldsStrings(string group, MoveSide side, string pattern) =>
+        !caches.Any(c => c.Group == group && c.PatternOf(side) == pattern) || caches.Any(c => c.Group == group && c.PatternOf(side) == pattern && c.Kind != KeyMoveKind.Hash);
 
     public string? CallerKeyOf(string group, MoveSide side, string cacheId, string key)
     {
@@ -97,7 +101,7 @@ internal sealed class RegisteredKeySpace(IReadOnlyList<KeyMoveCache> caches, str
 
     private bool IsExcluded(string key) => excluded is { Count: > 0 } && excluded.Any(pattern => GlobPatterns.Matches(pattern, key));
 
-    private IEnumerable<KeyMoveCache> Accepting(MoveSide side, string key)
+    private IEnumerable<KeyMoveCache> Accepting(MoveSide side, string key, KeyMoveKind? kind = null)
     {
         if (ReservedKeys.IsReserved(libraryPrefix, key) || IsExcluded(key) || (side == MoveSide.Native && !key.StartsWith(libraryPrefix, StringComparison.Ordinal)))
         {
@@ -106,6 +110,6 @@ internal sealed class RegisteredKeySpace(IReadOnlyList<KeyMoveCache> caches, str
 
         // An in-place key under the library prefix is the library's own, unless the cache says in so many words that it owns such keys.
         var underLibrary = side == MoveSide.Legacy && key.StartsWith(libraryPrefix, StringComparison.Ordinal);
-        return caches.Where(c => (!underLibrary || c.OwnsInPlace is not null) && c.Owns(side, key));
+        return caches.Where(c => (kind is null || c.Kind == kind) && (!underLibrary || c.OwnsInPlace is not null) && c.Owns(side, key));
     }
 }

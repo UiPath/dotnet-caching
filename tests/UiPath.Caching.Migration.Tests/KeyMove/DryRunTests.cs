@@ -148,12 +148,12 @@ public sealed class DryRunTests(RedisFixture fixture)
     public async Task A_hash_cache_key_is_counted_without_probing_its_value()
     {
         await using var kit = await MoverKit.CreateAsync(fixture);
-        var cache = CacheOf(kit) with { Hash = true, Kind = KeyMoveKind.Hash };
+        var cache = CacheOf(kit) with { Kind = KeyMoveKind.Hash };
         var space = new RegisteredKeySpace([cache], kit.Kit.N(string.Empty));
         await kit.Db.HashSetAsync(kit.Kit.L("key"), "field", "value");
         var rate = new SlowRate(0, TimeSpan.Zero);
 
-        var report = await Runner(kit, space: space, rate: rate).RunAsync(Ct);
+        var report = await Runner(kit, space: space, rate: rate, targets: new Dictionary<string, IMoveTarget>()).RunAsync(Ct);
 
         report.Scanned.Should().Be(1);
         Counts(report, kit.Kit.Cid).Should().ContainSingle().Which.Should().Be(KeyValuePair.Create("hash", 1L));
@@ -598,12 +598,12 @@ public sealed class DryRunTests(RedisFixture fixture)
         return dump;
     }
 
-    private static DryRunner Runner(MoverKit kit, IMoveRate? rate = null, DryRunOptions? options = null, KeyMoveMoverOptions? rates = null, IScanUnits? units = null, MoverOptions? moverOptions = null, IGroupKeySpace? space = null) =>
+    private static DryRunner Runner(MoverKit kit, IMoveRate? rate = null, DryRunOptions? options = null, KeyMoveMoverOptions? rates = null, IScanUnits? units = null, MoverOptions? moverOptions = null, IGroupKeySpace? space = null, IReadOnlyDictionary<string, IMoveTarget>? targets = null) =>
         new(
             kit.Kit.Group,
             kit.Kit.Plane,
             space ?? kit.Space,
-            new Dictionary<string, IMoveTarget> { [kit.Target.CacheId] = kit.Target },
+            targets ?? new Dictionary<string, IMoveTarget> { [kit.Target.CacheId] = kit.Target },
             units ?? kit.Units,
             string.Empty,
             rate ?? NoLimit.Instance,

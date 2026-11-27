@@ -76,7 +76,7 @@ internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
 
     /// <summary>The fields and the remaining life of a hash, together: one transaction on a primary, or two commands on a replica.</summary>
     /// <param name="cap">When set, the field count is asked first and a hash above it is reported without being read.</param>
-    public async ValueTask<HashSnap> SnapAsync(string key, bool replica, SchedulePointStep step, CancellationToken cancellationToken, int? cap = null)
+    public async ValueTask<HashSnap> SnapAsync(string key, bool replica, SchedulePointStep step, CancellationToken cancellationToken, int? cap = null, bool propagateFailures = false, bool measureCappedTtl = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (Data is not { } data || !data.IsConnected())
@@ -87,7 +87,7 @@ internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
         await At(step).ConfigureAwait(false);
         try
         {
-            if (cap is { } most && await CheckCapAsync(data, key, most).ConfigureAwait(false) is { } capped)
+            if (cap is { } most && await CheckCapAsync(data, key, most, measureCappedTtl).ConfigureAwait(false) is { } capped)
             {
                 return capped;
             }
@@ -120,19 +120,19 @@ internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
                 return HashSnap.Of(ReadOutcome.Absent);
             }
 
-            return new HashSnap(ReadOutcome.Found, entries, left is { } span ? (long)Math.Ceiling(span.TotalMilliseconds) : -1, parts.Clock.GetUtcNow(), entries.Length);
+            return new HashSnap(ReadOutcome.Found, entries, TtlMilliseconds(left), parts.Clock.GetUtcNow(), entries.Length);
         }
         catch (RedisServerException ex) when (ex.Message.Contains("WRONGTYPE", StringComparison.OrdinalIgnoreCase))
         {
             return HashSnap.Of(ReadOutcome.Unreadable);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (!propagateFailures && (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested))
         {
             return HashSnap.Of(ReadOutcome.Unavailable);
         }
     }
 
-    public async ValueTask<bool?> ExistsAsync(string key, SchedulePointStep step, CancellationToken cancellationToken)
+    public async ValueTask<bool?> ExistsAsync(string key, SchedulePointStep step, CancellationToken cancellationToken, bool propagateFailures = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (Data is not { } data || !data.IsConnected())
@@ -145,7 +145,7 @@ internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
         {
             return await data.Db.KeyExistsAsync(key, Master).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (!propagateFailures && (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested))
         {
             return null;
         }
@@ -178,6 +178,8 @@ internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
 
     private static DateTimeOffset? Expiration(HashSnap snap) => snap.TtlMs < 0 ? null : snap.At.AddMilliseconds(snap.TtlMs);
 
+    private static long TtlMilliseconds(TimeSpan? life) => life is { } span ? (long)Math.Ceiling(span.TotalMilliseconds) : -1;
+
     private static DecodedHash<T> Decode(HashSnap snap, IKeyMoveHashCodec<T> codec)
     {
         try
@@ -191,7 +193,7 @@ internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
     }
 
     // A hash with no field is absent, and one above the cap is reported without being read; null when the hash is to be read.
-    private static async ValueTask<HashSnap?> CheckCapAsync(KeyMoveData data, string key, int most)
+    private static async ValueTask<HashSnap?> CheckCapAsync(KeyMoveData data, string key, int most, bool measureTtl)
     {
         var length = await data.Db.HashLengthAsync(key, Master).ConfigureAwait(false);
         if (length == 0)
@@ -199,6 +201,12 @@ internal sealed class HashReads<T>(KeyMoveHashClientParts<T> parts)
             return HashSnap.Of(ReadOutcome.Absent);
         }
 
-        return length > most ? new HashSnap(ReadOutcome.Found, null, -1, default, length, TooLarge: true) : null;
+        if (length <= most)
+        {
+            return null;
+        }
+
+        var ttl = measureTtl ? TtlMilliseconds(await data.Db.KeyTimeToLiveAsync(key, Master).ConfigureAwait(false)) : -1;
+        return new HashSnap(ReadOutcome.Found, null, ttl, default, length, TooLarge: true);
     }
 }

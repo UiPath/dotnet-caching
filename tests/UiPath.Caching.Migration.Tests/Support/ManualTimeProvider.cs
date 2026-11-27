@@ -1,7 +1,7 @@
 namespace UiPath.Caching.Migration.Tests.Support;
 
 /// <summary>A <see cref="TimeProvider"/> that moves only when a test advances it, firing the timers that fall due.</summary>
-internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
+internal sealed class ManualTimeProvider(DateTimeOffset start, Action<TimeSpan>? timerCreated = null) : TimeProvider
 {
     private readonly object _gate = new();
     private readonly List<ManualTimer> _timers = [];
@@ -55,6 +55,7 @@ internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         var timer = new ManualTimer(this, callback, state);
         timer.Change(dueTime, period);
         _scheduled.Writer.TryWrite(dueTime);
+        timerCreated?.Invoke(dueTime);
         return timer;
     }
 

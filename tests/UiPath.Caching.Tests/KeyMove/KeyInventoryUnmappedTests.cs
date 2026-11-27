@@ -92,6 +92,7 @@ public class KeyInventoryUnmappedTests(RedisContainerFixture fixture)
         };
         var ttl = Substitute.For<IDatabase>();
         ttl.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster).Returns((TimeSpan?)TimeSpan.FromMinutes(7));
+        ttl.KeyTypeAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster).Returns(RedisType.String);
         var inventory = new KeyInventory(kit.Scanner, kit.Space, kit.Kit.Store, ttl, kit.Prefix, kit.Kit.Time);
 
         var result = (await inventory.RunAsync(kit.Group, Ct))!;

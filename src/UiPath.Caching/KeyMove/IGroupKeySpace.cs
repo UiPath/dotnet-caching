@@ -12,8 +12,8 @@ internal interface IGroupKeySpace
     /// <summary>The glob patterns of one cache's keys on <paramref name="side"/>, each starting with the library prefix; empty for a cache that is not registered in the group.</summary>
     IReadOnlyList<string> PatternsOf(string group, string cacheId, MoveSide side);
 
-    /// <summary>Every registered cache of the group, managed or not, whose ownership predicate accepts <paramref name="key"/>: none, one, or several, which is an error the caller refuses when one of them is managed.</summary>
-    IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key);
+    /// <summary>The registered caches that own the key, restricted to the given Redis type when supplied.</summary>
+    IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key, KeyMoveKind? kind = null);
 
     /// <summary>False when the key's owner maps it to a destination outside the namespace or onto a reserved key, which is a defect of the registration, not a class a mover may skip.</summary>
     bool HasValidDestination(string group, MoveSide side, string cacheId, string key);
@@ -21,8 +21,11 @@ internal interface IGroupKeySpace
     /// <summary>The key maps to the other side and its class is not one the mover skips, so a pass would still move it; a live <paramref name="timeToLive"/> below the cache's minimum, going forward, is the short class the mover leaves.</summary>
     bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive);
 
-    /// <summary>The group has a cache that stores hashes; the mover does not promote them yet, so the drain check fails for the group.</summary>
-    bool HasHashCache(string group);
+    /// <summary>A cache of the group that stores hashes owns <paramref name="pattern"/>, so the mover scans it for hashes.</summary>
+    bool HoldsHashes(string group, MoveSide side, string pattern);
+
+    /// <summary>A cache of the group that stores strings, or none at all, owns <paramref name="pattern"/>, so the mover scans it for strings.</summary>
+    bool HoldsStrings(string group, MoveSide side, string pattern);
 
     /// <summary>K2 or K2N: the caller key that the cache reads from <paramref name="key"/> on <paramref name="side"/>; null when the cache does not read it.</summary>
     string? CallerKeyOf(string group, MoveSide side, string cacheId, string key);

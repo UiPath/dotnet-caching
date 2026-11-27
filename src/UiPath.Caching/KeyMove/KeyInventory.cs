@@ -34,33 +34,35 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
         return result;
     }
 
+    private static KeyMoveKind? KindOf(RedisType type) => type switch
+    {
+        RedisType.String => KeyMoveKind.String,
+        RedisType.Hash => KeyMoveKind.Hash,
+        _ => null,
+    };
+
     private async Task<InventoryResult> CountAsync(IAsyncEnumerable<string> keys, string group, MoveSide side, IReadOnlyList<string> cacheIds, long? t3, CancellationToken cancellationToken)
     {
         // Each retry starts a fresh count.
         var residue = cacheIds.ToDictionary(c => c, _ => 0L, StringComparer.Ordinal);
         var totals = new AttemptTotals(t3 is null ? null : 0);
-        var batch = new List<(string Key, string Cache)>(LifeBatch);
+        var batch = new List<string>(LifeBatch);
         await foreach (var key in keys.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (CountKey(group, side, key, residue, totals) is not { } cache)
-            {
-                continue;
-            }
-
-            batch.Add((key, cache));
+            batch.Add(key);
             if (batch.Count == LifeBatch)
             {
-                await FlushAsync(group, side, t3, totals, batch).ConfigureAwait(false);
+                await FlushAsync(group, side, t3, residue, totals, batch).ConfigureAwait(false);
             }
         }
 
-        await FlushAsync(group, side, t3, totals, batch).ConfigureAwait(false);
+        await FlushAsync(group, side, t3, residue, totals, batch).ConfigureAwait(false);
         return new InventoryResult(residue, totals.Movable, totals.Canary, totals.Ambiguous, totals.Invalid, totals.Droppable, totals.ExpectedUnmapped);
     }
 
-    private string? CountKey(string group, MoveSide side, string key, Dictionary<string, long> residue, AttemptTotals totals)
+    private string? CountKey(string group, MoveSide side, string key, KeyMoveKind kind, Dictionary<string, long> residue, AttemptTotals totals)
     {
-        var owners = space.OwnersOf(group, side, key);
+        var owners = space.OwnersOf(group, side, key, kind);
         if (owners.Count == 0)
         {
             totals.ExpectedUnmapped++;
@@ -91,7 +93,24 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
         return null;
     }
 
-    private async Task FlushAsync(string group, MoveSide side, long? t3, AttemptTotals totals, List<(string Key, string Cache)> batch)
+    private async Task FlushAsync(string group, MoveSide side, long? t3, Dictionary<string, long> residue, AttemptTotals totals, List<string> batch)
+    {
+        var types = await Task.WhenAll(batch.Select(key => database.KeyTypeAsync(connectorPrefix + key, CommandFlags.DemandMaster))).ConfigureAwait(false);
+        var owned = new List<(string Key, string Cache)>(batch.Count);
+        for (var n = 0; n < batch.Count; n++)
+        {
+            var key = batch[n];
+            if (KindOf(types[n]) is { } kind && CountKey(group, side, key, kind, residue, totals) is { } cache)
+            {
+                owned.Add((key, cache));
+            }
+        }
+
+        batch.Clear();
+        await CountValuesAsync(group, side, t3, totals, owned).ConfigureAwait(false);
+    }
+
+    private async Task CountValuesAsync(string group, MoveSide side, long? t3, AttemptTotals totals, List<(string Key, string Cache)> batch)
     {
         var now = time.GetUtcNow().ToUnixTimeMilliseconds();
         var lives = await Task.WhenAll(batch.Select(b => database.KeyTimeToLiveAsync(connectorPrefix + b.Key, CommandFlags.DemandMaster))).ConfigureAwait(false);
@@ -122,11 +141,9 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
                 totals.Canary++;
             }
         }
-
-        batch.Clear();
     }
 
-    // Only the stored length is asked for (a hash's is its field count), so a batch never holds a value; a key of another type, or one that cannot be asked, is judged as movable.
+    // The key can change type between TYPE and the length read. Keep it movable if the length cannot be verified.
     private async Task<long?> LengthOfAsync(string key, KeyMoveKind kind)
     {
         try

@@ -6,14 +6,20 @@ internal enum HashPromotionStatus
     /// <summary>The target can answer the read, or the source has no hash left to move. The target is N forward and L in reverse.</summary>
     Complete,
 
-    /// <summary>L still holds the hash after the unit: it changed under the promotion, N was gone, or the promotion did not finish.</summary>
+    /// <summary>The source still holds the hash because it changed during promotion, the target disappeared, or promotion did not finish.</summary>
     Changing,
 
-    /// <summary>L is above the field or the byte cap and was not promoted; it was dropped when the cache has an origin.</summary>
+    /// <summary>The source exceeds the field or byte cap.</summary>
     TooLarge,
+
+    /// <summary>The source expires before the mover's minimum remaining life.</summary>
+    ShortTtl,
 
     /// <summary>L cannot be read, or holds a field name the in-place format cannot map.</summary>
     Unreadable,
+
+    /// <summary>The destination holds a value of a different Redis type.</summary>
+    WrongDestinationType,
 
     /// <summary>The promotion was abandoned and the hash served uncached: a slow capture, an exhausted budget, an expiring source, a refused fence or a closed gate.</summary>
     NotPromoted,

@@ -271,6 +271,6 @@ internal sealed class MoverKit : IAsyncDisposable
             owns is null ? null : k => k.StartsWith(_lPrefix, StringComparison.Ordinal) && owns(k[_lPrefix.Length..]),
             owns is null ? null : k => ParseNative(k) is { } caller && owns(caller),
             min,
-            hash);
+            hash ? KeyMoveKind.Hash : KeyMoveKind.String);
     }
 }

@@ -83,12 +83,21 @@ public class KeyInventoryHashTests(RedisContainerFixture fixture)
         await DeleteAsync(kit, [key]);
     }
 
-    [Fact]
-    public async Task A_key_of_another_type_in_a_hash_cache_is_judged_as_movable_and_a_cache_with_no_classifier_asks_for_no_length()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Inventory_ignores_wrong_types_and_only_classifies_lengths_when_configured(bool list)
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
         kit.Space.Kinds["b"] = KeyMoveKind.Hash;
         var wrong = await kit.SetAsync(MoveSide.Legacy, "b", "mv-string", value: "x");
+        if (list)
+        {
+            await kit.Kit.Db.KeyDeleteAsync(kit.Prefix + wrong);
+            await kit.Kit.Db.ListRightPushAsync(kit.Prefix + wrong, "item");
+        }
+
+        var hash = await SetHashAsync(kit, "b", "mv-hash", Cap);
         var calls = new ConcurrentQueue<string>();
         var spy = InterceptingProxy.Wrap(kit.Kit.Db, (method, _) =>
         {
@@ -101,9 +110,11 @@ public class KeyInventoryHashTests(RedisContainerFixture fixture)
         var unjudged = (await new KeyInventory(kit.Scanner, kit.Space, kit.Kit.Store, spy, kit.Prefix, kit.Kit.Time).RunAsync(kit.Group, Ct))!;
 
         judged.Movable.Should().Be(1);
+        judged.Residue["b"].Should().Be(1);
         unjudged.Movable.Should().Be(1);
+        unjudged.Residue["b"].Should().Be(1);
         calls.Should().NotContain(c => c.StartsWith("HashLength", StringComparison.Ordinal) || c.StartsWith("StringLength", StringComparison.Ordinal));
-        _ = wrong;
+        await DeleteAsync(kit, [wrong, hash]);
     }
 
     private static async Task<string> SetHashAsync(DataOpsKit kit, string cache, string name, int fields)

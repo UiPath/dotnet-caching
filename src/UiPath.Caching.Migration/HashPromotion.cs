@@ -1,3 +1,4 @@
+using System.Text;
 using StackExchange.Redis;
 using UiPath.Caching.KeyMove;
 
@@ -18,12 +19,90 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
     public ValueTask<HashPromotionResult<T>> PromoteAsync(string key, HashPromotionFlavour flavour, CancellationToken cancellationToken = default) =>
         PromoteAsync(key, flavour, null, cancellationToken);
 
-    public async ValueTask<HashPromotionResult<T>> PromoteAsync(string key, HashPromotionFlavour flavour, string[]? fields, CancellationToken cancellationToken)
+    public ValueTask<HashPromotionResult<T>> PromoteAsync(string key, HashPromotionFlavour flavour, string[]? fields, CancellationToken cancellationToken) =>
+        RunAsync(key, flavour, fields, null, cancellationToken);
+
+    public ValueTask<HashPromotionResult<T>> PromoteForMoverAsync(string key, MoveRequest move, CancellationToken cancellationToken) =>
+        RunAsync(key, HashPromotionFlavour.Ensure, null, move, cancellationToken);
+
+    public async ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken)
+    {
+        var snap = await reads.SnapAsync(parts.InPlaceKey(key), replica: false, SchedulePointStep.ReadSource, cancellationToken, parts.MaxHashFields, measureCappedTtl: true).ConfigureAwait(false);
+        var bytes = snap.Entries?.Sum(field => (long)field.Name.GetByteCount() + field.Value.GetByteCount()) ?? 0;
+        if (ProbeSkip(snap, minTtl) is { } reason)
+        {
+            return new DryRunProbe(reason, bytes, null);
+        }
+
+        var exists = await reads.ExistsAsync(parts.NativeKey(key), SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false);
+        if (exists != false)
+        {
+            return new DryRunProbe(exists is null ? DryRunClasses.Unavailable : DryRunClasses.Duplicate, bytes, null);
+        }
+
+        return decode ? ProbeDecoded(key, snap, bytes) : new DryRunProbe(DryRunClasses.Movable, bytes, null);
+    }
+
+    internal static bool IsMemoryRefusal(RedisServerException ex) => ex.Message.Contains("OOM ", StringComparison.Ordinal);
+
+    private static bool IsMoverFailure(Exception ex, MoveRequest? move) =>
+        move is not null && (ex is OwnershipLostException or TimeoutException || ex is RedisServerException server && IsMemoryRefusal(server));
+
+    private static HashPromotionResult<T> Done(HashRead<T> read) => HashPromotionResult<T>.Of(HashPromotionStatus.Complete, read);
+
+    private static HashPromotionResult<T> Done(ReadOutcome kind) => HashPromotionResult<T>.Of(HashPromotionStatus.Complete, kind);
+
+    private static bool IsShort(HashSnap snap, TimeSpan minTtl) => snap.TtlMs >= 0 && snap.TtlMs < minTtl.TotalMilliseconds;
+
+    private static string? ProbeSkip(HashSnap snap, TimeSpan minTtl) => snap.Kind switch
+    {
+        ReadOutcome.Found when IsShort(snap, minTtl) => DryRunClasses.ShortTtl,
+        ReadOutcome.Found when snap.TooLarge => DryRunClasses.TooLarge,
+        ReadOutcome.Found => null,
+        ReadOutcome.Absent => DryRunClasses.Absent,
+        ReadOutcome.Unreadable => DryRunClasses.Unreadable,
+        _ => DryRunClasses.Unavailable,
+    };
+
+    private static long StagedBytes(IReadOnlyList<KeyValuePair<string, byte[]>> staged) =>
+        staged.Sum(field => Encoding.UTF8.GetByteCount(field.Key) + field.Value.LongLength);
+
+    private DryRunProbe ProbeDecoded(string key, HashSnap snap, long bytes)
+    {
+        var decoded = DecodeSnap(snap);
+        var reason = decoded.Class switch
+        {
+            DecodeClass.Unreadable => DryRunClasses.Unreadable,
+            DecodeClass.TooLarge => DryRunClasses.TooLarge,
+            _ when parts.Mappable?.Invoke(key) == false => DryRunClasses.Unmappable,
+            _ => null,
+        };
+        if (reason is not null)
+        {
+            return new DryRunProbe(reason, bytes, null);
+        }
+
+        var encoded = TryEncodeStaged(decoded, FieldsForDestination(decoded), out var staged, out var lease);
+        using (lease)
+        {
+            if (!encoded)
+            {
+                return new DryRunProbe(DryRunClasses.Unreadable, bytes, null);
+            }
+
+            return staged.Count == 0
+                ? new DryRunProbe(DryRunClasses.NullNotCached, bytes, null)
+                : new DryRunProbe(DryRunClasses.Movable, bytes, StagedBytes(staged));
+        }
+    }
+
+    private async ValueTask<HashPromotionResult<T>> RunAsync(string key, HashPromotionFlavour flavour, string[]? fields, MoveRequest? move, CancellationToken cancellationToken)
     {
         try
         {
             var plan = KeyMovePlanning.PlanFor(parts.Plane, parts.Group, parts.CacheId, write: false);
-            if (reverse ? !KeyMovePlanning.PromotesReverse(plan) : plan.Mode is not (KeyMoveMode.S3 or KeyMoveMode.S4))
+            var promotes = reverse ? KeyMovePlanning.PromotesReverse(plan) : plan.Mode is KeyMoveMode.S3 or KeyMoveMode.S4;
+            if (!promotes || (move is not null && plan.Act?.Id != move.Identity))
             {
                 return HashPromotionResult<T>.Of(HashPromotionStatus.Replan);
             }
@@ -32,7 +111,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
             var attempt = 0;
             while (true)
             {
-                var step = await PromoteOnceAsync(key, promotionFlavour, plan, attempt, fields, cancellationToken).ConfigureAwait(false);
+                var step = await PromoteOnceAsync(key, promotionFlavour, plan, attempt, fields, move, cancellationToken).ConfigureAwait(false);
                 if (step.Status != HashPromotionStatus.Restart)
                 {
                     return step;
@@ -41,22 +120,18 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
                 attempt++;
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException && !IsMoverFailure(ex, move))
         {
             return HashPromotionResult<T>.Of(HashPromotionStatus.Unavailable, ReadOutcome.Unavailable);
         }
     }
-
-    private static HashPromotionResult<T> Done(HashRead<T> read) => HashPromotionResult<T>.Of(HashPromotionStatus.Complete, read);
-
-    private static HashPromotionResult<T> Done(ReadOutcome kind) => HashPromotionResult<T>.Of(HashPromotionStatus.Complete, kind);
 
     // N is the authority in reverse, so a reverse run never drops it.
     private bool DropAllowed(KeyMovePlan plan) => !reverse && plan.Mode is KeyMoveMode.S3 or KeyMoveMode.S4 && KeyMoveValueClasses.Droppable(DecodeClass.TooLarge, parts.NoOrigin, false);
 
     private void Count(string counter) => RouterTelemetry.CountMove(counter, parts.CacheId, parts.Group);
 
-    private async ValueTask<HashPromotionResult<T>> PromoteOnceAsync(string key, HashPromotionFlavour flavour, KeyMovePlan plan, int attempt, string[]? fields, CancellationToken cancellationToken)
+    private async ValueTask<HashPromotionResult<T>> PromoteOnceAsync(string key, HashPromotionFlavour flavour, KeyMovePlan plan, int attempt, string[]? fields, MoveRequest? move, CancellationToken cancellationToken)
     {
         var l = parts.InPlaceKey(key);
         var n = parts.NativeKey(key);
@@ -110,7 +185,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
                 return await UnpromotedAsync(key, ensure, fields, cancellationToken).ConfigureAwait(false);
             }
 
-            using var pass = NewPass(key, flavour, plan, attempt, unit, data, fields);
+            using var pass = NewPass(key, ensure, plan, attempt, unit, data, (fields, move));
             return await RunUnitAsync(pass, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -150,7 +225,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         return await ConfirmPublishedAsync(pass, cancellationToken).ConfigureAwait(false);
     }
 
-    private PromotionPass NewPass(string key, HashPromotionFlavour flavour, KeyMovePlan plan, int attempt, AdmittedUnit unit, KeyMoveData data, string[]? fields)
+    private PromotionPass NewPass(string key, bool ensure, KeyMovePlan plan, int attempt, AdmittedUnit unit, KeyMoveData data, (string[]? Fields, MoveRequest? Move) context)
     {
         var l = parts.InPlaceKey(key);
         var n = parts.NativeKey(key);
@@ -158,7 +233,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         var fence = reverse ? data.Names.ReverseFence(target) : data.Names.ForwardFence(target);
         var keys = new FencedKeys(fence, target, data.Names.ControlFor(parts.Group, target));
         var control = data.Names.ControlFor(parts.Group, source);
-        return new PromotionPass(key, source, target, plan, flavour == HashPromotionFlavour.Ensure, attempt, unit, data, keys, control) { Fields = fields };
+        return new PromotionPass(key, source, target, plan, ensure, attempt, unit, data, keys, control) { Fields = context.Fields, Move = context.Move };
     }
 
     // The capture, never in parallel with the snapshot of L. The bound counts from before CAP is sent, so a delayed CAP reply counts.
@@ -168,8 +243,9 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         pass.Events = data.ConnectionEvents();
         pass.Started = parts.Clock.GetTimestamp();
         await reads.At(SchedulePointStep.Capture).ConfigureAwait(false);
+        await pass.RequireOwnershipAsync(cancellationToken).ConfigureAwait(false);
         var marker = parts.NoOrigin && !reverse ? data.Names.MarkerField(pass.Source) : null;
-        var capture = await data.Scripts.CaptureAsync(pass.Keys, unit.Id, parts.CacheId, MoveScripts.NewNonce(), (long)Options.FenceTtl.TotalMilliseconds, marker).ConfigureAwait(false);
+        var capture = await data.Scripts.CaptureAsync(pass.Keys, unit.Id, parts.CacheId, MoveScripts.NewNonce(), (long)Options.FenceTtl.TotalMilliseconds, marker, pass.StillOwned).ConfigureAwait(false);
         pass.Capture = capture;
         if (capture.Code == MoveScripts.IdentityMismatch)
         {
@@ -195,7 +271,14 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
     // L, after the capture. A promotion does not read a hash above the field cap; a cache with no origin then serves it with an uncapped union read, uncached.
     private async ValueTask<HashPromotionResult<T>?> ReadSourceAsync(PromotionPass pass, CancellationToken cancellationToken)
     {
-        var snap = await reads.SnapAsync(pass.Source, replica: false, SchedulePointStep.ReadSource, cancellationToken, parts.MaxHashFields).ConfigureAwait(false);
+        var observe = pass.Move?.ObserveSourceTtl;
+        var requestedAt = observe is null ? 0 : parts.Clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var snap = await reads.SnapAsync(pass.Source, replica: false, SchedulePointStep.ReadSource, cancellationToken, parts.MaxHashFields, propagateFailures: pass.Move is not null, measureCappedTtl: pass.Move is not null).ConfigureAwait(false);
+        if (snap is { Kind: ReadOutcome.Found, TtlMs: >= 0 })
+        {
+            observe?.Invoke(snap.TtlMs, requestedAt);
+        }
+
         pass.Snap = snap;
         pass.Replied = parts.Clock.GetTimestamp();
         if (snap.Kind == ReadOutcome.Absent)
@@ -211,6 +294,11 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         if (snap.Kind != ReadOutcome.Found)
         {
             return HashPromotionResult<T>.Of(HashPromotionStatus.Unavailable, snap.Kind);
+        }
+
+        if (pass.Move is { } move && IsShort(snap, move.MinTtl))
+        {
+            return HashPromotionResult<T>.Of(HashPromotionStatus.ShortTtl);
         }
 
         return snap.TooLarge ? await OverCapAsync(pass, null, cancellationToken).ConfigureAwait(false) : null;
@@ -271,7 +359,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
     private async ValueTask<HashPromotionResult<T>?> StageFieldsAsync(PromotionPass pass, CancellationToken cancellationToken)
     {
         var decoded = pass.Decoded;
-        var fields = new Dictionary<string, T?>(decoded.Fields.Where(f => f.Value is not null || TargetCodec.CachesNulls), StringComparer.Ordinal);
+        var fields = FieldsForDestination(decoded);
         pass.Served = fields.Count == 0 ? HashRead<T>.Of(ReadOutcome.Absent) : new HashRead<T>(ReadOutcome.Found, new Dictionary<string, T?>(decoded.Fields, StringComparer.Ordinal), pass.Expiration, decoded.Metadata);
         if (!TryEncodeStaged(decoded, fields, out var staged, out pass.FormatLease))
         {
@@ -287,12 +375,16 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
                 return HashPromotionResult<T>.Of(HashPromotionStatus.NotPromoted, pass.Uncached);
             }
 
-            await DropWholeAsync(pass.Source, pass.Control, pass.Data, pass.Unit.Id, pass.Snap.Entries!).ConfigureAwait(false);
-            return await AbsentSourceAsync(pass, cancellationToken).ConfigureAwait(false);
+            return await CompareDeleteAsync(pass, cancellationToken, requireDelete: true).ConfigureAwait(false)
+                ? await AbsentSourceAsync(pass, cancellationToken).ConfigureAwait(false)
+                : HashPromotionResult<T>.Of(HashPromotionStatus.Changing, pass.Uncached);
         }
 
         return parts.Mappable?.Invoke(pass.Key) == false ? HashPromotionResult<T>.Of(HashPromotionStatus.Unreadable, pass.Served) : null;
     }
+
+    private Dictionary<string, T?> FieldsForDestination(DecodedHash<T> decoded) =>
+        new(decoded.Fields.Where(f => f.Value is not null || TargetCodec.CachesNulls), StringComparer.Ordinal);
 
     private bool TryEncodeStaged(DecodedHash<T> decoded, Dictionary<string, T?> fields, out IReadOnlyList<KeyValuePair<string, byte[]>> staged, out WriteLease lease)
     {
@@ -332,16 +424,21 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
 
     private async ValueTask<HashPromotionResult<T>?> PublishAsync(PromotionPass pass, CancellationToken cancellationToken)
     {
-        if (await PublishStagedAsync(pass).ConfigureAwait(false) is not { } published)
+        if (await PublishStagedAsync(pass, cancellationToken).ConfigureAwait(false) is not { } published)
         {
             return HashPromotionResult<T>.Of(HashPromotionStatus.NotPromoted, pass.Uncached);
+        }
+
+        if (published == MoveScripts.Published)
+        {
+            pass.Move?.Published(pass.Staged);
         }
 
         return await JudgePublishedAsync(pass, published, cancellationToken).ConfigureAwait(false);
     }
 
     // The fields are staged in N's slot and renamed over N as they are, so the expiry is the source's px and no version is minted. Null when the staging or the publish failed.
-    private async ValueTask<long?> PublishStagedAsync(PromotionPass pass)
+    private async ValueTask<long?> PublishStagedAsync(PromotionPass pass, CancellationToken cancellationToken)
     {
         var (data, snap, capture) = (pass.Data, pass.Snap, pass.Capture);
         var staging = reverse ? data.Names.ReverseStaging(pass.Target, MoveScripts.NewNonce()) : data.Names.ForwardStaging(pass.Target, MoveScripts.NewNonce());
@@ -350,18 +447,25 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         try
         {
             await reads.At(SchedulePointStep.StageHash).ConfigureAwait(false);
-            if (!await HashStaging.WriteAsync(data, staging, pass.Staged, Options.FenceTtl).ConfigureAwait(false))
+            if (!await HashStaging.WriteAsync(data, staging, pass.Staged, Options.FenceTtl, pass.Move?.Ownership, cancellationToken).ConfigureAwait(false))
             {
                 await HashStaging.DeleteAsync(data, staging).ConfigureAwait(false);
                 return null;
             }
 
             await reads.At(SchedulePointStep.Publish).ConfigureAwait(false);
-            return await data.Scripts.PublishHashAsync(pass.Keys, staging, pass.Unit.Id, publication).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            await pass.RequireOwnershipAsync(cancellationToken).ConfigureAwait(false);
+            return await data.Scripts.PublishHashAsync(pass.Keys, staging, pass.Unit.Id, publication, pass.StillOwned).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             await HashStaging.DeleteAsync(data, staging).ConfigureAwait(false);
+            if (ex is OperationCanceledException || IsMoverFailure(ex, pass.Move))
+            {
+                throw;
+            }
+
             return null;
         }
     }
@@ -394,48 +498,30 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         }
     }
 
-    // The source stays as the copy unless the target is there; the delete is a compare of every field as read.
     private async ValueTask<HashPromotionResult<T>> ConfirmPublishedAsync(PromotionPass pass, CancellationToken cancellationToken)
     {
-        var gone = false;
-        if (await reads.ExistsAsync(pass.Target, SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false) == true)
+        if (pass.Move is not null)
         {
-            gone = await CompareDeleteAsync(pass.Source, pass.Control, pass.Data, pass.Unit.Id, pass.Snap.Entries!, cancellationToken).ConfigureAwait(false);
+            return await ConfirmMoverDestinationAsync(pass, pass.Served, cancellationToken).ConfigureAwait(false);
         }
 
-        // No event.
+        var found = await reads.ExistsAsync(pass.Target, SchedulePointStep.ConfirmDestination, cancellationToken).ConfigureAwait(false);
+        var gone = found == true && await CompareDeleteAsync(pass, cancellationToken).ConfigureAwait(false);
         return HashPromotionResult<T>.Of(gone ? HashPromotionStatus.Complete : HashPromotionStatus.Changing, pass.Served);
     }
 
-    // The compare against every field as read: a hash that changed since stays; the result tells whether L is gone, which a compare that lost to a delete also is.
-    private async ValueTask<bool> CompareDeleteAsync(string l, RedisKey control, KeyMoveData data, string unitId, HashEntry[] entries, CancellationToken cancellationToken)
+    private async ValueTask<bool> CompareDeleteAsync(PromotionPass pass, CancellationToken cancellationToken, bool requireDelete = false)
     {
         await reads.At(SchedulePointStep.CompareDelete).ConfigureAwait(false);
+        await pass.RequireOwnershipAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (await data.Scripts.CompareDeleteHashAsync(l, control, unitId, entries).ConfigureAwait(false) == 1)
-            {
-                return true;
-            }
-
-            return await reads.ExistsAsync(l, SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false) == false;
+            var deleted = await pass.Data.Scripts.CompareDeleteHashAsync(pass.Source, pass.Control, pass.Unit.Id, pass.Snap.Entries!, pass.StillOwned).ConfigureAwait(false);
+            return deleted == 1 || (!requireDelete && await reads.ExistsAsync(pass.Source, SchedulePointStep.ProbeSource, cancellationToken, propagateFailures: pass.Move is not null).ConfigureAwait(false) == false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException && !IsMoverFailure(ex, pass.Move))
         {
             return false;
-        }
-    }
-
-    private async ValueTask DropWholeAsync(string l, RedisKey control, KeyMoveData data, string unitId, HashEntry[] entries)
-    {
-        await reads.At(SchedulePointStep.CompareDelete).ConfigureAwait(false);
-        try
-        {
-            _ = await data.Scripts.CompareDeleteHashAsync(l, control, unitId, entries).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException)
-        {
-            _ = ex;
         }
     }
 
@@ -474,6 +560,11 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
 
     private async ValueTask<HashPromotionResult<T>> ExistingAsync(PromotionPass pass, HashRead<T>? uncached, CancellationToken cancellationToken)
     {
+        if (pass.Move is not null)
+        {
+            return await ConfirmMoverDestinationAsync(pass, HashRead<T>.Of(ReadOutcome.Absent), cancellationToken).ConfigureAwait(false);
+        }
+
         if (pass.Ensure)
         {
             return await reads.ExistsAsync(pass.Source, SchedulePointStep.ProbeSource, cancellationToken).ConfigureAwait(false) switch
@@ -495,8 +586,29 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         return Done(existing.Kind == ReadOutcome.Unreadable ? HashReads<T>.RecoverFields(snap, parts.Native, pass.Fields) : existing);
     }
 
+    private async ValueTask<HashPromotionResult<T>> ConfirmMoverDestinationAsync(PromotionPass pass, HashRead<T> served, CancellationToken cancellationToken)
+    {
+        var source = pass.Snap.Entries is null ? await ReadSourceAsync(pass, cancellationToken).ConfigureAwait(false) : null;
+        cancellationToken.ThrowIfCancellationRequested();
+        await reads.At(SchedulePointStep.ConfirmDestination).ConfigureAwait(false);
+        var type = await pass.Data.Db.KeyTypeAsync(pass.Target, CommandFlags.DemandMaster).ConfigureAwait(false);
+        if (type is not (RedisType.None or RedisType.Hash))
+        {
+            return HashPromotionResult<T>.Of(HashPromotionStatus.WrongDestinationType);
+        }
+
+        if (source is { } unread)
+        {
+            return unread;
+        }
+
+        var deleted = type == RedisType.Hash && await CompareDeleteAsync(pass, cancellationToken).ConfigureAwait(false);
+        return HashPromotionResult<T>.Of(deleted ? HashPromotionStatus.Complete : HashPromotionStatus.Changing, served);
+    }
+
     private async ValueTask<HashPromotionResult<T>> HelpAsync(PromotionPass pass, RedisValue marker, CancellationToken cancellationToken)
     {
+        await pass.RequireOwnershipAsync(cancellationToken).ConfigureAwait(false);
         switch (await helper.OnSupersededAsync(new SupersededKey(parts.Group, parts.CacheId, pass.Key, marker, pass.Unit.Id), cancellationToken).ConfigureAwait(false))
         {
             case SupersessionAction.Retry:
@@ -520,7 +632,7 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         return HashPromotionResult<T>.Of(HashPromotionStatus.NotPromoted, union.Kind == ReadOutcome.Found ? union with { Uncached = true } : union);
     }
 
-    // The miss path of steps 5 and 7: N is read on the master once more, and only an N that is absent again sets the hint.
+    // Only a second miss on the destination primary sets the hint.
     private async ValueTask<HashRead<T>> MissAsync(string key, string n, string identity, string[]? fields, CancellationToken cancellationToken)
     {
         var again = HashReads<T>.Interpret(await reads.SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), parts.Native, authoritativeNull: true, fields: fields);
@@ -530,6 +642,27 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         }
 
         return again;
+    }
+
+    internal sealed class MoveRequest(string identity, TimeSpan minTtl, IMoveOwnership ownership, Action<long, long>? observeSourceTtl = null)
+    {
+        public string Identity => identity;
+
+        public TimeSpan MinTtl => minTtl;
+
+        public IMoveOwnership Ownership => ownership;
+
+        /// <summary>Receives the source TTL and its request time in Unix milliseconds.</summary>
+        public Action<long, long>? ObserveSourceTtl => observeSourceTtl;
+
+        public long Bytes { get; private set; }
+
+        public void Published(IReadOnlyList<KeyValuePair<string, byte[]>> staged)
+        {
+            var bytes = StagedBytes(staged);
+            Bytes += bytes;
+            ownership.Published(bytes);
+        }
     }
 
     private sealed class PromotionPass(string key, string source, string target, KeyMovePlan plan, bool ensure, int attempt, AdmittedUnit unit, KeyMoveData data, FencedKeys keys, RedisKey control) : IDisposable
@@ -551,6 +684,10 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         public int Attempt => attempt;
 
         public string[]? Fields { get; init; }
+
+        public MoveRequest? Move { get; init; }
+
+        public Func<bool>? StillOwned => Move is { } move ? KeyPromotion<T>.StillHeld(move.Ownership) : null;
 
         public AdmittedUnit Unit => unit;
 
@@ -581,5 +718,13 @@ internal sealed class HashPromotion<T>(KeyMoveHashClientParts<T> parts, HashRead
         public HashRead<T> Uncached => Served with { Uncached = true };
 
         public void Dispose() => FormatLease.Dispose();
+
+        public async ValueTask RequireOwnershipAsync(CancellationToken cancellationToken)
+        {
+            if (Move is { } move && !await move.Ownership.HoldsAsync(cancellationToken).ConfigureAwait(false))
+            {
+                throw new OwnershipLostException();
+            }
+        }
     }
 }

@@ -25,7 +25,7 @@ internal sealed class FakeKeySpace(string nativePrefix, string legacyPrefix) : I
 
     public IReadOnlyList<string> PatternsOf(string group, string cacheId, MoveSide side) => [$"{PrefixOf(side)}{cacheId}:*"];
 
-    public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key)
+    public IReadOnlyList<string> OwnersOf(string group, MoveSide side, string key, KeyMoveKind? kind = null)
     {
         OnOwnerOf?.Invoke(key);
         if (OwnersByKey.TryGetValue(key, out var owners))
@@ -41,18 +41,26 @@ internal sealed class FakeKeySpace(string nativePrefix, string legacyPrefix) : I
 
         var rest = key[prefix.Length..];
         var cut = rest.IndexOf(':', StringComparison.Ordinal);
-        return cut < 0 ? [] : [rest[..cut]];
+        if (cut < 0)
+        {
+            return [];
+        }
+
+        var cache = rest[..cut];
+        return kind is null || KindOf(group, cache) == kind ? [cache] : [];
     }
 
     public bool HasValidDestination(string group, MoveSide side, string cacheId, string key) => InvalidDestination?.Invoke(key) != true;
 
     public bool IsMovable(string group, MoveSide side, string cacheId, string key, TimeSpan? timeToLive) => Movable(key);
 
+    public bool HoldsHashes(string group, MoveSide side, string pattern) => Kinds.ContainsValue(KeyMoveKind.Hash);
+
+    public bool HoldsStrings(string group, MoveSide side, string pattern) => true;
+
     public KeyMoveKind KindOf(string group, string cacheId) => Kinds.TryGetValue(cacheId, out var kind) ? kind : KeyMoveKind.String;
 
     public TimeSpan? MaxSourceTtl(string group, string cacheId) => MaxTtl.TryGetValue(cacheId, out var ttl) ? ttl : null;
-
-    public bool HasHashCache(string group) => false;
 
     public string? CallerKeyOf(string group, MoveSide side, string cacheId, string key) => null;
 

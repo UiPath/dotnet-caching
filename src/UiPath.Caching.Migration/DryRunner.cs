@@ -49,7 +49,9 @@ internal sealed class DryRunner
     {
         var data = await ConnectedDataAsync(cancellationToken).ConfigureAwait(false);
         var units = await _units.ListAsync(cancellationToken).ConfigureAwait(false);
-        var patterns = _space.Patterns(_group, _side);
+        var patterns = _side == MoveSide.Legacy
+            ? MoveScan.For(_space, _group).Select(scan => new ScanPattern(scan.Pattern, scan.Kind, scan.RedisType)).ToArray()
+            : _space.Patterns(_group, _side).Select(pattern => new ScanPattern(pattern, null, null)).ToArray();
         var run = new Run();
         foreach (var unit in units)
         {
@@ -82,7 +84,7 @@ internal sealed class DryRunner
         return true;
     }
 
-    private async Task ScanUnitAsync(ScanUnit unit, IServer server, KeyMoveData data, IReadOnlyList<string> patterns, Run run, CancellationToken cancellationToken)
+    private async Task ScanUnitAsync(ScanUnit unit, IServer server, KeyMoveData data, IReadOnlyList<ScanPattern> patterns, Run run, CancellationToken cancellationToken)
     {
         for (var index = 0; index < patterns.Count; index++)
         {
@@ -103,20 +105,20 @@ internal sealed class DryRunner
         }
     }
 
-    private async Task ScanPatternAsync(ScanUnit unit, IServer server, KeyMoveData data, IReadOnlyList<string> patterns, int index, Run run, CancellationToken cancellationToken)
+    private async Task ScanPatternAsync(ScanUnit unit, IServer server, KeyMoveData data, IReadOnlyList<ScanPattern> patterns, int index, Run run, CancellationToken cancellationToken)
     {
         var pattern = patterns[index];
-        var earlier = patterns.Take(index).Where(p => GlobPatterns.MayOverlap(p, pattern)).ToArray();
+        var earlier = patterns.Take(index).Where(p => p.Kind == pattern.Kind && GlobPatterns.MayOverlap(p.Glob, pattern.Glob)).ToArray();
         var cursor = "0";
         do
         {
             await WaitWhilePausedAsync(unit, cancellationToken).ConfigureAwait(false);
             var reply = await ScanAsync(server, data, cursor, pattern, cancellationToken).ConfigureAwait(false);
             var keys = ReadScanReply(reply, out cursor);
-            foreach (var key in keys.Where(key => !earlier.Any(p => GlobPatterns.Matches(p, key))))
+            foreach (var key in keys.Where(key => !earlier.Any(p => GlobPatterns.Matches(p.Glob, key))))
             {
                 run.Scanned++;
-                await InventoryKeyAsync(unit, key, run, cancellationToken).ConfigureAwait(false);
+                await InventoryKeyAsync(unit, key, pattern.Kind, run, cancellationToken).ConfigureAwait(false);
             }
 
             if (cursor != "0" || index + 1 < patterns.Count)
@@ -127,8 +129,14 @@ internal sealed class DryRunner
         while (cursor != "0");
     }
 
-    private Task<RedisResult> ScanAsync(IServer server, KeyMoveData data, string cursor, string pattern, CancellationToken cancellationToken) =>
-        server.ExecuteAsync(data.Db.Database, "SCAN", [cursor, "MATCH", MasterScanner.EscapeGlob(_connectorPrefix) + pattern, "COUNT", _moverOptions.ScanCount]).WaitAsync(cancellationToken);
+    private Task<RedisResult> ScanAsync(IServer server, KeyMoveData data, string cursor, ScanPattern pattern, CancellationToken cancellationToken)
+    {
+        var glob = MasterScanner.EscapeGlob(_connectorPrefix) + pattern.Glob;
+        object[] args = pattern.RedisType is { } type
+            ? [cursor, "MATCH", glob, "COUNT", _moverOptions.ScanCount, "TYPE", type]
+            : [cursor, "MATCH", glob, "COUNT", _moverOptions.ScanCount];
+        return server.ExecuteAsync(data.Db.Database, "SCAN", args).WaitAsync(cancellationToken);
+    }
 
     // The keys of one SCAN reply with the connector prefix taken off; a key without the prefix is not the mover's.
     private List<string> ReadScanReply(RedisResult reply, out string cursor)
@@ -147,10 +155,11 @@ internal sealed class DryRunner
         return keys;
     }
 
-    private async Task InventoryKeyAsync(ScanUnit unit, string key, Run run, CancellationToken cancellationToken)
+    private async Task InventoryKeyAsync(ScanUnit unit, string key, KeyMoveKind? kind, Run run, CancellationToken cancellationToken)
     {
         await WaitWhilePausedAsync(unit, cancellationToken).ConfigureAwait(false);
-        var owners = _space.OwnersOf(_group, _side, key);
+        var owners = _space.OwnersOf(_group, _side, key, kind);
+
         if (CountUnowned(owners, run))
         {
             return;
@@ -158,7 +167,7 @@ internal sealed class DryRunner
 
         var cacheId = owners[0];
         var inventory = run.Of(cacheId);
-        if (_space.KindOf(_group, cacheId) == KeyMoveKind.Hash)
+        if (_space.KindOf(_group, cacheId) == KeyMoveKind.Hash && (_side == MoveSide.Native || !_targets.ContainsKey(cacheId)))
         {
             inventory.Count(DryRunClasses.Hash);
         }
@@ -213,6 +222,8 @@ internal sealed class DryRunner
             await Task.Delay(_moverOptions.PollInterval, _time, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    private readonly record struct ScanPattern(string Glob, KeyMoveKind? Kind, string? RedisType);
 
     private sealed class Run
     {

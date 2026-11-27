@@ -167,20 +167,25 @@ for i in "${!apps[@]}"; do
     fi
     if "$coverage"; then options+=(--coverage --coverage-output-format xml --coverage-output coverage.xml --coverage-settings "$PWD/eng/coverage.settings.xml"); fi
     # dotnet test starts the runner on the testing platform, which owns the trx, coverage and class filter.
+    # The hang dump fires before the outer timeout, and its log names the tests still running.
     exec timeout 10m dotnet test --project "${projects[i]}" --framework "${frameworks[i]}" -c Release --no-build \
       --filter-class "${classes[@]}" \
-      --results-directory "$results/${names[i]}" --report-xunit-trx --output Detailed "${options[@]}"
+      --results-directory "$results/${names[i]}" --report-xunit-trx --output Detailed \
+      --hangdump --hangdump-timeout 9m --hangdump-type Mini "${options[@]}"
   ) > "$results/${names[i]}/output.log" 2>&1 &
   pids+=("$!")
 done
 
 status=0
+failed=()
 for i in "${!pids[@]}"; do
   if wait "${pids[i]}"; then
     echo "Passed: ${names[i]} at $((SECONDS - started))s"
   else
-    echo "Failed: ${names[i]} at $((SECONDS - started))s" >&2
+    code=$?
+    echo "Failed: ${names[i]} at $((SECONDS - started))s with exit code $code" >&2
     cat "$results/${names[i]}/output.log"
+    failed+=("$i:$code")
     status=1
   fi
   if "$coverage" && [[ ! -s "$results/${names[i]}/coverage.xml" ]]; then
@@ -189,4 +194,20 @@ for i in "${!pids[@]}"; do
   fi
 done
 pids=()
+
+# The full logs above are long, so close with what failed in each shard.
+if ((${#failed[@]})); then
+  echo "Failure summary:"
+  for entry in "${failed[@]}"; do
+    i=${entry%%:*} code=${entry#*:}
+    echo "${names[i]} (exit code $code):"
+    if ((code == 124)); then echo "  The shard ran past 10 minutes and was stopped."; fi
+    sed -E 's/\x1b\[[0-9;]*m//g' "$results/${names[i]}/output.log" | grep -E '^failed ' | sed 's/^/  /' || true
+    for hang in "$results/${names[i]}"/*_hang.log; do
+      [[ -e "$hang" ]] || continue
+      echo "  Tests still running when the hang dump was taken:"
+      sed 's/^/    /' "$hang"
+    done
+  done
+fi
 exit "$status"

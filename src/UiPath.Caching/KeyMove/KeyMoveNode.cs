@@ -237,7 +237,7 @@ internal sealed class KeyMoveNode
             new GroupRemoval(store, stateScripts, controlScripts, names, _setup.DropClaim),
             control,
             units,
-            new MoverPasses(units, control, names, store.ReadAsync, _setup.KeySpace.HasHashCache, _ambiguity.Raise));
+            new MoverPasses(units, control, names, _setup.KeySpace, store.ReadAsync));
     }
 
     private void StartDriver(Wiring wiring, string[] names, CancellationToken token)

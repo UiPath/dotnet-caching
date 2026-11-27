@@ -9,7 +9,6 @@ namespace UiPath.Caching.KeyMove;
 /// <param name="ParseNative">Maps the native key to the caller key or returns null if the cache does not own it.</param>
 /// <param name="OwnsInPlace">The ownership predicate for in-place keys; null accepts a key that <paramref name="ParseInPlace"/> reads.</param>
 /// <param name="OwnsNative">The ownership predicate for native keys; null accepts a key that <paramref name="ParseNative"/> reads.</param>
-/// <param name="Hash">The cache stores hashes. The mover has no hash promotion yet, so the drain check never passes for a group with such a cache (<see cref="MoverPasses.NoHashPromotion"/>).</param>
 /// <param name="MoveMinTtl">The cache's own minimum remaining life for the mover; null follows the group's, which defaults to <see cref="IGroupKeySpace.DefaultMoveMinTtl"/>.</param>
 /// <param name="Kind">What the cache stores under each key.</param>
 internal sealed record KeyMoveCache(
@@ -28,7 +27,6 @@ internal sealed record KeyMoveCache(
     Func<string, bool>? OwnsInPlace = null,
     Func<string, bool>? OwnsNative = null,
     TimeSpan? MoveMinTtl = null,
-    bool Hash = false,
     KeyMoveKind Kind = KeyMoveKind.String)
 {
     public string PatternOf(MoveSide side) => side == MoveSide.Native ? NativePattern : InPlacePattern;
