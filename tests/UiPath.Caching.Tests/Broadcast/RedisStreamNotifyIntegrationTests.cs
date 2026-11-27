@@ -64,6 +64,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         // The server counts a subscription a little before the node treats it as live, and going live wakes a read; the count
         // below starts only once both nodes are live and the reads that woke have ended.
         await ReadyAsync();
+        await LiveAsync(a, b);
         (a.NotifyLive && b.NotifyLive).Should().BeTrue("both doorbell subscriptions go live");
         await QuietAsync();
 
@@ -98,6 +99,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         a.RingInAdd = ringInAdd;
         var (b, received) = Topic("urn:b", FarPoll, connector: connector);
         await ReadyAsync();
+        await LiveAsync(a, b);
         (a.NotifyLive && b.NotifyLive).Should().BeTrue("both doorbell subscriptions go live");
         await QuietAsync();
 
@@ -119,6 +121,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var (b, received) = Topic("urn:b", FarPoll);
         await SettledAsync();
         await ReadyAsync();
+        await LiveAsync(a, b);
         (a.NotifyLive && b.NotifyLive).Should().BeTrue("both doorbell subscriptions go live");
         await QuietAsync();
 
@@ -238,6 +241,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var (b, received) = Topic("urn:b", FarPoll, connector: limited, logger: log, configure: o => o.NotifyShardedPubSub = true);
 
         await ReadyAsync();
+        await LiveAsync(a, b);
         (a.NotifyLive && b.NotifyLive).Should().BeTrue("both subscriptions go live on the literal channel after the refusal");
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
@@ -311,6 +315,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var (topicB, received) = Topic("urn:b", Poll, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(5));
         await SettledAsync();
         // The waiter is read for the mechanism itself: a primer that merely took long could be a stalled machine, not a live doorbell.
+        await LiveAsync(topicB);
         topicB.NotifyLive.Should().BeTrue("the subscription goes live a little after the server counts it");
         // A wait that began before it went live still ends at the 250 ms poll; once that primer is read and acknowledged, the next wait is the notified one.
         (await a.PublishAsync(Event("urn:a", "primer"), TestContext.Current.CancellationToken)).Should().BeTrue();
@@ -338,6 +343,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var telemetry = Substitute.For<ICachingTelemetryProvider>();
         var (topicB, received) = Topic("urn:b", Poll, logger: log, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(3), telemetry: telemetry);
         await SettledAsync();
+        await LiveAsync(topicB);
         topicB.NotifyLive.Should().BeTrue("the subscription goes live a little after the server counts it");
         // Each of these lands in a wait that began live and runs its whole 3 s, since nothing rings for it.
         foreach (var id in new[] { "primer", "1", "2" })
@@ -368,6 +374,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var log = new RecordingLogger();
         var (a, _) = Topic("urn:a", Poll, logger: log, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(1));
         await ReadyAsync();
+        await LiveAsync(a);
         a.NotifyLive.Should().BeTrue("the subscription goes live");
 
         foreach (var id in new[] { "1", "2", "3" })
@@ -586,6 +593,38 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
             await SubscribeAsync(topic);
             await SubscribeAsync(topic);
             await _runs[topic].Reader.ReadAsync();
+        }
+    }
+
+    /// <summary>Waits until each topic's doorbell is live. A failure seen after the subscribe clears on its restore, and a resubscribe it asked for runs on the topic's clock.</summary>
+    private async Task LiveAsync(params RedisStreamsTopic<ICacheEvent>[] topics)
+    {
+        foreach (var topic in topics)
+        {
+            var run = _runs[topic];
+            var live = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void Live() => live.TrySetResult();
+            topic.NotifyLiveSet += Live;
+            try
+            {
+                while (!topic.NotifyLive)
+                {
+                    if (run.Clock.HasTimerDueIn(run.Due))
+                    {
+                        await SubscribeAsync(topic);
+                        continue;
+                    }
+
+                    var retry = run.Clock.WhenTimerAsync(() => run.Clock.HasTimerDueIn(run.Due));
+                    await Task.WhenAny(live.Task, retry).WaitAsync(TestContext.Current.CancellationToken);
+                    // Taken again before the state is read, so a doorbell that went live and dropped again is waited for anew.
+                    live = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+            }
+            finally
+            {
+                topic.NotifyLiveSet -= Live;
+            }
         }
     }
 
