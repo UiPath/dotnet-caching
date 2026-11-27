@@ -185,7 +185,7 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
                     .Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(
                         k,
                         round >= 2 && k == (CacheKey)"a"
-                            ? new TestCacheEntry<string?> { Value = "refilled:a", Expiration = DateTimeOffset.UtcNow.AddMinutes(10), Found = true }
+                            ? new TestCacheEntry<string?> { Value = "refilled:a", Expiration = _fixture.Create<TimeProvider>().GetUtcNow().AddMinutes(10), Found = true }
                             : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue }))
                     .ToArray();
             });
@@ -286,7 +286,7 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(_ => new TestChangeToken { ActiveChangeCallbacks = true, HasChanged = false });
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions { Clock = new TimeProviderClock(_fixture.Create<TimeProvider>()) }));
         _innerCache = _fixture.Freeze<ICache>();
         _options = new InMemoryRedisCacheOptions
         {
@@ -363,7 +363,7 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
 
     private TestCacheEntry<string?> Entry(CacheKey key) =>
         _stored.TryGetValue(key, out var value)
-            ? new TestCacheEntry<string?> { Value = value, Expiration = DateTimeOffset.UtcNow.AddMinutes(10), Found = true }
+            ? new TestCacheEntry<string?> { Value = value, Expiration = _fixture.Create<TimeProvider>().GetUtcNow().AddMinutes(10), Found = true }
             : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue };
 
     /// <summary>A miss whose third <see cref="Found"/> read, the one the batch makes as it takes the key, waits for the test: the inner read and the split of hits from misses read it first.</summary>

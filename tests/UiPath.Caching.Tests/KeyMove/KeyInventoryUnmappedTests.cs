@@ -11,7 +11,7 @@ namespace UiPath.Caching.Tests.KeyMove;
 [Trait("Category", "Integration")]
 public class KeyInventoryUnmappedTests(RedisContainerFixture fixture)
 {
-    private static CancellationToken Ct => CancellationToken.None;
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task Only_ownerless_keys_count_as_unmapped_and_they_never_block_the_drain()

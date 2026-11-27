@@ -331,10 +331,11 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         return false;
     }
 
+    // Added before the writer starts: an empty first read would put the group in use at 0-0, where a server below 7.0 takes the entry for a trim.
     private async Task StartReadingAsync()
     {
-        StartWriter();
         var first = await AddAsync(1);
+        StartWriter();
         (await EventuallyAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue("the group is in use once it has read");
     }
 

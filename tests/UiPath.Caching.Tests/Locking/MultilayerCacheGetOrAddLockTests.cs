@@ -383,7 +383,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         // A token that never reports a change, so an entry the local tier takes stays there; an auto-made one reports one at random and the entry is gone at once.
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(_ => new TestChangeToken { ActiveChangeCallbacks = true, HasChanged = false });
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions { Clock = new TimeProviderClock(_fixture.Create<TimeProvider>()) }));
         _innerCache = _fixture.Freeze<ICache>();
         _options = new InMemoryRedisCacheOptions
         {

@@ -8,7 +8,7 @@ namespace UiPath.Caching.Tests.KeyMove;
 [Trait("Category", "Integration")]
 public class ClearCoordinatorTests(RedisContainerFixture fixture)
 {
-    private static CancellationToken Ct => CancellationToken.None;
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task A_clear_closes_only_its_cache_during_the_sweep_and_reopens_it_after_the_second_event()

@@ -8,7 +8,7 @@ namespace UiPath.Caching.Tests.KeyMove;
 [Trait("Category", "Integration")]
 public class GroupDataOpsTests(RedisContainerFixture fixture)
 {
-    private static CancellationToken Ct => CancellationToken.None;
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Theory]
     [InlineData(true, "")]

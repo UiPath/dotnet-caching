@@ -766,6 +766,7 @@ public class RedisStreamNotifyChannelTests
     {
         using var rig = new LiveRig(_fixture, clock: NewClock());
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        await rig.DrainAsync();
         var wait = rig.Waiter.WaitAsync(CancellationToken.None);
         rig.Clock!.Advance(1.Seconds());
         await Task.Delay(100.Milliseconds(), TestContext.Current.CancellationToken);

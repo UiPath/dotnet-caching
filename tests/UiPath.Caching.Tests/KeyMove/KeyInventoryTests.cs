@@ -9,7 +9,7 @@ namespace UiPath.Caching.Tests.KeyMove;
 [Trait("Category", "Integration")]
 public class KeyInventoryTests(RedisContainerFixture fixture)
 {
-    private static CancellationToken Ct => CancellationToken.None;
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task The_inventory_counts_owned_source_keys_per_cache_with_a_zero_for_a_cache_that_holds_none()

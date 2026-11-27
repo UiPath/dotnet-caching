@@ -223,12 +223,13 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
             }
         }
 
-        public async Task Settled()
-        {
-            await BackgroundSettled(Cache);
-            await _telemetry.Changes.WaitUntil(() => Cache.RunsInFlight == 0);
-            Cache.FlushPeerRefreshMetrics();
-        }
+        public Task Settled() => SettledBut(static _ => 0);
+
+        /// <summary>Settles all runs but the late generations, for a test that releases them after.</summary>
+        public Task SettledButLate() => SettledBut(static cache => cache.LateGenerations);
+
+        /// <summary>Settles all runs but the <paramref name="held"/> generations the test holds open, for a test that releases them after.</summary>
+        public Task SettledButHeld(int held) => SettledBut(_ => held);
 
         /// <summary>Settles once the refresher has reported <paramref name="outcomes"/> keys since the node started.</summary>
         public async Task Settled(int outcomes)
@@ -241,6 +242,13 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
         {
             Cache.Dispose();
             Subject.Dispose();
+        }
+
+        private async Task SettledBut(Func<MultilayerCache, int> left)
+        {
+            await BackgroundSettled(Cache);
+            await _telemetry.Changes.WaitUntil(() => Cache.RunsInFlight == left(Cache));
+            Cache.FlushPeerRefreshMetrics();
         }
 
         private void OnEvicted()

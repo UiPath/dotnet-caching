@@ -397,7 +397,7 @@ public class FailSafePeerTests
         var joined = a.Cache.GetOrAddAsync(Key, Throwing, FailSafe, Ct).AsTask();
 
         await (byPeer ? b : a).Cache.RemoveAsync<string>(Key, Ct);
-        await a.Settled();
+        await a.SettledButHeld(1);
         release.SetException(new InvalidOperationException("down"));
 
         await running.Invoking(r => r).Should().ThrowAsync<InvalidOperationException>("the removal dropped the kept value before the generator failed");
@@ -422,7 +422,7 @@ public class FailSafePeerTests
         (await call).Should().Be("v1");
 
         await b.Cache.SetAsync(Key, "v2", policy, Ct);
-        await a.Settled();
+        await a.SettledButLate();
         var announced = a.Published.Count;
         release.SetResult("late");
         await CachePeers.Until(() => a.Cache.LateGenerations == 0);
