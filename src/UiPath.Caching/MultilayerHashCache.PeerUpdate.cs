@@ -62,6 +62,8 @@ internal sealed partial class MultilayerHashCache
         return _localMemorySetter.Set(options, merged, typeof(T), remaining, state.Refresh);
     }
 
+    private protected override void RemovingLocal(string name) => MarkDropped(name);
+
     private bool TryApplyPeerUpdate(RefreshMetadataState state, PeerUpdate update)
     {
         var name = state.CacheKey.Name;
@@ -71,14 +73,22 @@ internal sealed partial class MultilayerHashCache
             // The same lock a local merge takes, so the two take their turns over the held hash.
             lock (MergeLock(name))
             {
-                if (_memoryCache.TryGetValue(name, out object? current) && current is not null
+                if (_memoryCache.TryGetValue(name, out object? current) && current is not null && !_awaitingRefresh.TryGetValue(current, out _)
                     && HashVersions.TryGet(current, out var version) && version.Apply(this, state, current, update))
                 {
-                    return true;
-                }
+                    if (!_awaitingRefresh.TryGetValue(current, out _))
+                    {
+                        return true;
+                    }
 
-                // Marked before the lock is let go, so a merge that takes it next does not lay its fields over the copy.
-                handed = state.Refresh is not null && MarkAwaitingRefresh(name, state.CacheEntity);
+                    // This node dropped the copy while the update was merged over it: the merge is marked too, and goes below.
+                    MarkDropped(name);
+                }
+                else
+                {
+                    // Marked before the lock is let go, so a merge that takes it next does not lay its fields over the copy.
+                    handed = state.Refresh is not null && MarkAwaitingRefresh(name, state.CacheEntity);
+                }
             }
         }
         catch (Exception ex)
@@ -151,8 +161,25 @@ internal sealed partial class MultilayerHashCache
         }
 
         // Not under the merge lock: removing an entry disposes its change token, which waits on the lock a delivery holds while it waits on this one.
+        MarkDropped(name);
         _memoryCache.Remove(name);
         return true;
+    }
+
+    /// <summary>Marks the copy this node is about to drop, so a peer's update that read it before it went does not put it back with its fields merged in.</summary>
+    /// <remarks>Without the merge lock, which that update holds: it checks the mark once it has written.</remarks>
+    private void MarkDropped(string name)
+    {
+        if (_versioned is null)
+        {
+            return;
+        }
+
+        // Read again after marking: an update that wrote before it saw the mark left its merge here.
+        while (_memoryCache.TryGetValue(name, out object? held) && held is not null && !_awaitingRefresh.TryGetValue(held, out _))
+        {
+            _awaitingRefresh.AddOrUpdate(held, held);
+        }
     }
 
     private Lock MergeLock(string name) => _mergeLocks[(int)((uint)StringComparer.Ordinal.GetHashCode(name) % (uint)_mergeLocks.Length)];

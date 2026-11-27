@@ -477,6 +477,9 @@ internal sealed class PeerCluster(TimeProvider? defaultClock = null) : IDisposab
         /// <summary>When set, the fields an event carries do not decode.</summary>
         public bool FailsDecode { get; set; }
 
+        /// <summary>When set, runs as an event's fields are decoded: the node has read its copy and not yet written the merge.</summary>
+        public Action? Decoding { get; set; }
+
         public int CountedRemovals { get; private set; }
 
         void ISharedTier.Invalidated(CacheKey key)
@@ -508,6 +511,7 @@ internal sealed class PeerCluster(TimeProvider? defaultClock = null) : IDisposab
 
         public bool TryDecodeFields<T>(IReadOnlyDictionary<string, byte[]?> encoded, CachePolicy? policy, [MaybeNullWhen(false)] out Dictionary<string, T?> values)
         {
+            Decoding?.Invoke();
             if (FailsDecode)
             {
                 values = null;

@@ -538,6 +538,96 @@ public class PeerFieldUpdateTests
     }
 
     [Fact]
+    public async Task A_peer_s_write_merged_while_an_overtaken_write_drops_the_copy_does_not_put_back_a_copy_without_that_write()
+    {
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
+        var (node, other) = (c.Add("a"), c.Add("b"));
+        await Seed(node);
+        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
+        await Add(other, ("p", "1"));
+        var first = new TaskCompletionSource();
+        var firstWritten = new TaskCompletionSource();
+        node.Inner.AfterWrite = values =>
+        {
+            if (values.ContainsKey("x"))
+            {
+                firstWritten.TrySetResult();
+                return first.Task;
+            }
+
+            return Task.CompletedTask;
+        };
+        var early = node.Cache.SetAsync<string>("k", Fields(("x", "1")), Merge, Awaited, Ct).AsTask();
+        await firstWritten.Task;
+        await Add(node, ("y", "1"));
+
+        // The peer's write is merged over the copy that holds only the later write, and written after the earlier one dropped that copy.
+        using var update = MergeHeld(c, node, other.Published.Single());
+        await update.Reading;
+        first.SetResult();
+        (await early).Should().BeTrue();
+        await update.Finish();
+        await node.Settled();
+
+        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_peer_s_write_merged_while_the_node_removes_the_key_or_a_field_does_not_put_back_the_copy(bool wholeKey)
+    {
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
+        var (node, other) = (c.Add("a"), c.Add("b"));
+        await Seed(node);
+        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
+        await Add(other, ("p", "1"));
+
+        using var update = MergeHeld(c, node, other.Published.Single());
+        await update.Reading;
+        (wholeKey ? await node.Cache.RemoveAsync<string>("k", Ct) : await node.Cache.RemoveFieldsAsync<string>("k", ["a"], Ct)).Should().BeTrue();
+        await update.Finish();
+        await node.Settled();
+
+        var fields = await node.Cache.GetAsync<string>("k", Awaited, Ct);
+        if (wholeKey)
+        {
+            fields.Should().BeEmpty();
+        }
+        else
+        {
+            fields.Should().BeEquivalentTo(c.Redis.Fields());
+        }
+    }
+
+    [Fact]
+    public async Task A_peer_s_write_that_comes_late_is_not_merged_over_a_promoted_copy_that_awaits_the_refresh_of_a_later_one()
+    {
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
+        var (node, other) = (c.Add("a"), c.Add("b"));
+        await Seed(node);
+        await node.Cache.GetAsync<string>("k", Awaited, Ct);
+        await node.Cache.GetAsync<string>("k", Awaited, Ct);
+        var refresh = new TaskCompletionSource();
+        node.Cache.PeerRefreshHold = refresh.Task;
+        var release = new TaskCompletionSource();
+        node.Inner.Hold = release.Task;
+        await node.Cache.SetAsync<string>("k", Fields(("c", "3")), Merge, Background, Ct);
+        await Add(other, ("p", "1"));
+        await Add(other, ("q", "2"));
+
+        // The later write's event comes first and is handed to the refresh; the node's own write then lands and its copy is promoted.
+        c.Deliver(node, other.Published[1]);
+        release.SetResult();
+        await CachePeers.BackgroundSettled(node.Cache);
+        c.Deliver(node, other.Published[0]);
+        refresh.SetResult();
+        await node.Settled();
+
+        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+    }
+
+    [Fact]
     public async Task A_replacement_that_returns_after_a_merge_made_to_the_hash_it_replaced_does_not_keep_a_copy_without_that_merge()
     {
         using var c = new PeerCluster(Clock);
@@ -1609,6 +1699,15 @@ public class PeerFieldUpdateTests
     private static int ReadMark(PeerCluster c, PeerCluster.Node node) =>
         ((ILocalEntry)Local(c, node)).LastRead;
 
+    /// <summary>Delivers the event on another thread, which stops once the node has read its copy and before it writes the merge.</summary>
+    private static HeldMerge MergeHeld(PeerCluster c, PeerCluster.Node node, ICacheEvent update)
+    {
+        var held = new HeldMerge();
+        node.Inner.Decoding = held.Reached;
+        held.Delivery = Task.Run(() => c.Deliver(node, update), Ct);
+        return held;
+    }
+
     private static async Task Race(Barrier barrier, PeerCluster.Node node, string field)
     {
         barrier.SignalAndWait(Ct);
@@ -1627,4 +1726,32 @@ public class PeerFieldUpdateTests
 
     private static async Task Add(PeerCluster.Node node, CachePolicy policy, params (string Field, string Value)[] fields) =>
         (await node.Cache.SetAsync<string>("k", Fields(fields), Merge, policy, Ct)).Should().BeTrue();
+
+    private sealed class HeldMerge : IDisposable
+    {
+        private readonly TaskCompletionSource _reading = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ManualResetEventSlim _resume = new();
+
+        public Task Reading => _reading.Task;
+
+        public Task Delivery { get; set; } = Task.CompletedTask;
+
+        public void Reached()
+        {
+            _reading.TrySetResult();
+            _resume.Wait(Ct);
+        }
+
+        public Task Finish()
+        {
+            _resume.Set();
+            return Delivery;
+        }
+
+        public void Dispose()
+        {
+            _resume.Set();
+            _resume.Dispose();
+        }
+    }
 }

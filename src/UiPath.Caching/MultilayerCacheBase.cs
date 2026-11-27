@@ -381,9 +381,15 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private protected void RemoveLocal(string key) =>
         _background.Apply(key, (Cache: this, Key: key), static s =>
         {
+            s.Cache.RemovingLocal(s.Key);
             s.Cache.RemoveEntry(s.Key);
             return true;
         });
+
+    /// <summary>Runs in the key's local turn, before <see cref="RemoveLocal"/> takes its entry.</summary>
+    private protected virtual void RemovingLocal(string name)
+    {
+    }
 
     /// <summary>Removes the key's local entry and its fail-safe value.</summary>
     private protected void RemoveEntry(string name)
