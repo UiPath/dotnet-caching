@@ -22,8 +22,12 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
             local.Entry = NewEntry(options, values);
         }
 
-        return _background.RunAppending(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.KeepBackground(s.Options, s.Value, s.Policy, s.Local), static (s, token) =>
-            s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), static s => s.Cache.Layered<T>().PublishSetAsync(s.Options, s.Local.Counted), token));
+        return _background.RunAppending(
+            options.CacheKey.Name,
+            (Cache: this, Options: options, Value: values, Policy: policy, Local: local),
+            static s => s.Cache.KeepBackground(s.Options, s.Value, s.Policy, s.Local),
+            static (s, token) => s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), static s => s.Cache.Layered<T>().PublishSetAsync(s.Options, s.Local.Counted), token),
+            static s => s.Cache.DropSuperseded(s.Options.CacheKey.Name));
     }
 
     /// <summary>A merge builds it under the merge lock from the hash held here, or leaves none.</summary>
@@ -68,6 +72,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
             (Cache: this, Options: options, Value: values, Policy: policy, Local: local, Fill: fill),
             static s => s.Cache.MemorySet(s.Options, s.Local.Entry!, s.Cache.DisconnectedLifetime(s.Policy), s.Policy),
             static (s, token) => s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.FillDetachedAsync(s.Options, s.Value, s.Policy, s.Local, s.Fill, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), publish: null, token),
+            static s => s.Cache.DropSuperseded(s.Options.CacheKey.Name),
             static s => s.Cache.EndFill(s.Options.CacheKey.Name, s.Fill),
             fill: true);
     }

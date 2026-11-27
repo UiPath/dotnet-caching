@@ -115,7 +115,8 @@ public abstract partial class MultilayerCacheBase : IDisposable
             cacheName,
             logger,
             telemetryProvider,
-            clock);
+            clock,
+            key => BackgroundIssued?.Invoke(key));
         if (redisOptions?.RepeatInvalidationAfter is { } repeatAfter && repeatAfter > TimeSpan.Zero)
         {
             _repeats = new RepeatInvalidations(clock, repeatAfter, RemoveRepeated);
@@ -157,6 +158,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
     }
 
     public string Name { get; }
+
+    /// <summary>Test seam: runs as a background write of a key is issued, before its local write.</summary>
+    internal Action<string>? BackgroundIssued { get; set; }
 
     internal bool BackgroundWritesActive => _background.Active;
 

@@ -128,16 +128,17 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
     /// <summary>Makes a reserved write's local write and starts its inner one; returns what <paramref name="local"/> returned. The write holds the whole value of the key, so a newer one may take its place while it waits. Null, and nothing done, when its place was reserved past the limit and the queued write it was to replace can no longer take it: the caller writes in the foreground, as after a refused reservation.</summary>
     public bool? Run<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work) =>
-        RunCore(key, state, local, work, true, true, null);
+        RunCore(key, state, local, work, true, true, null, null);
 
     /// <summary>As <see cref="Run{TState}(string, TState, Func{TState, bool}, Func{TState, CancellationToken, ValueTask})"/> for a write that sends no event: it never takes the place of one that does.</summary>
     public bool? RunWithoutEvent<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, Action<TState>? dropped = null) =>
-        RunCore(key, state, local, work, true, false, dropped);
+        RunCore(key, state, local, work, true, false, dropped, null);
 
     /// <summary>As <see cref="Run{TState}(string, TState, Func{TState, bool}, Func{TState, CancellationToken, ValueTask})"/> for a write that is only part of the key's value, which every write of the key must reach the inner tier.</summary>
-    public bool RunAppending<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, Action<TState>? dropped = null, bool fill = false) =>
+    /// <param name="overtaken">Runs in place of <paramref name="local"/> when a write of the key issued later was the first to write locally: what that one kept was built without this write.</param>
+    public bool RunAppending<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, Func<TState, bool> overtaken, Action<TState>? dropped = null, bool fill = false) =>
         // Its place is never reserved past the limit, so it is never refused; a fill is no change of the key.
-        RunCore(key, state, local, work, false, !fill, dropped) ?? false;
+        RunCore(key, state, local, work, false, !fill, dropped, overtaken) ?? false;
 
     /// <summary>Starts watching the key for changes by anything but a fill; the token it returns is what <see cref="FillIntact"/> takes.</summary>
     public long BeginFill(string key, bool timed = false) => _fills.Begin(key, timed ? Math.Max(1, clock.GetTimestamp()) : 0);
@@ -846,7 +847,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
-    private bool? RunCore<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, bool coalesce, bool publishes, Action<TState>? dropped)
+    private bool? RunCore<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, bool coalesce, bool publishes, Action<TState>? dropped, Func<TState, bool>? overtaken)
     {
         // A write that sends no event is a fill.
         if (publishes)
@@ -907,12 +908,12 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         {
             onIssued?.Invoke(key);
 
-            // Two writes of the key can reach the gate out of issue order; the later one's value stands.
+            // Two writes of the key can reach the gate out of issue order; the later one's value stands, unless this one is a part of it.
             lock (started.Gate)
             {
                 if (issued < started.Applied)
                 {
-                    return true;
+                    return overtaken is null || Apply(key, state, overtaken);
                 }
 
                 started.Applied = issued;

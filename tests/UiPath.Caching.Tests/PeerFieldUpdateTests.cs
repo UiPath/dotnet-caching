@@ -1163,6 +1163,38 @@ public class PeerFieldUpdateTests
         writer.InnerReads.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData(HashCacheSetOption.HashReplace)]
+    [InlineData(HashCacheSetOption.KeyReplace)]
+    public async Task A_background_write_whose_local_write_a_later_merge_of_the_key_overtook_leaves_no_copy_without_it(HashCacheSetOption earlier)
+    {
+        using var c = new PeerCluster(Clock);
+        var (writer, _) = (c.Add("a"), c.Add("b"));
+        await Seed(writer);
+        (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
+        var issued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var resume = new ManualResetEventSlim();
+        var calls = 0;
+        writer.Cache.BackgroundIssued = _ =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                issued.TrySetResult();
+                resume.Wait(Ct);
+            }
+        };
+
+        // Issued first and written to the hash first, while the later merge is the first to reach the local copy.
+        var first = Task.Run(() => writer.Cache.SetAsync<string>("k", Fields(("x", "1")), new HashCacheEntryOptions(SetOption: earlier), Background, Ct).AsTask(), Ct);
+        await issued.Task;
+        await Add(writer, Background, ("y", "1"));
+        resume.Set();
+        (await first).Should().BeTrue();
+        await writer.Settled();
+
+        (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+    }
+
     [Fact]
     public async Task A_background_merge_over_a_background_fill_still_in_flight_takes_the_version_once_both_are_written()
     {
