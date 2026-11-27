@@ -113,28 +113,11 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         var timer = new ManualTimer(this, callback, state);
         lock (_gate)
         {
-            timer.Change(dueTime, period);
+            timer.Schedule(dueTime, period);
             Interlocked.Increment(ref _created);
-            for (var i = _conditions.Count - 1; i >= 0; i--)
-            {
-                if (_conditions[i].Condition())
-                {
-                    _conditions[i].Done.TrySetResult();
-                    _conditions.RemoveAt(i);
-                }
-            }
-            for (var i = _timerWaiters.Count - 1; i >= 0; i--)
-            {
-                if (_timerWaiters[i].Count <= _created)
-                {
-                    _timerWaiters[i].Done.TrySetResult();
-                    _timerWaiters.RemoveAt(i);
-                }
-            }
+            WakeWaiters();
         }
-        TimerScheduled?.Invoke();
-        _timerCreated.Pulse();
-        Broadcast.OperationSignals.Shared.Completed();
+        Armed();
         return timer;
     }
 
@@ -220,8 +203,36 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         }
     }
 
+    private void Armed()
+    {
+        TimerScheduled?.Invoke();
+        _timerCreated.Pulse();
+        Broadcast.OperationSignals.Shared.Completed();
+    }
+
+    private void WakeWaiters()
+    {
+        for (var i = _conditions.Count - 1; i >= 0; i--)
+        {
+            if (_conditions[i].Condition())
+            {
+                _conditions[i].Done.TrySetResult();
+                _conditions.RemoveAt(i);
+            }
+        }
+        for (var i = _timerWaiters.Count - 1; i >= 0; i--)
+        {
+            if (_timerWaiters[i].Count <= _created)
+            {
+                _timerWaiters[i].Done.TrySetResult();
+                _timerWaiters.RemoveAt(i);
+            }
+        }
+    }
+
     private void Changed()
     {
+        WakeWaiters();
         var previous = _changed;
         _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         previous.TrySetResult();
@@ -235,6 +246,17 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
 
         public bool Change(TimeSpan dueTime, TimeSpan period)
         {
+            Schedule(dueTime, period);
+            if (dueTime != Timeout.InfiniteTimeSpan)
+            {
+                owner.Armed();
+            }
+            return true;
+        }
+
+        /// <summary>Arms the timer under the provider's lock and wakes the waiters that check state, not creation.</summary>
+        public void Schedule(TimeSpan dueTime, TimeSpan period)
+        {
             lock (owner._gate)
             {
                 owner._timers.Remove(this);
@@ -242,14 +264,14 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
                 if (dueTime == Timeout.InfiniteTimeSpan)
                 {
                     Due = TimeSpan.MaxValue;
-                    owner.Changed();
-                    return true;
+                }
+                else
+                {
+                    Due = owner._elapsed + dueTime;
+                    owner._timers.Add(this);
                 }
 
-                Due = owner._elapsed + dueTime;
-                owner._timers.Add(this);
                 owner.Changed();
-                return true;
             }
         }
 

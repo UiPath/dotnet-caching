@@ -60,7 +60,7 @@ internal sealed class CachePeers(TimeProvider? defaultClock = null) : IDisposabl
     }
 
     internal static Task BackgroundSettled(MultilayerCacheBase cache) =>
-        ((BackgroundWrites)BackgroundField.GetValue(cache)!).WhenIdleAsync();
+        ((BackgroundWrites)BackgroundField.GetValue(cache)!).WhenIdleAsync().WaitAsync(TestContext.Current.CancellationToken);
 
     /// <summary>Whether a background write of <paramref name="key"/> is in flight, as a peer refresh's keep checks it: false once the write promoted its entry and left its turn.</summary>
     internal static bool WriteInFlight(MultilayerCacheBase cache, string key) =>

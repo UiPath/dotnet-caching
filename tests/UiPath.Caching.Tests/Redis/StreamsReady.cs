@@ -43,8 +43,18 @@ public static class StreamsReady
             }
         }
 
+        void OnRestored(object? sender, EventArgs e) => CheckSubscriptions();
+        var restored = (RedisPubSubTopicProvider)subscriptions;
         subscriptions.WhenConfirmed(CheckSubscriptions);
-        CheckSubscriptions();
-        await ready.Task.WaitAsync(TestContext.Current.CancellationToken);
+        restored.OnConnectionRestored += OnRestored;
+        try
+        {
+            CheckSubscriptions();
+            await ready.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            restored.OnConnectionRestored -= OnRestored;
+        }
     }
 }

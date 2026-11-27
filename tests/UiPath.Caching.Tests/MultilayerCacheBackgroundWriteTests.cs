@@ -71,7 +71,7 @@ public class MultilayerCacheBackgroundWriteTests
 
             // Once the original write promotes its entry and leaves its turn, the held refresh read is declined and retries against the peer value.
             writeGate.SetResult();
-            await CacheWork.CompleteAsync(b.Cache);
+            await CacheWork.SnapshotAsync(b.Cache);
             readGate.SetResult();
             await telemetry.Signal.UntilAsync(() => b.Cache.RunsInFlight == 0, Ct);
 

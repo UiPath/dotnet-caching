@@ -275,7 +275,7 @@ public class RedisConnectorStaleEndpointTests
         await h.Connector.ScanStaleEndpointsAsync(); // two null refreshes on the first multiplexer
         h.Connector.ForceReconnect();
         await h.OldDisposed.Task.WaitAsync(TestContext.Current.CancellationToken);
-        await h.Connector.ReconnectTask;
+        await h.Connector.ReconnectTask.WaitAsync(TestContext.Current.CancellationToken);
         await h.Connector.ScanStaleEndpointsAsync();
 
         for (var refreshes = 1; refreshes < RedisConnector.NullTopologyRefreshLimit; refreshes++)
@@ -425,13 +425,13 @@ public class RedisConnectorStaleEndpointTests
         var h = new Harness(replacementAvailable: false);
 
         await h.ScanTwiceAcrossThresholdAsync();
-        await h.Connector.ReconnectTask;
+        await h.Connector.ReconnectTask.WaitAsync(TestContext.Current.CancellationToken);
         h.Factory.CreateCount.Should().Be(2);
         h.Telemetry.Exceptions.Should().ContainSingle();
-        await h.Connector.ReconnectTask;
+        await h.Connector.ReconnectTask.WaitAsync(TestContext.Current.CancellationToken);
 
         await h.Connector.ScanStaleEndpointsAsync();
-        await h.Connector.ReconnectTask;
+        await h.Connector.ReconnectTask.WaitAsync(TestContext.Current.CancellationToken);
 
         h.Factory.CreateCount.Should().Be(3);
         h.Telemetry.Events.Should().Equal("Redis.StaleEndpointDetected", "Redis.StaleEndpointDetected");
@@ -816,10 +816,10 @@ public class RedisConnectorStaleEndpointTests
         {
             // A rebuild runs on the pool and clears its guard after the attempt, so wait for both.
             await AwaitScansAsync();
-            await Connector.ReconnectTask;
+            await Connector.ReconnectTask.WaitAsync(TestContext.Current.CancellationToken);
 
             Factory.CreateCount.Should().BeGreaterThanOrEqualTo(count);
-            await Connector.ReconnectTask;
+            await Connector.ReconnectTask.WaitAsync(TestContext.Current.CancellationToken);
         }
 
         public async Task ScanTwiceAcrossThresholdAsync()

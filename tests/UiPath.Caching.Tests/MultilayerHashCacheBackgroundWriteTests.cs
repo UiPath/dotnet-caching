@@ -90,7 +90,7 @@ public class MultilayerHashCacheBackgroundWriteTests
             await b.Inner.Changed.UntilAsync(() => b.InnerReads == reads + 1, Ct);
             CachePeers.WriteInFlight(b.Cache, "k").Should().BeTrue();
             writeGate.SetResult();
-            await CacheWork.CompleteAsync(b.Cache);
+            await CacheWork.SnapshotAsync(b.Cache);
             Held(b).Should().BeEquivalentTo(provisional);
 
             // The first read is declined, as the write moved the key under it; the retry finds no write in flight and keeps the peer's hash.
