@@ -25,55 +25,6 @@ internal sealed record NodeAdvertisement(
 
     public static string Token(int formatId) => formatId.ToString("X2", CultureInfo.InvariantCulture);
 
-    public string Encode()
-    {
-        var text = new StringBuilder();
-        text.Append("lib=").Append(Escape(Library)).Append(";inst=").Append(Escape(Instance)).Append(";vr=").AppendJoin(',', ValueReads);
-        if (Strict.Count > 0)
-        {
-            text.Append(";strict=");
-            var first = true;
-            foreach (var (policy, formats) in Strict.OrderBy(p => p.Key, StringComparer.Ordinal))
-            {
-                text.Append(first ? string.Empty : ",").Append(Escape(policy)).Append(':').AppendJoin('|', formats);
-                first = false;
-            }
-        }
-
-        if (EventReads is not null)
-        {
-            text.Append(";er=").AppendJoin(',', EventReads);
-        }
-
-        if (Subscriptions is { Count: > 0 })
-        {
-            text.Append(";sub=");
-            var first = true;
-            foreach (var (channel, count) in Subscriptions.OrderBy(p => p.Key, StringComparer.Ordinal))
-            {
-                text.Append(first ? string.Empty : ",").Append(Escape(channel)).Append(':').Append(count.ToString(CultureInfo.InvariantCulture));
-                first = false;
-            }
-        }
-
-        if (PatternSubscriptions is > 0)
-        {
-            text.Append(";psub=").Append(PatternSubscriptions.Value.ToString(CultureInfo.InvariantCulture));
-        }
-
-        if (Migration is not null)
-        {
-            text.Append(";mig=").Append(Escape(Migration));
-        }
-
-        if (Left)
-        {
-            text.Append(";left=1");
-        }
-
-        return text.ToString();
-    }
-
     /// <summary>A field it does not know is skipped, so a later version can add fields; a text without a readable <c>vr</c> is not an advertisement.</summary>
     public static bool TryParse(string text, [NotNullWhen(true)] out NodeAdvertisement? advertisement)
     {
@@ -137,6 +88,55 @@ internal sealed record NodeAdvertisement(
 
         advertisement = new NodeAdvertisement(library, instance, reads, strict, migration, left, eventReads, subscriptions.Count > 0 ? subscriptions : null, patterns);
         return true;
+    }
+
+    public string Encode()
+    {
+        var text = new StringBuilder();
+        text.Append("lib=").Append(Escape(Library)).Append(";inst=").Append(Escape(Instance)).Append(";vr=").AppendJoin(',', ValueReads);
+        if (Strict.Count > 0)
+        {
+            text.Append(";strict=");
+            var first = true;
+            foreach (var (policy, formats) in Strict.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                text.Append(first ? string.Empty : ",").Append(Escape(policy)).Append(':').AppendJoin('|', formats);
+                first = false;
+            }
+        }
+
+        if (EventReads is not null)
+        {
+            text.Append(";er=").AppendJoin(',', EventReads);
+        }
+
+        if (Subscriptions is { Count: > 0 })
+        {
+            text.Append(";sub=");
+            var first = true;
+            foreach (var (channel, count) in Subscriptions.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                text.Append(first ? string.Empty : ",").Append(Escape(channel)).Append(':').Append(count.ToString(CultureInfo.InvariantCulture));
+                first = false;
+            }
+        }
+
+        if (PatternSubscriptions is > 0)
+        {
+            text.Append(";psub=").Append(PatternSubscriptions.Value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (Migration is not null)
+        {
+            text.Append(";mig=").Append(Escape(Migration));
+        }
+
+        if (Left)
+        {
+            text.Append(";left=1");
+        }
+
+        return text.ToString();
     }
 
     private static void ParseSubscriptions(string value, Dictionary<string, int> subscriptions)

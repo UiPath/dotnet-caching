@@ -453,7 +453,8 @@ public sealed class ServerBarrierManyTests
             }
 
             _ = t.StringSetAsync($"barriertest:{{fake}}:{i}", "v");
-        })];
+        }),
+        ];
 
     // Two transactions; the queue callback of the one at the index throws a transient error while the transaction is being built.
     private static IReadOnlyList<Action<ITransaction>> WritesThatThrowAt(int index) =>
@@ -465,7 +466,8 @@ public sealed class ServerBarrierManyTests
             }
 
             _ = t.StringSetAsync($"barriertest:{{fake}}:{i}", "v");
-        })];
+        }),
+        ];
 
     private sealed class Fake
     {

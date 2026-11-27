@@ -43,12 +43,6 @@ internal sealed record StateRecord(
 
     public IReadOnlyList<string> CacheIds => Caches.Length == 0 ? [] : Caches.Split(CacheSeparator);
 
-    /// <summary>A field of the hash by name, empty when it is absent.</summary>
-    public string Field(string name) => Values is not null && Values.TryGetValue(name, out var value) ? value : string.Empty;
-
-    /// <summary>A cache whose residue count is above zero or unknown keeps the source fallback read; an absent count is unknown.</summary>
-    public bool KeepsSourceFallback(string cacheId) => Residue is null || !Residue.TryGetValue(cacheId, out var count) || count > 0;
-
     /// <summary>The managed cache ids as the hash stores them: sorted, joined with a character no cache name may hold.</summary>
     public static string EncodeCaches(IEnumerable<string> cacheIds)
     {
@@ -110,6 +104,12 @@ internal sealed record StateRecord(
             [.. fields.Keys],
             fields.Where(f => f.Value is not null).ToDictionary(f => f.Key, f => f.Value!, StringComparer.Ordinal));
     }
+
+    /// <summary>A field of the hash by name, empty when it is absent.</summary>
+    public string Field(string name) => Values is not null && Values.TryGetValue(name, out var value) ? value : string.Empty;
+
+    /// <summary>A cache whose residue count is above zero or unknown keeps the source fallback read; an absent count is unknown.</summary>
+    public bool KeepsSourceFallback(string cacheId) => Residue is null || !Residue.TryGetValue(cacheId, out var count) || count > 0;
 
     /// <summary>The control record this state asks every slot to hold, with a fresh open gate per managed cache.</summary>
     public ControlRecord ToControlRecord(IReadOnlyList<(string Cid, string Nonce)> gates)

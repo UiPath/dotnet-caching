@@ -781,7 +781,8 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
            (object?)_fixture.Create<int>(),
            (object?)$"{lastGenerated.ToUnixTimeMilliseconds()}-0",
            (object?)_fixture.Create<long?>(),
-           (object?)_fixture.Create<long?>()];
+           (object?)_fixture.Create<long?>(),
+        ];
         return (StreamGroupInfo)Activator.CreateInstance(typeof(StreamGroupInfo), BindingFlags.Instance | BindingFlags.NonPublic, null, args, null)!;
     }
 
@@ -791,7 +792,8 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         object?[] args = [
                (object?)_fixture.Create<string>(),
            (object?)_fixture.Create<int>(),
-           (object?)_fixture.Create<long>()];
+           (object?)_fixture.Create<long>(),
+        ];
         return (StreamConsumerInfo)Activator.CreateInstance(typeof(StreamConsumerInfo), BindingFlags.Instance | BindingFlags.NonPublic, null, args, null)!;
     }
 }

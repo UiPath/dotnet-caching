@@ -67,7 +67,7 @@ public sealed class ServerBarrierManyDurabilityTests
                     }
 
                     _ = t.StringSetAsync(k, "v");
-                })],
+                }),],
                 wayBack: false);
 
             outcome.Should().Be(BarrierOutcome.Confirmed);

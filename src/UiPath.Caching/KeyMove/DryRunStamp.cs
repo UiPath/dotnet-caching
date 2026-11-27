@@ -8,8 +8,6 @@ internal sealed record DryRunStamp(DateTimeOffset At, long EstimatedBytes, strin
     /// <summary>The identity of the report: the time it was stored, so a newer dry run is another report.</summary>
     public string ReportId => At.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
 
-    public string Encode() => string.Create(CultureInfo.InvariantCulture, $"{At.ToUnixTimeMilliseconds()}|{EstimatedBytes}|{Summary}");
-
     public static DryRunStamp? TryParse(string text)
     {
         var parts = text.Split('|', 3);
@@ -22,4 +20,6 @@ internal sealed record DryRunStamp(DateTimeOffset At, long EstimatedBytes, strin
 
         return new DryRunStamp(DateTimeOffset.FromUnixTimeMilliseconds(ms), bytes, parts.Length == 3 ? parts[2] : string.Empty);
     }
+
+    public string Encode() => string.Create(CultureInfo.InvariantCulture, $"{At.ToUnixTimeMilliseconds()}|{EstimatedBytes}|{Summary}");
 }

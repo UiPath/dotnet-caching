@@ -49,12 +49,6 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
-    internal event Action? Subscribed
-    {
-        add => _subscriber.Subscribed += value;
-        remove => _subscriber.Subscribed -= value;
-    }
-
     /// <summary>Raised when the server refuses a publish or the subscription (unknown command or missing permission), besides the usual log and retry; nobody listening changes nothing.</summary>
     event Action<Exception>? ITopic<T>.Refused
     {
@@ -74,6 +68,12 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
                 _subscriber.Refused -= value;
             }
         }
+    }
+
+    internal event Action? Subscribed
+    {
+        add => _subscriber.Subscribed += value;
+        remove => _subscriber.Subscribed -= value;
     }
 
     public TopicKey TopicKey { get; }

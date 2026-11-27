@@ -15,11 +15,11 @@ internal sealed record StepPlan(
     string? Caches = null,
     IReadOnlyList<string>? OverriddenGates = null)
 {
+    public static StepPlan Nothing { get; } = new(StepKind.None);
+
     public IReadOnlyList<StageAlert> AlertList => Alerts ?? [];
 
     public IReadOnlyList<(string Field, string Value)> FieldList => Fields ?? [];
-
-    public static StepPlan Nothing { get; } = new(StepKind.None);
 
     public static StepPlan Wait(string code, string detail) => new(StepKind.None, Alerts: [new StageAlert(code, detail)]);
 
