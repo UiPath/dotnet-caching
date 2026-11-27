@@ -278,6 +278,8 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         _redisConnector.OnConnectionRestored += Raise.Event<EventHandler>(_redisConnector, EventArgs.Empty);
 
         await entry.Missed.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
+
+        entry.Missed.Task.IsCompletedSuccessfully.Should().BeTrue("the topic expires what it keeps");
     }
 
     [Fact]
@@ -292,6 +294,8 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 
         _clock.Advance(_options.SubscriberDueTime!.Value);
         await entry.Missed.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
+
+        entry.Missed.Task.IsCompletedSuccessfully.Should().BeTrue("the topic expires what it keeps");
     }
 
     public ValueTask DisposeAsync()
@@ -363,7 +367,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         {
             return Task.FromResult(_sut);
         }
-        _sut = new RedisPubSubTopic<ICacheEvent>(_topicKey, _fixture.Create<Uri>(), _redisConnector, _redisConnector, _redisChannelStrategy, _fixture.Create<Func<IEventSubject<ICacheEvent>>>(), _formatter, _resiliencePipelineProvider, _options, _fixture.Create<ILogger<RedisPubSubTopic<ICacheEvent>>>(), testContextAccessor.Current.CancellationToken, _clock);
+        _sut = new RedisPubSubTopic<ICacheEvent>(_topicKey, _fixture.Create<Uri>(), _redisConnector, _redisConnector, _redisChannelStrategy, _fixture.Create<Func<IEventSubject<ICacheEvent>>>(), _formatter, _resiliencePipelineProvider, _options, _fixture.Create<ILogger<RedisPubSubTopic<ICacheEvent>>>(), _clock, testContextAccessor.Current.CancellationToken);
         if (startSubscription) { _clock.Advance(TimeSpan.Zero); }
         return Task.FromResult(_sut);
     }

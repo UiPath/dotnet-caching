@@ -32,7 +32,7 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
         RedisPubSubTopicOptions options,
         ILogger<RedisPubSubTopic<T>> logger,
         CancellationToken stopToken)
-        : this(topicKey, sourceUri, connectionState, redis, redisChannelStrategy, subjectFactory, formatter, resiliencePipelineProvider, options, logger, stopToken, TimeProvider.System)
+        : this(topicKey, sourceUri, connectionState, redis, redisChannelStrategy, subjectFactory, formatter, resiliencePipelineProvider, options, logger, TimeProvider.System, stopToken)
     {
     }
 
@@ -47,8 +47,8 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionS
         IResiliencePipelineProvider resiliencePipelineProvider,
         RedisPubSubTopicOptions options,
         ILogger<RedisPubSubTopic<T>> logger,
-        CancellationToken stopToken,
-        TimeProvider clock)
+        TimeProvider clock,
+        CancellationToken stopToken)
     {
         TopicKey = topicKey;
         _connectionState = connectionState;

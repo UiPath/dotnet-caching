@@ -100,8 +100,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         ILogger<RedisStreamsTopic<T>> logger,
         ICachingTelemetryProvider cachingTelemetryProvider,
         IRedisProfiler redisProfiler,
-        CancellationToken stopToken,
-        TimeProvider clock)
+        TimeProvider clock,
+        CancellationToken stopToken)
         : this(topicKey, connectionState, redis, subjectFactory, formatter, resiliencePipelineProvider, streamOptions, cacheOptions, logger, cachingTelemetryProvider, redisProfiler, onRefused: null, onRead: null, stopToken, clock)
     {
     }

@@ -84,16 +84,16 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ThrowsAsyncForAnyArgs(_ => throw new Exception());
 
-        Func<Task> act = async () => await Sut.FetchTask;
+        async Task ActAsync() => await Sut.FetchTask;
         await PendingAsync(_pollInterval.Multiply(50));
         await _cancellationTokenSource.CancelAsync();
         try
         {
-            await act();
+            await ActAsync();
         }
         catch (Exception ex)
         {
-            ex.Should().BeOfType<OperationCanceledException>().Which.CancellationToken.IsCancellationRequested.Should().BeTrue();
+            ex.Should().BeAssignableTo<OperationCanceledException>().Which.CancellationToken.IsCancellationRequested.Should().BeTrue();
         }
         _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }

@@ -558,8 +558,8 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
             logger ?? NullLogger<RedisStreamsTopic<ICacheEvent>>.Instance,
             telemetry ?? NullTelemetryProvider.Instance,
             NullRedisProfiler.Instance,
-            _stop.Token,
-            clock);
+            clock,
+            _stop.Token);
         _runs.Add(topic, new(clock, ObservedFetchWaiter.Attach(topic), options.NotifySubscriberDueTime!.Value, options));
         var observer = new Received();
         _disposables.Add(topic.Subscribe(observer));

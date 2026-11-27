@@ -36,6 +36,8 @@ public class RedisStreamNotifyChannelTests
         capturedHandler(channel, RedisValue.EmptyString);
 
         await waitTask.WaitAsync(token);
+
+        waitTask.IsCompletedSuccessfully.Should().BeTrue("the incoming message signals the waiter");
     }
 
     [Fact]

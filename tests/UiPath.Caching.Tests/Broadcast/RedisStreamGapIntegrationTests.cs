@@ -239,8 +239,8 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
             NullLogger<RedisStreamsTopic<ICacheEvent>>.Instance,
             NullTelemetryProvider.Instance,
             NullRedisProfiler.Instance,
-            _stop.Token,
-            clock: _clock);
+            _clock,
+            _stop.Token);
         var entry = new KeptEntry();
         using var subscription = topic.Subscribe(entry);
         await BroadcastNodeSignals.ReadyAsync(topic, _clock);

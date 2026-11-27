@@ -183,8 +183,8 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
                 NullLogger<RedisStreamsTopic<ICacheEvent>>.Instance,
                 NullTelemetryProvider.Instance,
                 NullRedisProfiler.Instance,
-                stop.Token,
-                clock: clock);
+                clock,
+                stop.Token);
             var ev = new TestCacheEvent { Id = "e1", Type = "set", Source = new Uri("urn:node"), Data = new CacheEventData("order:1") };
             (await topic.PublishAsync(ev, TestContext.Current.CancellationToken)).Should().BeTrue();
 

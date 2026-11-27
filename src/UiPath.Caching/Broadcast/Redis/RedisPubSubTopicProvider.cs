@@ -92,8 +92,8 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase, IPubSubSubscript
             _resiliencePipelineProvider,
             resolved,
             LoggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(),
-            _stopTokenSource.Token,
-            _clock);
+            _clock,
+            _stopTokenSource.Token);
         topic.Subscribed += () => SubscriptionConfirmed?.Invoke();
         return topic;
     }
