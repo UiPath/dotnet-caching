@@ -207,7 +207,7 @@ internal sealed class MoverHost
         await StopUnitsAsync([.. _running.Where(r => !current.Contains(r.Key) || r.Value.Task.IsCompleted).Select(r => r.Key)]).ConfigureAwait(false);
         foreach (var unit in units.Where(u => !_running.ContainsKey(u.Id)))
         {
-            var runner = new MoverUnitRunner(_group, unit, running.MoveId, running.Identity, ct => StillAsync(running, ct), _plane, _space, _targets, _connectorPrefix, _options, _rate, _time, _alerts, running.Direction);
+            var runner = new MoverUnitRunner(_group, unit, running.MoveId, running.Identity, ct => StillAsync(running, ct), _plane, _space, _targets, _connectorPrefix, _options, _rate, _time, _alerts, running.Direction, state?.S3AckedAt);
             var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var task = Task.Run(() => RunUnitAsync(runner, stop.Token), CancellationToken.None);
             lock (_running)

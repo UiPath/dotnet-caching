@@ -36,12 +36,14 @@ internal sealed class MoverUnitRunner
     private readonly string _direction;
     private readonly MoveSide _side;
     private readonly string _token = MoveScripts.NewNonce();
+    private readonly long? _s3At;
     private long _renewedAt;
     private bool _alertedAmbiguity;
 
     /// <param name="direction">Forward the pass scans L and moves to N; reverse it scans N and moves to L.</param>
-    public MoverUnitRunner(string group, ScanUnit unit, long moveId, string identity, Func<CancellationToken, Task<bool>> stillAllowed, IKeyMovePlane plane, IGroupKeySpace space, IReadOnlyDictionary<string, IMoveTarget> targets, string connectorPrefix, MoverOptions options, IMoveRate rate, TimeProvider time, ThrottledAlerts alerts, string direction = MoverPasses.Forward)
+    public MoverUnitRunner(string group, ScanUnit unit, long moveId, string identity, Func<CancellationToken, Task<bool>> stillAllowed, IKeyMovePlane plane, IGroupKeySpace space, IReadOnlyDictionary<string, IMoveTarget> targets, string connectorPrefix, MoverOptions options, IMoveRate rate, TimeProvider time, ThrottledAlerts alerts, string direction = MoverPasses.Forward, long? s3At = null)
     {
+        _s3At = s3At;
         (_group, _unit, _moveId, _identity, _stillAllowed, _plane, _space, _targets, _connectorPrefix, _options, _rate, _time, _alerts) = (group, unit, moveId, identity, stillAllowed, plane, space, targets, connectorPrefix, options, rate, time, alerts);
         _direction = direction;
         _side = direction == MoverPasses.Reverse ? MoveSide.Native : MoveSide.Legacy;
@@ -256,6 +258,8 @@ internal sealed class MoverUnitRunner
     private async Task<long> MoveWithRetryAsync(PassKeys pass, string key, Tally tally, PassOwnership ownership, RenewalCount renewal, CancellationToken cancellationToken)
     {
         var retryOnOom = true;
+        string? writtenCache = null;
+        void ObserveWrite(string cache) => writtenCache = cache;
         while (true)
         {
             if (!await MayMoveAsync(pass, renewal, cancellationToken).ConfigureAwait(false))
@@ -263,14 +267,35 @@ internal sealed class MoverUnitRunner
                 return EndBatch;
             }
 
-            var moved = await MoveKeyAsync(key, tally, ownership, retryOnOom, cancellationToken).ConfigureAwait(false);
+            var moved = await MoveKeyAsync(key, tally, ownership, retryOnOom, ObserveWrite, cancellationToken).ConfigureAwait(false);
             if (moved != RetryOom)
             {
+                if (moved != EndBatch && writtenCache is { } cache)
+                {
+                    KeyMoveTelemetry.CountWrittenAfterS3(cache, _group);
+                }
+
                 return moved;
             }
 
             retryOnOom = false;
         }
+    }
+
+    private Action<long, long>? ObserveSourceTtlOf(string cacheId, Action<string> observeWrite)
+    {
+        if (_s3At is not { } s3At || _space.MaxSourceTtl(_group, cacheId) is not { } longest)
+        {
+            return null;
+        }
+
+        return (ttlMs, requestedAt) =>
+        {
+            if (S3Canary.WrittenAfterS3(ttlMs, requestedAt, s3At, longest))
+            {
+                observeWrite(cacheId);
+            }
+        };
     }
 
     // The pause comes first, and ownership is judged after it, so a key is never scheduled on an ownership or identity that was lost while paused.
@@ -464,7 +489,7 @@ internal sealed class MoverUnitRunner
         server.ExecuteAsync(data.Db.Database, "SCAN", [at.Cursor, "MATCH", MasterScanner.EscapeGlob(_connectorPrefix) + patterns[at.Pattern], "COUNT", _options.ScanCount, "TYPE", "string"]).WaitAsync(cancellationToken);
 
     // Check ownership and key mapping before promotion. EndBatch ends the batch, RetryOom asks for one more try of the key, and anything else is the bytes published.
-    private async Task<long> MoveKeyAsync(string key, Tally tally, IMoveOwnership ownership, bool retryOnOom, CancellationToken cancellationToken)
+    private async Task<long> MoveKeyAsync(string key, Tally tally, IMoveOwnership ownership, bool retryOnOom, Action<string> observeWrite, CancellationToken cancellationToken)
     {
         var owners = _space.OwnersOf(_group, _side, key);
         if (owners.Count == 0)
@@ -511,7 +536,7 @@ internal sealed class MoverUnitRunner
         }
 
         var started = _time.GetTimestamp();
-        var result = await MoveOneAsync(target, caller, cacheId, ownership, cancellationToken).ConfigureAwait(false);
+        var result = await MoveOneAsync(target, caller, cacheId, ownership, observeWrite, cancellationToken).ConfigureAwait(false);
         _rate.Observed(_unit.Id, result, _time.GetElapsedTime(started));
         if (retryOnOom && string.Equals(result.SkipReason, "oom", StringComparison.Ordinal))
         {
@@ -541,10 +566,10 @@ internal sealed class MoverUnitRunner
         return result.Bytes;
     }
 
-    private ValueTask<MoveResult> MoveOneAsync(IMoveTarget target, string caller, string cacheId, IMoveOwnership ownership, CancellationToken cancellationToken) =>
+    private ValueTask<MoveResult> MoveOneAsync(IMoveTarget target, string caller, string cacheId, IMoveOwnership ownership, Action<string> observeWrite, CancellationToken cancellationToken) =>
         _side == MoveSide.Native
             ? target.MoveBackAsync(caller, _identity, ownership, cancellationToken)
-            : target.MoveAsync(caller, _space.MoveMinTtl(_group, cacheId), _identity, ownership, cancellationToken);
+            : target.MoveAsync(caller, _space.MoveMinTtl(_group, cacheId), _identity, ownership, ObserveSourceTtlOf(cacheId, observeWrite), cancellationToken);
 
     private async Task FlushAsync(KeyMoveData data, Tally tally)
     {

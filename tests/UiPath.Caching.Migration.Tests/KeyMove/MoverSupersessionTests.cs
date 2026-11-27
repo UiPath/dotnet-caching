@@ -19,7 +19,7 @@ public sealed class MoverSupersessionTests(RedisFixture fixture)
         await kit.SeedAsync("k");
         fake!.Supersede(1, "marker-é-1");
 
-        var result = await kit.Target.MoveAsync("k", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, Ct);
+        var result = await kit.Target.MoveAsync("k", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, null, Ct);
 
         result.SkipReason.Should().Be("superseded");
         var seen = handler.Seen.Should().ContainSingle().Subject;
@@ -67,11 +67,11 @@ public sealed class MoverSupersessionTests(RedisFixture fixture)
         await kit.SeedAsync("once", "always");
         fake!.Supersede(1);
 
-        (await kit.Target.MoveAsync("once", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, Ct)).Moved.Should().BeTrue();
+        (await kit.Target.MoveAsync("once", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, null, Ct)).Moved.Should().BeTrue();
         handler.Seen.Should().HaveCount(1);
 
         fake.Supersede(100);
-        (await kit.Target.MoveAsync("always", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, Ct)).SkipReason.Should().Be("superseded");
+        (await kit.Target.MoveAsync("always", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, null, Ct)).SkipReason.Should().Be("superseded");
         handler.Seen.Should().HaveCount(3, "one retry for the key that stayed superseded, and then it is left for the next pass");
     }
 
@@ -88,7 +88,7 @@ public sealed class MoverSupersessionTests(RedisFixture fixture)
         var before = kit.Kit.Id;
         fake!.Supersede(1);
 
-        var result = await kit.Target.MoveAsync("k", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, Ct);
+        var result = await kit.Target.MoveAsync("k", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, null, Ct);
 
         result.Moved.Should().BeFalse();
         result.SkipReason.Should().Be("identity");
@@ -107,7 +107,7 @@ public sealed class MoverSupersessionTests(RedisFixture fixture)
         await kit.SeedAsync("k");
         fake!.Supersede(5);
 
-        (await kit.Target.MoveAsync("k", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, Ct)).SkipReason.Should().Be("superseded");
+        (await kit.Target.MoveAsync("k", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, null, Ct)).SkipReason.Should().Be("superseded");
 
         handler.Seen.Should().ContainSingle();
         (await kit.Kit.ExistsAsync(kit.Kit.N("k"))).Should().BeFalse();

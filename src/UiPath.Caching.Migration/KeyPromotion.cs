@@ -127,7 +127,7 @@ internal sealed class KeyPromotion<T>
             return notCaptured;
         }
 
-        var snap = await SourceSnapAsync(key, cancellationToken).ConfigureAwait(false);
+        var snap = await SourceSnapAsync(key, cancellationToken, mover?.ObserveSourceTtl).ConfigureAwait(false);
         var replied = _p.Clock.GetTimestamp();
         var (served, skipped) = await ReadSourceAsync(run, snap, cancellationToken).ConfigureAwait(false);
         var deleteStaleTarget = _reverse && mover is not null && skipped is { Kind: PromotionKind.TooLarge };
@@ -566,7 +566,7 @@ internal sealed class KeyPromotion<T>
     private async ValueTask<PathRead<T>> ReadNativeAsync(string n, CancellationToken cancellationToken) =>
         Interpret(await SnapAsync(n, replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);
 
-    private async ValueTask<KeyMoveSnap> SourceSnapAsync(string key, CancellationToken cancellationToken)
+    private async ValueTask<KeyMoveSnap> SourceSnapAsync(string key, CancellationToken cancellationToken, Action<long, long>? observeSourceTtl = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!_source.IsAvailable)
@@ -575,7 +575,14 @@ internal sealed class KeyPromotion<T>
         }
 
         await At(SchedulePointStep.ReadSource).ConfigureAwait(false);
-        return await _source.SnapshotAsync(key, cancellationToken).ConfigureAwait(false);
+        var requestedAt = observeSourceTtl is null ? 0 : _p.Clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var snap = await _source.SnapshotAsync(key, cancellationToken).ConfigureAwait(false);
+        if (snap is { Kind: ReadOutcome.Found, TtlMs: >= 0 })
+        {
+            observeSourceTtl?.Invoke(snap.TtlMs, requestedAt);
+        }
+
+        return snap;
     }
 
     // The supersession markers belong to the forward NoOrigin writes.

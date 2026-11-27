@@ -91,7 +91,7 @@ public sealed class MoverIdleTests(RedisFixture fixture)
         public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) =>
             inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
-        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
         {
             if (Moving.TrySetResult())
             {
@@ -100,7 +100,7 @@ public sealed class MoverIdleTests(RedisFixture fixture)
                 cancellationToken.ThrowIfCancellationRequested();
             }
 
-            return await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+            return await inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
         }
     }
 

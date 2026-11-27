@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
@@ -11,6 +12,12 @@ internal static class KeyMoveTelemetry
     private static readonly Counter<long> MarkerOrphans = KeyMoveMeter.CreateCounter<long>("cache.keymove.marker_orphans");
     private static readonly Counter<long> GateOverrides = KeyMoveMeter.CreateCounter<long>("cache.keymove.gate_overrides");
     private static readonly Counter<long> CanaryKeys = KeyMoveMeter.CreateCounter<long>("cache.keymove.canary_keys");
+    private static readonly Counter<long> WrittenAfterS3 = KeyMoveMeter.CreateCounter<long>("cache.keymove.written_after_s3");
+    private static readonly ConcurrentDictionary<string, InventorySnapshot> LastInventory = new(StringComparer.Ordinal);
+
+    // The gauges hold the last inventory of each group; the instruments are kept alive by the meter.
+    private static readonly ObservableGauge<long> WrittenAfterS3Gauge = KeyMoveMeter.CreateObservableGauge("cache.keymove.inventory_written_after_s3", () => Measurements(static snapshot => snapshot.Canary));
+    private static readonly ObservableGauge<long> ExpectedUnmappedGauge = KeyMoveMeter.CreateObservableGauge("cache.keymove.inventory_expected_unmapped", () => Measurements(static snapshot => snapshot.ExpectedUnmapped));
 
     /// <summary>A step taken with a gate that a stored forcing approval overrode.</summary>
     public static void CountGateOverride(string group, string gate)
@@ -37,4 +44,34 @@ internal static class KeyMoveTelemetry
             MarkerOrphans.Add(count, new TagList { { "group", group } });
         }
     }
+
+    /// <summary>Counts observations of source writes after S3. A key can be observed again in a later pass.</summary>
+    public static void CountWrittenAfterS3(string cache, string group)
+    {
+        if (WrittenAfterS3.Enabled)
+        {
+            WrittenAfterS3.Add(1, new TagList { { "cache", cache }, { "group", group } });
+        }
+    }
+
+    /// <summary>Stores the last inventory's values for the gauges; the canary is null when S3 is unknown.</summary>
+    public static void RecordInventory(string group, long? writtenAfterS3, long expectedUnmapped)
+    {
+        _ = WrittenAfterS3Gauge;
+        _ = ExpectedUnmappedGauge;
+        LastInventory[group] = new InventorySnapshot(writtenAfterS3, expectedUnmapped);
+    }
+
+    private static IEnumerable<Measurement<long>> Measurements(Func<InventorySnapshot, long?> valueOf)
+    {
+        foreach (var (group, snapshot) in LastInventory)
+        {
+            if (valueOf(snapshot) is { } value)
+            {
+                yield return new Measurement<long>(value, new KeyValuePair<string, object?>("group", group));
+            }
+        }
+    }
+
+    private readonly record struct InventorySnapshot(long? Canary, long ExpectedUnmapped);
 }

@@ -26,15 +26,15 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
     {
         var side = SourceOf(state);
         var cacheIds = state.CacheIds;
-        var now = time.GetUtcNow().ToUnixTimeMilliseconds();
         var t3 = side == MoveSide.Legacy ? state.S3AckedAt : null;
 
-        var result = await scanner.RunAsync(space.Patterns(group, side), keys => CountAsync(keys, group, side, cacheIds, now, t3, cancellationToken), cancellationToken).ConfigureAwait(false);
-        KeyMoveTelemetry.CountCanaryKeys(group, result?.Canary ?? 0);
+        var result = await scanner.RunAsync(space.Patterns(group, side), keys => CountAsync(keys, group, side, cacheIds, t3, cancellationToken), cancellationToken).ConfigureAwait(false);
+        KeyMoveTelemetry.CountCanaryKeys(group, result.Canary ?? 0);
+        KeyMoveTelemetry.RecordInventory(group, result.Canary, result.ExpectedUnmapped);
         return result;
     }
 
-    private async Task<InventoryResult> CountAsync(IAsyncEnumerable<string> keys, string group, MoveSide side, IReadOnlyList<string> cacheIds, long now, long? t3, CancellationToken cancellationToken)
+    private async Task<InventoryResult> CountAsync(IAsyncEnumerable<string> keys, string group, MoveSide side, IReadOnlyList<string> cacheIds, long? t3, CancellationToken cancellationToken)
     {
         // Each retry starts a fresh count.
         var residue = cacheIds.ToDictionary(c => c, _ => 0L, StringComparer.Ordinal);
@@ -50,17 +50,23 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
             batch.Add((key, cache));
             if (batch.Count == LifeBatch)
             {
-                await FlushAsync(group, side, now, t3, totals, batch).ConfigureAwait(false);
+                await FlushAsync(group, side, t3, totals, batch).ConfigureAwait(false);
             }
         }
 
-        await FlushAsync(group, side, now, t3, totals, batch).ConfigureAwait(false);
-        return new InventoryResult(residue, totals.Movable, totals.Canary, totals.Ambiguous, totals.Invalid, totals.Droppable);
+        await FlushAsync(group, side, t3, totals, batch).ConfigureAwait(false);
+        return new InventoryResult(residue, totals.Movable, totals.Canary, totals.Ambiguous, totals.Invalid, totals.Droppable, totals.ExpectedUnmapped);
     }
 
     private string? CountKey(string group, MoveSide side, string key, Dictionary<string, long> residue, AttemptTotals totals)
     {
         var owners = space.OwnersOf(group, side, key);
+        if (owners.Count == 0)
+        {
+            totals.ExpectedUnmapped++;
+            return null;
+        }
+
         var managed = owners.Where(o => residue.ContainsKey(o)).ToArray();
         if (managed.Length == 0)
         {
@@ -85,8 +91,9 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
         return null;
     }
 
-    private async Task FlushAsync(string group, MoveSide side, long now, long? t3, AttemptTotals totals, List<(string Key, string Cache)> batch)
+    private async Task FlushAsync(string group, MoveSide side, long? t3, AttemptTotals totals, List<(string Key, string Cache)> batch)
     {
+        var now = time.GetUtcNow().ToUnixTimeMilliseconds();
         var lives = await Task.WhenAll(batch.Select(b => database.KeyTimeToLiveAsync(connectorPrefix + b.Key, CommandFlags.DemandMaster))).ConfigureAwait(false);
         var lengths = values is null ? null : await Task.WhenAll(batch.Select(b => LengthOfAsync(connectorPrefix + b.Key, space.KindOf(group, b.Cache)))).ConfigureAwait(false);
         for (var n = 0; n < batch.Count; n++)
@@ -110,7 +117,7 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
                 }
             }
 
-            if (t3 is { } start && lives[n] is { } life && space.MaxSourceTtl(group, cache) is { } longest && life.TotalMilliseconds + (now - start) > longest.TotalMilliseconds)
+            if (t3 is { } start && lives[n] is { } life && space.MaxSourceTtl(group, cache) is { } longest && S3Canary.WrittenAfterS3(life.TotalMilliseconds, now, start, longest))
             {
                 totals.Canary++;
             }
@@ -143,6 +150,8 @@ internal sealed class KeyInventory(MasterScanner scanner, IGroupKeySpace space, 
         public long Ambiguous { get; set; }
 
         public long Invalid { get; set; }
+
+        public long ExpectedUnmapped { get; set; }
 
         public long? Canary { get; set; } = canary;
     }

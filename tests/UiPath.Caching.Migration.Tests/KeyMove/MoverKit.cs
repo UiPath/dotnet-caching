@@ -14,7 +14,7 @@ internal sealed class MoverKit : IAsyncDisposable
     private readonly string _nTail;
     private readonly Dictionary<MoverHost, (MoverOptions Options, ObservedClock Poll)> _hosts = [];
 
-    private MoverKit(KeyMoveKit kit, bool twoOwners, bool hashCache, bool noOrigin, TimeSpan? groupMin, TimeSpan? cacheMin, string? excluded, ISupersessionHandler? supersession, Func<MoverKit, IMoveSide<Item>>? source, ISchedulePoint? schedule, KeyMoveOptions? moveOptions, IKeyMoveCodec<Item>? nativeCodec)
+    private MoverKit(KeyMoveKit kit, bool twoOwners, bool hashCache, bool noOrigin, TimeSpan? groupMin, TimeSpan? cacheMin, string? excluded, ISupersessionHandler? supersession, Func<MoverKit, IMoveSide<Item>>? source, ISchedulePoint? schedule, KeyMoveOptions? moveOptions, IKeyMoveCodec<Item>? nativeCodec, TimeSpan? maxSourceTtl)
     {
         Kit = kit;
         _lPrefix = kit.L(string.Empty);
@@ -22,15 +22,15 @@ internal sealed class MoverKit : IAsyncDisposable
         // A native key is a head, the caller key and a tail, which a cluster's tag needs.
         var native = kit.N("\u0001").Split('\u0001');
         (_nHead, _nTail) = (native[0], native[1]);
-        var caches = new List<KeyMoveCache> { Cache(kit.Cid, noOrigin, cacheMin, twoOwners ? k => k.StartsWith('a') || k.StartsWith('s') : null) };
+        var caches = new List<KeyMoveCache> { Cache(kit.Cid, noOrigin, cacheMin, maxSourceTtl, twoOwners ? k => k.StartsWith('a') || k.StartsWith('s') : null) };
         if (twoOwners)
         {
-            caches.Add(Cache(kit.Cid + "b", noOrigin, cacheMin, k => k.StartsWith('b') || k.StartsWith('s')));
+            caches.Add(Cache(kit.Cid + "b", noOrigin, cacheMin, maxSourceTtl, k => k.StartsWith('b') || k.StartsWith('s')));
         }
 
         if (hashCache)
         {
-            caches.Add(Cache(kit.Cid + "h", false, null, _ => false, hash: true));
+            caches.Add(Cache(kit.Cid + "h", false, null, null, _ => false, hash: true));
         }
 
         Space = new RegisteredKeySpace(caches, _nHead, null, excluded is null ? null : [excluded], groupMin is { } g ? new Dictionary<string, TimeSpan> { [kit.Group] = g } : null);
@@ -73,12 +73,13 @@ internal sealed class MoverKit : IAsyncDisposable
         TimeProvider? clock = null,
         KeyMoveOptions? moveOptions = null,
         IKeyMoveCodec<Item>? nativeCodec = null,
-        bool useScripts = true)
+        bool useScripts = true,
+        TimeSpan? maxSourceTtl = null)
     {
         var kit = await KeyMoveKit.CreateAsync(fixture, useScripts: useScripts, noOrigin: noOrigin, cluster: cluster, interceptDb: interceptDb, database: database, clock: clock);
         try
         {
-            var made = new MoverKit(kit, twoOwners, hashCache, noOrigin, groupMin, cacheMin, excluded?.Replace("{U}", kit.Unique, StringComparison.Ordinal), supersession, source, schedule, moveOptions, nativeCodec);
+            var made = new MoverKit(kit, twoOwners, hashCache, noOrigin, groupMin, cacheMin, excluded?.Replace("{U}", kit.Unique, StringComparison.Ordinal), supersession, source, schedule, moveOptions, nativeCodec, maxSourceTtl);
             return made;
         }
         catch
@@ -179,7 +180,7 @@ internal sealed class MoverKit : IAsyncDisposable
         (await PassedAsync(direction)).Should().BeTrue();
     }
 
-    public StateRecord State(string state = "S3", bool acked = true, string direction = "fwd") => new(
+    public StateRecord State(string state = "S3", bool acked = true, string direction = "fwd", long? s3At = null) => new(
         state,
         direction,
         Kit.Ep,
@@ -193,7 +194,10 @@ internal sealed class MoverKit : IAsyncDisposable
         acked ? Kit.Id : string.Empty,
         string.Empty,
         string.Empty,
-        string.Empty);
+        string.Empty)
+    {
+        Values = s3At is { } at ? new Dictionary<string, string> { [StateFields.T3At] = at.ToString(System.Globalization.CultureInfo.InvariantCulture) } : null,
+    };
 
     /// <summary>A plane over the same data whose database can be frozen, so a host on it dies as a killed process does: its commands fail and its lease stays held.</summary>
     public (StubPlane Plane, FreezableDatabase Freezer) FreezablePlane()
@@ -243,7 +247,7 @@ internal sealed class MoverKit : IAsyncDisposable
 
     public ValueTask DisposeAsync() => Kit.DisposeAsync();
 
-    private KeyMoveCache Cache(string name, bool noOrigin, TimeSpan? min, Func<string, bool>? owns, bool hash = false)
+    private KeyMoveCache Cache(string name, bool noOrigin, TimeSpan? min, TimeSpan? maxSourceTtl, Func<string, bool>? owns, bool hash = false)
     {
         static string? Parse(string key, string prefix) => key.StartsWith(prefix, StringComparison.Ordinal) ? Rest(key[prefix.Length..]) : null;
 
@@ -257,7 +261,7 @@ internal sealed class MoverKit : IAsyncDisposable
             noOrigin,
             false,
             false,
-            null,
+            maxSourceTtl,
             _lPrefix + "*",
             Kit.L,
             k => Parse(k, _lPrefix),

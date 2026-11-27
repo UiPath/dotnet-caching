@@ -132,7 +132,7 @@ public sealed class MoverStateWindowTests(RedisFixture fixture)
 
         public void Release() => _released.TrySetResult();
 
-        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
         {
             if (Interlocked.Increment(ref _seen) == blockAt)
             {
@@ -140,7 +140,7 @@ public sealed class MoverStateWindowTests(RedisFixture fixture)
                 await _released.Task.WaitAsync(cancellationToken);
             }
 
-            return await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+            return await inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
         }
     }
 }

@@ -423,7 +423,7 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
 
         public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
-        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
         {
             if (Interlocked.Increment(ref _seen) == crashAt)
             {
@@ -431,7 +431,7 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
                 throw new OperationCanceledException("killed");
             }
 
-            return await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+            return await inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
         }
     }
 
@@ -452,7 +452,7 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
 
         public void Release() => _released.TrySetResult();
 
-        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
         {
             if (Interlocked.Increment(ref _seen) == blockAt)
             {
@@ -460,7 +460,7 @@ public sealed class MoverLeaseTests(RedisFixture fixture)
                 await _released.Task.WaitAsync(cancellationToken);
             }
 
-            return await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+            return await inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
         }
     }
 }

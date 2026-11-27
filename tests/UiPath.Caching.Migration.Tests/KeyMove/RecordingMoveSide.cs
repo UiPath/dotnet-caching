@@ -3,7 +3,7 @@ using UiPath.Caching.Migration.Tests.Support;
 
 namespace UiPath.Caching.Migration.Tests.KeyMove;
 
-internal sealed class RecordingMoveSide(IMoveSide<Item> inner) : IMoveSide<Item>
+internal sealed class RecordingMoveSide(IMoveSide<Item> inner, Func<KeyMoveSnap, KeyMoveSnap>? onSnapshot = null) : IMoveSide<Item>
 {
 #if NET9_0_OR_GREATER
     private readonly Lock _gate = new();
@@ -53,10 +53,11 @@ internal sealed class RecordingMoveSide(IMoveSide<Item> inner) : IMoveSide<Item>
         return inner.Maps(logical);
     }
 
-    public ValueTask<KeyMoveSnap> SnapshotAsync(string logical, CancellationToken cancellationToken)
+    public async ValueTask<KeyMoveSnap> SnapshotAsync(string logical, CancellationToken cancellationToken)
     {
         Record("Snapshot");
-        return inner.SnapshotAsync(logical, cancellationToken);
+        var snap = await inner.SnapshotAsync(logical, cancellationToken);
+        return onSnapshot is null ? snap : onSnapshot(snap);
     }
 
     public ValueTask<bool?> ExistsAsync(string logical, CancellationToken cancellationToken)

@@ -115,7 +115,7 @@ public sealed class MoverClassTests(RedisFixture fixture)
         await kit.RunOnePassAsync(kit.Host(wrap: inner => new DeleteBeforeTarget(inner, kit.Db, kit.Kit.L("gone"), "gone")));
 
         (await kit.ProgressAsync()).Should().BeEquivalentTo(new Dictionary<string, long> { ["moved"] = 1, ["skipped:duplicate"] = 1 });
-        (await kit.Target.MoveAsync("never-there", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, Ct)).SkipReason.Should().Be("duplicate");
+        (await kit.Target.MoveAsync("never-there", TimeSpan.Zero, kit.Kit.Id, AlwaysOwned.Instance, null, Ct)).SkipReason.Should().Be("duplicate");
     }
 
     [Fact]
@@ -177,14 +177,14 @@ public sealed class MoverClassTests(RedisFixture fixture)
 
         public ValueTask<DryRunProbe> ProbeAsync(string key, TimeSpan minTtl, bool decode, CancellationToken cancellationToken) => inner.ProbeAsync(key, minTtl, decode, cancellationToken);
 
-        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, CancellationToken cancellationToken)
+        public async ValueTask<MoveResult> MoveAsync(string key, TimeSpan minTtl, string identity, IMoveOwnership ownership, Action<long, long>? observeSourceTtl, CancellationToken cancellationToken)
         {
             if (key == logical)
             {
                 await db.KeyDeleteAsync(redisKey);
             }
 
-            return await inner.MoveAsync(key, minTtl, identity, ownership, cancellationToken);
+            return await inner.MoveAsync(key, minTtl, identity, ownership, observeSourceTtl, cancellationToken);
         }
     }
 }
