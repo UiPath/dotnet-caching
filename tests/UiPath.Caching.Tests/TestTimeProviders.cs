@@ -165,6 +165,24 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         }
     }
 
+    /// <summary>Advances to the earliest pending timer; <c>false</c> when none is pending.</summary>
+    public bool TryAdvanceToNextTimer()
+    {
+        TimeSpan by;
+        lock (_gate)
+        {
+            if (_timers.Count == 0)
+            {
+                return false;
+            }
+
+            by = _timers.Min(timer => timer.Due) - _elapsed;
+        }
+
+        Advance(by);
+        return true;
+    }
+
     public void Advance(TimeSpan by)
     {
         ManualTimer[] due;

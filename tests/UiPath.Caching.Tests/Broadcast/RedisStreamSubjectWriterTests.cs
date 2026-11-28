@@ -246,7 +246,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
 
         await PollAsync(6);
-        (await WaitUntil(() => Volatile.Read(ref reads) >= 4)).Should().BeTrue();
+        (await PollUntilAsync(() => Volatile.Read(ref reads) >= 4)).Should().BeTrue();
         Volatile.Read(ref missed).Should().Be(1, "the group is not read again in between");
     }
 
@@ -310,7 +310,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         Volatile.Write(ref connected, 1);
         await PollAsync(2);
 
-        (await WaitUntil(() => Volatile.Read(ref readsAfterOutage) > 0)).Should().BeTrue();
+        (await PollUntilAsync(() => Volatile.Read(ref readsAfterOutage) > 0)).Should().BeTrue();
         Volatile.Read(ref checkedFirst).Should().BeTrue("the restored event may not have fired yet");
     }
 
@@ -928,7 +928,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         firstRead.SetException(new RedisException("NOGROUP No such key or consumer group"));
 
         await PollAsync(2);
-        (await WaitUntil(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamRangeAsync)))).Should().BeTrue("the group turned up and was checked");
+        (await PollUntilAsync(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamRangeAsync)))).Should().BeTrue("the group turned up and was checked");
         // The loop reads again only after the check has reported.
         var readsAtCheck = Volatile.Read(ref reads);
         await PollAsync();
@@ -1032,7 +1032,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         sut.MarkSubscribed();
 
         await PollAsync(3);
-        (await WaitUntil(() => Volatile.Read(ref reads) >= 4 && Volatile.Read(ref creates) == 2)).Should().BeTrue();
+        (await PollUntilAsync(() => Volatile.Read(ref reads) >= 4 && Volatile.Read(ref creates) == 2)).Should().BeTrue();
         Volatile.Read(ref missed).Should().Be(1, "the second recreate made good the first, for the loss already reported");
     }
 
@@ -1935,7 +1935,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var read = await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TestContext.Current.CancellationToken);
         await PollAsync(2);
-        (await WaitUntil(() => positions.Count(p => p == ">") >= 3)).Should().BeTrue();
+        (await PollUntilAsync(() => positions.Count(p => p == ">") >= 3)).Should().BeTrue();
         await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(TestContext.Current.CancellationToken);
 
@@ -2422,7 +2422,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { AutoAck = true });
 
         await PollAsync(1);
-        (await WaitUntil(() => Volatile.Read(ref reads) >= 2 && Volatile.Read(ref missed) >= 2)).Should().BeTrue();
+        (await PollUntilAsync(() => Volatile.Read(ref reads) >= 2 && Volatile.Read(ref missed) >= 2)).Should().BeTrue();
         await _cancellationTokenSource.CancelAsync();
         try { await sut.FetchTask.WaitAsync(TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
 
@@ -2460,7 +2460,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { AutoAck = true });
 
         await PollAsync(7);
-        (await WaitUntil(() => Volatile.Read(ref reads) >= 6 && Volatile.Read(ref missed) >= 4)).Should().BeTrue();
+        (await PollUntilAsync(() => Volatile.Read(ref reads) >= 6 && Volatile.Read(ref missed) >= 4)).Should().BeTrue();
         await _cancellationTokenSource.CancelAsync();
         try { await sut.FetchTask.WaitAsync(TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
 
@@ -2508,7 +2508,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         sut.MarkSubscribed();
 
         await PollAsync(2);
-        (await WaitUntil(() => Volatile.Read(ref checks) >= 2)).Should().BeTrue();
+        (await PollUntilAsync(() => Volatile.Read(ref checks) >= 2)).Should().BeTrue();
         await _cancellationTokenSource.CancelAsync();
         try { await sut.FetchTask.WaitAsync(TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
 
@@ -2600,7 +2600,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
 
         await PollAsync(3);
-        (await WaitUntil(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.ScriptEvaluateAsync) && c.GetArguments()[0] is string script && !IsHeadScript(script)))).Should().BeTrue();
+        (await PollUntilAsync(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.ScriptEvaluateAsync) && c.GetArguments()[0] is string script && !IsHeadScript(script)))).Should().BeTrue();
         await _clock.WhenTimerAsync(() => _clock.HasTimers);
         _clock.Advance(TimeSpan.FromMilliseconds(200));
         await _cancellationTokenSource.CancelAsync();
@@ -2687,6 +2687,25 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     private async Task<bool> WaitUntil(Func<bool> condition)
     {
         await await Task.WhenAny(_operations.WhenAsync(condition), _clock.WhenTimerAsync(condition));
+        return condition();
+    }
+
+    /// <summary>
+    /// Moves the clock from timer to timer until <paramref name="condition"/> holds. A step that met a timer let go before it fired
+    /// leaves the loop on one that is still pending, which a fixed count of steps never reaches.
+    /// </summary>
+    private async Task<bool> PollUntilAsync(Func<bool> condition)
+    {
+        for (var step = 0; step < 20; step++)
+        {
+            if (await WaitUntil(() => condition() || _clock.HasTimers) && condition())
+            {
+                return true;
+            }
+
+            _clock.TryAdvanceToNextTimer();
+        }
+
         return condition();
     }
 
