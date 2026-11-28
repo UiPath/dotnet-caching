@@ -226,6 +226,24 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     }
 
     [Fact]
+    public async Task A_doorbell_whose_first_subscribe_fails_goes_live_on_the_retry()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.StreamsUsable, RedisContainerFixture.StreamsSkipReason);
+        const string prefix = "retry:";
+        _extraKeys.Add(_stream.Prepend(prefix));
+        var connector = new KeyPrefixingConnector(_connector!, prefix) { FailSubscribes = 1 };
+        var (a, _) = Topic("urn:a", FarPoll, connector: connector);
+
+        // The failure lands inside the ready steps, so part of the retry delay is already used when the wait for live begins.
+        await ReadyAsync();
+        a.NotifyLive.Should().BeFalse("the first subscribe failed");
+        await LiveAsync(a);
+
+        a.NotifyLive.Should().BeTrue("the retry subscribes");
+    }
+
+    [Fact]
     public async Task A_server_that_refuses_sharded_pubsub_gets_the_doorbell_over_the_literal_channel()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
@@ -589,7 +607,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         await Task.CompletedTask;
     }
 
-    /// <summary>How far the clock must move for the next subscribe attempt: the due time, or the period a failed attempt waits before its retry.</summary>
+    /// <summary>How far the clock must move for the next subscribe attempt: the due time, or what is left of a failed attempt's retry delay.</summary>
     private TimeSpan? SubscribeDue(RedisStreamsTopic<ICacheEvent> topic)
     {
         var run = _runs[topic];
@@ -597,11 +615,10 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         {
             return run.Due;
         }
-        // The channel's own timer: another timer due at the retry period, such as a poll, must not stand in for it.
+        // The channel's own timer, at whatever is left of its delay: an earlier advance may have used part of it, and another timer must not stand in for it.
         var notify = NotifyChannel(topic);
         var timer = (ITimer?)notify?.GetType().GetField("_subscribeTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(notify);
-        var period = (TimeSpan?)notify?.GetType().GetField("_timerPeriod", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(notify);
-        return timer is not null && period is { } retry && run.Clock.DueIn(timer) == retry ? retry : null;
+        return timer is not null && run.Clock.DueIn(timer) is { } left && left > TimeSpan.Zero ? left : null;
     }
 
     private async Task ReadyAsync()
@@ -722,7 +739,10 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
 
         public IDatabase Database => writes is not null ? writes.Observe(inner.Database) : inner.Database.WithKeyPrefix(prefix!);
 
-        public ISubscriber Subscriber => inner.Subscriber;
+        /// <summary>How many reads of <see cref="Subscriber"/> fail as a dropped socket would, before it is handed out.</summary>
+        public int FailSubscribes { get; set; }
+
+        public ISubscriber Subscriber => FailSubscribes-- > 0 ? throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "subscribe refused for the test", null, CommandStatus.WaitingToBeSent) : inner.Subscriber;
 
         public void ForceReconnect() => inner.ForceReconnect();
 
