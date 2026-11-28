@@ -66,20 +66,20 @@ public sealed class KeyMoveRestoreTests(RedisFixture fixture)
     }
 
     [Fact]
-    public async Task Closed_data_stays_native_after_control_repair_and_a_lowered_stage_request()
+    public async Task Done_data_stays_native_after_control_repair_and_a_lowered_stage_request()
     {
         await using var host = await MovingCacheHost.CreateAsync(fixture);
         var ledger = await SeedLedgerAsync(host);
         await DriveToAsync(host, "S5");
         await ApplyWritesAsync(host, ledger, revision: 1, acceptsWrites: true, Ct);
-        var closed = await host.StateAsync();
+        var done = await host.StateAsync();
         await host.Db.KeyDeleteAsync(host.Names.ControlFor(MovingCacheHost.Group, host.Native("kept"))).WaitAsync(Ct);
 
         await host.UpkeepAsync();
         var repaired = await host.StateAsync();
         repaired.State.Should().Be("S5");
         repaired.Durable.Should().BeTrue();
-        repaired.Ep.Should().BeGreaterThan(closed.Ep);
+        repaired.Ep.Should().BeGreaterThan(done.Ep);
         await host.SetStageAsync(2);
         await host.ExpectAlertAsync("flag_below_closed");
         await host.ApproveAsync(ApprovalKinds.Abandon);

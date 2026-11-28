@@ -77,7 +77,7 @@ internal static class ClaimLogic
 
     /// <param name="target"><c>cert</c>, <c>idle</c> or <c>closed</c>.</param>
     /// <param name="epoch">For <c>cert</c> only; otherwise empty.</param>
-    /// <param name="terminal"><c>not-started</c> or <c>closed</c> for <c>cert</c> only; otherwise empty.</param>
+    /// <param name="terminal"><c>off</c> or <c>done</c> for <c>cert</c> only; otherwise empty.</param>
     public static ClaimDecision Release(IReadOnlyList<KeyValuePair<string, string>> record, string field, string token, string target, string epoch, string terminal)
     {
         var view = new Snapshot(record);
@@ -237,7 +237,7 @@ internal static class ClaimLogic
 
     private static bool ValidReleaseTarget(string target, string epoch, string terminal) =>
         target == Certify
-            ? ClaimGrammar.ValidEpoch(epoch) && terminal is KeyMoveStates.NotStarted or KeyMoveStates.Closed
+            ? ClaimGrammar.ValidEpoch(epoch) && terminal is KeyMoveStates.Off or KeyMoveStates.Done
             : epoch.Length == 0 && terminal.Length == 0;
 
     private static ClaimDecision CertifyClaim(string field, ClaimValue own, string cert)
@@ -257,7 +257,7 @@ internal static class ClaimLogic
             return ClaimDecision.One(field, $"{ClaimGrammar.Idle}|{own.Token}|{own.Descriptor}|");
         }
 
-        if (own.Status == ClaimGrammar.Open && own.Cert.EndsWith(":" + KeyMoveStates.NotStarted, StringComparison.Ordinal))
+        if (own.Status == ClaimGrammar.Open && own.Cert.EndsWith(":" + KeyMoveStates.Off, StringComparison.Ordinal))
         {
             var writes = new List<ClaimWrite>();
             if (kind == FormatMove && !TryRestorePointer(view, group, writes))
@@ -274,7 +274,7 @@ internal static class ClaimLogic
 
     private static ClaimDecision ReleaseClosedClaim(Snapshot view, string field, ClaimValue own, string kind, string group)
     {
-        if (own.Status == ClaimGrammar.Open && own.Cert.EndsWith(":" + KeyMoveStates.Closed, StringComparison.Ordinal))
+        if (own.Status == ClaimGrammar.Open && own.Cert.EndsWith(":" + KeyMoveStates.Done, StringComparison.Ordinal))
         {
             var writes = new List<ClaimWrite>();
             if (kind == FormatMove)

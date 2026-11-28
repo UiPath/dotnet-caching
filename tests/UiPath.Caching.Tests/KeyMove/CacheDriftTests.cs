@@ -9,7 +9,7 @@ namespace UiPath.Caching.Tests.KeyMove;
 [Trait("Category", "Integration")]
 public class CacheDriftTests(RedisContainerFixture fixture)
 {
-    private static readonly StateRecord Ready = State("S1", ep: 11, prev: "S0:none:0:10:id10");
+    private static readonly StateRecord Preparing = State("S1", ep: 11, prev: "S0:none:0:10:id10");
 
     [Theory]
     [InlineData("S1", "S0:none:0:9:id9")]
@@ -29,8 +29,8 @@ public class CacheDriftTests(RedisContainerFixture fixture)
     [Fact]
     public async Task Adverts_that_disagree_or_say_nothing_never_rebuild_and_are_reported()
     {
-        var disagree = await StepPlanner.DecideAsync(Input(Ready, [Advert("n1", ca: "a,b", acks: Ready), Advert("n2", ca: "a", acks: Ready)]), Defaults);
-        var silent = await StepPlanner.DecideAsync(Input(Ready, [Advert("n1", ca: "a,b", acks: Ready), Advert("n2", ca: null, acks: Ready)]), Defaults);
+        var disagree = await StepPlanner.DecideAsync(Input(Preparing, [Advert("n1", ca: "a,b", acks: Preparing), Advert("n2", ca: "a", acks: Preparing)]), Defaults);
+        var silent = await StepPlanner.DecideAsync(Input(Preparing, [Advert("n1", ca: "a,b", acks: Preparing), Advert("n2", ca: null, acks: Preparing)]), Defaults);
 
         disagree.Kind.Should().NotBe(StepKind.RebuildCaches);
         disagree.AlertList.Should().Contain(new StageAlert("cache_set_drift", "n1"));
@@ -68,8 +68,8 @@ public class CacheDriftTests(RedisContainerFixture fixture)
     [Fact]
     public async Task A_cache_name_a_state_cannot_hold_and_a_lowered_flag_do_not_rebuild()
     {
-        var bad = await StepPlanner.DecideAsync(Input(Ready, [Advert("n1", ca: "a,b@c", acks: Ready), Advert("n2", ca: "a,b@c", acks: Ready)]), Defaults);
-        var lowered = await StepPlanner.DecideAsync(Input(Ready, [Advert("n1", ca: "a,b", acks: Ready), Advert("n2", ca: "a,b", acks: Ready)], Verdict(min: 2, lowered: 2)), Defaults);
+        var bad = await StepPlanner.DecideAsync(Input(Preparing, [Advert("n1", ca: "a,b@c", acks: Preparing), Advert("n2", ca: "a,b@c", acks: Preparing)]), Defaults);
+        var lowered = await StepPlanner.DecideAsync(Input(Preparing, [Advert("n1", ca: "a,b", acks: Preparing), Advert("n2", ca: "a,b", acks: Preparing)], Verdict(min: 2, lowered: 2)), Defaults);
 
         bad.Kind.Should().NotBe(StepKind.RebuildCaches);
         lowered.Kind.Should().NotBe(StepKind.RebuildCaches, "the way back to S0 refreshes the set through Init");
@@ -78,7 +78,7 @@ public class CacheDriftTests(RedisContainerFixture fixture)
     [Fact]
     public async Task The_same_set_raises_nothing()
     {
-        var plan = await StepPlanner.DecideAsync(Input(Ready, [Advert("n1", acks: Ready), Advert("n2", acks: Ready)]), Defaults);
+        var plan = await StepPlanner.DecideAsync(Input(Preparing, [Advert("n1", acks: Preparing), Advert("n2", acks: Preparing)]), Defaults);
 
         plan.AlertList.Select(a => a.Code).Should().NotContain("cache_set_drift");
     }
@@ -88,18 +88,18 @@ public class CacheDriftTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         await kit.PrepareAsync();
-        var ready = await kit.StepUntilAsync("S1");
+        var preparing = await kit.StepUntilAsync("S1");
         kit.Fleet.All(n => n.Ca = "a,b");
         kit.Fleet.All(n => n.Acks = false);
 
-        for (var step = 0; step < 6 && (await kit.StateAsync()).Ep == ready.Ep; step++)
+        for (var step = 0; step < 6 && (await kit.StateAsync()).Ep == preparing.Ep; step++)
         {
             await kit.StepAsync();
         }
 
         var rebuilt = await kit.StateAsync();
-        rebuilt.Ep.Should().Be(ready.Ep + 1);
-        rebuilt.Id.Should().NotBe(ready.Id);
+        rebuilt.Ep.Should().Be(preparing.Ep + 1);
+        rebuilt.Id.Should().NotBe(preparing.Id);
         rebuilt.CacheIds.Should().Equal("a", "b");
         rebuilt.State.Should().Be("S1");
         (await kit.Kit.ControlDb.HashGetAllAsync(kit.Kit.Names.Control(kit.Group, 0))).Select(e => (string)e.Name!).Should().Contain(["c:a", "c:b"]);
@@ -119,7 +119,7 @@ public class CacheDriftTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         await kit.PrepareAsync();
-        var moving = await kit.StepUntilAsync("S3");
+        var copying = await kit.StepUntilAsync("S3");
         kit.Fleet.All(n => n.Ca = "a,b");
 
         for (var step = 0; step < 4; step++)
@@ -128,7 +128,7 @@ public class CacheDriftTests(RedisContainerFixture fixture)
         }
 
         var after = await kit.StateAsync();
-        after.Ep.Should().Be(moving.Ep);
+        after.Ep.Should().Be(copying.Ep);
         after.CacheIds.Should().Equal("a");
         kit.Alerts.Should().Contain(a => a.Code == "cache_set_drift");
     }

@@ -7,7 +7,7 @@ internal sealed class FlagViews(StageDriverOptions options, TimeProvider time)
 {
     private readonly ConcurrentDictionary<string, GroupSamples> _groups = new(StringComparer.Ordinal);
 
-    /// <param name="stageFlag">The flag value the current state stands for: 2 for not-started, 3 for ready to moving, 4 for drained, 5 for closed.</param>
+    /// <param name="stageFlag">The flag value the current state stands for: 2 for off, 3 for preparing to copying, 4 for copied, 5 for done.</param>
     /// <param name="confirmLevel">The level whose continuous agreement is measured (the CloseConfirm level), or null.</param>
     public FlagVerdict Sample(string group, IReadOnlyList<NodeAdvert> fresh, int stageFlag, int? confirmLevel = null)
     {

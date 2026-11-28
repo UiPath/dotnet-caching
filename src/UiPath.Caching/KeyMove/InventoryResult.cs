@@ -6,6 +6,6 @@ namespace UiPath.Caching.KeyMove;
 /// <param name="Droppable">Owned keys whose value the codec refuses for good; they stay in the residue, are not movable, and a delete removes them.</param>
 /// <param name="Ambiguous">Keys that more than one cache owns; each is counted in the residue of every cache that claims it, never moved, and blocks the confirming pass.</param>
 /// <param name="InvalidMapping">Owned keys whose registration maps them outside the namespace or onto a reserved key; a defect that no mover pass can finish, so the drain evidence fails while any exists.</param>
-/// <param name="Canary">Owned keys whose life says they were written after moving. Null in reverse moves or when the time of moving is unknown.</param>
+/// <param name="Canary">Owned keys whose life says they were written after copying. Null in reverse moves or when the time of copying is unknown.</param>
 /// <param name="ExpectedUnmapped">Keys the group's patterns matched that have no owner; counted apart, never in the residue, and never blocking.</param>
 internal sealed record InventoryResult(IReadOnlyDictionary<string, long> Residue, long Movable, long? Canary, long Ambiguous = 0, long InvalidMapping = 0, long Droppable = 0, long ExpectedUnmapped = 0);

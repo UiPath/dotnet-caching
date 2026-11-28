@@ -17,11 +17,11 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         kit.Facts.Claims = true;
         await kit.PrepareAsync();
 
-        var ready = await kit.StepUntilAsync("S1");
+        var preparing = await kit.StepUntilAsync("S1");
 
         kit.Claim.Calls.Should().Equal("pend:rt", "open");
-        ready.Claim.Should().NotBeEmpty();
-        ready.Move.Should().Be("rt");
+        preparing.Claim.Should().NotBeEmpty();
+        preparing.Move.Should().Be("rt");
     }
 
     [Fact]
@@ -35,10 +35,10 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         await kit.Kit.Db.HashSetAsync(kit.Kit.StateKey, StateFields.PendToken, stored);
         await kit.Kit.Db.HashSetAsync(kit.Kit.StateKey, StateFields.PendUncertain, "1");
 
-        var ready = await kit.StepUntilAsync("S1");
+        var preparing = await kit.StepUntilAsync("S1");
 
         kit.Claim.Acquired.Should().NotBeEmpty().And.OnlyContain(t => t == stored);
-        ready.Claim.Should().Be(stored, "the state carries the token the claim handed out");
+        preparing.Claim.Should().Be(stored, "the state carries the token the claim handed out");
         (await kit.Kit.Db.HashExistsAsync(kit.Kit.StateKey, StateFields.PendToken)).Should().BeFalse("the TRANSIT that binds the claim ends the acquisition");
         (await kit.Kit.Db.HashExistsAsync(kit.Kit.StateKey, StateFields.PendUncertain)).Should().BeFalse("the mark goes with the token");
     }
@@ -97,14 +97,14 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         await using var kit = await DriverKit.CreateAsync(fixture);
         kit.Facts.Claims = true;
         await kit.PrepareAsync();
-        var ready = await kit.StepUntilAsync("S1");
+        var preparing = await kit.StepUntilAsync("S1");
         kit.Fleet.Nodes[0].Fl = 2;
         kit.Claim.Calls.Clear();
 
         var off = await kit.StepUntilAsync("S0", "none", advance: Ten);
 
         kit.Claim.Calls.Should().Equal("cert:S0", "idle");
-        off.Release.Should().Be($"{ready.Claim}:{off.Ep}:S0");
+        off.Release.Should().Be($"{preparing.Claim}:{off.Ep}:S0");
     }
 
     [Fact]
@@ -140,17 +140,17 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
     }
 
     [Fact]
-    public async Task The_abandon_of_a_closed_group_flips_to_S0_waits_for_every_ack_and_recycle_then_purges_and_releases_the_claim()
+    public async Task The_abandon_of_a_done_group_flips_to_S0_waits_for_every_ack_and_recycle_then_purges_and_releases_the_claim()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         kit.Facts.Claims = true;
         kit.Facts.AcceptRefill = true;
-        var closed = await ToClosedAsync(kit);
+        var doneState = await ToDoneAsync(kit);
         kit.Claim.Calls.Clear();
 
         (await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
         var flipped = await kit.StepUntilAsync("S0", "none");
-        flipped.Should().Match<StateRecord>(s => s.NPop == 0 && s.Ep > closed.Ep && s.Field(StateFields.ColdStart) == closed.Claim);
+        flipped.Should().Match<StateRecord>(s => s.NPop == 0 && s.Ep > doneState.Ep && s.Field(StateFields.ColdStart) == doneState.Claim);
 
         for (var n = 0; n < 4; n++)
         {
@@ -168,7 +168,7 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         kit.Claim.Calls.Should().Equal("cert:S0", "idle");
         var done = await kit.StateAsync();
         done.Field(StateFields.ColdStart).Should().BeEmpty();
-        done.Release.Should().Be($"{closed.Claim}:{flipped.Ep}:S0");
+        done.Release.Should().Be($"{doneState.Claim}:{flipped.Ep}:S0");
     }
 
     [Fact]
@@ -177,8 +177,8 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         await using var kit = await DriverKit.CreateAsync(fixture);
         kit.Facts.Claims = true;
         kit.Facts.AcceptRefill = true;
-        var closed = await ToClosedAsync(kit);
-        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, closed.Id, [(StateFields.Swept, closed.Id)], []);
+        var done = await ToDoneAsync(kit);
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, done.Id, [(StateFields.Swept, done.Id)], []);
         kit.Claim.Calls.Clear();
         await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
 
@@ -193,8 +193,8 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         await using var kit = await DriverKit.CreateAsync(fixture);
         kit.Facts.Claims = true;
         kit.Facts.AcceptRefill = true;
-        var closed = await ToClosedAsync(kit);
-        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, closed.Id, [(StateFields.Swept, closed.Id)], []);
+        var done = await ToDoneAsync(kit);
+        await kit.Kit.Scripts.FieldsAsync(kit.Kit.StateKey, done.Id, [(StateFields.Swept, done.Id)], []);
         kit.Claim.Reopen = ClaimOutcome.Refused;
         await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
 
@@ -208,7 +208,7 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
     public async Task A_group_with_a_cache_that_does_not_accept_a_refill_is_never_abandoned()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var closed = await ToClosedAsync(kit);
+        var done = await ToDoneAsync(kit);
         await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
 
         for (var n = 0; n < 3; n++)
@@ -216,7 +216,7 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
             await kit.StepAsync();
         }
 
-        (await kit.StateAsync()).Should().Match<StateRecord>(s => s.State == "S5" && s.Ep == closed.Ep);
+        (await kit.StateAsync()).Should().Match<StateRecord>(s => s.State == "S5" && s.Ep == done.Ep);
         kit.Alerts.Should().Contain(a => a.Code == "abandon_refused");
     }
 
@@ -272,7 +272,7 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         await kit.Kit.Db.KeyDeleteAsync(key);
     }
 
-    private static async Task<StateRecord> ToClosedAsync(DriverKit kit)
+    private static async Task<StateRecord> ToDoneAsync(DriverKit kit)
     {
         await kit.PrepareAsync();
         await kit.StepUntilAsync("S3");

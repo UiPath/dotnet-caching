@@ -19,7 +19,7 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
 
         var s1 = await kit.StepUntilAsync("S1");
         var s3 = await kit.StepUntilAsync("S3");
-        var s4 = await ToDrainedFromS3Async(kit);
+        var s4 = await ToCopiedFromS3Async(kit);
 
         s1.ForwardGeneration.Should().Be(s1.Id);
         s1.RetiringGeneration.Should().BeEmpty();
@@ -32,13 +32,13 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
     public async Task The_reverse_start_moves_fg_to_rg_and_the_retire_step_clears_it_and_the_release_leaves_neither_and_the_next_start_mints_a_new_one()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
-        var first = drained.ForwardGeneration;
+        var copied = await ToCopiedAsync(kit);
+        var first = copied.ForwardGeneration;
         kit.Fleet.All(n => n.Fl = 2);
 
         var reverse = await kit.StepUntilAsync("S1", "rev", advance: Ten);
         var afterReverseStart = await RecordAsync(kit);
-        var reverseMoving = await kit.StepUntilAsync("S3", "rev");
+        var copyingBack = await kit.StepUntilAsync("S3", "rev");
         var afterRetire = await RecordAsync(kit);
         await kit.StepUntilAsync("S4", "rev");
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Release, "ok", "op", CancellationToken.None);
@@ -50,7 +50,7 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
         reverse.ForwardGeneration.Should().BeEmpty();
         reverse.RetiringGeneration.Should().Be(first);
         afterReverseStart.Should().Contain(("rg", first)).And.NotContain(f => f.Field == "fg");
-        reverseMoving.RetiringGeneration.Should().BeEmpty();
+        copyingBack.RetiringGeneration.Should().BeEmpty();
         afterRetire.Should().NotContain(f => f.Field == "rg").And.NotContain(f => f.Field == "fg");
         off.ForwardGeneration.Should().BeEmpty();
         off.RetiringGeneration.Should().BeEmpty();
@@ -62,19 +62,19 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
     public async Task The_return_to_the_move_and_a_rebuild_keep_fg_with_a_new_identity()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         kit.Fleet.All(n => n.Fl = 3);
 
         var back = await kit.StepUntilAsync("S3", advance: Ten);
         var rebuilt = await kit.Kit.Upkeep.RebuildAsync(kit.Group, back, null, null, CancellationToken.None);
         var afterRebuild = await kit.StateAsync();
 
-        back.Id.Should().NotBe(drained.Id);
-        back.ForwardGeneration.Should().Be(drained.ForwardGeneration);
+        back.Id.Should().NotBe(copied.Id);
+        back.ForwardGeneration.Should().Be(copied.ForwardGeneration);
         rebuilt.Outcome.Should().Be(TransitionOutcome.Completed);
         afterRebuild.Id.Should().NotBe(back.Id);
-        afterRebuild.ForwardGeneration.Should().Be(drained.ForwardGeneration);
-        (await RecordAsync(kit)).Should().Contain(("fg", drained.ForwardGeneration));
+        afterRebuild.ForwardGeneration.Should().Be(copied.ForwardGeneration);
+        (await RecordAsync(kit)).Should().Contain(("fg", copied.ForwardGeneration));
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
     public async Task The_abandon_of_a_reverse_start_that_never_committed_restores_fg_and_rg_of_the_committed_state()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         var state = await kit.StateAsync();
 
         // A reverse start that was written to the state hash and went no further.
@@ -106,31 +106,31 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
         (await kit.Kit.Scripts.TransitAsync(kit.Kit.StateKey, StateExpectation.Holding(state.Ep, state.Id, 1), target)).Should().Be(MoveScripts.Written);
         var inFlight = await kit.StateAsync();
         inFlight.ForwardGeneration.Should().BeEmpty();
-        inFlight.RetiringGeneration.Should().Be(drained.ForwardGeneration);
+        inFlight.RetiringGeneration.Should().Be(copied.ForwardGeneration);
 
         var result = await kit.Kit.Sequence.AbandonAsync(kit.Group, false, 1, new SequenceOptions(), CancellationToken.None);
         var restored = await kit.StateAsync();
 
         result.Outcome.Should().Be(TransitionOutcome.Completed);
         restored.State.Should().Be("S4");
-        restored.ForwardGeneration.Should().Be(drained.ForwardGeneration);
+        restored.ForwardGeneration.Should().Be(copied.ForwardGeneration);
         restored.RetiringGeneration.Should().BeEmpty();
-        (await RecordAsync(kit)).Should().Contain(("fg", drained.ForwardGeneration));
+        (await RecordAsync(kit)).Should().Contain(("fg", copied.ForwardGeneration));
     }
 
     [Fact]
     public async Task DURABLE_keeps_the_generations_of_the_committed_state_as_pfg_and_prg()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         kit.Fleet.All(n => n.Fl = 2);
 
         var reverse = await kit.StepUntilAsync("S1", "rev", advance: Ten);
 
-        drained.Field(StateFields.PrevFg).Should().Be(drained.ForwardGeneration);
-        drained.Field(StateFields.PrevRg).Should().BeEmpty();
+        copied.Field(StateFields.PrevFg).Should().Be(copied.ForwardGeneration);
+        copied.Field(StateFields.PrevRg).Should().BeEmpty();
         reverse.Field(StateFields.PrevFg).Should().BeEmpty();
-        reverse.Field(StateFields.PrevRg).Should().Be(drained.ForwardGeneration);
+        reverse.Field(StateFields.PrevRg).Should().Be(copied.ForwardGeneration);
     }
 
     [Fact]
@@ -145,7 +145,7 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
         await kit.Kit.Sequence.AbandonAsync(kit.Group, false, 1, new SequenceOptions(), CancellationToken.None);
         var abandonedStart = await kit.StateAsync();
         await kit.StepUntilAsync("S1");
-        var drained = await ToDrainedFromS3Async(kit);
+        var copied = await ToCopiedFromS3Async(kit);
         kit.Fleet.All(n => n.Fl = 2);
         var reverse = await kit.StepUntilAsync("S1", "rev", advance: Ten);
         var retireTarget = new StateTarget("S3", "rev", 1, reverse.Ep + 1, "retire-id", StateRecord.FormatPrev(reverse.State, reverse.Direction, reverse.NPop, reverse.Ep, reverse.Id), 1, Clear: [StateFields.Rg]);
@@ -159,7 +159,7 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
         abandonedStart.ForwardGeneration.Should().BeEmpty();
         abandonedRetire.State.Should().Be("S1");
         abandonedRetire.Direction.Should().Be("rev");
-        abandonedRetire.RetiringGeneration.Should().Be(drained.ForwardGeneration);
+        abandonedRetire.RetiringGeneration.Should().Be(copied.ForwardGeneration);
         abandonedRetire.ForwardGeneration.Should().BeEmpty();
     }
 
@@ -167,7 +167,7 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
     public async Task Reassert_takes_fg_from_the_record_of_the_highest_ep()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         await kit.Kit.Db.KeyDeleteAsync(kit.Kit.StateKey);
 
         var result = await kit.Kit.Recovery.ReassertAsync(kit.Group, "state lost", null, null, null, CancellationToken.None);
@@ -175,15 +175,15 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
 
         result.Outcome.Should().Be(RecoveryOutcome.Done);
         state.State.Should().Be("S4");
-        state.ForwardGeneration.Should().Be(drained.ForwardGeneration);
-        (await RecordAsync(kit)).Should().Contain(("fg", drained.ForwardGeneration));
+        state.ForwardGeneration.Should().Be(copied.ForwardGeneration);
+        (await RecordAsync(kit)).Should().Contain(("fg", copied.ForwardGeneration));
     }
 
     [Fact]
     public async Task Reassert_in_S1_reverse_takes_rg_from_the_record_and_gives_no_fg()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         kit.Fleet.All(n => n.Fl = 2);
         await kit.StepUntilAsync("S1", "rev", advance: Ten);
         await kit.Kit.Db.KeyDeleteAsync(kit.Kit.StateKey);
@@ -193,7 +193,7 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
 
         result.Outcome.Should().Be(RecoveryOutcome.Done);
         state.Direction.Should().Be("rev");
-        state.RetiringGeneration.Should().Be(drained.ForwardGeneration);
+        state.RetiringGeneration.Should().Be(copied.ForwardGeneration);
         state.ForwardGeneration.Should().BeEmpty();
     }
 
@@ -201,26 +201,26 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
     public async Task Reassert_with_no_record_that_shows_fg_gives_the_forward_run_a_new_one()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         await kit.Kit.Db.KeyDeleteAsync(kit.Kit.StateKey);
         await kit.Kit.ControlDb.HashDeleteAsync(kit.Kit.Names.Control(kit.Group, 0), ["fg", "bf"]);
 
         await kit.Kit.Recovery.ReassertAsync(kit.Group, "state lost", null, null, null, CancellationToken.None);
         var state = await kit.StateAsync();
 
-        state.ForwardGeneration.Should().NotBeEmpty().And.NotBe(drained.ForwardGeneration);
+        state.ForwardGeneration.Should().NotBeEmpty().And.NotBe(copied.ForwardGeneration);
         state.ForwardGeneration.Should().Be(state.Id);
     }
 
     [Fact]
-    public async Task The_cold_start_of_a_closed_group_leaves_neither_generation()
+    public async Task The_cold_start_of_a_done_group_leaves_neither_generation()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         kit.Facts.AcceptRefill = true;
-        await ToDrainedAsync(kit);
+        await ToCopiedAsync(kit);
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "residue acknowledged", "op", CancellationToken.None);
-        var closed = await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
-        closed.ForwardGeneration.Should().NotBeEmpty();
+        var done = await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
+        done.ForwardGeneration.Should().NotBeEmpty();
         await kit.Commands.AbandonAsync(kit.Group, ApprovalKinds.ConfirmTexts[ApprovalKinds.Abandon], "op", CancellationToken.None);
 
         var flipped = await kit.StepUntilAsync("S0", "none");
@@ -230,14 +230,14 @@ public class GenerationLifecycleTests(RedisContainerFixture fixture)
         (await RecordAsync(kit)).Should().NotContain(f => f.Field == "fg" || f.Field == "rg" || f.Field == "bf");
     }
 
-    private static async Task<StateRecord> ToDrainedAsync(DriverKit kit)
+    private static async Task<StateRecord> ToCopiedAsync(DriverKit kit)
     {
         await kit.PrepareAsync();
         await kit.StepUntilAsync("S3");
-        return await ToDrainedFromS3Async(kit);
+        return await ToCopiedFromS3Async(kit);
     }
 
-    private static async Task<StateRecord> ToDrainedFromS3Async(DriverKit kit)
+    private static async Task<StateRecord> ToCopiedFromS3Async(DriverKit kit)
     {
         kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
         kit.Mover.Inventory = new Dictionary<string, long> { ["a"] = 0 };

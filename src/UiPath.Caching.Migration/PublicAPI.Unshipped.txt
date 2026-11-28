@@ -276,12 +276,12 @@ UiPath.Caching.Migration.KeyMoveDryRunCache.KeyMoveDryRunCache(System.Collection
 UiPath.Caching.Migration.KeyMoveDryRunCache.SizeBuckets.get -> System.Collections.Generic.IReadOnlyList<long>!
 UiPath.Caching.Migration.KeyMoveDryRunCache.SizeBuckets.init -> void
 UiPath.Caching.Migration.KeyMoveStage
-UiPath.Caching.Migration.KeyMoveStage.Barrier = 2 -> UiPath.Caching.Migration.KeyMoveStage
-UiPath.Caching.Migration.KeyMoveStage.Closed = 5 -> UiPath.Caching.Migration.KeyMoveStage
-UiPath.Caching.Migration.KeyMoveStage.Drained = 4 -> UiPath.Caching.Migration.KeyMoveStage
-UiPath.Caching.Migration.KeyMoveStage.Moving = 3 -> UiPath.Caching.Migration.KeyMoveStage
-UiPath.Caching.Migration.KeyMoveStage.NotStarted = 0 -> UiPath.Caching.Migration.KeyMoveStage
-UiPath.Caching.Migration.KeyMoveStage.Ready = 1 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Switching = 2 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Done = 5 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Copied = 4 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Copying = 3 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Off = 0 -> UiPath.Caching.Migration.KeyMoveStage
+UiPath.Caching.Migration.KeyMoveStage.Preparing = 1 -> UiPath.Caching.Migration.KeyMoveStage
 UiPath.Caching.Migration.KeyMoveStatus
 UiPath.Caching.Migration.KeyMoveStatus.<Clone>$() -> UiPath.Caching.Migration.KeyMoveStatus!
 UiPath.Caching.Migration.KeyMoveStatus.Approvals.get -> System.Collections.Generic.IReadOnlyList<string!>!

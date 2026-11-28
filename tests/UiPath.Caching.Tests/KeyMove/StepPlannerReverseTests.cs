@@ -6,17 +6,17 @@ namespace UiPath.Caching.Tests.KeyMove;
 // X6 to X10, the reverse gates, and the flag direction rules (reverse_blocked).
 public class StepPlannerReverseTests
 {
-    private static readonly StateRecord Ready = State("S1", ep: 11, prev: "S0:none:0:10:id10");
-    private static readonly StateRecord Moving = State("S3", ep: 13, nPop: 1, prev: "S2:fwd:0:12:id12");
-    private static readonly StateRecord Drained = State("S4", ep: 14, nPop: 1, prev: "S3:fwd:1:13:id13");
-    private static readonly StateRecord ReverseReady = State("S1", "rev", ep: 15, nPop: 1, prev: "S4:fwd:1:14:id14");
-    private static readonly StateRecord ReverseMoving = State("S3", "rev", ep: 16, nPop: 1, prev: "S1:rev:1:15:id15");
-    private static readonly StateRecord ReverseDrained = State("S4", "rev", ep: 17, nPop: 1, prev: "S3:rev:1:16:id16").With((StateFields.ResidueId, "id17"));
+    private static readonly StateRecord Preparing = State("S1", ep: 11, prev: "S0:none:0:10:id10");
+    private static readonly StateRecord Copying = State("S3", ep: 13, nPop: 1, prev: "S2:fwd:0:12:id12");
+    private static readonly StateRecord Copied = State("S4", ep: 14, nPop: 1, prev: "S3:fwd:1:13:id13");
+    private static readonly StateRecord Returning = State("S1", "rev", ep: 15, nPop: 1, prev: "S4:fwd:1:14:id14");
+    private static readonly StateRecord CopyingBack = State("S3", "rev", ep: 16, nPop: 1, prev: "S1:rev:1:15:id15");
+    private static readonly StateRecord CopiedBack = State("S4", "rev", ep: 17, nPop: 1, prev: "S3:rev:1:16:id16").With((StateFields.ResidueId, "id17"));
 
     [Fact]
     public async Task X6_returns_S1_or_S2_to_S0_once_a_lower_view_persisted_and_releases_the_claim_of_a_group_that_holds_one()
     {
-        var plan = await DecideAsync(Input(Ready with { Claim = "tok" }, flag: Verdict(min: 3, lowered: 2)));
+        var plan = await DecideAsync(Input(Preparing with { Claim = "tok" }, flag: Verdict(min: 3, lowered: 2)));
 
         Takes(plan, "X6", "S0", "none", 0);
         plan.Spec!.Should().Match<TransitionSpec>(s => s.ReleaseClaim && s.WayBack);
@@ -29,7 +29,7 @@ public class StepPlannerReverseTests
     [Fact]
     public async Task A_lower_view_that_has_not_persisted_starts_no_way_back()
     {
-        var plan = await DecideAsync(Input(Ready, flag: Verdict(min: 2, lowered: null), fresh: [Advert("n1", fl: 2), Advert("n2", fl: 3)]));
+        var plan = await DecideAsync(Input(Preparing, flag: Verdict(min: 2, lowered: null), fresh: [Advert("n1", fl: 2), Advert("n2", fl: 3)]));
 
         plan.Kind.Should().Be(StepKind.None);
     }
@@ -39,17 +39,17 @@ public class StepPlannerReverseTests
     {
         var lowered = Verdict(min: 3, lowered: 1);
 
-        var plan = await DecideAsync(Input(Moving, flag: lowered));
+        var plan = await DecideAsync(Input(Copying, flag: lowered));
         Takes(plan, "X7", "S1", "rev", 1);
         plan.Spec!.NewMoveId.Should().BeTrue();
 
-        var blocked = await DecideAsync(Input(Moving, [Advert("n1", acks: Moving), Advert("n2", km: false)], lowered));
+        var blocked = await DecideAsync(Input(Copying, [Advert("n1", acks: Copying), Advert("n2", km: false)], lowered));
         blocked.Kind.Should().Be(StepKind.None);
         blocked.AlertList.Should().Contain(a => a.Code == "reverse_blocked" && a.Detail == "start.km_support:n2");
 
-        (await DecideAsync(Input(Moving, [Advert("n1"), Advert("n2", pin: false)], lowered))).AlertList.Should().Contain(a => a.Code == "reverse_blocked" && a.Detail == "start.pins:n2");
-        (await DecideAsync(Input(Moving, [Advert("n1"), Advert("n2", snap: 90)], lowered))).AlertList.Should().Contain(a => a.Code == "reverse_blocked" && a.Detail == "start.snapshot_freshness:n2");
-        (await DecideAsync(Input(Moving, facts: new FakeGroupFacts { NodeListSettled = false }, flag: lowered))).AlertList.Should().Contain(a => a.Code == "reverse_blocked" && a.Detail == "start.node_list:node_list_incomplete");
+        (await DecideAsync(Input(Copying, [Advert("n1"), Advert("n2", pin: false)], lowered))).AlertList.Should().Contain(a => a.Code == "reverse_blocked" && a.Detail == "start.pins:n2");
+        (await DecideAsync(Input(Copying, [Advert("n1"), Advert("n2", snap: 90)], lowered))).AlertList.Should().Contain(a => a.Code == "reverse_blocked" && a.Detail == "start.snapshot_freshness:n2");
+        (await DecideAsync(Input(Copying, facts: new FakeGroupFacts { NodeListSettled = false }, flag: lowered))).AlertList.Should().Contain(a => a.Code == "reverse_blocked" && a.Detail == "start.node_list:node_list_incomplete");
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class StepPlannerReverseTests
         var lowered = Verdict(min: 3, lowered: 1);
         var fresh = new[] { Advert("n1"), Advert("n2", km: false, snap: 90) };
 
-        var plan = await DecideAsync(Input(Moving.Approved(ApprovalKinds.ForceReverse), fresh, lowered, facts: new FakeGroupFacts { Settled = false }));
+        var plan = await DecideAsync(Input(Copying.Approved(ApprovalKinds.ForceReverse), fresh, lowered, facts: new FakeGroupFacts { Settled = false }));
 
         Takes(plan, "X7", "S1", "rev", 1);
         plan.AlertList.Should().Contain(new StageAlert("gate_override", ApprovalKinds.ForceReverse));
@@ -67,36 +67,37 @@ public class StepPlannerReverseTests
     [Fact]
     public async Task X8_requires_reverse_S1_acknowledgements_and_X9_requires_a_drain_and_no_in_flight_promotions_regardless_of_holds_or_canary()
     {
-        Takes(await DecideAsync(Input(ReverseReady, flag: Verdict(min: 5))), "X8", "S3", "rev", 1);
-        var waiting = await DecideAsync(Input(ReverseReady, [Advert("n1", acks: ReverseReady), Advert("n2", acks: Drained)]));
+        Takes(await DecideAsync(Input(Returning, flag: Verdict(min: 5))), "X8", "S3", "rev", 1);
+        var waiting = await DecideAsync(Input(Returning, [Advert("n1", acks: Returning), Advert("n2", acks: Copied)]));
         waiting.AlertList.Should().ContainSingle().Which.Should().Be(new StageAlert("stage_pending", "ack:n2"));
 
         var mover = new FakeMoverStatus { Report = FakeMoverStatus.Drained(canary: 9) };
-        var held = ReverseMoving with { HoldOp = "x", HoldAuto = "canary" };
+        var held = CopyingBack with { HoldOp = "x", HoldAuto = "canary" };
         Takes(await DecideAsync(Input(held, mover: mover)), "X9", "S4", "rev", 1);
         mover.Directions.Should().Contain("rev");
 
-        (await DecideAsync(Input(ReverseMoving, mover: new FakeMoverStatus()))).AlertList.Single().Detail.Should().Be("drained:drain.confirming_pass,drain.skipped_accounted");
+        (await DecideAsync(Input(CopyingBack, mover: new FakeMoverStatus()))).AlertList.Single().Detail.Should().Be("copied-back:drain.confirming_pass,drain.skipped_accounted");
         mover.Report = FakeMoverStatus.Drained();
-        (await DecideAsync(Input(ReverseMoving, [Advert("n1", acks: ReverseMoving, pi: 1)], mover: mover))).AlertList.Single().Detail.Should().Be("drained:drain.promotions_idle");
+        (await DecideAsync(Input(CopyingBack, [Advert("n1", acks: CopyingBack, pi: 1)], mover: mover))).AlertList.Single().Detail.Should().Be("copied-back:drain.promotions_idle");
     }
 
     [Fact]
     public async Task X10_needs_the_stored_release_consent_then_sweeps_N_before_the_flip_to_S0()
     {
-        var waiting = await DecideAsync(Input(ReverseDrained with { Residue = new Dictionary<string, long> { ["a"] = 0 } }));
+        var waiting = await DecideAsync(Input(CopiedBack with { Residue = new Dictionary<string, long> { ["a"] = 0 } }));
         waiting.AlertList.Should().ContainSingle().Which.Should().Be(new StageAlert("stage_pending", "release_consent"));
 
-        var plan = await DecideAsync(Input((ReverseDrained with { Claim = "tok", Residue = new Dictionary<string, long> { ["a"] = 1 } }).Approved(ApprovalKinds.Release)));
+        var plan = await DecideAsync(Input((CopiedBack with { Claim = "tok", Residue = new Dictionary<string, long> { ["a"] = 1 } }).Approved(ApprovalKinds.Release)));
 
         Takes(plan, "X10", "S0", "none", 0);
         plan.Spec!.Should().Match<TransitionSpec>(s => s.Pre == PreStep.SweepNative && s.ReleaseClaim && s.WayBack);
+        KeyMoveStates.NameOf(plan.Spec.State, plan.Spec.Direction).Should().Be("off");
     }
 
     [Fact]
     public async Task A_release_consent_is_void_when_the_inventory_it_covers_changes()
     {
-        var consented = (ReverseDrained with { Residue = new Dictionary<string, long> { ["a"] = 1 } }).Approved(ApprovalKinds.Release);
+        var consented = (CopiedBack with { Residue = new Dictionary<string, long> { ["a"] = 1 } }).Approved(ApprovalKinds.Release);
 
         var plan = await DecideAsync(Input(consented with { Residue = new Dictionary<string, long> { ["a"] = 2 } }));
 
@@ -109,8 +110,8 @@ public class StepPlannerReverseTests
     {
         var mover = new FakeMoverStatus { Report = FakeMoverStatus.Drained() };
 
-        Takes(await DecideAsync(Input(ReverseReady with { HoldOp = "x" })), "X8", "S3", "rev", 1);
-        Takes(await DecideAsync(Input(ReverseMoving with { HoldAuto = "no_km:n9" }, mover: mover)), "X9", "S4", "rev", 1);
+        Takes(await DecideAsync(Input(Returning with { HoldOp = "x" })), "X8", "S3", "rev", 1);
+        Takes(await DecideAsync(Input(CopyingBack with { HoldAuto = "no_km:n9" }, mover: mover)), "X9", "S4", "rev", 1);
     }
 
     [Fact]
@@ -119,20 +120,20 @@ public class StepPlannerReverseTests
         var mover = new FakeMoverStatus { Report = FakeMoverStatus.Drained() };
 
         // The flag back at 5 while the reverse runs: the library does not turn round.
-        Takes(await DecideAsync(Input(ReverseReady, flag: Verdict(min: 5))), "X8", "S3", "rev", 1);
-        Takes(await DecideAsync(Input(ReverseMoving, flag: Verdict(min: 5), mover: mover)), "X9", "S4", "rev", 1);
+        Takes(await DecideAsync(Input(Returning, flag: Verdict(min: 5))), "X8", "S3", "rev", 1);
+        Takes(await DecideAsync(Input(CopyingBack, flag: Verdict(min: 5), mover: mover)), "X9", "S4", "rev", 1);
 
         // A further lowering during the reverse is the same plan, and X6 never runs in reverse.
         var lowered = Verdict(min: 3, lowered: 0);
-        Takes(await DecideAsync(Input(ReverseReady, flag: lowered)), "X8", "S3", "rev", 1);
-        Takes(await DecideAsync(Input(ReverseMoving, flag: lowered, mover: mover)), "X9", "S4", "rev", 1);
-        (await DecideAsync(Input(ReverseDrained, flag: lowered))).Kind.Should().Be(StepKind.None);
+        Takes(await DecideAsync(Input(Returning, flag: lowered)), "X8", "S3", "rev", 1);
+        Takes(await DecideAsync(Input(CopyingBack, flag: lowered, mover: mover)), "X9", "S4", "rev", 1);
+        (await DecideAsync(Input(CopiedBack, flag: lowered))).Kind.Should().Be(StepKind.None);
     }
 
     [Fact]
     public async Task A_raise_during_a_reverse_waits_for_S0_and_forward_starts_again_only_when_the_flag_still_asks()
     {
-        var consented = (ReverseDrained with { Residue = new Dictionary<string, long> { ["a"] = 0 } }).Approved(ApprovalKinds.Release);
+        var consented = (CopiedBack with { Residue = new Dictionary<string, long> { ["a"] = 0 } }).Approved(ApprovalKinds.Release);
         var raised = Verdict(min: 5);
 
         Takes(await DecideAsync(Input(consented, flag: raised)), "X10", "S0", "none", 0);
@@ -145,27 +146,27 @@ public class StepPlannerReverseTests
     [Fact]
     public async Task The_flag_below_5_in_S5_is_ignored_with_an_alert_and_nothing_goes_back()
     {
-        var closed = State("S5", ep: 20, nPop: 1, prev: "S4:fwd:1:19:id19");
+        var done = State("S5", ep: 20, nPop: 1, prev: "S4:fwd:1:19:id19");
 
-        var plan = await DecideAsync(Input(closed, flag: Verdict(min: 4, lowered: 2)));
+        var plan = await DecideAsync(Input(done, flag: Verdict(min: 4, lowered: 2)));
 
         plan.Kind.Should().Be(StepKind.None);
         plan.AlertList.Should().ContainSingle().Which.Should().Be(new StageAlert("flag_below_closed", Group));
-        (await DecideAsync(Input(closed, flag: Verdict(min: 5)))).AlertList.Should().BeEmpty();
+        (await DecideAsync(Input(done, flag: Verdict(min: 5)))).AlertList.Should().BeEmpty();
     }
 
     [Fact]
     public async Task The_only_way_out_of_S5_is_the_operator_abandon_for_groups_that_accept_a_refill()
     {
-        var closed = State("S5", ep: 20, nPop: 1, prev: "S4:fwd:1:19:id19");
+        var done = State("S5", ep: 20, nPop: 1, prev: "S4:fwd:1:19:id19");
 
-        var refused = await DecideAsync(Input(closed.Approved(ApprovalKinds.Abandon), flag: Verdict(min: 5)));
+        var refused = await DecideAsync(Input(done.Approved(ApprovalKinds.Abandon), flag: Verdict(min: 5)));
         refused.AlertList.Should().ContainSingle().Which.Code.Should().Be("abandon_refused");
 
-        var plan = await DecideAsync(Input(closed.Approved(ApprovalKinds.Abandon), flag: Verdict(min: 5), facts: new FakeGroupFacts { AcceptRefill = true }));
+        var plan = await DecideAsync(Input(done.Approved(ApprovalKinds.Abandon), flag: Verdict(min: 5), facts: new FakeGroupFacts { AcceptRefill = true }));
         plan.Kind.Should().Be(StepKind.ColdStart);
 
-        (await DecideAsync(Input(closed, flag: Verdict(min: 5), facts: new FakeGroupFacts { AcceptRefill = true }))).Kind.Should().Be(StepKind.None, "without the stored abandon nothing leaves S5");
+        (await DecideAsync(Input(done, flag: Verdict(min: 5), facts: new FakeGroupFacts { AcceptRefill = true }))).Kind.Should().Be(StepKind.None, "without the stored abandon nothing leaves S5");
     }
 
     [Fact]

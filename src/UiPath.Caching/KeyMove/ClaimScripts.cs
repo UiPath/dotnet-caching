@@ -146,12 +146,12 @@ internal static class ClaimScripts
         """;
 
     private const string ReleaseBody = $$"""
-        -- CLAIMREL. KEYS 1 claim. ARGV 1 field, 2 token, 3 target ('cert', 'idle', 'closed'), 4 ep (cert only, else ''), 5 terminal ('{{KeyMoveStates.NotStarted}}' or '{{KeyMoveStates.Closed}}', cert only, else '').
+        -- CLAIMREL. KEYS 1 claim. ARGV 1 field, 2 token, 3 target ('cert', 'idle', 'closed'), 4 ep (cert only, else ''), 5 terminal ('{{KeyMoveStates.Off}}' or '{{KeyMoveStates.Done}}', cert only, else '').
         local tg = ARGV[3]
         local fk0, fg0 = validfield(ARGV[1])
         if (not ismove(fk0)) or (not validtoken(ARGV[2])) or (tg ~= 'cert' and tg ~= 'idle' and tg ~= 'closed') then return -8 end
         if tg == 'cert' then
-          if (not validep(ARGV[4])) or (ARGV[5] ~= '{{KeyMoveStates.NotStarted}}' and ARGV[5] ~= '{{KeyMoveStates.Closed}}') then return -8 end
+          if (not validep(ARGV[4])) or (ARGV[5] ~= '{{KeyMoveStates.Off}}' and ARGV[5] ~= '{{KeyMoveStates.Done}}') then return -8 end
         elseif ARGV[4] ~= '' or ARGV[5] ~= '' then return -8 end
         local s, t, d, c = parse(redis.call('HGET', KEYS[1], ARGV[1]))
         if s == false then return -9 end
@@ -172,7 +172,7 @@ internal static class ClaimScripts
             redis.call('HSET', KEYS[1], ARGV[1], 'idle|' .. t .. '|' .. d .. '|')
             return 1
           end
-          if s == 'open' and string.match(c, ':{{KeyMoveStates.NotStarted}}$') then
+          if s == 'open' and string.match(c, ':{{KeyMoveStates.Off}}$') then
             if fk0 == 'fm' then
               local cg = parseptr(redis.call('HGET', KEYS[1], 'cur:fm'))
               if cg == false then return -9 end
@@ -188,7 +188,7 @@ internal static class ClaimScripts
           end
           return 0
         end
-        if s == 'open' and string.match(c, ':{{KeyMoveStates.Closed}}$') then
+        if s == 'open' and string.match(c, ':{{KeyMoveStates.Done}}$') then
           if fk0 == 'fm' then
             local old = redis.call('HGET', KEYS[1], 'cur:fm')
             local cg = parseptr(old)

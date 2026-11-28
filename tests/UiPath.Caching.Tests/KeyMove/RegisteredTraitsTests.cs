@@ -11,7 +11,7 @@ public class RegisteredTraitsTests
     private static readonly string ReportId = new DryRunStamp(DateTimeOffset.UnixEpoch.AddDays(29), 1_000, "ok").ReportId;
 
     [Fact]
-    public async Task A_NoOrigin_cache_among_the_managed_ones_makes_the_ready_group_take_X2_and_without_one_it_takes_X3()
+    public async Task A_NoOrigin_cache_among_the_managed_ones_makes_the_preparing_group_take_X2_and_without_one_it_takes_X3()
     {
         var state = State("S1", ep: 11, caches: "a+b", prev: "S0:none:0:10:id10");
         var fresh = Fleet(state);
@@ -28,10 +28,10 @@ public class RegisteredTraitsTests
     [Fact]
     public async Task X11_opens_only_when_every_managed_cache_accepts_a_refill()
     {
-        var closed = State("S5", ep: 20, nPop: 1, caches: "a+b", prev: "S4:fwd:1:19:id19").Approved(ApprovalKinds.Abandon);
+        var done = State("S5", ep: 20, nPop: 1, caches: "a+b", prev: "S4:fwd:1:19:id19").Approved(ApprovalKinds.Abandon);
 
-        (await StepPlanner.DecideAsync(Input(closed, facts: Facts(refill: ["a", "b"])), Defaults)).Kind.Should().Be(StepKind.ColdStart);
-        var refused = await StepPlanner.DecideAsync(Input(closed, facts: Facts(refill: ["a"])), Defaults);
+        (await StepPlanner.DecideAsync(Input(done, facts: Facts(refill: ["a", "b"])), Defaults)).Kind.Should().Be(StepKind.ColdStart);
+        var refused = await StepPlanner.DecideAsync(Input(done, facts: Facts(refill: ["a"])), Defaults);
         refused.Kind.Should().Be(StepKind.None);
         refused.AlertList.Should().Contain(new StageAlert("abandon_refused", "a cache does not accept a refill"));
     }

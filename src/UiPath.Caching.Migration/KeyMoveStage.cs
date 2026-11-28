@@ -4,20 +4,20 @@ namespace UiPath.Caching.Migration;
 public enum KeyMoveStage
 {
     /// <summary>No move runs, and every cache reads and writes its in-place keys.</summary>
-    NotStarted,
+    Off,
 
     /// <summary>Every node uses the move's write forms, the source remains authoritative, and keys have not started moving.</summary>
-    Ready,
+    Preparing,
 
-    /// <summary>During a forward move, caches without an origin stop writes while source writers drain; other caches continue as in <see cref="Ready"/>.</summary>
-    Barrier,
+    /// <summary>During a forward move, caches without an origin stop writes while source writers drain; other caches continue as in <see cref="Preparing"/>.</summary>
+    Switching,
 
     /// <summary>The destination is authoritative, reads promote source keys, and the mover copies the remaining keys.</summary>
-    Moving,
+    Copying,
 
     /// <summary>The mover found no remaining keys to move, and reads still check the source for counted residue.</summary>
-    Drained,
+    Copied,
 
     /// <summary>The forward move is final, the group uses native keys only, and leftover in-place keys are swept.</summary>
-    Closed,
+    Done,
 }

@@ -71,9 +71,9 @@ internal sealed class ClaimStore
         return await DurableAsync(() => RunAsync(ClaimScripts.Open, args, record => ClaimLogic.Open(record, field, token, descriptor, restore), bound: true)).ConfigureAwait(false);
     }
 
-    /// <summary>A certificate: <paramref name="swept"/> writes <c>closed</c> (a committed closed with <c>lswept</c> stored), otherwise <c>not-started</c>.</summary>
+    /// <summary>A certificate: <paramref name="swept"/> writes <c>done</c> (a committed done with <c>lswept</c> stored), otherwise <c>off</c>.</summary>
     public Task<ClaimResult> CertifyAsync(string field, string token, long epoch, bool swept) =>
-        ReleaseAsync(field, token, "cert", epoch.ToString(System.Globalization.CultureInfo.InvariantCulture), swept ? KeyMoveStates.Closed : KeyMoveStates.NotStarted);
+        ReleaseAsync(field, token, "cert", epoch.ToString(System.Globalization.CultureInfo.InvariantCulture), swept ? KeyMoveStates.Done : KeyMoveStates.Off);
 
     public Task<ClaimResult> IdleAsync(string field, string token) => ReleaseAsync(field, token, ClaimGrammar.Idle, string.Empty, string.Empty);
 

@@ -68,8 +68,8 @@ public class KeyInventoryUnmappedTests(RedisContainerFixture fixture)
         (await kit.Inventory.RunAsync(kit.Group, Ct))!.Canary.Should().BeNull();
         var unknown = gauges.Read();
 
-        first.Should().BeEquivalentTo(new Dictionary<string, long> { ["cache.keymove.inventory_written_after_moving"] = 1, ["cache.keymove.inventory_expected_unmapped"] = 1 });
-        second.Should().BeEquivalentTo(new Dictionary<string, long> { ["cache.keymove.inventory_written_after_moving"] = 2, ["cache.keymove.inventory_expected_unmapped"] = 2 });
+        first.Should().BeEquivalentTo(new Dictionary<string, long> { ["cache.keymove.inventory_written_after_copying"] = 1, ["cache.keymove.inventory_expected_unmapped"] = 1 });
+        second.Should().BeEquivalentTo(new Dictionary<string, long> { ["cache.keymove.inventory_written_after_copying"] = 2, ["cache.keymove.inventory_expected_unmapped"] = 2 });
         unknown.Should().BeEquivalentTo(new Dictionary<string, long> { ["cache.keymove.inventory_expected_unmapped"] = 3 });
     }
 

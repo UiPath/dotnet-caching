@@ -636,15 +636,15 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
     }
 
     [Theory]
-    [InlineData(KeyMoveStates.Ready, "fwd", "ready")]
-    [InlineData(KeyMoveStates.Barrier, "fwd", "barrier")]
-    [InlineData(KeyMoveStates.Moving, "rev", "moving (reverse)")]
-    [InlineData(KeyMoveStates.Drained, "rev", "drained (reverse)")]
+    [InlineData(KeyMoveStates.Preparing, "fwd", "preparing")]
+    [InlineData(KeyMoveStates.Switching, "fwd", "switching")]
+    [InlineData(KeyMoveStates.Copying, "rev", "copying-back")]
+    [InlineData(KeyMoveStates.Copied, "rev", "copied-back")]
     public async Task Metadata_is_refused_where_the_hash_is_kept_in_the_in_place_format_and_written_to_N_elsewhere(string state, string direction, string stageName)
     {
         await using var kit = await KeyMoveHashKit.CreateAsync(fixture, nativeNulls: true);
         await kit.Kit.PrepareAsync("k");
-        await kit.Kit.SetStateAsync(state, direction: direction, nPop: state is KeyMoveStates.Ready or KeyMoveStates.Barrier ? 0 : 1);
+        await kit.Kit.SetStateAsync(state, direction: direction, nPop: state is KeyMoveStates.Preparing or KeyMoveStates.Switching ? 0 : 1);
         var metadata = new Dictionary<string, string?> { ["owner"] = "me" };
 
         var refused = async () => await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("a", "1")), new HashWriteOptions(HashCacheSetOption.KeyReplace, null, metadata), Ct);
@@ -653,7 +653,7 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
         (await refresh.Should().ThrowAsync<NotSupportedException>()).Which.Message.Should().Contain(kit.Kit.Cid).And.Contain($"state {stageName}.");
         (await kit.Kit.ExistsAsync(kit.L("k"))).Should().BeFalse("a refused write stores nothing");
 
-        await kit.Kit.SetStateAsync(KeyMoveStates.Moving);
+        await kit.Kit.SetStateAsync(KeyMoveStates.Copying);
         (await kit.Client.SetAsync("k", KeyMoveHashKit.Items(("a", "1")), new HashWriteOptions(HashCacheSetOption.KeyReplace, null, metadata), Ct)).Outcome.Should().Be(WriteOutcome.Committed);
         (await kit.AllFieldsAsync(kit.N("k"))).Should().ContainKey("_metadata_");
         (await kit.Client.ReadAsync("k", null, Ct)).Metadata.Should().ContainKey("owner");

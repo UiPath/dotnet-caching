@@ -10,7 +10,7 @@ internal sealed partial class KeyMoveClient<T>
     {
         var result = new Dictionary<string, PathRead<T>>(keys.Count, StringComparer.Ordinal);
         var plan = PlanFor(write: false);
-        if (plan.Mode is KeyMoveMode.Plain or KeyMoveMode.Ready or KeyMoveMode.Barrier || Data is not { } data)
+        if (plan.Mode is KeyMoveMode.Plain or KeyMoveMode.Preparing or KeyMoveMode.Switching || Data is not { } data)
         {
             var each = await Task.WhenAll(keys.Select(k => ReadAsync(k, cancellationToken).AsTask())).ConfigureAwait(false);
             for (var i = 0; i < keys.Count; i++)
@@ -31,7 +31,7 @@ internal sealed partial class KeyMoveClient<T>
                 .Select(entry => PromoteReverseAsync(entry.Key, plan, cancellationToken).AsTask())).ConfigureAwait(false);
         }
 
-        if (missing.Count == 0 || plan.Mode == KeyMoveMode.Closed)
+        if (missing.Count == 0 || plan.Mode == KeyMoveMode.Done)
         {
             foreach (var key in missing)
             {
@@ -41,7 +41,7 @@ internal sealed partial class KeyMoveClient<T>
             return result;
         }
 
-        if (plan.Mode == KeyMoveMode.Moving)
+        if (plan.Mode == KeyMoveMode.Copying)
         {
             await ReadMissingWithPromotionAsync(missing, plan, result, cancellationToken).ConfigureAwait(false);
             return result;

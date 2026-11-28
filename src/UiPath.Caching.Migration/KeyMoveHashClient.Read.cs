@@ -31,7 +31,7 @@ internal sealed partial class KeyMoveHashClient<T>
         return await HolderAsync(key).ConfigureAwait(false) is { } life && life.Left >= 0 ? _p.Clock.GetUtcNow().AddMilliseconds(life.Left) : null;
     }
 
-    // The read plan checks N in closed, L in ready and barrier, otherwise N, L, then N again. Read only life and existence, without decoding or promotion.
+    // The read plan checks N in done, L in preparing and switching, otherwise N, L, then N again. Read only life and existence, without decoding or promotion.
     private async ValueTask<(string Side, long Left)?> HolderAsync(string key)
     {
         var data = Data;
@@ -44,8 +44,8 @@ internal sealed partial class KeyMoveHashClient<T>
         {
             string[] sides = PlanFor(write: false).Mode switch
             {
-                KeyMoveMode.Closed => [Native(key)],
-                KeyMoveMode.Ready or KeyMoveMode.Barrier => [InPlace(key)],
+                KeyMoveMode.Done => [Native(key)],
+                KeyMoveMode.Preparing or KeyMoveMode.Switching => [InPlace(key)],
                 _ => [Native(key), InPlace(key), Native(key)],
             };
             foreach (var side in sides)
@@ -84,9 +84,9 @@ internal sealed partial class KeyMoveHashClient<T>
             run++;
             var step = plan.Mode switch
             {
-                KeyMoveMode.Ready or KeyMoveMode.Barrier => await ReadLegacyOnlyAsync(key, plan, fields, cancellationToken).ConfigureAwait(false),
-                KeyMoveMode.Moving => await PromoteReadAsync(key, fields, cancellationToken).ConfigureAwait(false),
-                KeyMoveMode.Closed => await _reads.ReadUnionAsync(key, withSource: false, fields, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.Preparing or KeyMoveMode.Switching => await ReadLegacyOnlyAsync(key, plan, fields, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.Copying => await PromoteReadAsync(key, fields, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.Done => await _reads.ReadUnionAsync(key, withSource: false, fields, cancellationToken).ConfigureAwait(false),
                 _ when KeyMovePlanning.PromotesReverse(plan) => await ReadReverseAsync(key, fields, cancellationToken).ConfigureAwait(false),
                 _ => await _reads.ReadUnionAsync(key, withSource: true, fields, cancellationToken).ConfigureAwait(false),
             };
@@ -134,7 +134,7 @@ internal sealed partial class KeyMoveHashClient<T>
         return HashReadStep<T>.Of(HashReads<T>.Interpret(inPlace, _p.InPlace, fields: fields));
     }
 
-    // ready and barrier read only L before promotion starts. A NoOrigin miss reads the identity first because promotion may have moved the key.
+    // preparing and switching read only L before promotion starts. A NoOrigin miss reads the identity first because promotion may have moved the key.
     private async ValueTask<HashReadStep<T>> ReadLegacyOnlyAsync(string key, KeyMovePlan plan, string[]? fields, CancellationToken cancellationToken)
     {
         var snap = await _reads.SnapAsync(InPlace(key), replica: false, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);

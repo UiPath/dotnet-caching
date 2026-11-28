@@ -152,11 +152,11 @@ public class GroupStateMonitorTests
     }
 
     [Fact]
-    public async Task A_stale_closed_group_and_a_stale_unlisted_group_keep_the_last_known_rules_and_only_alert()
+    public async Task A_stale_done_group_and_a_stale_unlisted_group_keep_the_last_known_rules_and_only_alert()
     {
-        var closed = Monitor(listed: true);
+        var done = Monitor(listed: true);
         _reader.State = FakeStateReader.Record("S5", 8);
-        await closed.StepAsync(Group, CancellationToken.None);
+        await done.StepAsync(Group, CancellationToken.None);
         var drifted = new GroupStateMonitor(_reader, _options, _time, (g, a) => _alerts.Add((g, a)));
         drifted.Register([new GroupRegistration("g2", false, false)]);
         await drifted.StepAsync("g2", CancellationToken.None);
@@ -164,7 +164,7 @@ public class GroupStateMonitorTests
 
         _time.Advance(TimeSpan.FromSeconds(500));
 
-        foreach (var (monitor, name) in new[] { (closed, Group), (drifted, "g2") })
+        foreach (var (monitor, name) in new[] { (done, Group), (drifted, "g2") })
         {
             var rules = monitor.RulesFor(name);
             rules.Writes.Should().Be(WriteRule.Follow, name);
@@ -174,7 +174,7 @@ public class GroupStateMonitorTests
     }
 
     [Fact]
-    public async Task Stale_after_is_three_polls_at_the_slow_poll_interval_so_a_closed_group_is_stale_after_one_hundred_eighty_seconds()
+    public async Task Stale_after_is_three_polls_at_the_slow_poll_interval_so_a_done_group_is_stale_after_one_hundred_eighty_seconds()
     {
         var monitor = Monitor(listed: true);
         _reader.State = FakeStateReader.Record("S5", 8);

@@ -35,7 +35,7 @@ internal sealed class MovingCacheHost : IAsyncDisposable
         FlagLowerHold = Poll,
         UpgradeHold = TimeSpan.Zero,
         CloseConfirm = TimeSpan.Zero,
-        DrainedSoak = TimeSpan.Zero,
+        CopiedSoak = TimeSpan.Zero,
     };
     private readonly KeyMoveStateOptions _stateOptions;
     private readonly RegisteredKeySpace _space;

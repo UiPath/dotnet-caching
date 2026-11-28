@@ -27,7 +27,7 @@ public sealed class ClaimConformanceTests(RedisContainerFixture fixture)
         new("a group with an underscore", [], [Pend("rt:a_b", T1, "rt", "", 1)], [("rt:a_b", $"pend|{T1}|rt|")]),
         new("a 201 character group", [], [Pend("rt:" + Group201, T1, "rt", "", -8)]),
         new("ids of 8 and 9 characters", [], [Pend("fm:g", T1, "fmt:12345678>1", "-", 1), Pend("fm:h", T2, "fmt:123456789>1", "-", -8)], [("fm:g", $"pend|{T1}|fmt:12345678>1|")]),
-        new("a 19 digit epoch", [("rt:a", $"open|{T1}|rt|")], [Rel("rt:a", T1, "cert", "1234567890123456789", KeyMoveStates.NotStarted, -8)]),
+        new("a 19 digit epoch", [("rt:a", $"open|{T1}|rt|")], [Rel("rt:a", T1, "cert", "1234567890123456789", KeyMoveStates.Off, -8)]),
         new("a cert 5:S3", [("rt:a", $"open|{T1}|rt|5:S3")], [Pend("rt:b", T1, "rt", "", -4)]),
         new("a field name outside the grammar", [("xx:a", $"pend|{T1}|rt|")], [Pend("rt:b", T1, "rt", "", -4)]),
         new("a malformed pointer", [("cur:fm", "garbage"), ("fm:g1", $"open|{T1}|{Fmt}|7:S0")], [Pend("rt:b", T1, "rt", "", -4), Rel("fm:g1", T1, "idle", "", "", -9)]),
@@ -43,13 +43,13 @@ public sealed class ClaimConformanceTests(RedisContainerFixture fixture)
         new("OPEN restore over absent", [], [Open("rt:a", T1, "rt", true, 1), Open("rt:b", T2, "rt", false, 0)], [("rt:a", $"open|{T1}|rt|")]),
         new("REL idle with an S5 cert", [("rt:a", $"open|{T1}|rt|8:S5")], [Rel("rt:a", T1, "idle", "", "", 0)]),
         new("REL closed with an S0 cert", [("rt:a", $"open|{T1}|rt|8:S0")], [Rel("rt:a", T1, "closed", "", "", 0)]),
-        new("REL cert with an empty epoch", [("rt:a", $"open|{T1}|rt|")], [Rel("rt:a", T1, "cert", "", KeyMoveStates.NotStarted, -8)]),
+        new("REL cert with an empty epoch", [("rt:a", $"open|{T1}|rt|")], [Rel("rt:a", T1, "cert", "", KeyMoveStates.Off, -8)]),
         new("REL idle of a pend clears to idle with no cert", [("rt:a", $"pend|{T1}|rt|")], [Rel("rt:a", T1, "idle", "", "", 1), Rel("rt:a", T1, "idle", "", "", 2)], [("rt:a", $"idle|{T1}|rt|")]),
         new("REOPEN while another group is live", [("fm:g1", $"closed|{T1}|{Fmt}|9:S5"), ("cur:fm", Ptr1), ("fm:g2", $"pend|{T2}|{Fmt}|")], [Reopen("fm:g1", T1, -3)]),
         new(
             "REOPEN then idle restores the pointer it names",
             [("fm:g1", $"closed|{T1}|{Fmt}|9:S5"), ("cur:fm", Ptr1), ("prv:g1", "-")],
-            [Reopen("fm:g1", T1, 1), Rel("fm:g1", T1, "cert", "12", KeyMoveStates.NotStarted, 1), Rel("fm:g1", T1, "idle", "", "", 1)],
+            [Reopen("fm:g1", T1, 1), Rel("fm:g1", T1, "cert", "12", KeyMoveStates.Off, 1), Rel("fm:g1", T1, "idle", "", "", 1)],
             [("fm:g1", $"idle|{T1}|{Fmt}|12:S0")]),
         new(
             "REL closed twice keeps the pointer and prv",
@@ -76,7 +76,7 @@ public sealed class ClaimConformanceTests(RedisContainerFixture fixture)
         new(
             "the stale gate of MC4",
             [("fm:g1", $"closed|{T1}|{Fmt}|9:S5"), ("cur:fm", Ptr1), ("prv:g1", $"g0|{T2}|1|0")],
-            [Reopen("fm:g1", T1, 1), Rel("fm:g1", T1, "cert", "13", KeyMoveStates.NotStarted, 1), Rel("fm:g1", T1, "idle", "", "", 1), Pend("fm:g2", T2, Fmt, Ptr1, -5)],
+            [Reopen("fm:g1", T1, 1), Rel("fm:g1", T1, "cert", "13", KeyMoveStates.Off, 1), Rel("fm:g1", T1, "idle", "", "", 1), Pend("fm:g2", T2, Fmt, Ptr1, -5)],
             [("fm:g1", $"idle|{T1}|{Fmt}|13:S0"), ("cur:fm", $"g0|{T2}|1|0")]),
     }.ToDictionary(r => r.Name);
 

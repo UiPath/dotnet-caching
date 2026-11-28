@@ -28,7 +28,7 @@ A group the application did not register throws `ArgumentException`. A call befo
 
 ## Stage flag
 
-Use `StringFlagStageSource` with a string flag getter. It accepts `not-started`, `moving`, `drained`, and `closed`, case-insensitively, and ignores surrounding whitespace.
+Use `StringFlagStageSource` with a string flag getter. It accepts `off`, `copying`, `copied`, and `done`, case-insensitively, and ignores surrounding whitespace.
 The numeric strings `0` through `5` remain accepted. `IntFlagStageSource` continues accepting integer flags.
 
 ```csharp
@@ -40,14 +40,15 @@ Names map to the corresponding stage numbers. The existing advancement and rollb
 
 | Flag | The group goes to |
 | --- | --- |
-| `not-started` (`0`), `1`, `2` | Not started. From Ready or Barrier it goes back at once; from Moving or Drained it moves the keys back first. |
-| `moving` (`3`) | Moving, through Ready and Barrier. From Drained it goes back to Moving. |
-| `drained` (`4`) | Drained, once the mover finds nothing left to move. |
-| `closed` (`5`) | Closed, once the close gates pass and the close approval is stored. |
+| `off` (`0`), `1`, `2` | Off. From Preparing or Switching it goes back at once; from Copying or Copied it moves the keys back first. |
+| `copying` (`3`) | Copying, through Preparing and Switching. From Copied it goes back to Copying. |
+| `copied` (`4`) | Copied, once the mover finds nothing left to move. |
+| `done` (`5`) | Done, once the close gates pass and the close approval is stored. |
 
-Ready and Barrier remain automatic intermediate stages. The flag names `ready` and `barrier` are rejected. Numeric flags `1` and `2` still mean not-started for compatibility.
+Preparing and Switching remain automatic intermediate stages. The flag names `preparing` and `switching` are rejected. Numeric flags `1` and `2` still mean off for compatibility.
+Reverse stage names and all former stage names are also rejected as flags.
 A missing, empty, or unknown flag retains the last valid view. Before any valid read, the node advertises no flag view.
-A flag below `closed` on a closed group only raises the `flag_below_closed` alert.
+A flag below `done` on a done group only raises the `flag_below_closed` alert.
 
 ## Stages
 
@@ -55,12 +56,12 @@ A flag below `closed` on a closed group only raises the `flag_below_closed` aler
 
 | Stage | What happens | Check before you go on | Approvals |
 | --- | --- | --- | --- |
-| `NotStarted` | Every cache reads and writes its in-place keys. | Run `InitializeAsync`, then `RunDryRunAsync`. Read the dry run's counts, size buckets, memory estimate and duration. | `start` if the release floor was not attested with `AttestReleaseFloor()`. `start_unsettled`, `start_no_dry_run`, `start_memory` or `control_records_evictable` when a start check fails for a known reason. |
-| `Ready` | Every node writes the move's forms; the in-place side is still the authority. | All nodes acknowledge it. | None. |
-| `Barrier` | Caches without an origin close their writes while the last in-place writers drain. | The barrier ends on its own. | `skip_barrier` while a transition is still pending and a replica never confirms it. |
-| `Moving` | The native side is the authority. Reads promote keys, and the mover copies the rest. | Watch the mover's progress and `BlockingGates`. | `force_reverse` to step back past a failing reverse gate. |
-| `Drained` | The mover found no key left. Reads still fall back to the in-place keys for the residue. | Read `Residue`. Wait for the soak. Keep the code that reads the in-place keys deployed. | `close` or `close_force` covers the residue. `close_force` also allows closing before the soak or with canary keys. |
-| `Closed` | The group uses the native keys only, and the leftover in-place keys are swept. | Nothing. | `abandon` to start every cache cold. `skip_lswept_wait` can be stored at this stage and has no effect on the sweep. |
+| `Off` | Every cache reads and writes its in-place keys. | Run `InitializeAsync`, then `RunDryRunAsync`. Read the dry run's counts, size buckets, memory estimate and duration. | `start` if the release floor was not attested with `AttestReleaseFloor()`. `start_unsettled`, `start_no_dry_run`, `start_memory` or `control_records_evictable` when a start check fails for a known reason. |
+| `Preparing` | Every node writes the move's forms; the in-place side is still the authority. | All nodes acknowledge it. | None. |
+| `Switching` | Caches without an origin close their writes while the last in-place writers drain. | Switching ends on its own. | `skip_barrier` while a transition is still pending and a replica never confirms it. |
+| `Copying` | The native side is the authority. Reads promote keys, and the mover copies the rest. | Watch the mover's progress and `BlockingGates`. | `force_reverse` to step back past a failing reverse gate. |
+| `Copied` | The mover found no key left. Reads still fall back to the in-place keys for the residue. | Read `Residue`. Wait for the soak. Keep the code that reads the in-place keys deployed. | `close` or `close_force` covers the residue. `close_force` also allows closing before the soak or with canary keys. |
+| `Done` | The group uses the native keys only, and the leftover in-place keys are swept. | Nothing. | `abandon` to start every cache cold. `skip_lswept_wait` can be stored at this stage and has no effect on the sweep. |
 
 An approval holds for the state it was stored in. It is void once the state moves, or once the evidence it covers changes, such as the residue of a `close`. `Approvals` in the status lists only the valid ones.
 
@@ -87,7 +88,7 @@ When the leader's last step took no step, `BlockingGates` lists each reason as `
 Common codes:
 
 - `start_blocked`: a start gate fails.
-- `stage_pending`: the stage waits for the mover, such as `drained:drain.confirming_pass`.
+- `stage_pending`: the stage waits for the mover, such as `copied:drain.confirming_pass`.
 - `close_pending`: a close gate fails.
 - `reverse_blocked`: a reverse gate fails.
 - `held`: an operator or automatic hold.
@@ -97,13 +98,16 @@ Common codes:
 
 | From | How | What happens |
 | --- | --- | --- |
-| `NotStarted` | Nothing to do. | Nothing was written. |
-| `Ready`, `Barrier` | Set the flag to `not-started`. | The group returns to `NotStarted`. Nothing was moved. |
-| `Moving`, `Drained` | Set the flag to `not-started`. If a reverse gate fails, approve `force_reverse`. | The group steps back with `Reverse` set. It walks `Ready`, `Moving` and `Drained` again while the mover copies the native keys back. Approve `release` at the reverse `Drained` to sweep the native keys and return to `NotStarted`. If old markers block the step back, `retire_markers` lets it go on. |
-| `Drained` | Set the flag to `moving`. | The group returns to `Moving`. |
-| `Closed` | No step back. Approve `abandon` for caches that accept a refill. | Every cache of the group starts cold on its native keys. |
+| `Off` | Nothing to do. | Nothing was written. |
+| `Preparing`, `Switching` | Set the flag to `off`. | The group returns to `Off`. Nothing was moved. |
+| `Copying`, `Copied` | Set the flag to `off`. If a reverse gate fails, approve `force_reverse`. | The group steps back with `Reverse` set. It walks `returning`, `copying-back` and `copied-back` while the mover copies the native keys back. Approve `release` at `copied-back` to sweep the native keys and return to `off`. If old markers block the step back, `retire_markers` lets it go on. |
+| `Copied` | Set the flag to `copying`. | The group returns to `Copying`. |
+| `Done` | No step back. Approve `abandon` for caches that accept a refill. | Every cache of the group starts cold on its native keys. |
 
-Keep the code that reads the in-place keys deployed while a step back is possible. The `close.consent` gate checks for a valid close approval covering the stored residue and checks that caches without an origin accept a refill if they have residue. A step back from `Moving` or `Drained` needs that code, so attest that it is still deployed with `AttestInPlaceReadersDeployed(group, evidence)` on the key move builder. The `close.in_place_readers` gate refuses to close without it, and no approval overrides that gate.
+With `Reverse` set, enum values `Preparing`, `Copying` and `Copied` display as `returning`, `copying-back` and `copied-back`, respectively.
+A released reverse group returns to `Off`, displayed as `off`.
+
+Keep the code that reads the in-place keys deployed while a step back is possible. The `close.consent` gate checks for a valid close approval covering the stored residue and checks that caches without an origin accept a refill if they have residue. A step back from `Copying` or `Copied` needs that code, so attest that it is still deployed with `AttestInPlaceReadersDeployed(group, evidence)` on the key move builder. The `close.in_place_readers` gate refuses to close without it, and no approval overrides that gate.
 
 ## Telemetry and gate IDs
 

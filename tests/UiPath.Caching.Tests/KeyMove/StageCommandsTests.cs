@@ -125,7 +125,7 @@ public class StageCommandsTests(RedisContainerFixture fixture)
     }
 
     [Fact]
-    public async Task SkipBarrier_and_Abandon_apply_to_a_transition_at_dur_0_and_to_a_closed_group_only()
+    public async Task SkipSwitching_and_Abandon_apply_to_a_transition_at_dur_0_and_to_a_done_group_only()
     {
         await using var kit = await StateKit.StandaloneAsync(fixture, true);
         var commands = new StageCommands(kit.Store, kit.Scripts, kit.Names, Options);

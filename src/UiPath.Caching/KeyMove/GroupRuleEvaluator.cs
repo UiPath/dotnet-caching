@@ -2,14 +2,14 @@ namespace UiPath.Caching.KeyMove;
 
 internal static partial class GroupRuleEvaluator
 {
-    private const string Closed = KeyMoveStates.Closed;
-    private const string Off = KeyMoveStates.NotStarted;
+    private const string Done = KeyMoveStates.Done;
+    private const string Off = KeyMoveStates.Off;
 
     public static bool IsRelevant(GroupView view) => view.Answer == StateAnswer.Unknown
         ? view.Registration.Flagged || view.Registration.Listed || view.RecordFound
         : view.Registration.Listed || view.Answer == StateAnswer.Present || view.RecordFound || view.EverPresent;
 
-    /// <summary>ready to drained, a listed not-started and any state not yet durable are polled often, closed and the rest slowly, by the state in force.</summary>
+    /// <summary>preparing to copied, a listed off and any state not yet durable are polled often, done and the rest slowly, by the state in force.</summary>
     public static TimeSpan PollInterval(GroupView view, KeyMoveStateOptions options)
     {
         if (view.State is { Durable: false })
@@ -19,7 +19,7 @@ internal static partial class GroupRuleEvaluator
 
         return (view.LastKnown?.State ?? view.State?.State) switch
         {
-            Closed => options.SlowPollInterval,
+            Done => options.SlowPollInterval,
             Off when !view.Registration.Listed => options.SlowPollInterval,
             _ => options.PollInterval,
         };
@@ -66,7 +66,7 @@ internal static partial class GroupRuleEvaluator
 
         if (view.Answer == StateAnswer.Absent)
         {
-            var keeps = view.LastKnown?.State is Off or Closed;
+            var keeps = view.LastKnown?.State is Off or Done;
             return new GroupRules(true, keeps ? ReadRule.Follow : ReadRule.UnionNativeFirst, keeps ? WriteRule.Follow : WriteRule.FailClosed, view.LastKnown, null, false, true, ["state_missing"]);
         }
 
@@ -86,8 +86,8 @@ internal static partial class GroupRuleEvaluator
         var ready = view.SinceStart < options.StartupWait;
         var alerts = view.SinceStart > staleAfter ? new[] { "no_snapshot", "node_blind" } : ["no_snapshot"];
 
-        // A closed group keeps serving: its terminal record counts as an answer. Writers in closed delete the source copy until the sweep is confirmed done.
-        if (view.LastKnown is null && view.Sample is { State: Closed, Durable: true } sample)
+        // A done group keeps serving: its terminal record counts as an answer. Writers in done delete the source copy until the sweep is confirmed done.
+        if (view.LastKnown is null && view.Sample is { State: Done, Durable: true } sample)
         {
             return new GroupRules(true, ReadRule.UnionNativeFirst, WriteRule.Follow, new ActedState(sample.State, sample.Direction, sample.Ep, sample.Id, 1, false), null, false, ready, []);
         }
@@ -98,7 +98,7 @@ internal static partial class GroupRuleEvaluator
     private static GroupRules Stale(GroupView view)
     {
         var stage = view.LastKnown?.State ?? view.State?.State;
-        if (view.Registration.Listed && stage != Closed)
+        if (view.Registration.Listed && stage != Done)
         {
             return new GroupRules(true, stage == Off ? ReadRule.Follow : ReadRule.UnionNativeFirst, WriteRule.FailClosed, view.LastKnown, null, true, true, ["snapshot_stale"]);
         }

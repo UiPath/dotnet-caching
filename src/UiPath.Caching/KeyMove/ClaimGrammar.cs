@@ -101,7 +101,7 @@ internal static class ClaimGrammar
         }
 
         var colon = c.IndexOf(':', StringComparison.Ordinal);
-        return colon > 0 && colon <= 18 && All(c[..colon], IsDigit) && c[(colon + 1)..] is KeyMoveStates.NotStarted or KeyMoveStates.Closed;
+        return colon > 0 && colon <= 18 && All(c[..colon], IsDigit) && c[(colon + 1)..] is KeyMoveStates.Off or KeyMoveStates.Done;
     }
 
     /// <summary>A move value: null when absent, a malformed marker, or its four parts.</summary>

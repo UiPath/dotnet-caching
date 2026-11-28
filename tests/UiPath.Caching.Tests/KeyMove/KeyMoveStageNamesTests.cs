@@ -6,12 +6,12 @@ namespace UiPath.Caching.Tests.KeyMove;
 public class KeyMoveStageNamesTests
 {
     [Theory]
-    [InlineData(KeyMoveStates.NotStarted, "not-started", 0, 2)]
-    [InlineData(KeyMoveStates.Ready, "ready", 1, 3)]
-    [InlineData(KeyMoveStates.Barrier, "barrier", 2, 3)]
-    [InlineData(KeyMoveStates.Moving, "moving", 3, 3)]
-    [InlineData(KeyMoveStates.Drained, "drained", 4, 4)]
-    [InlineData(KeyMoveStates.Closed, "closed", 5, 5)]
+    [InlineData(KeyMoveStates.Off, "off", 0, 2)]
+    [InlineData(KeyMoveStates.Preparing, "preparing", 1, 3)]
+    [InlineData(KeyMoveStates.Switching, "switching", 2, 3)]
+    [InlineData(KeyMoveStates.Copying, "copying", 3, 3)]
+    [InlineData(KeyMoveStates.Copied, "copied", 4, 4)]
+    [InlineData(KeyMoveStates.Done, "done", 5, 5)]
     public async Task Names_round_trip_and_numeric_flags_keep_the_existing_stage_semantics(string stored, string name, int flag, int currentFlag)
     {
         KeyMoveStates.NameOf(stored).Should().Be(name);
@@ -28,40 +28,40 @@ public class KeyMoveStageNamesTests
     }
 
     [Theory]
-    [InlineData("not-started", 0)]
-    [InlineData("moving", 3)]
-    [InlineData("drained", 4)]
-    [InlineData("closed", 5)]
-    [InlineData(" moving ", 3)]
+    [InlineData("off", 0)]
+    [InlineData("copying", 3)]
+    [InlineData("copied", 4)]
+    [InlineData("done", 5)]
+    [InlineData(" copying ", 3)]
     [InlineData("\t1 ", 1)]
     [InlineData(" 2\t", 2)]
-    [InlineData("drained\n", 4)]
+    [InlineData("copied\n", 4)]
     [InlineData("3\r\n", 3)]
     public async Task Flag_names_and_numbers_ignore_case_and_surrounding_whitespace(string value, int expected)
     {
         var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         var source = new StringFlagStageSource((_, _, _) => ValueTask.FromResult<string?>(value));
-        var uppercase = new StringFlagStageSource((_, _, _) => ValueTask.FromResult<string?>(value.ToUpperInvariant()));
+        var uppercase = new StringFlagStageSource((_, _, _) => ValueTask.FromResult<string?>($" \t{value.ToUpperInvariant()}\r\n"));
 
         await AssertViewAsync(source, expected, time);
         await AssertViewAsync(uppercase, expected, time);
     }
 
     [Theory]
-    [InlineData("not-started")]
+    [InlineData("off")]
     [InlineData("0")]
     [InlineData("1")]
     [InlineData("2")]
-    public async Task Compatible_flags_start_rolling_a_moving_group_back(string value)
+    public async Task Compatible_flags_start_rolling_a_copying_group_back(string value)
     {
         var source = new StringFlagStageSource((_, _, _) => ValueTask.FromResult<string?>(value));
         var flag = await source.GetStageAsync(Group, TestContext.Current.CancellationToken);
-        var state = State(KeyMoveStates.Moving, nPop: 1);
+        var state = State(KeyMoveStates.Copying, nPop: 1);
 
         var plan = await StepPlanner.DecideAsync(Input(state, flag: Verdict(min: flag, lowered: flag)), Defaults);
 
         plan.Kind.Should().Be(StepKind.Transit);
-        plan.Spec!.State.Should().Be(KeyMoveStates.Ready);
+        plan.Spec!.State.Should().Be(KeyMoveStates.Preparing);
         plan.Spec.Direction.Should().Be("rev");
     }
 
@@ -80,19 +80,28 @@ public class KeyMoveStageNamesTests
     [InlineData("")]
     [InlineData(" ")]
     [InlineData("\t\r\n ")]
+    [InlineData("preparing")]
+    [InlineData("switching")]
+    [InlineData(" PREPARING ")]
+    [InlineData("SWITCHING\n")]
+    [InlineData("not-started")]
     [InlineData("ready")]
     [InlineData("barrier")]
-    [InlineData(" READY ")]
-    [InlineData("BARRIER\n")]
+    [InlineData("moving")]
+    [InlineData("drained")]
+    [InlineData("closed")]
+    [InlineData("returning")]
+    [InlineData("copying-back")]
+    [InlineData("copied-back")]
     [InlineData("unknown")]
     [InlineData("-1")]
     [InlineData("6")]
-    [InlineData(KeyMoveStates.NotStarted)]
-    [InlineData(KeyMoveStates.Ready)]
-    [InlineData(KeyMoveStates.Barrier)]
-    [InlineData(KeyMoveStates.Moving)]
-    [InlineData(KeyMoveStates.Drained)]
-    [InlineData(KeyMoveStates.Closed)]
+    [InlineData(KeyMoveStates.Off)]
+    [InlineData(KeyMoveStates.Preparing)]
+    [InlineData(KeyMoveStates.Switching)]
+    [InlineData(KeyMoveStates.Copying)]
+    [InlineData(KeyMoveStates.Copied)]
+    [InlineData(KeyMoveStates.Done)]
     public async Task An_unreadable_flag_has_no_initial_view_and_keeps_the_last_valid_view(string? value)
     {
         var current = value;
@@ -103,9 +112,14 @@ public class KeyMoveStageNamesTests
         (await poller.StepAsync(Group, TestContext.Current.CancellationToken)).Should().BeFalse();
         poller.ViewOf(Group).Should().BeNull();
 
-        current = "drained";
+        current = "copied";
         (await poller.StepAsync(Group, TestContext.Current.CancellationToken)).Should().BeTrue();
         current = value;
+        (await poller.StepAsync(Group, TestContext.Current.CancellationToken)).Should().BeFalse();
+        poller.ViewOf(Group).Should().Be(4);
+
+        current = $" \t{value?.ToUpperInvariant()}\r\n";
+        (await source.GetStageAsync(Group, TestContext.Current.CancellationToken)).Should().BeNull();
         (await poller.StepAsync(Group, TestContext.Current.CancellationToken)).Should().BeFalse();
         poller.ViewOf(Group).Should().Be(4);
     }
@@ -126,10 +140,10 @@ public class KeyMoveStageNamesTests
     }
 
     [Theory]
-    [InlineData(KeyMoveStates.Barrier, "barrier", "invalid")]
-    [InlineData(KeyMoveStates.Ready, "ready", "invalid")]
+    [InlineData(KeyMoveStates.Switching, "switching", "invalid")]
+    [InlineData(KeyMoveStates.Preparing, "preparing", "invalid")]
     [InlineData("S9", "S9", "fwd")]
-    [InlineData("S9", "S9", "rev")]
+    [InlineData("S9", "S9 (reverse)", "rev")]
     public async Task An_unsupported_state_or_direction_reports_the_stage(string stored, string name, string direction)
     {
         var plan = await StepPlanner.DecideAsync(Input(State(stored, direction)), Defaults);
@@ -138,26 +152,26 @@ public class KeyMoveStageNamesTests
     }
 
     [Theory]
-    [InlineData(KeyMoveStates.NotStarted, "not-started")]
-    [InlineData(KeyMoveStates.Ready, "ready")]
-    [InlineData(KeyMoveStates.Barrier, "barrier")]
-    [InlineData(KeyMoveStates.Moving, "moving")]
-    [InlineData(KeyMoveStates.Drained, "drained")]
-    [InlineData(KeyMoveStates.Closed, "closed")]
-    [InlineData("S9", "S9")]
+    [InlineData(KeyMoveStates.Off, "off")]
+    [InlineData(KeyMoveStates.Preparing, "returning")]
+    [InlineData(KeyMoveStates.Switching, "switching (reverse)")]
+    [InlineData(KeyMoveStates.Copying, "copying-back")]
+    [InlineData(KeyMoveStates.Copied, "copied-back")]
+    [InlineData(KeyMoveStates.Done, "done (reverse)")]
+    [InlineData("S9", "S9 (reverse)")]
     public async Task A_frozen_managed_set_exception_names_the_stage(string stored, string name)
     {
         var upkeep = new ControlUpkeep(null!, null!, null!, new(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         var act = () => upkeep.RebuildAsync(Group, State(stored, "rev"), "changed", null, TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage($"The managed set is frozen outside ready and barrier: the group is in {name} rev.");
+            .WithMessage($"The managed set is frozen outside preparing and switching: the group is in {name} rev.");
     }
 
     [Fact]
     public void A_malformed_previous_state_is_not_echoed_in_the_exception()
     {
-        var act = () => State(KeyMoveStates.Moving, prev: KeyMoveStates.Ready).ToControlRecord([]);
+        var act = () => State(KeyMoveStates.Copying, prev: KeyMoveStates.Preparing).ToControlRecord([]);
 
         act.Should().Throw<FormatException>()
             .WithMessage("The state hash holds no valid previous state to copy into the control records.");

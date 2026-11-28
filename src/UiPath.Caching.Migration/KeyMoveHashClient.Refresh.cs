@@ -117,15 +117,15 @@ internal sealed partial class KeyMoveHashClient<T>
         {
             switch (plan.Mode)
             {
-                case KeyMoveMode.Ready:
-                case KeyMoveMode.Barrier:
+                case KeyMoveMode.Preparing:
+                case KeyMoveMode.Switching:
                     return Judged(await ExpireAsync(data, l, unit, at, null, clearOfL).ConfigureAwait(false));
-                case KeyMoveMode.Closed when withOptions:
+                case KeyMoveMode.Done when withOptions:
                     // The keys have moved, so the hash is the library's own and the refresh is the library's options refresh, which sets or clears the metadata with the expiry on a hash that is there.
                     return (await PlainRefreshAsync(key, CacheExpiry.At(DateTimeOffset.FromUnixTimeMilliseconds(at)), metadata, withOptions, cancellationToken).ConfigureAwait(false), false);
-                case KeyMoveMode.Closed:
+                case KeyMoveMode.Done:
                     return Judged(await ExpireAsync(data, n, unit, at, null).ConfigureAwait(false));
-                case KeyMoveMode.Drained:
+                case KeyMoveMode.Copied:
                     // A refresh is acknowledged only where it lands on N: L is no copy that survives for good.
                     return Judged(await ExpireAsync(data, n, unit, at, fence, clearOfN).ConfigureAwait(false));
                 case KeyMoveMode.ReverseS1:
@@ -146,7 +146,7 @@ internal sealed partial class KeyMoveHashClient<T>
         }
     }
 
-    // In moving, acknowledge a refresh only when it lands on N. Never extend L: a field delete can make oversized or corrupt L promotable. A promoter holding its earlier expiry would publish that expiry and delete L.
+    // In copying, acknowledge a refresh only when it lands on N. Never extend L: a field delete can make oversized or corrupt L promotable. A promoter holding its earlier expiry would publish that expiry and delete L.
     // N is refreshed, or the hash is promoted and N is asked again, after every promotion including the last. A hash that cannot be promoted (above the caps or unreadable), or whose promotion does not finish, is not sent.
     private async ValueTask<(WriteResult Result, bool Again)> RefreshForwardAsync(string key, long at, HashMetadataClear clear, AdmittedUnit unit, KeyMoveData data, FenceBump fence, CancellationToken cancellationToken)
     {
@@ -236,7 +236,7 @@ internal sealed partial class KeyMoveHashClient<T>
 
     private void ThrowIfRefreshMetadataRefused(KeyMovePlan plan)
     {
-        if (plan.Mode is KeyMoveMode.Ready or KeyMoveMode.Barrier or KeyMoveMode.Moving or KeyMoveMode.Drained || KeyMovePlanning.IsReverseWrite(plan.Mode))
+        if (plan.Mode is KeyMoveMode.Preparing or KeyMoveMode.Switching or KeyMoveMode.Copying or KeyMoveMode.Copied || KeyMovePlanning.IsReverseWrite(plan.Mode))
         {
             throw new NotSupportedException($"The hash cache '{_p.CacheId}' cannot refresh with metadata because the metadata field has no checked form for a refresh in state {plan.StageName}.");
         }

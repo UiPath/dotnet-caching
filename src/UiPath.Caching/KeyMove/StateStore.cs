@@ -16,7 +16,7 @@ internal sealed class StateStore(IDatabase stateDatabase, MoveKeyNames names, Mo
 
     public Task<long> ServerMicrosecondsAsync(string group) => scripts.ServerMicrosecondsAsync(names.State(group));
 
-    /// <summary>X0 for the managed cache ids <paramref name="cacheIds"/>: creates the not-started state, or refreshes the set of a not-started state; any later stage is refused.</summary>
+    /// <summary>X0 for the managed cache ids <paramref name="cacheIds"/>: creates the off state, or refreshes the set of a off state; any later stage is refused.</summary>
     public async Task<InitResult> InitAsync(string group, IEnumerable<string> cacheIds, CancellationToken cancellationToken)
     {
         var caches = StateRecord.EncodeCaches(cacheIds);

@@ -18,10 +18,10 @@ internal sealed partial class KeyMoveClient<T>
         {
             var step = plan.Mode switch
             {
-                KeyMoveMode.Ready => await ReadLegacyOnlyAsync(key, plan, cancellationToken).ConfigureAwait(false),
-                KeyMoveMode.Moving => await PromoteAsync(key, plan, cancellationToken).ConfigureAwait(false),
-                KeyMoveMode.Closed => await ReadUnionAsync(key, withSource: false, cancellationToken).ConfigureAwait(false),
-                KeyMoveMode.Barrier => await ReadLegacyOnlyAsync(key, plan, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.Preparing => await ReadLegacyOnlyAsync(key, plan, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.Copying => await PromoteAsync(key, plan, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.Done => await ReadUnionAsync(key, withSource: false, cancellationToken).ConfigureAwait(false),
+                KeyMoveMode.Switching => await ReadLegacyOnlyAsync(key, plan, cancellationToken).ConfigureAwait(false),
                 _ when KeyMovePlanning.PromotesReverse(plan) => await ReadReverseAsync(key, plan, cancellationToken).ConfigureAwait(false),
                 _ => await ReadUnionAsync(key, withSource: true, cancellationToken).ConfigureAwait(false),
             };
@@ -46,7 +46,7 @@ internal sealed partial class KeyMoveClient<T>
         }
     }
 
-    // ready and barrier read only L before promotion starts. On a NoOrigin miss, check the identity before returning because promotion may have moved the key.
+    // preparing and switching read only L before promotion starts. On a NoOrigin miss, check the identity before returning because promotion may have moved the key.
     private async ValueTask<ReadStep<T>> ReadLegacyOnlyAsync(string key, KeyMovePlan plan, CancellationToken cancellationToken)
     {
         var snap = await SourceSnapAsync(key, SchedulePointStep.ReadSource, cancellationToken).ConfigureAwait(false);
@@ -77,7 +77,7 @@ internal sealed partial class KeyMoveClient<T>
         return id != plan.Act?.Id ? ReadStep<T>.Again : ReadStep<T>.Of(read);
     }
 
-    // In moving(rev), read N on the master, serve a hit, then promote it to L in the same unit. A miss reads L without re-reading: reverse promoters publish L before deleting N.
+    // In copying-back, read N on the master, serve a hit, then promote it to L in the same unit. A miss reads L without re-reading: reverse promoters publish L before deleting N.
     private async ValueTask<ReadStep<T>> ReadReverseAsync(string key, KeyMovePlan plan, CancellationToken cancellationToken)
     {
         var native = Interpret(await SnapAsync(Native(key), replica: false, SchedulePointStep.ReadDestinationOnMaster, cancellationToken).ConfigureAwait(false), _p.Native, authoritativeNull: true);

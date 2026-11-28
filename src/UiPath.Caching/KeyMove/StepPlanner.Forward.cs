@@ -9,16 +9,16 @@ internal static partial class StepPlanner
         var state = i.State;
         return (state.State, state.Direction) switch
         {
-            (KeyMoveStates.NotStarted, _) => await FromOffAsync(i, options, side).ConfigureAwait(false),
-            (KeyMoveStates.Ready, "fwd") => await FromReadyAsync(i, options, side).ConfigureAwait(false),
-            (KeyMoveStates.Barrier, "fwd") => await FromFreezeAsync(i, side).ConfigureAwait(false),
-            (KeyMoveStates.Moving, "fwd") => await FromMovingAsync(i, options, side).ConfigureAwait(false),
-            (KeyMoveStates.Drained, "fwd") => await FromDrainedAsync(i, options, side).ConfigureAwait(false),
-            (KeyMoveStates.Closed, _) => FromClosed(i),
-            (KeyMoveStates.Ready, "rev") => await FromReverseReadyAsync(i, options).ConfigureAwait(false),
-            (KeyMoveStates.Moving, "rev") => await FromReverseMovingAsync(i).ConfigureAwait(false),
-            (KeyMoveStates.Drained, "rev") => FromReverseDrained(i, side),
-            _ => StepPlan.Wait("unknown_state", $"{KeyMoveStates.NameOf(state.State)}:{state.Direction}"),
+            (KeyMoveStates.Off, _) => await FromOffAsync(i, options, side).ConfigureAwait(false),
+            (KeyMoveStates.Preparing, "fwd") => await FromPreparingAsync(i, options, side).ConfigureAwait(false),
+            (KeyMoveStates.Switching, "fwd") => await FromFreezeAsync(i, side).ConfigureAwait(false),
+            (KeyMoveStates.Copying, "fwd") => await FromCopyingAsync(i, options, side).ConfigureAwait(false),
+            (KeyMoveStates.Copied, "fwd") => await FromCopiedAsync(i, options, side).ConfigureAwait(false),
+            (KeyMoveStates.Done, _) => FromDone(i),
+            (KeyMoveStates.Preparing, "rev") => await FromReturningAsync(i, options).ConfigureAwait(false),
+            (KeyMoveStates.Copying, "rev") => await FromCopyingBackAsync(i).ConfigureAwait(false),
+            (KeyMoveStates.Copied, "rev") => FromCopiedBack(i, side),
+            _ => StepPlan.Wait("unknown_state", $"{KeyMoveStates.NameOf(state.State, state.Direction)}:{state.Direction}"),
         };
     }
 
@@ -50,12 +50,12 @@ internal static partial class StepPlanner
             return StepPlan.Wait("start_blocked", string.Join(',', failures));
         }
 
-        var spec = new TransitionSpec("X1", KeyMoveStates.Ready, "fwd", 0, NewMoveId: true, TakeClaim: i.Facts.TakesClaim(i.Group), Binding: BindingChange.Mint);
+        var spec = new TransitionSpec("X1", KeyMoveStates.Preparing, "fwd", 0, NewMoveId: true, TakeClaim: i.Facts.TakesClaim(i.Group), Binding: BindingChange.Mint);
         var plan = new StepPlan(StepKind.Transit, spec);
         return overrides.Count == 0 ? plan : plan.WithOverrides(string.Join(',', overrides.Select(o => o.Approval)), [.. overrides.Select(o => o.Gate)]);
     }
 
-    private static async Task<StepPlan> FromReadyAsync(StepInput i, StageDriverOptions options, StepSide side)
+    private static async Task<StepPlan> FromPreparingAsync(StepInput i, StageDriverOptions options, StepSide side)
     {
         if (i.Flag.Lowered is <= 2)
         {
@@ -89,8 +89,8 @@ internal static partial class StepPlanner
         }
 
         return noOrigin
-            ? new StepPlan(StepKind.Transit, new TransitionSpec("X2", KeyMoveStates.Barrier, "fwd", 0))
-            : new StepPlan(StepKind.Transit, new TransitionSpec("X3", KeyMoveStates.Moving, "fwd", 1, Pre: PreStep.NativeInventory));
+            ? new StepPlan(StepKind.Transit, new TransitionSpec("X2", KeyMoveStates.Switching, "fwd", 0))
+            : new StepPlan(StepKind.Transit, new TransitionSpec("X3", KeyMoveStates.Copying, "fwd", 1, Pre: PreStep.NativeInventory));
     }
 
     private static async Task<StepPlan> FromFreezeAsync(StepInput i, StepSide side)
@@ -120,10 +120,10 @@ internal static partial class StepPlanner
             return StepPlan.Wait(ReplicaUnhealthy, preflight.Reason);
         }
 
-        return new StepPlan(StepKind.Transit, new TransitionSpec("X3", KeyMoveStates.Moving, "fwd", 1, Pre: PreStep.NativeInventory));
+        return new StepPlan(StepKind.Transit, new TransitionSpec("X3", KeyMoveStates.Copying, "fwd", 1, Pre: PreStep.NativeInventory));
     }
 
-    private static async Task<StepPlan> FromMovingAsync(StepInput i, StageDriverOptions options, StepSide side)
+    private static async Task<StepPlan> FromCopyingAsync(StepInput i, StageDriverOptions options, StepSide side)
     {
         if (i.Flag.Lowered is <= 2)
         {
@@ -149,7 +149,7 @@ internal static partial class StepPlanner
 
         if (pending.Count > 0)
         {
-            return StepPlan.Wait(StagePending, $"drained:{string.Join(',', pending)}");
+            return StepPlan.Wait(StagePending, $"copied:{string.Join(',', pending)}");
         }
 
         if (await StartGates.ReplicasAsync(i).ConfigureAwait(false) is { } preflight)
@@ -157,9 +157,9 @@ internal static partial class StepPlanner
             return StepPlan.Wait(ReplicaUnhealthy, preflight.Reason);
         }
 
-        var post = new List<(string, string)> { (StateFields.DrainedAt, Number(i.Now.ToUnixTimeMilliseconds())) };
+        var post = new List<(string, string)> { (StateFields.CopiedAt, Number(i.Now.ToUnixTimeMilliseconds())) };
         post.AddRange(drain!.Residue.Select(r => (StateFields.ResiduePrefix + r.Key, Number(r.Value))));
-        return new StepPlan(StepKind.Transit, new TransitionSpec("X4", KeyMoveStates.Drained, "fwd", 1, PostFields: post));
+        return new StepPlan(StepKind.Transit, new TransitionSpec("X4", KeyMoveStates.Copied, "fwd", 1, PostFields: post));
     }
 
     private static List<string> DrainFailures(StepInput i, DrainReport? drain)
@@ -179,7 +179,7 @@ internal static partial class StepPlanner
         return pending;
     }
 
-    private static async Task<StepPlan> FromDrainedAsync(StepInput i, StageDriverOptions options, StepSide side)
+    private static async Task<StepPlan> FromCopiedAsync(StepInput i, StageDriverOptions options, StepSide side)
     {
         if (i.Flag.Lowered is <= 2)
         {
@@ -188,7 +188,7 @@ internal static partial class StepPlanner
 
         if (i.Flag.Lowered == 3)
         {
-            return side.Hold is not null ? StepPlan.Nothing : new StepPlan(StepKind.Transit, new TransitionSpec("X13", KeyMoveStates.Moving, "fwd", 1, NewMoveId: true));
+            return side.Hold is not null ? StepPlan.Nothing : new StepPlan(StepKind.Transit, new TransitionSpec("X13", KeyMoveStates.Copying, "fwd", 1, NewMoveId: true));
         }
 
         if (FlagBlocks(i, 5) is { } blocked)
@@ -217,12 +217,12 @@ internal static partial class StepPlanner
             return StepPlan.Wait(ReplicaUnhealthy, preflight.Reason);
         }
 
-        var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X5", KeyMoveStates.Closed, "fwd", 1, RecheckViews: true, PostFields: [(StateFields.ClosedAt, Number(i.Now.ToUnixTimeMilliseconds()))]));
+        var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X5", KeyMoveStates.Done, "fwd", 1, RecheckViews: true, PostFields: [(StateFields.DoneAt, Number(i.Now.ToUnixTimeMilliseconds()))]));
         return failures.Overrides.Count == 0 ? plan : plan.WithOverrides(string.Join(',', failures.Overrides), failures.Overrides);
     }
 
-    // closed permits only operator abandon, for groups whose caches all accept a refill.
-    private static StepPlan FromClosed(StepInput i)
+    // done permits only operator abandon, for groups whose caches all accept a refill.
+    private static StepPlan FromDone(StepInput i)
     {
         if (Approval.ValidFor(i.State, ApprovalKinds.Abandon) is not null)
         {

@@ -53,19 +53,19 @@ internal sealed class StageCommands(StateStore store, MoveScripts scripts, MoveK
     public Task<ApproveResult> SkipBarrierAsync(string group, string confirm, string operatorId, CancellationToken cancellationToken) =>
         ApproveAsync(group, ApprovalKinds.SkipBarrier, confirm, operatorId, cancellationToken);
 
-    /// <summary>X11 for a closed group: the leader flips to not-started and purges.</summary>
+    /// <summary>X11 for a done group: the leader flips to off and purges.</summary>
     public Task<ApproveResult> AbandonAsync(string group, string confirm, string operatorId, CancellationToken cancellationToken) =>
         ApproveAsync(group, ApprovalKinds.Abandon, confirm, operatorId, cancellationToken);
 
     private static bool Applies(string kind, StateRecord state) => kind switch
     {
-        ApprovalKinds.Start or ApprovalKinds.StartUnsettled or ApprovalKinds.StartNoDryRun or ApprovalKinds.StartMemory or ApprovalKinds.ControlRecordsEvictable => state is { State: KeyMoveStates.NotStarted, Durable: true },
-        ApprovalKinds.Close or ApprovalKinds.CloseForce => state is { State: KeyMoveStates.Drained, Direction: "fwd" },
-        ApprovalKinds.Release => state is { State: KeyMoveStates.Drained, Direction: "rev" },
-        ApprovalKinds.ForceReverse => state is { State: KeyMoveStates.Moving or KeyMoveStates.Drained, Direction: "fwd" },
+        ApprovalKinds.Start or ApprovalKinds.StartUnsettled or ApprovalKinds.StartNoDryRun or ApprovalKinds.StartMemory or ApprovalKinds.ControlRecordsEvictable => state is { State: KeyMoveStates.Off, Durable: true },
+        ApprovalKinds.Close or ApprovalKinds.CloseForce => state is { State: KeyMoveStates.Copied, Direction: "fwd" },
+        ApprovalKinds.Release => state is { State: KeyMoveStates.Copied, Direction: "rev" },
+        ApprovalKinds.ForceReverse => state is { State: KeyMoveStates.Copying or KeyMoveStates.Copied, Direction: "fwd" },
         ApprovalKinds.SkipBarrier => !state.Durable,
-        ApprovalKinds.RetireMarkers => state is { State: KeyMoveStates.Ready, Direction: "rev" },
-        ApprovalKinds.Abandon or ApprovalKinds.SkipLsweptWait => state is { State: KeyMoveStates.Closed },
+        ApprovalKinds.RetireMarkers => state is { State: KeyMoveStates.Preparing, Direction: "rev" },
+        ApprovalKinds.Abandon or ApprovalKinds.SkipLsweptWait => state is { State: KeyMoveStates.Done },
         _ => false,
     };
 }

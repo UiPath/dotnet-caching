@@ -12,11 +12,11 @@ internal static class KeyMoveTelemetry
     private static readonly Counter<long> MarkerOrphans = KeyMoveMeter.CreateCounter<long>("cache.keymove.marker_orphans");
     private static readonly Counter<long> GateOverrides = KeyMoveMeter.CreateCounter<long>("cache.keymove.gate_overrides");
     private static readonly Counter<long> CanaryKeys = KeyMoveMeter.CreateCounter<long>("cache.keymove.canary_keys");
-    private static readonly Counter<long> WrittenAfterMoving = KeyMoveMeter.CreateCounter<long>("cache.keymove.written_after_moving");
+    private static readonly Counter<long> WrittenAfterCopying = KeyMoveMeter.CreateCounter<long>("cache.keymove.written_after_copying");
     private static readonly ConcurrentDictionary<string, InventorySnapshot> LastInventory = new(StringComparer.Ordinal);
 
     // The gauges hold the last inventory of each group; the instruments are kept alive by the meter.
-    private static readonly ObservableGauge<long> WrittenAfterMovingGauge = KeyMoveMeter.CreateObservableGauge("cache.keymove.inventory_written_after_moving", () => Measurements(static snapshot => snapshot.Canary));
+    private static readonly ObservableGauge<long> WrittenAfterCopyingGauge = KeyMoveMeter.CreateObservableGauge("cache.keymove.inventory_written_after_copying", () => Measurements(static snapshot => snapshot.Canary));
     private static readonly ObservableGauge<long> ExpectedUnmappedGauge = KeyMoveMeter.CreateObservableGauge("cache.keymove.inventory_expected_unmapped", () => Measurements(static snapshot => snapshot.ExpectedUnmapped));
 
     /// <summary>A step taken with a gate that a stored forcing approval overrode.</summary>
@@ -45,21 +45,21 @@ internal static class KeyMoveTelemetry
         }
     }
 
-    /// <summary>Counts observations of source writes after moving. A key can be observed again in a later pass.</summary>
-    public static void CountWrittenAfterMoving(string cache, string group)
+    /// <summary>Counts observations of source writes after copying. A key can be observed again in a later pass.</summary>
+    public static void CountWrittenAfterCopying(string cache, string group)
     {
-        if (WrittenAfterMoving.Enabled)
+        if (WrittenAfterCopying.Enabled)
         {
-            WrittenAfterMoving.Add(1, new TagList { { "cache", cache }, { "group", group } });
+            WrittenAfterCopying.Add(1, new TagList { { "cache", cache }, { "group", group } });
         }
     }
 
-    /// <summary>Stores the last inventory's values for the gauges; the canary is null when moving is unknown.</summary>
-    public static void RecordInventory(string group, long? writtenAfterMoving, long expectedUnmapped)
+    /// <summary>Stores the last inventory's values for the gauges; the canary is null when copying is unknown.</summary>
+    public static void RecordInventory(string group, long? writtenAfterCopying, long expectedUnmapped)
     {
-        _ = WrittenAfterMovingGauge;
+        _ = WrittenAfterCopyingGauge;
         _ = ExpectedUnmappedGauge;
-        LastInventory[group] = new InventorySnapshot(writtenAfterMoving, expectedUnmapped);
+        LastInventory[group] = new InventorySnapshot(writtenAfterCopying, expectedUnmapped);
     }
 
     private static IEnumerable<Measurement<long>> Measurements(Func<InventorySnapshot, long?> valueOf)

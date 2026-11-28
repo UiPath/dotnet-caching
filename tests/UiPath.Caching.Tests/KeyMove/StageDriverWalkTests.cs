@@ -9,31 +9,31 @@ namespace UiPath.Caching.Tests.KeyMove;
 public class StageDriverWalkTests(RedisContainerFixture fixture)
 {
     [Fact]
-    public async Task A_jump_from_2_to_5_walks_S1_and_S3_waits_for_drained_then_S4_then_waits_for_the_consent_then_closes()
+    public async Task A_jump_from_2_to_5_walks_S1_and_S3_waits_for_copied_then_S4_then_waits_for_the_consent_then_closes()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         await kit.PrepareAsync();
 
-        var ready = await kit.StepUntilAsync("S1");
-        ready.MoveId.Should().Be(ready.Ep, "X1 writes moveId");
+        var preparing = await kit.StepUntilAsync("S1");
+        preparing.MoveId.Should().Be(preparing.Ep, "X1 writes moveId");
 
-        var moving = await kit.StepUntilAsync("S3");
-        moving.NPop.Should().Be(1);
+        var copying = await kit.StepUntilAsync("S3");
+        copying.NPop.Should().Be(1);
         kit.Data.Calls.Should().Contain("count");
         await kit.StepAsync();
-        (await kit.StateAsync()).AllAck.Should().Be(moving.Id, "every fresh node acknowledged S3, which the leader stores once");
+        (await kit.StateAsync()).AllAck.Should().Be(copying.Id, "every fresh node acknowledged S3, which the leader stores once");
         for (var n = 0; n < 5; n++)
         {
             await kit.StepAsync();
         }
 
         (await kit.StateAsync()).State.Should().Be("S3", "DRAINED does not hold yet");
-        kit.Alerts.Should().Contain(("stage_pending", "drained:drain.confirming_pass,drain.skipped_accounted"));
+        kit.Alerts.Should().Contain(("stage_pending", "copied:drain.confirming_pass,drain.skipped_accounted"));
 
         kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
         kit.Mover.Inventory = new Dictionary<string, long> { ["a"] = 0 };
-        var drained = await kit.StepUntilAsync("S4");
-        drained.Should().Match<StateRecord>(s => s.Residue!["a"] == 0 && s.Field(StateFields.DrainedAt).Length > 0);
+        var copied = await kit.StepUntilAsync("S4");
+        copied.Should().Match<StateRecord>(s => s.Residue!["a"] == 0 && s.Field(StateFields.CopiedAt).Length > 0);
 
         for (var n = 0; n < 6; n++)
         {
@@ -44,8 +44,8 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
         kit.Alerts.Should().Contain(("close_pending", "close.consent:no_consent"));
 
         (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "residue acknowledged, old code deployed", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
-        var closed = await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
-        closed.Field(StateFields.ClosedAt).Should().NotBeEmpty();
+        var done = await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
+        done.Field(StateFields.DoneAt).Should().NotBeEmpty();
     }
 
     [Fact]
@@ -56,14 +56,14 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
             UpgradeHold = TimeSpan.Zero,
             AckStable = TimeSpan.Zero,
             CloseConfirm = TimeSpan.Zero,
-            DrainedSoak = TimeSpan.FromDays(1),
+            CopiedSoak = TimeSpan.FromDays(1),
         };
         await using var kit = await DriverKit.CreateAsync(fixture, options: options);
         using var overrides = new KeyMoveMeterRecorder("cache.keymove.gate_overrides", kit.Group);
         await kit.PrepareAsync();
         await kit.StepUntilAsync("S3");
         kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
-        var drained = await kit.StepUntilAsync("S4");
+        var copied = await kit.StepUntilAsync("S4");
         kit.Mover.Report = FakeMoverStatus.Drained(1, ("a", 0));
         (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.CloseForce, ApprovalKinds.ConfirmTexts[ApprovalKinds.CloseForce], "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
         kit.Fence = new LeaseFence(kit.Kit.Names.Lead(kit.Group), "stale");
@@ -71,7 +71,7 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
         var refused = await kit.StepAsync();
 
         refused!.Result!.Outcome.Should().Be(TransitionOutcome.LeaseLost);
-        (await kit.StateAsync()).Id.Should().Be(drained.Id);
+        (await kit.StateAsync()).Id.Should().Be(copied.Id);
         kit.Alerts.Should().Contain(("gate_override", "close.soak,close.canary"));
         overrides.Measured.Should().BeEmpty();
 
@@ -125,22 +125,22 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         await kit.PrepareAsync();
-        var ready = await kit.StepUntilAsync("S1");
+        var preparing = await kit.StepUntilAsync("S1");
         await kit.StepAsync();
         var acked = await kit.StateAsync();
-        acked.AllAck.Should().Be(ready.Id);
+        acked.AllAck.Should().Be(preparing.Id);
         acked.Field(StateFields.T3At).Should().BeEmpty("S1 is not S3");
 
-        var moving = await kit.StepUntilAsync("S3");
+        var copying = await kit.StepUntilAsync("S3");
         await kit.StepAsync();
 
         var s3 = await kit.StateAsync();
-        s3.AllAck.Should().Be(moving.Id);
+        s3.AllAck.Should().Be(copying.Id);
         long.Parse(s3.Field(StateFields.T3At), System.Globalization.CultureInfo.InvariantCulture).Should().BeGreaterThan(0, "the time of the S3 acknowledgement is stored with it");
     }
 
     [Fact]
-    public async Task A_group_with_a_NoOrigin_cache_visits_S2_and_X3_waits_for_every_fresh_node_to_ack_the_barrier()
+    public async Task A_group_with_a_NoOrigin_cache_visits_S2_and_X3_waits_for_every_fresh_node_to_ack_the_switching()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         kit.Facts.NoOrigin = true;
@@ -333,15 +333,15 @@ public class StageDriverWalkTests(RedisContainerFixture fixture)
         await kit.StepAsync();
         var waiting = await kit.StateAsync();
         var since = waiting.Field(StateFields.BlockedAt);
-        waiting.Field(StateFields.Blocked).Should().Be("stage_pending:drained:drain.confirming_pass,drain.skipped_accounted");
+        waiting.Field(StateFields.Blocked).Should().Be("stage_pending:copied:drain.confirming_pass,drain.skipped_accounted");
         long.Parse(since, System.Globalization.CultureInfo.InvariantCulture).Should().BeLessThan(kit.Kit.Time.GetUtcNow().ToUnixTimeMilliseconds());
         await kit.StepAsync(TimeSpan.FromSeconds(30));
         (await kit.StateAsync()).Field(StateFields.BlockedAt).Should().Be(since, "the same reasons keep the time they were first seen");
 
         kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
         kit.Mover.Inventory = new Dictionary<string, long> { ["a"] = 0 };
-        var drained = await kit.StepUntilAsync("S4");
-        drained.FieldNames.Should().NotContain([StateFields.Blocked, StateFields.BlockedAt]);
+        var copied = await kit.StepUntilAsync("S4");
+        copied.FieldNames.Should().NotContain([StateFields.Blocked, StateFields.BlockedAt]);
 
         await kit.StepAsync(TimeSpan.FromSeconds(30));
         (await kit.StateAsync()).Field(StateFields.Blocked).Split('\n').Should().ContainSingle(r => r.StartsWith("close_pending:", StringComparison.Ordinal) && r.Contains("close.consent:no_consent", StringComparison.Ordinal));

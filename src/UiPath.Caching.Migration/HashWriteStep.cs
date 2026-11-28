@@ -24,12 +24,12 @@ internal enum HashWriteStep
     /// <summary>HDELC on the target, replacing its fence: N under G forward, L under GL in reverse.</summary>
     DstFieldsDel,
 
-    /// <summary>The native write of closed: HSETC on N with no fence.</summary>
+    /// <summary>The native write of done: HSETC on N with no fence.</summary>
     NativeWrite,
 
-    /// <summary>The native <c>DEL N</c> of closed.</summary>
+    /// <summary>The native <c>DEL N</c> of done.</summary>
     NativeDel,
 
-    /// <summary>The native field delete of closed: HDELC on N with no fence.</summary>
+    /// <summary>The native field delete of done: HDELC on N with no fence.</summary>
     NativeFieldsDel,
 }

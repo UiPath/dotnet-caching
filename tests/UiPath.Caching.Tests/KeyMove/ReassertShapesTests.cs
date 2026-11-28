@@ -35,8 +35,8 @@ public class ReassertShapesTests(RedisContainerFixture fixture)
         state.Swept.Should().BeEmpty("an S5 group is swept again");
         state.Residue.Should().BeNullOrEmpty("the counts are unknown");
         state.KeepsSourceFallback("a").Should().BeTrue();
-        state.Field(StateFields.DrainedAt).Should().BeEmpty();
-        state.Field(StateFields.ClosedAt).Should().BeEmpty();
+        state.Field(StateFields.CopiedAt).Should().BeEmpty();
+        state.Field(StateFields.DoneAt).Should().BeEmpty();
     }
 
     [Fact]

@@ -35,7 +35,7 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
         await using var kit = await DriverKit.CreateAsync(fixture);
         var (lease, key) = await LeaseAsync(kit);
         await kit.PrepareAsync();
-        var ready = await kit.StepUntilAsync("S1");
+        var preparing = await kit.StepUntilAsync("S1");
         kit.Data.Native = 4;
         kit.Fence = new LeaseFence(key, "stale");
 
@@ -50,7 +50,7 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
 
         kit.Fence = lease.Fence;
         await kit.StepUntilAsync("S3");
-        kit.Data.Guards.Should().NotBeEmpty().And.OnlyContain(g => g.Id == ready.Id && g.Fence == lease.Fence);
+        kit.Data.Guards.Should().NotBeEmpty().And.OnlyContain(g => g.Id == preparing.Id && g.Fence == lease.Fence);
         await kit.Kit.Db.KeyDeleteAsync(key);
     }
 
@@ -59,9 +59,9 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         await kit.PrepareAsync();
-        var ready = await kit.StepUntilAsync("S1");
+        var preparing = await kit.StepUntilAsync("S1");
         kit.Data.Native = 4;
-        kit.Data.AfterFirstCount = async () => await kit.Kit.Scripts.TransitAsync(kit.Kit.StateKey, StateKit.Expecting(ready), StateKit.TargetFrom(ready, "S3", "fwd", 1));
+        kit.Data.AfterFirstCount = async () => await kit.Kit.Scripts.TransitAsync(kit.Kit.StateKey, StateKit.Expecting(preparing), StateKit.TargetFrom(preparing, "S3", "fwd", 1));
 
         await kit.StepAsync();
 
@@ -75,7 +75,7 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
         await using var kit = await DriverKit.CreateAsync(fixture);
         var (lease, key) = await LeaseAsync(kit);
         kit.Fence = lease.Fence;
-        await ToReverseDrainedAsync(kit);
+        await ToCopiedBackAsync(kit);
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Release, "N residue acknowledged", "op", CancellationToken.None);
         kit.Fence = new LeaseFence(key, "stale");
 
@@ -154,7 +154,7 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
     public async Task A_lost_post_write_of_X9_blocks_the_release_until_a_complete_inventory_is_written_under_the_identity()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        await ToReverseMovingAsync(kit);
+        await ToCopyingBackAsync(kit);
         kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
         var reverse = await kit.StepUntilAsync("S4", "rev");
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Release, "no N residue", "op", CancellationToken.None);
@@ -186,7 +186,7 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
         await kit.StepUntilAsync("S3");
         kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 0));
         kit.Mover.Inventory = new Dictionary<string, long> { ["a"] = 0 };
-        var drained = await kit.StepUntilAsync("S4");
+        var copied = await kit.StepUntilAsync("S4");
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "residue acknowledged", "op", CancellationToken.None);
         kit.Kit.Topology.Wait = (_, _) => 0;
         for (var n = 0; n < 8 && (await kit.StateAsync()).Durable; n++)
@@ -205,8 +205,8 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
         outcome!.Plan.Kind.Should().Be(StepKind.Resume);
         var after = await kit.StateAsync();
         after.Should().Match<StateRecord>(s => s.State == "S4" && s.Durable && s.Ep > stuck.Ep);
-        after.Field(StateFields.ClosedAt).Should().BeEmpty();
-        drained.State.Should().Be("S4");
+        after.Field(StateFields.DoneAt).Should().BeEmpty();
+        copied.State.Should().Be("S4");
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
     public async Task The_reverse_inventory_replaces_the_forward_residue_and_a_release_consent_dies_when_the_inventory_changes()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        await ToReverseMovingAsync(kit);
+        await ToCopyingBackAsync(kit);
         kit.Mover.Report = FakeMoverStatus.Drained(0, ("a", 3));
 
         var reverse = await kit.StepUntilAsync("S4", "rev");
@@ -316,7 +316,7 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
         return (lease, key);
     }
 
-    private static async Task ToReverseMovingAsync(DriverKit kit)
+    private static async Task ToCopyingBackAsync(DriverKit kit)
     {
         await kit.PrepareAsync();
         await kit.StepUntilAsync("S3");
@@ -328,9 +328,9 @@ public class StageDriverReviewTests(RedisContainerFixture fixture)
         await kit.StepUntilAsync("S3", "rev");
     }
 
-    private static async Task ToReverseDrainedAsync(DriverKit kit)
+    private static async Task ToCopiedBackAsync(DriverKit kit)
     {
-        await ToReverseMovingAsync(kit);
+        await ToCopyingBackAsync(kit);
         await kit.StepUntilAsync("S4", "rev");
     }
 }

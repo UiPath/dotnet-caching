@@ -29,8 +29,8 @@ internal static class StateFields
     public const string HoldAuto = "hold:auto";
     public const string ResiduePrefix = "res:";
     public const string ApprovalPrefix = "appr:";
-    public const string DrainedAt = "drainedAt";
-    public const string ClosedAt = "closedAt";
+    public const string CopiedAt = "drainedAt";
+    public const string DoneAt = "closedAt";
     public const string DryRun = "dry";
     public const string ColdStart = "cold";
     public const string CanaryAt = "canaryAt";

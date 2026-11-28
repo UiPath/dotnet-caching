@@ -36,12 +36,12 @@ internal static partial class StepPlanner
         };
     }
 
-    /// <summary>The flag value a state stands for: 2 for not-started, 3 for ready to moving, 4 for drained, 5 for closed.</summary>
+    /// <summary>The flag value a state stands for: 2 for off, 3 for preparing to copying, 4 for copied, 5 for done.</summary>
     public static int StageFlagOf(StateRecord state) => state.State switch
     {
-        KeyMoveStates.Drained => 4,
-        KeyMoveStates.Closed => 5,
-        KeyMoveStates.NotStarted => 2,
+        KeyMoveStates.Copied => 4,
+        KeyMoveStates.Done => 5,
+        KeyMoveStates.Off => 2,
         _ => 3,
     };
 

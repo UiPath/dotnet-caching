@@ -16,7 +16,7 @@ public class CommitMismatchTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture, useScripts, withMonitor: true);
         await kit.PrepareAsync();
-        var moving = await kit.StepUntilAsync("S3");
+        var copying = await kit.StepUntilAsync("S3");
         await kit.Kit.Db.HashSetAsync(kit.Kit.StateKey, "dur", "0");
         kit.Fleet.All(n => n.Fl = 2);
         await kit.Monitor!.StepAsync(kit.Group, CancellationToken.None);
@@ -26,7 +26,7 @@ public class CommitMismatchTests(RedisContainerFixture fixture)
 
         outcome!.Plan.Kind.Should().Be(StepKind.Resume);
         var state = await kit.StateAsync();
-        state.Should().Match<StateRecord>(s => s.State == "S3" && s.Ep == moving.Ep && s.Id == moving.Id && s.Durable, "completed, not abandoned and not replaced");
+        state.Should().Match<StateRecord>(s => s.State == "S3" && s.Ep == copying.Ep && s.Id == copying.Id && s.Durable, "completed, not abandoned and not replaced");
         kit.Alerts.Should().Contain(a => a.Code == "commit_mismatch");
         await kit.Monitor.StepAsync(kit.Group, CancellationToken.None);
         kit.Monitor.RulesFor(kit.Group).Alerts.Should().NotContain("commit_mismatch");

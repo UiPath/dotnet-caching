@@ -13,8 +13,8 @@ public interface IKeyMoveOperations
     /// <returns>Null when the group has no key move state yet.</returns>
     Task<KeyMoveStatus?> GetStatusAsync(string group, CancellationToken cancellationToken = default);
 
-    /// <summary>Creates the key move state of <paramref name="group"/> in <see cref="KeyMoveStage.NotStarted"/> with the caches its registration names; a state still in that stage takes the registration's caches again.</summary>
-    /// <returns>False when the group is past <see cref="KeyMoveStage.NotStarted"/>.</returns>
+    /// <summary>Creates the key move state of <paramref name="group"/> in <see cref="KeyMoveStage.Off"/> with the caches its registration names; a state still in that stage takes the registration's caches again.</summary>
+    /// <returns>False when the group is past <see cref="KeyMoveStage.Off"/>.</returns>
     Task<bool> InitializeAsync(string group, CancellationToken cancellationToken = default);
 
     /// <summary>Holds the group at its stage until <see cref="ResumeAsync"/>; a step back to the in-place keys still runs.</summary>

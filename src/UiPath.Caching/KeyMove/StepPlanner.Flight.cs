@@ -13,14 +13,14 @@ internal static partial class StepPlanner
 
         return (prev[0], prev[1], state.State, state.Direction) switch
         {
-            (KeyMoveStates.NotStarted, _, KeyMoveStates.Ready, "fwd") => "X1",
-            (KeyMoveStates.Ready, "fwd", KeyMoveStates.Barrier, "fwd") => "X2",
-            (KeyMoveStates.Ready or KeyMoveStates.Barrier, "fwd", KeyMoveStates.Moving, "fwd") => "X3",
-            (KeyMoveStates.Moving, "fwd", KeyMoveStates.Drained, "fwd") => "X4",
-            (KeyMoveStates.Drained, "fwd", KeyMoveStates.Closed, _) => "X5",
-            (KeyMoveStates.Ready or KeyMoveStates.Barrier, "fwd", KeyMoveStates.NotStarted, _) => "X6",
-            (KeyMoveStates.Moving or KeyMoveStates.Drained, "fwd", KeyMoveStates.Ready, "rev") => "X7",
-            (KeyMoveStates.Drained, "fwd", KeyMoveStates.Moving, "fwd") => "X13",
+            (KeyMoveStates.Off, _, KeyMoveStates.Preparing, "fwd") => "X1",
+            (KeyMoveStates.Preparing, "fwd", KeyMoveStates.Switching, "fwd") => "X2",
+            (KeyMoveStates.Preparing or KeyMoveStates.Switching, "fwd", KeyMoveStates.Copying, "fwd") => "X3",
+            (KeyMoveStates.Copying, "fwd", KeyMoveStates.Copied, "fwd") => "X4",
+            (KeyMoveStates.Copied, "fwd", KeyMoveStates.Done, _) => "X5",
+            (KeyMoveStates.Preparing or KeyMoveStates.Switching, "fwd", KeyMoveStates.Off, _) => "X6",
+            (KeyMoveStates.Copying or KeyMoveStates.Copied, "fwd", KeyMoveStates.Preparing, "rev") => "X7",
+            (KeyMoveStates.Copied, "fwd", KeyMoveStates.Copying, "fwd") => "X13",
             _ => null,
         };
     }

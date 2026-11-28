@@ -13,7 +13,7 @@ internal sealed class StageDriverOptions
 
     public TimeSpan UpgradeHold { get; init; } = TimeSpan.FromHours(2);
 
-    public TimeSpan DrainedSoak { get; init; } = TimeSpan.FromDays(7);
+    public TimeSpan CopiedSoak { get; init; } = TimeSpan.FromDays(7);
 
     /// <summary>How long complete discovery passes may keep finding markers of the retiring generation before <c>reverse_blocked</c> is raised.</summary>
     public TimeSpan RetireWait { get; init; } = TimeSpan.FromSeconds(60);

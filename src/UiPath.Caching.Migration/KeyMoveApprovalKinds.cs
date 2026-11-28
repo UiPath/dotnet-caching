@@ -32,13 +32,13 @@ public static class KeyMoveApprovalKinds
     /// <summary>Steps back although a node does not meet the gates of the step back.</summary>
     public const string ForceReverse = ApprovalKinds.ForceReverse;
 
-    /// <summary>Records the closed state without waiting for a replica that does not confirm the sweep.</summary>
+    /// <summary>Records the done state without waiting for a replica that does not confirm the sweep.</summary>
     public const string SkipSweptWait = ApprovalKinds.SkipLsweptWait;
 
     /// <summary>Goes on past a transition whose barrier a replica did not confirm.</summary>
     public const string SkipBarrier = ApprovalKinds.SkipBarrier;
 
-    /// <summary>Abandons a closed move and starts every cache of the group cold; only for caches that accept a refill.</summary>
+    /// <summary>Abandons a done move and starts every cache of the group cold; only for caches that accept a refill.</summary>
     public const string Abandon = ApprovalKinds.Abandon;
 
     /// <summary>Removes the old markers before a step back may go on.</summary>

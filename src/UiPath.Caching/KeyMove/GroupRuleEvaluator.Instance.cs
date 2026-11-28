@@ -37,7 +37,7 @@ internal static partial class GroupRuleEvaluator
             return KeepLastKnown(last);
         }
 
-        // No state was ever read, and Src shows no newer identity. An empty sample means not-started; no sample means the node is blind.
+        // No state was ever read, and Src shows no newer identity. An empty sample means off; no sample means the node is blind.
         return view.SampleKnown
             ? new GroupRules(true, ReadRule.Follow, WriteRule.Follow, null, null, false, true, [KeyMoveGateIds.DstUnreachable])
             : Unknown(view, staleAfter, options);
@@ -65,8 +65,8 @@ internal static partial class GroupRuleEvaluator
             return new GroupRules(true, ReadRule.Follow, WriteRule.Follow, new ActedState(sample.State, sample.Direction, sample.Ep, sample.Id, 0, false), null, false, true, [KeyMoveGateIds.DstUnreachable]);
         }
 
-        // A closed group keeps serving, as when the state is unknown.
-        if (last is null && sample is { State: Closed, Durable: true })
+        // A done group keeps serving, as when the state is unknown.
+        if (last is null && sample is { State: Done, Durable: true })
         {
             return new GroupRules(true, ReadRule.UnionNativeFirst, WriteRule.Follow, new ActedState(sample.State, sample.Direction, sample.Ep, sample.Id, 1, false), null, false, true, [KeyMoveGateIds.DstUnreachable]);
         }
@@ -74,8 +74,8 @@ internal static partial class GroupRuleEvaluator
         return new GroupRules(true, ReadRule.UnionNativeFirst, WriteRule.FailClosed, last, null, false, true, [KeyMoveGateIds.DstUnreachable]);
     }
 
-    // Nothing newer is known: the last known rules. Only a state that already holds data on the Dst (nPop 1) fails closed, and a closed one keeps serving.
-    private static GroupRules KeepLastKnown(ActedState last) => last.NPop == 0 || last.State == Closed
+    // Nothing newer is known: the last known rules. Only a state that already holds data on the Dst (nPop 1) fails done, and a done one keeps serving.
+    private static GroupRules KeepLastKnown(ActedState last) => last.NPop == 0 || last.State == Done
         ? new GroupRules(true, ReadRule.Follow, WriteRule.Follow, last, null, false, true, [KeyMoveGateIds.DstUnreachable])
         : new GroupRules(true, ReadRule.UnionNativeFirst, WriteRule.FailClosed, last, null, true, true, [KeyMoveGateIds.DstUnreachable]);
 }

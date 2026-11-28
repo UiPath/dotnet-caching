@@ -50,7 +50,7 @@ internal sealed partial class StageDriver
         if (plan.AllAck)
         {
             // T3 of the canary is stored with the acknowledgement itself, so one never exists without the other.
-            long? t3 = state.State == KeyMoveStates.Moving ? time.GetUtcNow().ToUnixTimeMilliseconds() : null;
+            long? t3 = state.State == KeyMoveStates.Copying ? time.GetUtcNow().ToUnixTimeMilliseconds() : null;
             await services.Store.AllAckAsync(group, state.Id, Fence(group), t3).ConfigureAwait(false);
         }
 
@@ -62,7 +62,7 @@ internal sealed partial class StageDriver
         cancellationToken.ThrowIfCancellationRequested();
     }
 
-    // X12 in ready or barrier uses the cache set fresh nodes agree on. Every node acknowledges the new identity before X3.
+    // X12 in preparing or switching uses the cache set fresh nodes agree on. Every node acknowledges the new identity before X3.
     private async Task<TransitionResult?> RebuildCachesAsync(string group, StateRecord state, StepPlan plan, CancellationToken cancellationToken)
     {
         if (services.Upkeep is null || plan.Caches is null)
@@ -155,7 +155,7 @@ internal sealed partial class StageDriver
 
     private SequenceOptions SequenceFor(string group, TransitionSpec spec, string token, long ep)
     {
-        var release = spec.ReleaseClaim && token.Length > 0 ? $"{token}:{ep}:{KeyMoveStates.NotStarted}" : string.Empty;
+        var release = spec.ReleaseClaim && token.Length > 0 ? $"{token}:{ep}:{KeyMoveStates.Off}" : string.Empty;
         Func<CancellationToken, Task<TransitionResult?>>? beforeCommit = null;
         if (spec.TakeClaim)
         {
@@ -188,7 +188,7 @@ internal sealed partial class StageDriver
     }
 
     private async Task<TransitionResult?> CertifyAsync(string group, string token, long ep, CancellationToken cancellationToken) =>
-        Settle(group, await services.Claim.CertifyAsync(group, token, ep, KeyMoveStates.NotStarted, Fence(group), cancellationToken).ConfigureAwait(false)) switch
+        Settle(group, await services.Claim.CertifyAsync(group, token, ep, KeyMoveStates.Off, Fence(group), cancellationToken).ConfigureAwait(false)) switch
         {
             ClaimOutcome.Failed => new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "the move claim certificate could not be written"),
             _ => null,
@@ -213,7 +213,7 @@ internal sealed partial class StageDriver
             return true;
         }
 
-        // N is empty by construction in ready and barrier. Any key there is junk: delete it with PurgeData and recount.
+        // N is empty by construction in preparing and switching. Any key there is junk: delete it with PurgeData and recount.
         if (await services.Data.CountNativeAsync(group, cancellationToken).ConfigureAwait(false) > 0)
         {
             if (await GuardAsync(group, state.Id) is not { } guard)
@@ -288,7 +288,7 @@ internal sealed partial class StageDriver
 
         // Only an open claim has a certificate to give; one that never opened is released idle and its token dropped from the state.
         var status = abandoning ? await services.Claim.StatusAsync(group, token, cancellationToken).ConfigureAwait(false) : ClaimStatus.Absent;
-        var spec = new TransitionSpec("X12", KeyMoveStates.NotStarted, "none", 0, WayBack: true, ReleaseClaim: status == ClaimStatus.Open);
+        var spec = new TransitionSpec("X12", KeyMoveStates.Off, "none", 0, WayBack: true, ReleaseClaim: status == ClaimStatus.Open);
         var result = await services.Sequence.AbandonAsync(group, acknowledged, time.GetUtcNow().ToUnixTimeMilliseconds(), SequenceFor(group, spec, token, ep), cancellationToken).ConfigureAwait(false);
         if (result.Outcome == TransitionOutcome.AbandonRefused)
         {
@@ -311,8 +311,8 @@ internal sealed partial class StageDriver
     private async Task<TransitionResult?> ResumeAsync(string group, StateRecord state, StepInput input, bool skipBarriers, bool recheck, CancellationToken cancellationToken)
     {
         var kind = StepPlanner.Classify(state);
-        var wayBack = kind is "X6" or "X7" || (state is { State: KeyMoveStates.Moving or KeyMoveStates.Drained, Direction: "rev" }) || state.State == KeyMoveStates.NotStarted;
-        var into0 = state.State == KeyMoveStates.NotStarted && state.Claim.Length > 0 && await services.Claim.StatusAsync(group, state.Claim, cancellationToken).ConfigureAwait(false) == ClaimStatus.Open;
+        var wayBack = kind is "X6" or "X7" || (state is { State: KeyMoveStates.Copying or KeyMoveStates.Copied, Direction: "rev" }) || state.State == KeyMoveStates.Off;
+        var into0 = state.State == KeyMoveStates.Off && state.Claim.Length > 0 && await services.Claim.StatusAsync(group, state.Claim, cancellationToken).ConfigureAwait(false) == ClaimStatus.Open;
         var spec = new TransitionSpec(kind ?? "X12", state.State, state.Direction, state.NPop, WayBack: wayBack, TakeClaim: kind == "X1" && state.Claim.Length > 0, ReleaseClaim: into0, RecheckViews: recheck && kind == "X5" && state.Field(StateFields.CommitBegun) != state.Id);
         var sequence = SequenceFor(group, spec, state.Claim, state.Ep) with { SkipBarriers = skipBarriers };
         var result = await services.Sequence.ResumeAsync(group, sequence, cancellationToken).ConfigureAwait(false);
