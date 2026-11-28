@@ -118,6 +118,22 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
     }
 
     [Fact]
+    public async Task A_metadata_only_merge_writes_just_metadata_when_null_caching_is_disabled()
+    {
+        var sut = Create();
+        Stub();
+        _database.KeyTypeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(RedisType.Hash);
+        var metadata = new Dictionary<string, string?> { ["owner"] = "writer" };
+        var options = Replace with { Metadata = metadata, SetOption = HashCacheSetOption.HashReplace };
+
+        var result = await sut.WriteAsync("key", new Dictionary<string, string?>(), options, null, Token);
+
+        await _database.DidNotReceiveWithAnyArgs().KeyDeleteAsync(default(RedisKey), default);
+        await _transaction.Received(1).HashSetAsync(Arg.Any<RedisKey>(), Arg.Is<HashEntry[]>(entries => entries.Length == 1 && entries[0].Name == KnownFieldNames.MetadataKey), Arg.Any<CommandFlags>());
+        result.Should().Be(StoreOutcome.Committed);
+    }
+
+    [Fact]
     public async Task An_expired_merge_does_not_send_a_delete()
     {
         var sut = Create();
@@ -160,6 +176,32 @@ public class RedisHashCacheMigrationOutcomeTests(ITestContextAccessor testContex
         var merge = Replace with { SetOption = HashCacheSetOption.HashReplace };
         (await sut.WriteAsync("key", fields, merge, null, Token)).Should().Be(StoreOutcome.Failed);
         await _database.DidNotReceiveWithAnyArgs().ScriptEvaluateAsync(default(string)!, default, default, default);
+    }
+
+    [Fact]
+    public async Task A_chunked_merge_that_expires_awaiting_the_hash_type_sends_no_fields_or_expiry()
+    {
+        var sut = Create(fieldBatch: 1, version: new Version(7, 0));
+        sut.ChunkScriptsEnabled = false;
+        Stub();
+        var typeRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var keyType = new TaskCompletionSource<RedisType>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.KeyTypeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(_ =>
+        {
+            typeRequested.TrySetResult();
+            return keyType.Task;
+        });
+        var fields = new Dictionary<string, string?> { ["a"] = "1", ["b"] = "2" };
+        var merge = Replace with { SetOption = HashCacheSetOption.HashReplace };
+
+        var write = sut.WriteAsync("key", fields, merge, null, Token).AsTask();
+        await typeRequested.Task.WaitAsync(Token);
+        _time.Advance(TimeSpan.FromMinutes(10));
+        keyType.SetResult(RedisType.Hash);
+
+        (await write).Should().Be(StoreOutcome.Failed);
+        await _transaction.DidNotReceive().HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
+        _ = _transaction.DidNotReceiveWithAnyArgs().KeyExpireAsync(default, default(DateTime?), default);
     }
 
     [Fact]

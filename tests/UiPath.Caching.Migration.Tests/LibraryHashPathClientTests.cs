@@ -40,11 +40,11 @@ public sealed class LibraryHashPathClientTests : RouterTestBase
     }
 
     [Fact]
-    public async Task An_unreadable_snapshot_is_still_unreadable_when_the_selected_read_only_returns_nulls()
+    public async Task An_unreadable_snapshot_is_still_unreadable_when_the_selected_read_is_empty()
     {
         _store.Read = (_, _) => Task.FromResult<object?>(SnapshotOutcome.Unreadable);
         var cache = InterceptingProxy.Wrap<IHashCache>(null!, (_, _) =>
-            new ValueTask<IDictionary<string, Item?>>(new Dictionary<string, Item?> { ["field"] = null }));
+            new ValueTask<IDictionary<string, Item?>>(new Dictionary<string, Item?>()));
         var client = new LibraryHashPathClient<Item>(_store, _connection, key => key, Settle) { Cache = cache };
 
         (await client.ReadAsync("key", ["field"], Ct)).Kind.Should().Be(ReadOutcome.Unreadable);

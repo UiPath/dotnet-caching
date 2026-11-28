@@ -174,8 +174,7 @@ internal sealed class LibraryHashPathClient<T>(IMigrationHashCache store, IConne
         }
 
         var selected = await cache.GetAsync<T>(CacheKey.Verbatim(redisKey(key)), fields, null, cancellationToken).ConfigureAwait(false);
-        // The public read also returns null fields when the selected values cannot be read.
-        return selected.Values.Any(value => value is not null) ? new HashRead<T>(ReadOutcome.Found, selected, null) : HashRead<T>.Of(ReadOutcome.Unreadable);
+        return selected.Count > 0 ? new HashRead<T>(ReadOutcome.Found, selected, null) : HashRead<T>.Of(ReadOutcome.Unreadable);
     }
 
     private async ValueTask<WriteResult> WriteAsync(string key, Func<CacheKey, CancellationToken, ValueTask<StoreOutcome>> command, CancellationToken cancellationToken)

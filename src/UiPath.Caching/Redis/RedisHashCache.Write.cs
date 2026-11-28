@@ -16,10 +16,11 @@ internal sealed partial class RedisHashCache
         HashFields.ValidateForWrite(values);
         var redisKey = ToRedisKey(cacheKey, token);
         var writer = FormatFor(policy, forWrite: true).Writer;
-        var requested = MetadataRequested(values.Count, options.Metadata);
+        var metadataMerge = trace is not null && options.SetOption == HashCacheSetOption.HashReplace && options.Metadata is not null;
+        var requested = metadataMerge ? options.Metadata : MetadataRequested(values.Count, options.Metadata);
         var metadata = MetadataToWrite(requested, writer);
         var expiration = GetExpiration(options, policy);
-        var setOption = values.Count == 0 && _cacheNullValues ? HashCacheSetOption.KeyReplace : options.SetOption;
+        var setOption = values.Count == 0 && _cacheNullValues && !metadataMerge ? HashCacheSetOption.KeyReplace : options.SetOption;
 
         // Everything that can throw runs before the fields and the metadata rent buffers, which SetInnerAsync then owns.
         var (entries, payloads) = SerializeFields(values, metadata, writer);
@@ -192,7 +193,7 @@ internal sealed partial class RedisHashCache
         }
 
         var absent = report?.OnlyIfAbsent == true;
-        if (expiration < now || hashEntries.Length == 0)
+        if (expiration < now || (hashEntries.Length == 0 && !dropMetadata))
         {
             // A fill of an absent key mutates nothing it did not find absent: a hash a peer stored while its generator ran stays.
             return !absent && await DeleteKeyAsync(redisKey, token, trace).ConfigureAwait(false);

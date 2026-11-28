@@ -47,6 +47,48 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
         (await cache.ExpireTimeAsync("key", Ct)).Should().BeCloseTo(deadline, TimeSpan.FromSeconds(1));
     }
 
+    [Fact]
+    public async Task An_empty_merge_with_metadata_stores_it_and_keeps_the_existing_fields()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        _library = true;
+        var node = NewNode(useEnvelope: false);
+        var cache = Cache(node);
+        await RouterTestBase.WaitForLibraryAsync(node.GetRequiredService<IRouter>(), Ct);
+        var original = Fields(("kept", "1"));
+        (await cache.SetAsync("key", original, Ct)).Should().BeTrue();
+        var metadata = new Dictionary<string, string?> { ["owner"] = "writer" };
+        var options = new HashCacheEntryOptions(Metadata: metadata, SetOption: HashCacheSetOption.HashReplace);
+
+        (await cache.SetAsync("key", Fields(), options, Ct)).Should().BeTrue();
+
+        (await cache.GetAsync("key", Ct)).Should().BeEquivalentTo(original);
+        (await cache.GetMetadataAsync("key", Ct)).Should().BeEquivalentTo(metadata);
+    }
+
+    [Fact]
+    public async Task An_empty_merge_at_its_deadline_returns_false_and_keeps_the_existing_fields()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        Action? onRoute = null;
+        var node = NewNode(useLibrary: () =>
+        {
+            onRoute?.Invoke();
+            return true;
+        });
+        var cache = Cache(node);
+        await RouterTestBase.WaitForLibraryAsync(node.GetRequiredService<IRouter>(), Ct);
+        var original = Fields(("kept", "1"));
+        (await cache.SetAsync("key", original, Ct)).Should().BeTrue();
+        var options = new HashCacheEntryOptions(ExpireTime: Clock.GetUtcNow().AddMinutes(1), SetOption: HashCacheSetOption.HashReplace);
+        onRoute = () => Clock.Advance(TimeSpan.FromMinutes(1));
+
+        (await cache.SetAsync("key", Fields(), options, Ct)).Should().BeFalse();
+
+        onRoute = null;
+        (await cache.GetAsync("key", Ct)).Should().BeEquivalentTo(original);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -208,6 +250,31 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
         absent.Should().BeEquivalentTo(await native.GetAsync<List<long>>(CacheKey.Verbatim(RedisKeyOf("nokey")), ["a"], null, Ct));
     }
 
+    [Fact]
+    public async Task A_selected_read_keeps_a_stored_null_when_the_undecodable_field_is_not_selected()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var node = NewNode(pinned: true, useEnvelope: false);
+        var router = (Router)node.GetRequiredService<IRouter>();
+        var routed = (RoutedHashCache<List<long>>)Cache(node);
+        await RouterTestBase.WaitForLibraryAsync(router, Ct);
+        await router.Core.Pins!.RefreshAsync(Ct);
+        router.Core.PinFor("g")!.Applied.Should().BeTrue();
+        var redisKey = RedisKeyOf("key");
+        RedisValue undecodable = new byte[] { 0x1E, 1, 2, 3 };
+        await Db.HashSetAsync(redisKey, [new HashEntry("a", RedisValue.EmptyString), new HashEntry("b", undecodable)]);
+        var native = ((LibraryHashPathClient<List<long>>)routed.Library).Cache!;
+        IHashCache<List<long>> cache = routed;
+        var expected = new Dictionary<string, List<long>?> { ["a"] = null };
+
+        var key = CacheKey.Verbatim(redisKey);
+        (await ((IMigrationHashCache)native).ReadSnapshotAsync<List<long>>(key, null, Ct)).Outcome.Should().Be(SnapshotOutcome.Unreadable);
+        (await native.GetAsync<List<long>>(key, ["a"], null, Ct)).Should().BeEquivalentTo(expected);
+        (await native.GetAsync<List<long>>(key, ["a", "b"], null, Ct)).Should().BeEmpty();
+        (await cache.GetAsync("key", ["a", "b"], Ct)).Should().BeEmpty();
+        (await cache.GetAsync("key", ["a"], Ct)).Should().BeEquivalentTo(expected);
+    }
+
     // A field is its name and its numbers as text: "2,3" is the list 2, 3.
     [Fact]
     public async Task A_host_with_a_hash_registration_starts_the_library_and_gives_the_cache_the_plain_path_with_the_shared_tier()
@@ -246,7 +313,7 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
         (await Db.KeyExpireTimeAsync(RedisKeyOf(actual))).Should().Be(deadline);
     }
 
-    private ServiceProvider NewNode(bool hasDefault = true)
+    private ServiceProvider NewNode(bool hasDefault = true, bool pinned = false, bool useEnvelope = true, Func<bool>? useLibrary = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -265,10 +332,21 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(
             configuration,
-            router => router
-                .AddHash(new RouterHashCacheRegistration<List<long>> { Name = "lists", Group = "g", Source = source, RedisKey = source.RedisKey, DefaultExpiry = hasDefault ? Life : null })
-                .UseLibraryWhen(_ => _library)
-                .UseEnvelope(new LegacyEnvelopeProxy()));
+            router =>
+            {
+                router.AddHash(new RouterHashCacheRegistration<List<long>> { Name = "lists", Group = "g", Source = source, RedisKey = source.RedisKey, DefaultExpiry = hasDefault ? Life : null })
+                    .UseLibraryWhen(_ => useLibrary?.Invoke() ?? _library);
+                if (useEnvelope)
+                {
+                    router.UseEnvelope(new LegacyEnvelopeProxy());
+                }
+
+                if (pinned)
+                {
+                    router.UsePinWhen(_ => true)
+                        .UseValueSerializers(builder => builder.AddValueSerializer("test-format", [TestFormatSerializer.Id], _ => new TestFormatSerializer()));
+                }
+            });
         var provider = services.BuildServiceProvider();
         _nodes.Add(provider);
         _ = provider.GetRequiredService<IRouter>();

@@ -53,16 +53,21 @@ internal sealed partial class RedisHashCache
         return false;
     }
 
-    /// <summary>Writes one chunk of a merge in one step that first checks the key is a hash or absent: a script, or where the server refuses scripts a watched transaction (which needs 6.0.9, where a watched key that expires aborts it).</summary>
+    /// <summary>Writes one guarded chunk, returning false if the deadline passes before the fallback transaction is sent.</summary>
     /// <exception cref="HashTypeRefusedException">The key holds another type; nothing was changed.</exception>
-    private async Task WriteGuardedChunkAsync(RedisKey target, HashEntry[] chunk, DateTimeOffset expiration)
+    private async Task<bool> WriteGuardedChunkAsync(RedisKey target, HashEntry[] chunk, DateTimeOffset expiration)
     {
         var expireAt = expiration == DateTimeOffset.MaxValue ? -1 : expiration.ToUnixTimeMilliseconds();
         if (ChunkScriptsEnabled && Volatile.Read(ref _chunkScriptsRefused) == 0 && await TryWriteGuardedChunkScriptAsync(target, chunk, expireAt).ConfigureAwait(false))
         {
-            return;
+            return true;
         }
 
+        return await WriteGuardedChunkTransactionAsync(target, chunk, expiration).ConfigureAwait(false);
+    }
+
+    private async Task<bool> WriteGuardedChunkTransactionAsync(RedisKey target, HashEntry[] chunk, DateTimeOffset expiration)
+    {
         if (ServerVersion < FallbackMinimum)
         {
             throw new NotSupportedException($"The server refuses scripts and runs Redis {ServerVersion}; a guarded merge without scripts needs {FallbackMinimum} or later.");
@@ -71,6 +76,11 @@ internal sealed partial class RedisHashCache
         for (var attempt = 0; attempt < MaxChunkWatchAborts; attempt++)
         {
             var type = await Database.KeyTypeAsync(target, CommandFlags.DemandMaster).ConfigureAwait(false);
+            if (expiration <= Clock.GetUtcNow())
+            {
+                return false;
+            }
+
             if (type is not (RedisType.None or RedisType.Hash))
             {
                 throw new HashTypeRefusedException(target);
@@ -80,13 +90,13 @@ internal sealed partial class RedisHashCache
             var transaction = Database.CreateTransaction();
             transaction.AddCondition(type == RedisType.Hash ? Condition.HashLengthGreaterThan(target, 0) : Condition.KeyNotExists(target));
             var written = transaction.HashSetAsync(target, chunk, CommandFlags.DemandMaster);
-            var lifetime = expireAt == -1
+            var lifetime = expiration == DateTimeOffset.MaxValue
                 ? (Task)transaction.KeyPersistAsync(target, CommandFlags.DemandMaster)
                 : transaction.KeyExpireAsync(target, expiration.UtcDateTime, CommandFlags.DemandMaster);
             if (await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false))
             {
                 await ObserveAllAsync([written, lifetime]).ConfigureAwait(false);
-                return;
+                return true;
             }
 
             written.Forget();
