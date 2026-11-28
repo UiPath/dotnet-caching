@@ -171,10 +171,10 @@ public sealed class KeyMoveReverseWriteTests(RedisFixture fixture)
 
     [Theory]
     [InlineData("S1", "ReverseS1")]
-    [InlineData("S2", "Closed")]
+    [InlineData("S2", "Unavailable")]
     [InlineData("S3", "ReverseS3")]
     [InlineData("S4", "ReverseS4")]
-    [InlineData("S5", "Closed")]
+    [InlineData("S5", "Unavailable")]
     public async Task A_reverse_state_plans_its_own_write_mode_and_a_union_read(string state, string expected)
     {
         await using var kit = await CreateAsync(scripts: true);

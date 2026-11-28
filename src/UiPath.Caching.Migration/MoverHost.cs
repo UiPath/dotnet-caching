@@ -90,9 +90,9 @@ internal sealed class MoverHost
         await CancelAndDisposeWhenDoneAsync(stop, loop).ConfigureAwait(false);
     }
 
-    // An S3 of either direction with dur=1 whose id every fresh node acknowledged (allAck equals the id), and only while this node acts under it.
+    // moving in either direction with dur=1 and every fresh node's acknowledgement (allAck equals id), while this node acts under it.
     private static (long MoveId, string Identity, string Direction)? Allowed(StateRecord? state, GroupRules rules) =>
-        state is { State: "S3", Direction: MoverPasses.Forward or MoverPasses.Reverse, Durable: true, MoveId: { } id } && state.AllAck == state.Id
+        state is { State: KeyMoveStates.Moving, Direction: MoverPasses.Forward or MoverPasses.Reverse, Durable: true, MoveId: { } id } && state.AllAck == state.Id
         && rules is { Relevant: true, Acting: { } acting } && acting.Id == state.Id && acting.Direction == state.Direction
             ? (id, state.Id, state.Direction)
             : null;

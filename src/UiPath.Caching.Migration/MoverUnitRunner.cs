@@ -118,7 +118,7 @@ internal sealed class MoverUnitRunner
     // One pass of the unit from its stored cursor to the cursor's return to zero. Returns how long to wait before the next pass, or null when the pass ended without finishing.
     private async Task<TimeSpan?> RunPassAsync(KeyMoveData data, CancellationToken cancellationToken)
     {
-        // A pass starts only while the state is an S3 of the runner's direction that every node acknowledged, which is read again before every batch.
+        // Start a pass only in moving, in the runner's direction, with every node's acknowledgement. Re-read the state before every batch.
         if (!await _stillAllowed(cancellationToken).ConfigureAwait(false))
         {
             return null;
@@ -266,7 +266,7 @@ internal sealed class MoverUnitRunner
             {
                 if (moved != EndBatch && writtenCache is { } cache)
                 {
-                    KeyMoveTelemetry.CountWrittenAfterS3(cache, _group);
+                    KeyMoveTelemetry.CountWrittenAfterMoving(cache, _group);
                 }
 
                 return moved;
@@ -403,8 +403,8 @@ internal sealed class MoverUnitRunner
 
     private bool HoldsLease() => _time.GetElapsedTime(_renewedAt) < _options.LeaseTtl;
 
-    // An S3 of the runner's direction, under its identity.
-    private bool MovingS3() => _plane.RulesFor(_group).Acting is { State: "S3" } acting && acting.Direction == _direction && acting.Id == _identity;
+    // moving in the runner's direction, under its identity.
+    private bool MovingS3() => _plane.RulesFor(_group).Acting is { State: KeyMoveStates.Moving } acting && acting.Direction == _direction && acting.Id == _identity;
 
     // A lease that has to be taken again, not extended, lapsed under this runner, so another may have run the unit since.
     private async Task<bool> RenewAsync(KeyMoveData data, RedisKey lease, long leaseMs)

@@ -29,7 +29,7 @@ internal sealed class ClaimOperator(ClaimStore store, IClaimEvidence evidence)
         return ToOutcome(await store.DropAsync(field, expected, confirm).ConfigureAwait(false));
     }
 
-    /// <summary>For an open field with no cert, still holding <paramref name="expected"/> as shown: writes the group's terminal evidence as its cert, then idles (S0) or closes (S5) it.</summary>
+    /// <summary>For an open field with no cert, still holding <paramref name="expected"/> as shown: writes the group's terminal evidence as its cert, then idles (not-started) or closes (closed) it.</summary>
     /// <returns><see cref="ClaimCommandOutcome.DoneUnconfirmed"/> when a WAIT did not confirm a step: the caller raises <c>wait_skipped{claim}</c>.</returns>
     public async Task<ClaimCommandOutcome> CertifyAsync(string field, string expected, string confirm, CancellationToken cancellationToken)
     {
@@ -54,8 +54,8 @@ internal sealed class ClaimOperator(ClaimStore store, IClaimEvidence evidence)
             return ClaimCommandOutcome.NoEvidence;
         }
 
-        // An S0 certificate requires the matching published release because CTLCOMMIT can precede a failed DURABLE.
-        if (!terminal.Swept && terminal.PublishedRelease != $"{value.Token}:{terminal.Epoch}:S0")
+        // A not-started certificate requires the matching published release because CTLCOMMIT can precede a failed DURABLE.
+        if (!terminal.Swept && terminal.PublishedRelease != $"{value.Token}:{terminal.Epoch}:{KeyMoveStates.NotStarted}")
         {
             return ClaimCommandOutcome.NoEvidence;
         }

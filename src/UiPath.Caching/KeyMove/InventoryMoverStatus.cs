@@ -7,7 +7,7 @@ namespace UiPath.Caching.KeyMove;
 /// <remarks>The inventory behind the drain report is reused for <see cref="ReuseFor"/>, since a scan of every master on each 2 second step would load the servers; a failed inventory is no evidence.</remarks>
 /// <param name="moverEvidence">When given, it replaces <paramref name="moverFinishedPass"/>: null for no finished pass, else the evidence the passes rest on (the identity and the unit topology), which the confirmation window is bound to.</param>
 /// <param name="confirmAfter">How long after it first saw the mover's passes clean the leader waits before it takes the primary inventory that proves them (the replica lag bound); null takes it at once.</param>
-/// <param name="moverFinishedPass">Whether the mover's own pass for the group finished after the acknowledgement of S3; null when there is no mover.</param>
+/// <param name="moverFinishedPass">Whether the mover's own pass for the group finished after the acknowledgement of moving; null when there is no mover.</param>
 internal sealed class InventoryMoverStatus(KeyInventory inventory, TimeProvider time, Func<string, string, CancellationToken, Task<bool>>? moverFinishedPass = null, TimeSpan? confirmAfter = null, Func<string, string, CancellationToken, Task<string?>>? moverEvidence = null) : IMoverStatus
 {
     public static readonly TimeSpan ReuseFor = TimeSpan.FromSeconds(30);

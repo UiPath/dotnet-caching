@@ -19,14 +19,14 @@ public class StateScriptsTests(RedisContainerFixture fixture)
     {
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, openControl: false);
         var state = env.Make("state");
-        var target = new StateTarget("S1", "fwd", 0, 5, Id, "S0:none:0:4:id-0", 1234, MoveId: 5, Claim: "tok", Caches: ("a+b", "hash"));
+        var target = new StateTarget(KeyMoveStates.Ready, "fwd", 0, 5, Id, "S0:none:0:4:id-0", 1234, MoveId: 5, Claim: "tok", Caches: ("a+b", "hash"));
 
         (await env.Scripts.TransitAsync(state, StateExpectation.Absent, target)).Should().Be(MoveScripts.Written);
 
         var held = (await env.Db.HashGetAllAsync(state)).ToDictionary(e => (string)e.Name!, e => (string)e.Value!);
         held.Should().BeEquivalentTo(new Dictionary<string, string>
         {
-            ["st"] = "S1", ["dir"] = "fwd", ["nPop"] = "0", ["ep"] = "5", ["id"] = Id, ["dur"] = "0", ["prev"] = "S0:none:0:4:id-0", ["upd"] = "1234",
+            ["st"] = KeyMoveStates.Ready, ["dir"] = "fwd", ["nPop"] = "0", ["ep"] = "5", ["id"] = Id, ["dur"] = "0", ["prev"] = "S0:none:0:4:id-0", ["upd"] = "1234",
             ["moveId"] = "5", ["ct"] = "tok", ["caches"] = "a+b", ["cs"] = "hash",
         });
     }
@@ -39,14 +39,14 @@ public class StateScriptsTests(RedisContainerFixture fixture)
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, openControl: false);
         var state = await DurableStateAsync(env, ep: 5, id: "id-5");
 
-        var code = await env.Scripts.TransitAsync(state, StateExpectation.Holding(5, "id-5", 1), new StateTarget("S3", "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 9));
+        var code = await env.Scripts.TransitAsync(state, StateExpectation.Holding(5, "id-5", 1), new StateTarget(KeyMoveStates.Moving, "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 9));
 
         code.Should().Be(MoveScripts.Written);
         var held = await env.Db.HashGetAllAsync(state);
         Field(held, "ep").Should().Be("6");
         Field(held, "id").Should().Be("id-6");
         Field(held, "dur").Should().Be("0");
-        Field(held, "st").Should().Be("S3");
+        Field(held, "st").Should().Be(KeyMoveStates.Moving);
         Field(held, "nPop").Should().Be("1");
         Field(held, "prev").Should().Be("S1:fwd:0:5:id-5");
         Field(held, "caches").Should().Be("a");
@@ -65,7 +65,7 @@ public class StateScriptsTests(RedisContainerFixture fixture)
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, openControl: false);
         var state = await DurableStateAsync(env, ep: 5, id: "id-5");
 
-        var code = await env.Scripts.TransitAsync(state, StateExpectation.Holding(ep, id, durable), new StateTarget("S3", "fwd", 1, 9, "id-9", "x:y:0:5:id-5", 9));
+        var code = await env.Scripts.TransitAsync(state, StateExpectation.Holding(ep, id, durable), new StateTarget(KeyMoveStates.Moving, "fwd", 1, 9, "id-9", "x:y:0:5:id-5", 9));
 
         code.Should().Be(MoveScripts.ExpectationFailed);
         (await env.Db.HashGetAsync(state, "id")).Should().Be("id-5");
@@ -78,8 +78,8 @@ public class StateScriptsTests(RedisContainerFixture fixture)
     {
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, openControl: false);
         var state = await DurableStateAsync(env, ep: 5, id: "id-5");
-        await env.Scripts.TransitAsync(state, StateExpectation.Holding(5, "id-5", 1), new StateTarget("S1", "fwd", 0, 6, "id-6", "S0:none:0:5:id-5", 1));
-        var back = new StateTarget("S0", "none", 0, 7, "id-7", "S0:none:0:5:id-5", 2);
+        await env.Scripts.TransitAsync(state, StateExpectation.Holding(5, "id-5", 1), new StateTarget(KeyMoveStates.Ready, "fwd", 0, 6, "id-6", "S0:none:0:5:id-5", 1));
+        var back = new StateTarget(KeyMoveStates.NotStarted, "none", 0, 7, "id-7", "S0:none:0:5:id-5", 2);
 
         (await env.Scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 1), back)).Should().Be(MoveScripts.ExpectationFailed);
         (await env.Scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 0), back)).Should().Be(MoveScripts.Written);
@@ -94,7 +94,7 @@ public class StateScriptsTests(RedisContainerFixture fixture)
     {
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, openControl: false);
         var state = await DurableStateAsync(env, ep: 5, id: "id-5");
-        var target = new StateTarget("S1", "fwd", 0, 6, "id-6", "S0:none:0:5:id-5", 1);
+        var target = new StateTarget(KeyMoveStates.Ready, "fwd", 0, 6, "id-6", "S0:none:0:5:id-5", 1);
         await env.Scripts.TransitAsync(state, StateExpectation.Holding(5, "id-5", 1), target);
 
         (await env.Scripts.TransitAsync(state, StateExpectation.Holding(5, "id-5", 1), target)).Should().Be(MoveScripts.Repeated);
@@ -108,7 +108,7 @@ public class StateScriptsTests(RedisContainerFixture fixture)
     {
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts: true, openControl: false);
 
-        var act = () => env.Scripts.TransitAsync(env.Make("state"), StateExpectation.Holding(5, "id-5", 1), new StateTarget("S1", "fwd", 0, 5, "id-6", "p", 1));
+        var act = () => env.Scripts.TransitAsync(env.Make("state"), StateExpectation.Holding(5, "id-5", 1), new StateTarget(KeyMoveStates.Ready, "fwd", 0, 5, "id-6", "p", 1));
 
         await act.Should().ThrowAsync<ArgumentException>();
     }
@@ -120,7 +120,7 @@ public class StateScriptsTests(RedisContainerFixture fixture)
     {
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, openControl: false);
         var state = env.Make("state");
-        await env.Scripts.TransitAsync(state, StateExpectation.Absent, new StateTarget("S3", "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 1));
+        await env.Scripts.TransitAsync(state, StateExpectation.Absent, new StateTarget(KeyMoveStates.Moving, "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 1));
 
         (await env.Scripts.DurableAsync(state, "other")).Should().Be(0);
         (await env.Db.HashGetAsync(state, "dur")).Should().Be("0");
@@ -164,7 +164,7 @@ public class StateScriptsTests(RedisContainerFixture fixture)
         result.Ep.Should().BeGreaterThanOrEqualTo(micros);
         above.Ep.Should().Be((long.MaxValue / 2) + 1);
         var held = await env.Db.HashGetAllAsync(state);
-        Field(held, "st").Should().Be("S0");
+        Field(held, "st").Should().Be(KeyMoveStates.NotStarted);
         Field(held, "dur").Should().Be("1");
         Field(held, "nPop").Should().Be("0");
         Field(held, "ep").Should().Be(result.Ep.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -191,7 +191,7 @@ public class StateScriptsTests(RedisContainerFixture fixture)
         Field(held, "caches").Should().Be("a+b");
         Field(held, "cs").Should().Be("h2");
 
-        await env.Scripts.TransitAsync(state, StateExpectation.Holding(first.Ep, first.Id, 1), new StateTarget("S1", "fwd", 0, first.Ep + 1, "id-x", "p", 3));
+        await env.Scripts.TransitAsync(state, StateExpectation.Holding(first.Ep, first.Id, 1), new StateTarget(KeyMoveStates.Ready, "fwd", 0, first.Ep + 1, "id-x", "p", 3));
         (await env.Scripts.InitAsync(state, "z", "h3", 0, 4)).Code.Should().Be(MoveScripts.StateNotInitial);
         (await env.Db.HashGetAsync(state, "caches")).Should().Be("a+b");
     }
@@ -201,12 +201,12 @@ public class StateScriptsTests(RedisContainerFixture fixture)
     public async Task One_aborted_exec_with_every_predicate_holding_is_sent_again_and_gives_the_script_code(string command)
     {
         await using var scriptEnv = await MoveTestEnvironment.CreateAsync(fixture, useScripts: true, openControl: false);
-        var expected = await RunAsync(command, scriptEnv, scriptEnv.Scripts, await PrepareAsync(command, scriptEnv));
+        var expected = await RunAsync(command, scriptEnv.Scripts, await PrepareAsync(command, scriptEnv));
         await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts: false, openControl: false);
         var state = await PrepareAsync(command, env);
         await using var harness = await WatchAbortHarness.CreateAsync(env, fixture.ConnectionString, toForce: 1, field: "zz", watched: state, absent: command is "transit-create" or "init");
 
-        var code = await RunAsync(command, env, new MoveScripts(harness.Database, useScripts: false, env.ServerVersion), state);
+        var code = await RunAsync(command, new MoveScripts(harness.Database, useScripts: false, env.ServerVersion), state);
 
         code.Should().Be(expected, command);
         code.Should().BePositive(command);
@@ -222,7 +222,7 @@ public class StateScriptsTests(RedisContainerFixture fixture)
         var state = await PrepareAsync(command, env);
         await using var harness = await WatchAbortHarness.CreateAsync(env, fixture.ConnectionString, toForce: int.MaxValue, field: "zz", watched: state, absent: command is "transit-create" or "init");
 
-        var act = () => RunAsync(command, env, new MoveScripts(harness.Database, useScripts: false, env.ServerVersion), state);
+        var act = () => RunAsync(command, new MoveScripts(harness.Database, useScripts: false, env.ServerVersion), state);
 
         await act.Should().ThrowAsync<RedisException>();
         harness.Aborted.Should().Be(MoveScripts.MaxWatchAborts, command);
@@ -247,7 +247,7 @@ public class StateScriptsTests(RedisContainerFixture fixture)
         var state = env.Make("state");
         await env.Db.HashSetAsync(
             state,
-            [new("st", "S1"), new("dir", "fwd"), new("nPop", "0"), new("ep", ep), new("id", id), new("dur", "1"), new("caches", "a"), new("prev", $"S1:fwd:0:{ep}:{id}")]);
+            [new("st", KeyMoveStates.Ready), new("dir", "fwd"), new("nPop", "0"), new("ep", ep), new("id", id), new("dur", "1"), new("caches", "a"), new("prev", $"S1:fwd:0:{ep}:{id}")]);
         return state;
     }
 
@@ -259,7 +259,7 @@ public class StateScriptsTests(RedisContainerFixture fixture)
             case "transit":
                 return await DurableStateAsync(env, 5, "id-5");
             case "durable":
-                await env.Scripts.TransitAsync(state, StateExpectation.Absent, new StateTarget("S3", "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 1));
+                await env.Scripts.TransitAsync(state, StateExpectation.Absent, new StateTarget(KeyMoveStates.Moving, "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 1));
                 return state;
             case "allack":
                 return await DurableStateAsync(env, 5, "id-5");
@@ -271,14 +271,14 @@ public class StateScriptsTests(RedisContainerFixture fixture)
         }
     }
 
-    private static async Task<long> RunAsync(string command, MoveTestEnvironment env, MoveScripts scripts, RedisKey state)
+    private static async Task<long> RunAsync(string command, MoveScripts scripts, RedisKey state)
     {
         switch (command)
         {
             case "transit":
-                return await scripts.TransitAsync(state, StateExpectation.Holding(5, "id-5", 1), new StateTarget("S3", "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 1));
+                return await scripts.TransitAsync(state, StateExpectation.Holding(5, "id-5", 1), new StateTarget(KeyMoveStates.Moving, "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 1));
             case "transit-create":
-                return await scripts.TransitAsync(state, StateExpectation.Absent, new StateTarget("S3", "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 1));
+                return await scripts.TransitAsync(state, StateExpectation.Absent, new StateTarget(KeyMoveStates.Moving, "fwd", 1, 6, "id-6", "S1:fwd:0:5:id-5", 1));
             case "durable":
                 return await scripts.DurableAsync(state, "id-6");
             case "allack":

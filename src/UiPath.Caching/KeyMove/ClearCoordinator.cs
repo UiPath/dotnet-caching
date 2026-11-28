@@ -3,7 +3,7 @@ using StackExchange.Redis;
 namespace UiPath.Caching.KeyMove;
 
 /// <summary>Clear of one cache: the lock, the gate closed on every slot, the sweep, the check that no transition replaced the gates, and the reopen of its own close.</summary>
-/// <remarks>In S0 and S5, and for a group with no state, it is the plain sweep with the two events.</remarks>
+/// <remarks>In not-started and closed, and for a group with no state, it is the plain sweep with the two events.</remarks>
 /// <param name="stateScripts">The scripts over the view of the state hash, which holds the lock.</param>
 /// <param name="controlScripts">The scripts over the view that names control records.</param>
 internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScripts, MoveScripts controlScripts, ControlRecordReader records, MoveKeyNames names, KeyMoveStateOptions options, TimeProvider time)
@@ -19,7 +19,7 @@ internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScript
             return ClearOutcome.Unavailable;
         }
 
-        if (state is null or { State: "S0" or "S5" })
+        if (state is null or { State: KeyMoveStates.NotStarted or KeyMoveStates.Closed })
         {
             await hooks.PublishFirst(cancellationToken).ConfigureAwait(false);
             await hooks.Sweep(cancellationToken).ConfigureAwait(false);
@@ -76,7 +76,7 @@ internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScript
             if (attempt > 0)
             {
                 // A transition that ran during the sweep replaced the gates; the next close is made under the identity now in force.
-                if (await store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is not { Durable: true, State: "S1" or "S2" or "S3" or "S4" } reread)
+                if (await store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is not { Durable: true, State: KeyMoveStates.Ready or KeyMoveStates.Barrier or KeyMoveStates.Moving or KeyMoveStates.Drained } reread)
                 {
                     return ClearOutcome.Unavailable;
                 }

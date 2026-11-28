@@ -23,7 +23,7 @@ internal sealed class GroupDataOps(MasterScanner scanner, IGroupKeySpace space, 
 
     public Task PurgeLegacyAsync(string group, DataGuard guard, CancellationToken cancellationToken) => PurgeAsync(group, MoveSide.Legacy, guard, cancellationToken);
 
-    /// <summary>The operator command: deletes the owned N keys of a group in S0; it never touches records or state.</summary>
+    /// <summary>The operator command: deletes the owned N keys of a group in not-started; it never touches records or state.</summary>
     public async Task<PurgeOutcome> PurgeDataAsync(string group, CancellationToken cancellationToken)
     {
         if (await store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is not { } state)
@@ -31,7 +31,7 @@ internal sealed class GroupDataOps(MasterScanner scanner, IGroupKeySpace space, 
             return PurgeOutcome.NoState;
         }
 
-        if (state is not { State: "S0", Durable: true })
+        if (state is not { State: KeyMoveStates.NotStarted, Durable: true })
         {
             return PurgeOutcome.NotApplicable;
         }
@@ -85,7 +85,7 @@ internal sealed class GroupDataOps(MasterScanner scanner, IGroupKeySpace space, 
         {
             var seen = await DeletePassAsync(group, side, state.CacheIds, guard, cancellationToken).ConfigureAwait(false);
 
-            // N must end empty, so a pass on the masters that found no owned key is the confirming pass. L serves the router's per-group path again once the nodes ack S0
+            // N must end empty, so a master pass finding no owned key confirms it. L serves the router's per-group path again once nodes acknowledge not-started.
             // AcceptRefill covers data a refill can rewrite, so the first complete pass that deleted everything it saw is the last.
             if (seen == 0 || side == MoveSide.Legacy)
             {

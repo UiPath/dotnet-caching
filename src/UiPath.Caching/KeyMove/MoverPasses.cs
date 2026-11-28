@@ -35,7 +35,7 @@ internal sealed class MoverPasses(IScanUnits units, IDatabase database, MoveKeyN
             return null;
         }
 
-        if (state.State != "S3" || state.Direction != direction || !state.Durable || state.AllAck != state.Id || state.MoveId is not { } moveId)
+        if (state.State != KeyMoveStates.Moving || state.Direction != direction || !state.Durable || state.AllAck != state.Id || state.MoveId is not { } moveId)
         {
             return null;
         }

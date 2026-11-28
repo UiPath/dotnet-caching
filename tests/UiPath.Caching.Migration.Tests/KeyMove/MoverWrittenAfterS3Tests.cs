@@ -10,7 +10,7 @@ namespace UiPath.Caching.Migration.Tests.KeyMove;
 [Trait("Category", "Integration")]
 public sealed class MoverWrittenAfterS3Tests(RedisFixture fixture)
 {
-    private const string Counter = "cache.keymove.written_after_s3";
+    private const string Counter = "cache.keymove.written_after_moving";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 

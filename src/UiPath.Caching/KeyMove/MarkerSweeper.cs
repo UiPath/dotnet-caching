@@ -3,10 +3,7 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.KeyMove;
 
-/// <summary>
-/// The leader's removal of markers that no writer will remove, in two modes (the orphans of a forward run, and the retiring generation in S1(rev)): an obsolete one goes by SMGC, and a current one whose writer is gone (it has stood for longer than a write can run) is helped,
-/// by the deletion of the superseded copy fenced by the marker's binding and then the removal of the exact marker.
-/// </summary>
+/// <summary>The leader's removal of markers that no writer will remove, in two modes (the orphans of a forward run, and the retiring generation in ready(rev)): an obsolete one goes by SMGC, and a current one whose writer is gone (it has stood for longer than a write can run) is helped, by the deletion of the superseded copy fenced by the marker's binding and then the removal of the exact marker.</summary>
 internal sealed class MarkerSweeper(IDatabase control, MoveScripts scripts, MoveKeyNames names, KeyMoveStateOptions options, TimeProvider time)
 {
     private const int Batch = 512;
@@ -29,7 +26,7 @@ internal sealed class MarkerSweeper(IDatabase control, MoveScripts scripts, Move
         ControlRecord.FixedFields + (state.ForwardGeneration.Length > 0 || state.RetiringGeneration.Length > 0 ? 2 : 0) + state.CacheIds.Count;
 
     public static bool Applies(StateRecord state, SweepMode mode) => mode == SweepMode.Retire
-        ? state is { State: "S1", Direction: "rev", Durable: true } && state.RetiringGeneration.Length > 0
+        ? state is { State: KeyMoveStates.Ready, Direction: "rev", Durable: true } && state.RetiringGeneration.Length > 0
         : ControlUpkeep.Applies(state) && state.Direction == "fwd";
 
     /// <summary>One pass over the group's records, found by the length of each: a record that holds no more than its fixed fields and gates has no marker.</summary>

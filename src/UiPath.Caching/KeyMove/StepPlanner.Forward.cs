@@ -9,16 +9,16 @@ internal static partial class StepPlanner
         var state = i.State;
         return (state.State, state.Direction) switch
         {
-            ("S0", _) => await FromOffAsync(i, options, side).ConfigureAwait(false),
-            ("S1", "fwd") => await FromReadyAsync(i, options, side).ConfigureAwait(false),
-            ("S2", "fwd") => await FromFreezeAsync(i, side).ConfigureAwait(false),
-            ("S3", "fwd") => await FromMovingAsync(i, options, side).ConfigureAwait(false),
-            ("S4", "fwd") => await FromDrainedAsync(i, options, side).ConfigureAwait(false),
-            ("S5", _) => FromClosed(i),
-            ("S1", "rev") => await FromReverseReadyAsync(i, options).ConfigureAwait(false),
-            ("S3", "rev") => await FromReverseMovingAsync(i).ConfigureAwait(false),
-            ("S4", "rev") => FromReverseDrained(i, side),
-            _ => StepPlan.Wait("unknown_state", $"{state.State}:{state.Direction}"),
+            (KeyMoveStates.NotStarted, _) => await FromOffAsync(i, options, side).ConfigureAwait(false),
+            (KeyMoveStates.Ready, "fwd") => await FromReadyAsync(i, options, side).ConfigureAwait(false),
+            (KeyMoveStates.Barrier, "fwd") => await FromFreezeAsync(i, side).ConfigureAwait(false),
+            (KeyMoveStates.Moving, "fwd") => await FromMovingAsync(i, options, side).ConfigureAwait(false),
+            (KeyMoveStates.Drained, "fwd") => await FromDrainedAsync(i, options, side).ConfigureAwait(false),
+            (KeyMoveStates.Closed, _) => FromClosed(i),
+            (KeyMoveStates.Ready, "rev") => await FromReverseReadyAsync(i, options).ConfigureAwait(false),
+            (KeyMoveStates.Moving, "rev") => await FromReverseMovingAsync(i).ConfigureAwait(false),
+            (KeyMoveStates.Drained, "rev") => FromReverseDrained(i, side),
+            _ => StepPlan.Wait("unknown_state", $"{KeyMoveStates.NameOf(state.State)}:{state.Direction}"),
         };
     }
 
@@ -50,7 +50,7 @@ internal static partial class StepPlanner
             return StepPlan.Wait("start_blocked", string.Join(',', failures));
         }
 
-        var spec = new TransitionSpec("X1", "S1", "fwd", 0, NewMoveId: true, TakeClaim: i.Facts.TakesClaim(i.Group), Binding: BindingChange.Mint);
+        var spec = new TransitionSpec("X1", KeyMoveStates.Ready, "fwd", 0, NewMoveId: true, TakeClaim: i.Facts.TakesClaim(i.Group), Binding: BindingChange.Mint);
         var plan = new StepPlan(StepKind.Transit, spec);
         return overrides.Count == 0 ? plan : plan.WithOverrides(string.Join(',', overrides.Select(o => o.Approval)), [.. overrides.Select(o => o.Gate)]);
     }
@@ -89,8 +89,8 @@ internal static partial class StepPlanner
         }
 
         return noOrigin
-            ? new StepPlan(StepKind.Transit, new TransitionSpec("X2", "S2", "fwd", 0))
-            : new StepPlan(StepKind.Transit, new TransitionSpec("X3", "S3", "fwd", 1, Pre: PreStep.NativeInventory));
+            ? new StepPlan(StepKind.Transit, new TransitionSpec("X2", KeyMoveStates.Barrier, "fwd", 0))
+            : new StepPlan(StepKind.Transit, new TransitionSpec("X3", KeyMoveStates.Moving, "fwd", 1, Pre: PreStep.NativeInventory));
     }
 
     private static async Task<StepPlan> FromFreezeAsync(StepInput i, StepSide side)
@@ -120,7 +120,7 @@ internal static partial class StepPlanner
             return StepPlan.Wait(ReplicaUnhealthy, preflight.Reason);
         }
 
-        return new StepPlan(StepKind.Transit, new TransitionSpec("X3", "S3", "fwd", 1, Pre: PreStep.NativeInventory));
+        return new StepPlan(StepKind.Transit, new TransitionSpec("X3", KeyMoveStates.Moving, "fwd", 1, Pre: PreStep.NativeInventory));
     }
 
     private static async Task<StepPlan> FromMovingAsync(StepInput i, StageDriverOptions options, StepSide side)
@@ -159,7 +159,7 @@ internal static partial class StepPlanner
 
         var post = new List<(string, string)> { (StateFields.DrainedAt, Number(i.Now.ToUnixTimeMilliseconds())) };
         post.AddRange(drain!.Residue.Select(r => (StateFields.ResiduePrefix + r.Key, Number(r.Value))));
-        return new StepPlan(StepKind.Transit, new TransitionSpec("X4", "S4", "fwd", 1, PostFields: post));
+        return new StepPlan(StepKind.Transit, new TransitionSpec("X4", KeyMoveStates.Drained, "fwd", 1, PostFields: post));
     }
 
     private static List<string> DrainFailures(StepInput i, DrainReport? drain)
@@ -188,7 +188,7 @@ internal static partial class StepPlanner
 
         if (i.Flag.Lowered == 3)
         {
-            return side.Hold is not null ? StepPlan.Nothing : new StepPlan(StepKind.Transit, new TransitionSpec("X13", "S3", "fwd", 1, NewMoveId: true));
+            return side.Hold is not null ? StepPlan.Nothing : new StepPlan(StepKind.Transit, new TransitionSpec("X13", KeyMoveStates.Moving, "fwd", 1, NewMoveId: true));
         }
 
         if (FlagBlocks(i, 5) is { } blocked)
@@ -217,11 +217,11 @@ internal static partial class StepPlanner
             return StepPlan.Wait(ReplicaUnhealthy, preflight.Reason);
         }
 
-        var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X5", "S5", "fwd", 1, RecheckViews: true, PostFields: [(StateFields.ClosedAt, Number(i.Now.ToUnixTimeMilliseconds()))]));
+        var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X5", KeyMoveStates.Closed, "fwd", 1, RecheckViews: true, PostFields: [(StateFields.ClosedAt, Number(i.Now.ToUnixTimeMilliseconds()))]));
         return failures.Overrides.Count == 0 ? plan : plan.WithOverrides(string.Join(',', failures.Overrides), failures.Overrides);
     }
 
-    // No way out of S5 but the operator's abandon, for groups whose caches all accept a refill.
+    // closed permits only operator abandon, for groups whose caches all accept a refill.
     private static StepPlan FromClosed(StepInput i)
     {
         if (Approval.ValidFor(i.State, ApprovalKinds.Abandon) is not null)

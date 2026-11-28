@@ -326,7 +326,7 @@ internal sealed class KeyMoveNode
         Runtime = RuntimeOf(wiring);
     }
 
-    // The flag is read every 2 s from S1 to S4 and while a listed group waits in S0 or is unknown; a closed group, and a group the node does not list, is read every minute.
+    // Read the flag every 2 s from ready through drained, and for listed groups waiting in not-started or unknown. Read closed or unlisted groups every minute.
     private bool IsActive(string group)
     {
         var rules = _monitor.RulesFor(group);
@@ -336,13 +336,13 @@ internal sealed class KeyMoveNode
         }
 
         var stage = rules.Acting?.State;
-        return stage is "S1" or "S2" or "S3" or "S4" || (stage is null or "S0" && _setup.Groups.Any(g => g.Name == group && g.Listed));
+        return stage is KeyMoveStates.Ready or KeyMoveStates.Barrier or KeyMoveStates.Moving or KeyMoveStates.Drained || (stage is null or KeyMoveStates.NotStarted && _setup.Groups.Any(g => g.Name == group && g.Listed));
     }
 
-    // Before a node acknowledges the S0 of X11 it recycles its data connections, once for that identity, and advertises rc.
+    // Before acknowledging not-started from X11, a node recycles its data connections once for that identity and advertises rc.
     private bool BeforeAck(string group)
     {
-        if (_monitor.CurrentState(group) is not { State: "S0", Durable: true } state || state.Field(StateFields.ColdStart).Length == 0)
+        if (_monitor.CurrentState(group) is not { State: KeyMoveStates.NotStarted, Durable: true } state || state.Field(StateFields.ColdStart).Length == 0)
         {
             return true;
         }

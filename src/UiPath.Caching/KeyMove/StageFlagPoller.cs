@@ -2,8 +2,8 @@ using System.Collections.Concurrent;
 
 namespace UiPath.Caching.KeyMove;
 
-/// <summary>Polls the stage source on its own loop, every 2 seconds in S0 to S4 and every 60 otherwise; a null or failed read keeps the last view and each call is bounded by one interval.</summary>
-/// <param name="isActive">True for a group in S0 to S4 that is Init-ed or listed.</param>
+/// <summary>Polls the stage source on its own loop, every 2 seconds in not-started to drained and every 60 otherwise; a null or failed read keeps the last view and each call is bounded by one interval.</summary>
+/// <param name="isActive">True for a group in not-started to drained that is Init-ed or listed.</param>
 internal sealed class StageFlagPoller(IMigrationStageSource source, Func<string, bool> isActive, KeyMoveStateOptions options, TimeProvider time)
 {
     private readonly ConcurrentDictionary<string, int> _views = new(StringComparer.Ordinal);

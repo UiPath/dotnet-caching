@@ -6,7 +6,7 @@ internal interface IGroupFacts
     /// <summary>Configuration attests the release floor in place of start consent.</summary>
     bool ReleaseFloorAttested { get; }
 
-    /// <summary>The group has a cache without an origin, which gets the S2 barrier.</summary>
+    /// <summary>The group has a cache without an origin, which gets the barrier.</summary>
     bool HasNoOrigin(string group, IReadOnlyList<string> cacheIds);
 
     bool TakesClaim(string group);

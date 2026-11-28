@@ -62,12 +62,12 @@ internal sealed class InstanceClaimRecovery(
         }
     }
 
-    private static bool Terminal(StateRecord state) => state.Durable && (state.State == "S0" || (state.State == "S5" && state.Swept == state.Id));
+    private static bool Terminal(StateRecord state) => state.Durable && (state.State == KeyMoveStates.NotStarted || (state.State == KeyMoveStates.Closed && state.Swept == state.Id));
 
     private static (long Ep, bool Swept) ParseCert(string cert)
     {
         var colon = cert.IndexOf(':', StringComparison.Ordinal);
-        return (long.Parse(cert[..colon], NumberStyles.None, CultureInfo.InvariantCulture), cert[(colon + 1)..] == "S5");
+        return (long.Parse(cert[..colon], NumberStyles.None, CultureInfo.InvariantCulture), cert[(colon + 1)..] == KeyMoveStates.Closed);
     }
 
     // The Src field is missing: a live group's field is recreated from ct; a settled group needs none.
@@ -83,7 +83,7 @@ internal sealed class InstanceClaimRecovery(
             return;
         }
 
-        if (state.Claim.Length == 0 || !state.Durable || state.State == "S0")
+        if (state.Claim.Length == 0 || !state.Durable || state.State == KeyMoveStates.NotStarted)
         {
             return;
         }
@@ -219,11 +219,11 @@ internal sealed class InstanceClaimRecovery(
         }
     }
 
-    // REL cert from the state's terminal evidence, then idle (S0) or closed (S5 with lswept).
+    // REL cert from the state's terminal evidence, then idle (not-started) or closed (with lswept).
     private async Task CertifyFromStateAsync(string group, string token, StateRecord state, CancellationToken cancellationToken)
     {
-        var swept = state.State == "S5";
-        if (await claim.CertifyAsync(group, token, state.Ep, swept ? "S5" : "S0", null, cancellationToken).ConfigureAwait(false) is not (ClaimOutcome.Done or ClaimOutcome.DoneUnconfirmed))
+        var swept = state.State == KeyMoveStates.Closed;
+        if (await claim.CertifyAsync(group, token, state.Ep, swept ? KeyMoveStates.Closed : KeyMoveStates.NotStarted, null, cancellationToken).ConfigureAwait(false) is not (ClaimOutcome.Done or ClaimOutcome.DoneUnconfirmed))
         {
             return;
         }
@@ -233,29 +233,29 @@ internal sealed class InstanceClaimRecovery(
             : await claim.ReleaseIdleAsync(group, token, null, cancellationToken).ConfigureAwait(false);
     }
 
-    // The certificate is on the field: an S0 one goes to idle, an S5 one to closed only while the state shows S5.
+    // The field's not-started certificate goes to idle; its closed certificate goes to closed only while the state shows closed.
     private async Task ReleaseCertifiedAsync(string group, ClaimValue field, StateRecord? state, CancellationToken cancellationToken)
     {
         var (certEp, swept) = ParseCert(field.Cert);
         if (!swept)
         {
             // A certificate can survive a failed DURABLE write. Release requires the matching published state.
-            if (state is { Durable: true, State: "S0" } && state.Ep == certEp && state.Release == $"{field.Token}:{field.Cert}")
+            if (state is { Durable: true, State: KeyMoveStates.NotStarted } && state.Ep == certEp && state.Release == $"{field.Token}:{field.Cert}")
             {
                 await claim.ReleaseIdleAsync(group, field.Token, null, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                alert?.Invoke(group, "claim_cert_unpublished", "the claim carries an S0 certificate and the state does not show that identity as DURABLE with the matching rel; it is not released");
+                alert?.Invoke(group, "claim_cert_unpublished", "the claim carries a not-started certificate and the state does not show that identity as DURABLE with the matching rel; it is not released");
             }
         }
-        else if (state is { State: "S5" })
+        else if (state is { State: KeyMoveStates.Closed })
         {
             await claim.CloseAsync(group, field.Token, cancellationToken).ConfigureAwait(false);
         }
         else
         {
-            alert?.Invoke(group, ClaimOrphan, "the claim carries an S5 certificate and the state does not show S5; it is not closed");
+            alert?.Invoke(group, ClaimOrphan, "the claim carries a closed certificate and the state does not show closed; it is not closed");
         }
     }
 

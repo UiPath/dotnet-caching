@@ -23,10 +23,10 @@ internal sealed partial class KeyMoveClient<T>
     {
         return plan.Mode switch
         {
-            KeyMoveMode.S1 => [SourceStep(delete)],
-            KeyMoveMode.S2 when !_p.NoOrigin => [SourceStep(delete)],
-            KeyMoveMode.S3 or KeyMoveMode.S4 => DualWriteSteps(delete),
-            KeyMoveMode.S5 => NativeWriteSteps(delete, plan.Act is { Swept: true }),
+            KeyMoveMode.Ready => [SourceStep(delete)],
+            KeyMoveMode.Barrier when !_p.NoOrigin => [SourceStep(delete)],
+            KeyMoveMode.Moving or KeyMoveMode.Drained => DualWriteSteps(delete),
+            KeyMoveMode.Closed => NativeWriteSteps(delete, plan.Act is { Swept: true }),
 
             // Reverse: Src is N and the target is L under GL.
             KeyMoveMode.ReverseS1 when !_p.NoOrigin => [SourceStep(delete), WriteStep.BumpDel],
@@ -501,7 +501,7 @@ internal sealed partial class KeyMoveClient<T>
             plan = PlanFor(write: true);
         }
 
-        return plan.Mode == KeyMoveMode.Wait ? plan with { Mode = KeyMoveMode.Closed } : plan;
+        return plan.Mode == KeyMoveMode.Wait ? plan with { Mode = KeyMoveMode.Unavailable } : plan;
     }
 
     // The first attempt of a fence step that has an earlier step may be retried, so the token in force just before it is kept: the retry may apply over it or over the nonce this attempt sets.

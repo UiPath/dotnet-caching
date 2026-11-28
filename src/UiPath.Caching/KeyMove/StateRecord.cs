@@ -31,14 +31,14 @@ internal sealed record StateRecord(
 
     public string Identity => $"{Ep}:{Id}";
 
-    /// <summary>The S3 acknowledgement time in Unix milliseconds, when it belongs to this state ID.</summary>
+    /// <summary>The moving acknowledgement time in Unix milliseconds, when it belongs to this state ID.</summary>
     public long? S3AckedAt =>
         AllAck == Id && long.TryParse(Field(StateFields.T3At), NumberStyles.None, CultureInfo.InvariantCulture, out var at) ? at : null;
 
     /// <summary>The forward generation the markers of this run are bound to; empty before the start and after the way back began.</summary>
     public string ForwardGeneration => Field(StateFields.Fg);
 
-    /// <summary>The generation that is retiring in S1(rev); empty elsewhere.</summary>
+    /// <summary>The generation that is retiring in ready(rev); empty elsewhere.</summary>
     public string RetiringGeneration => Field(StateFields.Rg);
 
     public IReadOnlyList<string> CacheIds => Caches.Length == 0 ? [] : Caches.Split(CacheSeparator);
@@ -117,7 +117,7 @@ internal sealed record StateRecord(
         var prev = Prev.Split(':');
         if (prev.Length != 5)
         {
-            throw new FormatException($"The state hash holds no previous state to copy into the control records: '{Prev}'.");
+            throw new FormatException("The state hash holds no valid previous state to copy into the control records.");
         }
 
         return new ControlRecord(Ep, Id, State, Direction, NPop.ToString(CultureInfo.InvariantCulture), prev[0], prev[1], prev[2], prev[3], prev[4], gates)

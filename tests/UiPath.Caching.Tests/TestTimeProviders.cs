@@ -136,6 +136,15 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         }
     }
 
+    /// <summary>How long until <paramref name="timer"/>, one of this clock's timers, fires; null when it is not armed.</summary>
+    public TimeSpan? DueIn(ITimer timer)
+    {
+        lock (_gate)
+        {
+            return timer is ManualTimer { Due: var due } && due != TimeSpan.MaxValue ? due - _elapsed : null;
+        }
+    }
+
     public Task WhenTimerAsync(Func<bool> condition)
     {
         lock (_gate)

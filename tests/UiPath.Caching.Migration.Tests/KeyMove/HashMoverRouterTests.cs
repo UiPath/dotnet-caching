@@ -278,7 +278,7 @@ public sealed class HashMoverRouterTests(RedisFixture fixture)
         var targets = new MoveTargets();
         using var cache = Bind(kit, targets);
         var group = kit.Kit.Group;
-        var runner = new DryRunner(group, kit.Kit.Plane, Space(kit), targets.Of(group), new MultiplexerScanUnits(() => kit.Kit.Mux), string.Empty, NoLimit.Instance, kit.Kit.Clock);
+        var runner = new DryRunner(group, kit.Kit.Plane, Space(kit), targets.Of(group), new MultiplexerScanUnits(() => kit.Kit.Mux), string.Empty, NoLimit.Instance, kit.Kit.Clock, moverOptions: MoverKit.Quick);
 
         var report = await runner.RunAsync(Ct);
 

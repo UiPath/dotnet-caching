@@ -3,21 +3,21 @@ namespace UiPath.Caching.Migration;
 /// <summary>The stage of a key move group, as its stored state says.</summary>
 public enum KeyMoveStage
 {
-    /// <summary>No move runs: every cache of the group reads and writes its in-place keys as before (state S0).</summary>
+    /// <summary>No move runs, and every cache reads and writes its in-place keys.</summary>
     NotStarted,
 
-    /// <summary>Every node has switched to the move's write forms, with the source side still the authority, and no key moves yet (state S1).</summary>
+    /// <summary>Every node uses the move's write forms, the source remains authoritative, and keys have not started moving.</summary>
     Ready,
 
-    /// <summary>The writes of the caches that have no origin are closed while the last writers of the source side drain; the other caches go on as in <see cref="Ready"/> (state S2, forward only).</summary>
+    /// <summary>During a forward move, caches without an origin stop writes while source writers drain; other caches continue as in <see cref="Ready"/>.</summary>
     Barrier,
 
-    /// <summary>The destination side is the authority: reads promote keys from the source side, and the mover copies the rest (state S3).</summary>
+    /// <summary>The destination is authoritative, reads promote source keys, and the mover copies the remaining keys.</summary>
     Moving,
 
-    /// <summary>The mover found no key left to move; reads still fall back to the source side for the residue the census counted (state S4).</summary>
+    /// <summary>The mover found no remaining keys to move, and reads still check the source for counted residue.</summary>
     Drained,
 
-    /// <summary>The move is final: the group reads and writes the native keys only, and the leftover in-place keys are swept (state S5, forward only).</summary>
+    /// <summary>The forward move is final, the group uses native keys only, and leftover in-place keys are swept.</summary>
     Closed,
 }

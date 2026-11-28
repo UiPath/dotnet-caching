@@ -14,6 +14,6 @@ internal enum BindingChange
     /// <summary>The retire gate was passed; <c>rg</c> is cleared.</summary>
     ClearRetiring,
 
-    /// <summary>The group is back in S0 and holds neither.</summary>
+    /// <summary>The group is back in not-started and holds neither.</summary>
     ClearAll,
 }

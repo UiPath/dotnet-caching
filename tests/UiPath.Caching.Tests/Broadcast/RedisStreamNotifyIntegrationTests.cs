@@ -528,6 +528,9 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
 
     private static TestCacheEvent Event(string source, string id) => new() { Id = id, Source = new Uri(source), Data = new("order:1") };
 
+    private static object? NotifyChannel(RedisStreamsTopic<ICacheEvent> topic) =>
+        typeof(RedisStreamsTopic<ICacheEvent>).GetField("_notifyChannel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(topic);
+
     private async Task<RedisConnector> ConnectAsync(string connectionString, ProfilingSession? profile = null)
     {
         var options = Options.Create(new RedisConnectionOptions
@@ -574,16 +577,31 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         return (topic, observer);
     }
 
-    private async Task SubscribeAsync(RedisStreamsTopic<ICacheEvent> topic)
+    private async Task SubscribeAsync(RedisStreamsTopic<ICacheEvent> topic, TimeSpan? by = null)
     {
         var run = _runs[topic];
-        run.Clock.Advance(run.Due);
-        var notify = typeof(RedisStreamsTopic<ICacheEvent>).GetField("_notifyChannel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(topic);
+        run.Clock.Advance(by ?? run.Due);
+        var notify = NotifyChannel(topic);
         if (notify is not null)
         {
             ((ManualResetEventSlim)notify.GetType().GetField("_subscribingDone", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(notify)!).Wait(TestContext.Current.CancellationToken);
         }
         await Task.CompletedTask;
+    }
+
+    /// <summary>How far the clock must move for the next subscribe attempt: the due time, or the period a failed attempt waits before its retry.</summary>
+    private TimeSpan? SubscribeDue(RedisStreamsTopic<ICacheEvent> topic)
+    {
+        var run = _runs[topic];
+        if (run.Clock.HasTimerDueIn(run.Due))
+        {
+            return run.Due;
+        }
+        // The channel's own timer: another timer due at the retry period, such as a poll, must not stand in for it.
+        var notify = NotifyChannel(topic);
+        var timer = (ITimer?)notify?.GetType().GetField("_subscribeTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(notify);
+        var period = (TimeSpan?)notify?.GetType().GetField("_timerPeriod", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(notify);
+        return timer is not null && period is { } retry && run.Clock.DueIn(timer) == retry ? retry : null;
     }
 
     private async Task ReadyAsync()
@@ -596,7 +614,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         }
     }
 
-    /// <summary>Waits until each topic's doorbell is live. A failure seen after the subscribe clears on its restore, and a resubscribe it asked for runs on the topic's clock.</summary>
+    /// <summary>Waits until each topic's doorbell is live. A failure seen after the subscribe clears on its restore, and a resubscribe or retry it asked for runs on the topic's clock.</summary>
     private async Task LiveAsync(params RedisStreamsTopic<ICacheEvent>[] topics)
     {
         foreach (var topic in topics)
@@ -609,13 +627,13 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
             {
                 while (!topic.NotifyLive)
                 {
-                    if (run.Clock.HasTimerDueIn(run.Due))
+                    if (SubscribeDue(topic) is { } due)
                     {
-                        await SubscribeAsync(topic);
+                        await SubscribeAsync(topic, due);
                         continue;
                     }
 
-                    var retry = run.Clock.WhenTimerAsync(() => run.Clock.HasTimerDueIn(run.Due));
+                    var retry = run.Clock.WhenTimerAsync(() => SubscribeDue(topic) is not null);
                     await Task.WhenAny(live.Task, retry).WaitAsync(TestContext.Current.CancellationToken);
                     // Taken again before the state is read, so a doorbell that went live and dropped again is waited for anew.
                     live = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -16,7 +16,7 @@ internal enum RecoveryOutcome
 
     RecordsDisagree,
 
-    /// <summary>S1 to S5 with no surviving record: the managed set is unknown, so the operator must name it.</summary>
+    /// <summary>ready to closed with no surviving record: the managed set is unknown, so the operator must name it.</summary>
     NeedsReassert,
 
     RecordsDisagreeOnDirection,
