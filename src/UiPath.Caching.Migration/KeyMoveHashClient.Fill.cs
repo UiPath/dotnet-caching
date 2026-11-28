@@ -157,7 +157,7 @@ internal sealed partial class KeyMoveHashClient<T>
         try
         {
             await At(SchedulePointStep.StageHash).ConfigureAwait(false);
-            if (!await HashStaging.WriteAsync(fill.Data, fill.Staging, stored, _options.FenceTtl).ConfigureAwait(false))
+            if (!await HashStaging.WriteAsync(fill.Data, fill.Staging, stored, _options.FenceTtl, cancellationToken: cancellationToken).ConfigureAwait(false))
             {
                 await DiscardStagingAsync(fill).ConfigureAwait(false);
                 return (0, WriteOutcome.NotSent);
