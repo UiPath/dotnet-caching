@@ -12,6 +12,72 @@ public sealed class KeyMoveHashWriteTests(RedisFixture fixture)
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    [Fact]
+    public async Task An_empty_replacement_still_deletes_the_source_when_its_deadline_passes_after_conversion()
+    {
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
+        await kit.Kit.PrepareAsync("key");
+        await kit.Kit.SetStateAsync("S3");
+        await kit.SetAsync(kit.L("key"), Original);
+        var deadline = kit.Kit.Time.GetUtcNow().AddMinutes(1);
+        kit.Kit.Schedule.Hook = (step, _) =>
+        {
+            if (step == SchedulePointStep.SourceDelete)
+            {
+                kit.Kit.Time.Advance(TimeSpan.FromMinutes(2));
+            }
+
+            return Task.CompletedTask;
+        };
+
+        var result = await kit.Client.SetAsync("key", KeyMoveHashKit.Items(), Replace(deadline), Ct);
+
+        (await kit.Kit.ExistsAsync(kit.L("key"))).Should().BeFalse();
+        result.Outcome.Should().Be(WriteOutcome.Committed);
+    }
+
+    [Fact]
+    public async Task An_expired_merge_after_the_source_delete_registers_a_pending_write()
+    {
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
+        await kit.Kit.PrepareAsync("key");
+        await kit.Kit.SetStateAsync("S5", swept: false);
+        await kit.SetAsync(kit.L("key"), Original);
+        await kit.SetAsync(kit.N("key"), Original);
+        var deadline = kit.Kit.Time.GetUtcNow().AddMinutes(1);
+        kit.Kit.Schedule.Hook = (step, _) =>
+        {
+            if (step == SchedulePointStep.NativeWrite)
+            {
+                kit.Kit.Time.Advance(TimeSpan.FromMinutes(2));
+            }
+
+            return Task.CompletedTask;
+        };
+
+        var result = await kit.Client.SetAsync("key", KeyMoveHashKit.Items(("late", "4")), Merge(deadline), Ct);
+
+        (await kit.Kit.ExistsAsync(kit.L("key"))).Should().BeFalse();
+        (await kit.FieldsAsync(kit.N("key"))).Should().BeEquivalentTo(Original);
+        result.Outcome.Should().Be(WriteOutcome.Unknown);
+        kit.Client.Retries.IsPending("key").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_late_marked_hash_write_is_refused_and_counted()
+    {
+        await using var kit = await KeyMoveHashKit.CreateAsync(fixture, noOrigin: true, options: new KeyMoveOptions { CommandTimeout = TimeSpan.FromMinutes(-1) });
+        using var meter = new MeterCollector(kit.Kit.Cid);
+        await kit.Kit.PrepareAsync("key");
+        await kit.Kit.SetStateAsync("S3");
+
+        var result = await kit.Client.SetAsync("key", KeyMoveHashKit.Items(("value", "1")), Replace(), Ct);
+
+        result.Outcome.Should().Be(WriteOutcome.NotSent);
+        meter.Count("cache.keymove.marker_late").Should().Be(1);
+        (await kit.Kit.ExistsAsync(kit.N("key"))).Should().BeFalse();
+    }
+
     [Theory]
     [InlineData(true, true)]
     [InlineData(true, false)]

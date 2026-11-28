@@ -380,7 +380,7 @@ internal sealed partial class KeyMoveHashClient<T>
         }
 
         using var unit = admitted ?? throw Unavailable();
-        var form = new Form(run.KeyName, run.Steps, run.InPlaceEntries, run.NativeEntries, run.Kind == HashWriteKind.Replace ? HashCacheSetOption.KeyReplace : HashCacheSetOption.HashReplace, run.ExpireAt, run.Names, unit.Id, MoveScripts.NewNonce(), run.Absolute, HashVersion.NewEpochSeed()) { Reverse = KeyMovePlanning.IsReverseWrite(run.Plan.Mode), First = !run.Attempted, Prior = run.Applied, Lease = run.Lease, FormatLease = run.FormatLease };
+        var form = new Form(run.KeyName, run.Steps, run.InPlaceEntries, run.NativeEntries, run.Kind, run.ExpireAt, run.Names, unit.Id, MoveScripts.NewNonce(), run.Absolute, HashVersion.NewEpochSeed()) { Reverse = KeyMovePlanning.IsReverseWrite(run.Plan.Mode), First = !run.Attempted, Prior = run.Applied, Lease = run.Lease, FormatLease = run.FormatLease };
         var (ranResult, rerun) = await RunStepsAsync(form, unit, cancellationToken).ConfigureAwait(false);
         if (!rerun)
         {
@@ -501,11 +501,6 @@ internal sealed partial class KeyMoveHashClient<T>
         if (sent.Failed is { } failed)
         {
             return index != 0 ? (Pending(form, index), false) : (Typed(FirstStepFailure(form, failed)), false);
-        }
-
-        if (form.Mode == HashCacheSetOption.HashReplace && sent.Code == MoveScripts.Late)
-        {
-            return (index == 0 && !form.Prior ? WriteOutcome.NotSent : Typed(WriteOutcome.Unknown), false);
         }
 
         if (form.Steps[index] == HashWriteStep.DstWriteMarked && sent.Code is MoveScripts.RecordFull or MoveScripts.Late or MoveScripts.NoBinding)
@@ -647,9 +642,9 @@ internal sealed partial class KeyMoveHashClient<T>
             return null;
         }
 
-        if (form.Mode == HashCacheSetOption.HashReplace)
+        if (form.Kind == HashWriteKind.Merge)
         {
-            return new StepSent(retry ? MoveScripts.Superseded : MoveScripts.Late);
+            return retry ? new StepSent(MoveScripts.Superseded) : StepSent.NotSent;
         }
 
         return retry && step is HashWriteStep.SrcWrite or HashWriteStep.DstWrite or HashWriteStep.NativeWrite or HashWriteStep.DstWriteMarked
@@ -786,8 +781,10 @@ internal sealed partial class KeyMoveHashClient<T>
         public HashEntry[]? NativeEntries { get; set; }
     }
 
-    private sealed record Form(string KeyName, HashWriteStep[] Steps, HashEntry[]? InPlace, HashEntry[]? Native, HashCacheSetOption Mode, long ExpireAt, string[]? Names, string Id, string Nonce, DateTimeOffset? Deadline, long Seed)
+    private sealed record Form(string KeyName, HashWriteStep[] Steps, HashEntry[]? InPlace, HashEntry[]? Native, HashWriteKind Kind, long ExpireAt, string[]? Names, string Id, string Nonce, DateTimeOffset? Deadline, long Seed)
     {
+        public HashCacheSetOption Mode => Kind == HashWriteKind.Replace ? HashCacheSetOption.KeyReplace : HashCacheSetOption.HashReplace;
+
         public string? Observed { get; set; }
 
         /// <summary>Src is N and the target is L under GL.</summary>

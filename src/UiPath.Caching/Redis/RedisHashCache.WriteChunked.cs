@@ -164,7 +164,7 @@ internal sealed partial class RedisHashCache
 
             try
             {
-                if (expiration <= Clock.GetUtcNow())
+                if (expiration <= Clock.GetUtcNow() || !await WriteGuardedChunkAsync(target, entries.AsSpan(start, Math.Min(_fieldBatchSize, entries.Length - start)).ToArray(), expiration).ConfigureAwait(false))
                 {
                     if (index == 0)
                     {
@@ -173,8 +173,6 @@ internal sealed partial class RedisHashCache
 
                     return false;
                 }
-
-                await WriteGuardedChunkAsync(target, entries.AsSpan(start, Math.Min(_fieldBatchSize, entries.Length - start)).ToArray(), expiration).ConfigureAwait(false);
             }
             catch (HashTypeRefusedException) when (index == 0)
             {

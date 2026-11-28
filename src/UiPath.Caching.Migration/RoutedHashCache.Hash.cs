@@ -199,12 +199,12 @@ internal sealed partial class RoutedHashCache<T>
         HashFields.ValidateForWrite(values);
         using var admission = Admit(out var route);
         token.ThrowIfCancellationRequested();
-        if (mode == HashCacheSetOption.HashReplace && values.Count == 0)
+        var options = new HashWriteOptions(mode, Deadline(expiry), metadata);
+        if (mode == HashCacheSetOption.HashReplace && values.Count == 0 && metadata is null)
         {
-            return true;
+            return IsLive(options.Deadline);
         }
 
-        var options = new HashWriteOptions(mode, Deadline(expiry), metadata);
         // The source cannot keep metadata, so a write that carries it never goes there from the library.
         var path = metadata is null ? route : route with { NoFallback = true };
         try
@@ -220,13 +220,15 @@ internal sealed partial class RoutedHashCache<T>
 
     private ValueTask<WriteResult> StoreOnClientAsync(IHashPathClient<T> client, string key, IDictionary<string, T?> values, HashWriteOptions options, CancellationToken token)
     {
-        if (options.Deadline is not { } at || at > _core.Clock.GetUtcNow())
+        if (IsLive(options.Deadline))
         {
             return client.SetAsync(key, values, options, token);
         }
 
         return options.Mode == HashCacheSetOption.KeyReplace ? client.RemoveAsync(key, token) : ValueTask.FromResult<WriteResult>(WriteOutcome.NotSent);
     }
+
+    private bool IsLive(DateTimeOffset? deadline) => deadline is not { } at || at > _core.Clock.GetUtcNow();
 
     private async ValueTask<bool> RefreshedAsync(string key, CacheExpiry expiry, bool withMetadata, IDictionary<string, string?>? metadata, CancellationToken token)
     {
