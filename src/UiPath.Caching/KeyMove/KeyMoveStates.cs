@@ -19,15 +19,16 @@ internal static class KeyMoveStates
         (Closed, "closed"),
     ];
 
-    public static string NameOf(string stored) => Stages.FirstOrDefault(s => s.Stored == stored).Name ?? "unknown";
+    public static string NameOf(string stored) => Stages.FirstOrDefault(s => s.Stored == stored).Name ?? stored;
 
     public static string? StoredOf(string name) => Stages.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)).Stored;
 
     public static int? ParseFlag(string? value)
     {
+        value = value?.Trim();
         for (var stage = 0; stage < Stages.Length; stage++)
         {
-            if (string.Equals(value, Stages[stage].Name, StringComparison.OrdinalIgnoreCase) ||
+            if ((Stages[stage].Stored is not (Ready or Barrier) && string.Equals(value, Stages[stage].Name, StringComparison.OrdinalIgnoreCase)) ||
                 (value is { Length: 1 } && value[0] == '0' + stage))
             {
                 return stage;

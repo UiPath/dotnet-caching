@@ -28,7 +28,7 @@ A group the application did not register throws `ArgumentException`. A call befo
 
 ## Stage flag
 
-Use `StringFlagStageSource` with a string flag getter. It accepts `not-started`, `ready`, `barrier`, `moving`, `drained`, and `closed`, case-insensitively.
+Use `StringFlagStageSource` with a string flag getter. It accepts `not-started`, `moving`, `drained`, and `closed`, case-insensitively, and ignores surrounding whitespace.
 The numeric strings `0` through `5` remain accepted. `IntFlagStageSource` continues accepting integer flags.
 
 ```csharp
@@ -40,12 +40,12 @@ Names map to the corresponding stage numbers. The existing advancement and rollb
 
 | Flag | The group goes to |
 | --- | --- |
-| `not-started` (`0`), `ready` (`1`), `barrier` (`2`) | Not started. From Ready or Barrier it goes back at once; from Moving or Drained it moves the keys back first. |
+| `not-started` (`0`), `1`, `2` | Not started. From Ready or Barrier it goes back at once; from Moving or Drained it moves the keys back first. |
 | `moving` (`3`) | Moving, through Ready and Barrier. From Drained it goes back to Moving. |
 | `drained` (`4`) | Drained, once the mover finds nothing left to move. |
 | `closed` (`5`) | Closed, once the close gates pass and the close approval is stored. |
 
-Ready and Barrier remain automatic intermediate stages. Their flag names do not pause a forward move at those stages.
+Ready and Barrier remain automatic intermediate stages. The flag names `ready` and `barrier` are rejected. Numeric flags `1` and `2` still mean not-started for compatibility.
 A missing, empty, or unknown flag retains the last valid view. Before any valid read, the node advertises no flag view.
 A flag below `closed` on a closed group only raises the `flag_below_closed` alert.
 
