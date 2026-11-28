@@ -597,9 +597,11 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         {
             return run.Due;
         }
+        // The channel's own timer: another timer due at the retry period, such as a poll, must not stand in for it.
         var notify = NotifyChannel(topic);
+        var timer = (ITimer?)notify?.GetType().GetField("_subscribeTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(notify);
         var period = (TimeSpan?)notify?.GetType().GetField("_timerPeriod", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(notify);
-        return period is { } retry && run.Clock.HasTimerDueIn(retry) ? retry : null;
+        return timer is not null && period is { } retry && run.Clock.DueIn(timer) == retry ? retry : null;
     }
 
     private async Task ReadyAsync()
