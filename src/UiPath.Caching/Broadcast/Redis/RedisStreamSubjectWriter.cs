@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
 using UiPath.Caching.Serialization;
@@ -60,7 +59,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private volatile bool _subscribed;
     // The group exists as far as this process knows (made or found by the reader), until a read proves it gone.
     private volatile bool _groupExists;
-    // The Stopwatch timestamp of the first subscriber that joined while no group was known, 0 for none: a group then made
+    // The clock timestamp of the first subscriber that joined while no group was known, 0 for none: a group then made
     // at the head skipped what was added since.
     private long _unanchoredAt;
     // _inUse, and the recoveries seen, when the read in flight was issued.
@@ -121,7 +120,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _context = context;
         _connectionState = connectionState;
         _redis = redis;
-        _stream = stream ?? new RedisStreamPort(context, redis);
+        _stream = stream ?? new RedisStreamPort(context, redis, clock);
         _clock = clock ?? TimeProvider.System;
         _topicName = context.Topic.ToString();
         _ownSource = Encoding.UTF8.GetBytes(StreamSource.Of(context.SourceUri));
@@ -191,7 +190,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         {
             // The exchange fences the instant ahead of the second look; the reader publishes the group before it takes the
             // instant, so one of the two sees the other. The first instant is kept: it is the earliest a loss could start.
-            Interlocked.CompareExchange(ref _unanchoredAt, Math.Max(1, Stopwatch.GetTimestamp()), 0);
+            Interlocked.CompareExchange(ref _unanchoredAt, Math.Max(1, _clock.GetTimestamp()), 0);
             if (!_groupExists)
             {
                 _waiter.Signal();
@@ -613,7 +612,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     /// <summary>Whether a group made at <paramref name="head"/> skipped an entry this node would have acted on, added since <paramref name="since"/>.</summary>
     private async Task<bool> SkippedSinceAsync(StreamHead? head, long since)
     {
-        if (!ConsumerGroups.AddedSince(head, since))
+        if (!ConsumerGroups.AddedSince(head, since, _clock))
         {
             return false;
         }
@@ -625,7 +624,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         try
         {
-            var skipped = await _stream.RangeAsync($"{Math.Max(0, ConsumerGroups.SinceMs(h, since))}-0", h.LastId, SkippedEntriesChecked).ConfigureAwait(false);
+            var skipped = await _stream.RangeAsync($"{Math.Max(0, ConsumerGroups.SinceMs(h, since, _clock))}-0", h.LastId, SkippedEntriesChecked).ConfigureAwait(false);
             return skipped.Length >= SkippedEntriesChecked || Array.Exists(skipped, IsActedOn);
         }
         catch (Exception ex)

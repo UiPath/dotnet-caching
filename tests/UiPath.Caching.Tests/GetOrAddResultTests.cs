@@ -12,6 +12,7 @@ namespace UiPath.Caching.Tests;
 [Collection(AllocationCollection.Name)]
 public class GetOrAddResultTests
 {
+    private static readonly ManualTimeProvider Clock = new();
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static Func<CancellationToken, Task<string?>> Unexpected { get; } = static _ => throw new InvalidOperationException("the generator ran on a hit");
@@ -25,7 +26,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task Miss_reports_generated()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         var result = await cache.GetOrAddResultAsync<string>("k:miss", _ => Task.FromResult<string?>("v"), policy: null, Ct);
 
@@ -36,7 +37,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task Hit_reports_not_generated()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         await cache.GetOrAddAsync<string>("k:hit", _ => Task.FromResult<string?>("v"), policy: null, Ct);
 
         var result = await cache.GetOrAddResultAsync<string>("k:hit", Unexpected, policy: null, Ct);
@@ -48,10 +49,10 @@ public class GetOrAddResultTests
     [Fact]
     public async Task Every_form_reports_a_miss_then_a_hit()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var owner = new Owner("o");
         var minute = TimeSpan.FromMinutes(1);
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+        var deadline = Clock.GetUtcNow().AddMinutes(5);
 
         (await cache.GetOrAddResultAsync<string>("k:a", _ => Task.FromResult<string?>("1"), minute, null, Ct)).WasGenerated.Should().BeTrue();
         (await cache.GetOrAddResultAsync<string>("k:a", Unexpected, minute, null, Ct)).WasGenerated.Should().BeFalse();
@@ -66,7 +67,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task The_typed_cache_reports_a_miss_then_a_hit()
     {
-        using var inner = InMemoryMultilayer.Cache();
+        using var inner = InMemoryMultilayer.Cache(clock: Clock);
         ICache<string> typed = new Cache<string>(inner);
 
         var miss = await typed.GetOrAddResultAsync("k:typed", _ => Task.FromResult<string?>("v"), Ct);
@@ -81,7 +82,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task Waiting_on_a_concurrent_miss_reports_not_generated()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -98,7 +99,6 @@ public class GetOrAddResultTests
         await started.Task;
         var secondRead = cache.GetOrAddResultAsync<string>("k:shared", Unexpected, policy: null, Ct);
         var second = secondRead.AsTask();
-        await Task.Delay(50, Ct);
         second.IsCompleted.Should().BeFalse("it waits on the run in progress");
         release.SetResult("v");
 
@@ -111,8 +111,8 @@ public class GetOrAddResultTests
     [Fact]
     public async Task Expiration_is_the_stored_expiration()
     {
-        using var cache = InMemoryMultilayer.Cache();
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
+        var deadline = Clock.GetUtcNow().AddMinutes(7);
 
         var miss = await cache.GetOrAddResultAsync<string>("k:exp", _ => Task.FromResult<string?>("v"), deadline, null, Ct);
         var hit = await cache.GetOrAddResultAsync<string>("k:exp", Unexpected, deadline.AddHours(1), null, Ct);
@@ -143,7 +143,7 @@ public class GetOrAddResultTests
     public async Task Default_implementation_reports_a_caller_deadline_when_it_generated()
     {
         ICache cache = new GeneratingCache();
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(3);
+        var deadline = Clock.GetUtcNow().AddMinutes(3);
 
         var miss = await cache.GetOrAddResultAsync<string>("k:deadline", _ => Task.FromResult<string?>("v"), deadline, null, Ct);
         var hit = await cache.GetOrAddResultAsync<string>("k:deadline", Unexpected, deadline, null, Ct);
@@ -156,7 +156,7 @@ public class GetOrAddResultTests
     public async Task Default_implementation_reports_no_deadline_for_a_generated_null()
     {
         ICache cache = new GeneratingCache();
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(3);
+        var deadline = Clock.GetUtcNow().AddMinutes(3);
 
         var byClosure = await cache.GetOrAddResultAsync<string>("k:null-deadline", _ => Task.FromResult<string?>(null), deadline, null, Ct);
         var byState = await cache.GetOrAddResultAsync<string, int>("k:null-deadline-state", 1, (_, _) => Task.FromResult<string?>(null), deadline, null, Ct);
@@ -168,8 +168,8 @@ public class GetOrAddResultTests
     [Fact]
     public async Task Every_expiration_state_and_handler_form_reports_a_miss_then_the_stored_entry()
     {
-        using var cache = InMemoryMultilayer.Cache();
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
+        var deadline = Clock.GetUtcNow().AddMinutes(5);
 
         var forms = await EveryFormAsync(cache, TimeSpan.FromMinutes(1), deadline);
 
@@ -185,7 +185,7 @@ public class GetOrAddResultTests
     public async Task Every_expiration_state_and_handler_form_of_the_default_implementation_reports_a_miss_then_a_hit()
     {
         ICache cache = new GeneratingCache();
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+        var deadline = Clock.GetUtcNow().AddMinutes(5);
 
         var forms = await EveryFormAsync(cache, TimeSpan.FromMinutes(1), deadline);
 
@@ -199,9 +199,9 @@ public class GetOrAddResultTests
     [Fact]
     public async Task Every_typed_form_reports_a_miss_then_the_stored_entry()
     {
-        using var inner = InMemoryMultilayer.Cache();
+        using var inner = InMemoryMultilayer.Cache(clock: Clock);
         ICache<string> typed = new Cache<string>(inner);
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+        var deadline = Clock.GetUtcNow().AddMinutes(5);
 
         var forms = await EveryTypedFormAsync(typed, TimeSpan.FromMinutes(1), deadline);
 
@@ -217,7 +217,7 @@ public class GetOrAddResultTests
     public async Task Every_typed_form_of_the_default_implementation_reports_a_miss_then_a_hit()
     {
         var typed = TypedCacheWithoutResults();
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+        var deadline = Clock.GetUtcNow().AddMinutes(5);
 
         var forms = await EveryTypedFormAsync(typed, TimeSpan.FromMinutes(1), deadline);
 
@@ -231,7 +231,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task A_failed_generation_leaves_the_retry_to_generate()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         await FluentActions.Awaiting(async () => await cache.GetOrAddResultAsync<string>("k:fail", _ => throw new InvalidOperationException("boom"), policy: null, Ct)).Should().ThrowAsync<InvalidOperationException>();
         var retry = await cache.GetOrAddResultAsync<string>("k:fail", _ => Task.FromResult<string?>("v"), policy: null, Ct);
@@ -242,7 +242,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task A_cancelled_call_leaves_the_retry_to_generate()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
 
@@ -255,7 +255,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task A_generated_null_that_is_not_cached_reports_no_expiration()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         var result = await cache.GetOrAddResultAsync<string>("k:null-uncached", _ => Task.FromResult<string?>(null), TimeSpan.FromMinutes(5), null, Ct);
 
@@ -265,7 +265,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task A_generated_null_that_is_cached_reports_its_expiration()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheNullValues = true });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheNullValues = true }, clock: Clock);
 
         var result = await cache.GetOrAddResultAsync<string>("k:null-cached", _ => Task.FromResult<string?>(null), TimeSpan.FromMinutes(5), null, Ct);
 
@@ -281,7 +281,7 @@ public class GetOrAddResultTests
 
         var byClosure = await cache.GetOrAddResultAsync<string>($"{text}", _ => Task.FromResult<string?>("v"), (CachePolicy?)null, Ct);
         var byState = await cache.GetOrAddResultAsync<string, int>($"{text}", 1, (_, _) => Task.FromResult<string?>("w"), TimeSpan.FromMinutes(1), null, Ct);
-        var byDeadline = await cache.GetOrAddResultAsync<string>($"{text}", _ => Task.FromResult<string?>("x"), DateTimeOffset.UtcNow.AddMinutes(1), null, Ct);
+        var byDeadline = await cache.GetOrAddResultAsync<string>($"{text}", _ => Task.FromResult<string?>("x"), Clock.GetUtcNow().AddMinutes(1), null, Ct);
 
         byClosure.Should().Be(new CacheResult<string>("v", null, WasGenerated: true));
         byState.Should().Be(new CacheResult<string>("w", null, WasGenerated: true));
@@ -303,7 +303,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task A_null_generator_is_refused()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         ICache custom = new GeneratingCache();
 
         await FluentActions.Awaiting(async () => await cache.GetOrAddResultAsync<string>("k:n", (Func<CancellationToken, Task<string?>>)null!, policy: null, Ct)).Should().ThrowAsync<ArgumentNullException>();
@@ -315,7 +315,7 @@ public class GetOrAddResultTests
     [Fact]
     public async Task Hit_allocates_nothing()
     {
-        using var multilayer = InMemoryMultilayer.Cache();
+        using var multilayer = InMemoryMultilayer.Cache(clock: Clock);
         ICache cache = multilayer;
         var owner = new Owner("o");
         CacheKey key = "k:alloc";
@@ -324,14 +324,14 @@ public class GetOrAddResultTests
         AllocatedBy(() => Complete(cache.GetOrAddResultAsync<string>(key, Unexpected, policy: null, Ct))).Should().Be(0, "the CacheKey form");
         AllocatedBy(() => Complete(cache.GetOrAddResultAsync<string>(key, Unexpected, TimeSpan.FromMinutes(1), null, Ct))).Should().Be(0, "the TimeSpan form");
         AllocatedBy(() => Complete(cache.GetOrAddResultAsync(key, owner, 1, UnexpectedOwned, policy: null, Ct))).Should().Be(0, "the owner and argument form");
-        AllocatedBy(() => Complete(cache.GetOrAddResultAsync<string>(key, Unexpected, DateTimeOffset.UtcNow.AddMinutes(1), null, Ct))).Should().Be(0, "the DateTimeOffset form");
+        AllocatedBy(() => Complete(cache.GetOrAddResultAsync<string>(key, Unexpected, Clock.GetUtcNow().AddMinutes(1), null, Ct))).Should().Be(0, "the DateTimeOffset form");
         AllocatedBy(() => HandlerHit(cache)).Should().Be(0, "the handler-key form");
     }
 
     [Fact]
     public async Task A_typed_cache_hit_allocates_nothing()
     {
-        using var multilayer = InMemoryMultilayer.Cache();
+        using var multilayer = InMemoryMultilayer.Cache(clock: Clock);
         ICache<string> typed = new Cache<string>(multilayer);
         CacheKey key = "k:typed-alloc";
         await typed.GetOrAddResultAsync(key, _ => Task.FromResult<string?>("v"), Ct);
@@ -488,6 +488,7 @@ public class GetOrAddResultTests
 [Trait("Category", "Integration")]
 public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
+    private static readonly ManualTimeProvider Clock = new();
     private readonly string _app = $"gr{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
 
@@ -507,8 +508,8 @@ public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fi
 
         miss.Should().Match<CacheResult<string>>(r => r.WasGenerated && r.Value == "v");
         hit.Should().Match<CacheResult<string>>(r => !r.WasGenerated && r.Value == "v");
-        miss.Expiration.Should().BeAfter(DateTimeOffset.UtcNow);
-        hit.Expiration.Should().BeAfter(DateTimeOffset.UtcNow);
+        miss.Expiration.Should().BeAfter(Clock.GetUtcNow());
+        hit.Expiration.Should().BeAfter(Clock.GetUtcNow());
     }
 
     [Fact]
@@ -517,7 +518,7 @@ public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fi
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var cache = Cache(KnownCacheProviderNames.Redis, readScripts: false);
         CacheKey key = $"k-{Guid.NewGuid():N}";
-        var before = DateTimeOffset.UtcNow;
+        var before = Clock.GetUtcNow();
         await cache.SetAsync(key, "stored", TimeSpan.FromMinutes(5), null, Ct);
 
         var hit = await cache.GetOrAddResultAsync<string>(key, _ => throw new InvalidOperationException("ran on a hit"), TimeSpan.FromMinutes(9), null, Ct);
@@ -545,7 +546,7 @@ public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fi
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var cache = Cache(KnownCacheProviderNames.Redis, readScripts: false);
         CacheKey key = $"k-{Guid.NewGuid():N}";
-        var before = DateTimeOffset.UtcNow;
+        var before = Clock.GetUtcNow();
 
         var miss = await cache.GetOrAddResultAsync<string>(key, _ => Task.FromResult<string?>("made"), TimeSpan.FromMinutes(5), null, Ct);
         var hit = await cache.GetOrAddResultAsync<string>(key, _ => throw new InvalidOperationException("ran on a hit"), TimeSpan.FromMinutes(5), null, Ct);
@@ -617,7 +618,6 @@ public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fi
             second = joinerRead.AsTask();
         }
 
-        await Task.Delay(100, Ct);
         second.IsCompleted.Should().BeFalse("it joins the run in progress");
         release.SetResult("first");
         var results = await Task.WhenAll(first, second);
@@ -625,10 +625,10 @@ public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fi
         runs.Should().Be(1);
         results.Select(r => r.Value).Should().AllBe("first");
         (resultCallStarts ? results[0] : results[1]).WasGenerated.Should().Be(resultCallStarts);
-        results.Should().OnlyContain(r => r.Expiration == null || r.Expiration > DateTimeOffset.UtcNow);
+        results.Should().OnlyContain(r => r.Expiration == null || r.Expiration > Clock.GetUtcNow());
         if (!resultCallStarts)
         {
-            results[1].Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(5), TimeSpan.FromSeconds(10), "it joined a plain run on a miss and reports what that run stored");
+            results[1].Expiration.Should().BeCloseTo(Clock.GetUtcNow().AddMinutes(5), TimeSpan.FromSeconds(10), "it joined a plain run on a miss and reports what that run stored");
         }
     }
 
@@ -644,7 +644,6 @@ public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fi
         async Task ReleaseLaterAsync()
         {
             await started.Task;
-            await Task.Delay(200, Ct);
             release.SetResult("v");
         }
 
@@ -658,11 +657,12 @@ public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fi
         var pending = cache.GetOrAddAsync<string>(key, Gated, TimeSpan.FromMinutes(5), null, Ct);
         await started.Task;
         pending.IsCompleted.Should().BeFalse();
-        _ = ReleaseLaterAsync();
+        var releasing = Task.Run(ReleaseLaterAsync, Ct);
 
 #pragma warning disable xUnit1031, S5034 // the point is the blocking wait on a ValueTask that is not finished
         pending.GetAwaiter().GetResult().Should().Be("v");
 #pragma warning restore xUnit1031, S5034, CA2012
+        await releasing;
     }
 
     [Fact]
@@ -704,6 +704,7 @@ public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fi
     private ICache Cache(string provider, bool readScripts = true, bool cacheNulls = false)
     {
         var node = new ServiceCollection()
+            .AddSingleton<TimeProvider>(Clock)
             .AddLogging()
             .AddCaching(
                 b =>
@@ -733,6 +734,7 @@ public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fi
 [Trait("Category", "Integration")]
 public sealed class GetOrAddResultRedisAllocationTests(RedisContainerFixture fixture) : IDisposable
 {
+    private static readonly ManualTimeProvider Clock = new();
     private readonly string _app = $"ga{Guid.NewGuid():N}"[..10];
     private ServiceProvider? _node;
 
@@ -789,6 +791,7 @@ public sealed class GetOrAddResultRedisAllocationTests(RedisContainerFixture fix
     private ICache RedisCache()
     {
         _node = new ServiceCollection()
+            .AddSingleton<TimeProvider>(Clock)
             .AddLogging()
             .AddCaching(
                 b =>

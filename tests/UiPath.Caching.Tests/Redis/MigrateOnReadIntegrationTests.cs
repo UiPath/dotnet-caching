@@ -148,8 +148,8 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
         await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var (key, redisKey) = await SeedAsync(harness, raw, JsonX);
 
-        var read = await harness.Cache().GetAsync<string>(key, harness.Resolve(MigrateOnReadHarness.Migrating), Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var read = await harness.Cache().GetAsync<string>(key, harness.Resolve(MigrateOnReadHarness.Migrating), Ct).AsTask().WaitAsync(Ct);
+        await entered.Task.WaitAsync(Ct);
 
         read.Should().Be("x");
         ((byte[]?)await raw.GetDatabase().StringGetAsync(redisKey)).Should().Equal(JsonX, "the rewrite is still waiting on its serializer");
@@ -302,19 +302,16 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
         var cache = harness.Cache();
         var policy = harness.Resolve(MigrateOnReadHarness.Migrating);
         await cache.GetAsync<string>(first, policy, Ct);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await entered.Task.WaitAsync(Ct);
         watching = secondKey;
         await cache.GetAsync<string>(second, policy, Ct);
 
         // The first rewrite is running, so the second sits in the queue with what it holds.
-        for (var attempt = 0; attempt < 10 && watched!.IsAlive; attempt++)
-        {
+        await Task.Yield();
 #pragma warning disable S1215 // The test needs the collector to clear the queued rewrite weak reference.
-            GC.Collect();
+        GC.Collect();
 #pragma warning restore S1215
-            GC.WaitForPendingFinalizers();
-            await Task.Delay(20, Ct);
-        }
+        GC.WaitForPendingFinalizers();
 
         var alive = watched!.IsAlive;
         gate.SetResult();
@@ -389,7 +386,7 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
         var cache = harness.Cache();
         var policy = harness.Resolve(MigrateOnReadHarness.Migrating);
         await cache.GetAsync<string>(first, policy, Ct);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await entered.Task.WaitAsync(Ct);
         await cache.GetAsync<string>(second, policy, Ct);
 
         // A node that cannot read the format has joined, while one rewrite is in flight and another is queued behind it.
@@ -415,7 +412,7 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
         var (key, redisKey) = await SeedAsync(harness, raw, "[\"a\",\"b\"]"u8.ToArray());
 
         var returned = (await harness.Cache().GetAsync<List<string>>(key, harness.Resolve(MigrateOnReadHarness.Migrating), Ct))!;
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await entered.Task.WaitAsync(Ct);
         returned.Add("added by the caller after the read");
         gate.SetResult();
         await harness.Migrator.WhenIdleAsync(Ct);
@@ -702,11 +699,11 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
 
             var migrator = harness.Migrator;
             harness.Dispose();
-            await migrator.Stopped.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await migrator.Stopped.WaitAsync(Ct);
 #pragma warning disable S1215 // The test needs the finalizers to run so an unobserved task exception surfaces.
-            GC.Collect();
+        GC.Collect();
 #pragma warning restore S1215
-            GC.WaitForPendingFinalizers();
+        GC.WaitForPendingFinalizers();
 
             unobserved.Should().BeEmpty();
             foreach (var (_, redisKey) in keys)

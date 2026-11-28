@@ -37,12 +37,12 @@ public class MultilayerHashCacheMigrationTests
             "expiry" => ((IMigrationHashCache)cache).RenewExpiryAsync<string>("k", new HashCacheEntryOptions(), Policy, Ct).AsTask(),
             _ => ((IMigrationHashCache)cache).DeleteFieldsAsync<string>("k", ["f"], Ct).AsTask(),
         };
-        await inner.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await inner.Entered.Task.WaitAsync(Ct);
 
         // The store call is in flight: this read loads the old hash from the store, and must not keep it.
         (await cache.GetAsync<string>("k", Policy, Ct))["f"].Should().Be("old");
         inner.Gate.SetResult();
-        (await mutation.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().Be(StoreOutcome.Committed);
+        (await mutation.WaitAsync(Ct)).Should().Be(StoreOutcome.Committed);
 
         var after = await cache.GetAsync<string>("k", Policy, Ct);
         if (operation == "write")
@@ -68,7 +68,7 @@ public class MultilayerHashCacheMigrationTests
         return RunTables.Track(new MultilayerHashCache(
             KnownCacheProviderNames.InMemoryRedis,
             inner,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(new ManualTimeProvider(), NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             topics,
             events,
@@ -78,7 +78,7 @@ public class MultilayerHashCacheMigrationTests
             new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = false },
             NullDistributedLock.Instance,
             NullCachePolicyFactory.Instance,
-            TimeProvider.System,
+            new ManualTimeProvider(),
             NullLogger.Instance));
     }
 
@@ -111,7 +111,7 @@ public class MultilayerHashCacheMigrationTests
             nameof(IHashCache.GetCacheEntryAsync) => new ValueTask<ICacheEntry<IDictionary<string, string?>>>(new TestCacheEntry<IDictionary<string, string?>>
             {
                 Value = Stored is null ? null : new Dictionary<string, string?>(Stored),
-                Expiration = Stored is null ? DateTimeOffset.MinValue : DateTimeOffset.UtcNow.AddHours(1),
+                Expiration = Stored is null ? DateTimeOffset.MinValue : new ManualTimeProvider().GetUtcNow().AddHours(1),
             }),
             _ => throw new NotSupportedException(targetMethod.Name),
         };

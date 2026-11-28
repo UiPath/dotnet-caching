@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis.Profiling;
@@ -6,13 +5,12 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Tests;
 
-public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
+public class RedisProfilerTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
+    private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
     private RedisProfiler? _sut = null;
-    private ISystemClock _clock = default!;
-    private DateTimeOffset _now;
     private IProfiledCommandProcessor _profiledCommandProcessor = default!;
     private IProfilingSessionCommandReader _profilingSessionCommandReader = default!;
     private ILogger<RedisProfiler> _logger = default!;
@@ -63,7 +61,7 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
     }
 
     [Fact]
-    public async Task Remove_old_sessions_Lifespan()
+    public void Remove_old_sessions_Lifespan()
     {
         _redisConnectionOptions.ProfilerSessionMaxLifespan = _redisConnectionOptions.ProfilerFlushInterval.Multiply(2);
         _redisConnectionOptions.ProfilerSessionMaxChecks = null;
@@ -71,21 +69,13 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
         var sessionId = _fixture.Create<string>();
         using (Sut.CreateSession(sessionId))
         {
-            for(int i = 0; i < 100; i++)
-            {
-                _now = _now.Add(_redisConnectionOptions.ProfilerFlushInterval).AddSeconds(100);
-                if(Sut.Count == 0)
-                {
-                    break;
-                }
-                await Task.Delay(_redisConnectionOptions.ProfilerFlushInterval, testContextAccessor.Current.CancellationToken);
-            }
+            _clock.Advance(_redisConnectionOptions.ProfilerFlushInterval.Multiply(3));
             Sut.GetSession().Should().BeNull();
         }
     }
 
     [Fact]
-    public async Task Remove_old_sessions_MaxChecks()
+    public void Remove_old_sessions_MaxChecks()
     {
         _redisConnectionOptions.ProfilerSessionMaxLifespan = null;
         _redisConnectionOptions.ProfilerSessionMaxChecks = 2;
@@ -93,14 +83,9 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
         var sessionId = _fixture.Create<string>();
         using (Sut.CreateSession(sessionId))
         {
-            for (int i = 0; i < 100; i++)
+            for (var i = 0; i < 3; i++)
             {
-                _now = _now.Add(_redisConnectionOptions.ProfilerFlushInterval).AddSeconds(100);
-                if (Sut.Count == 0)
-                {
-                    break;
-                }
-                await Task.Delay(_redisConnectionOptions.ProfilerFlushInterval, testContextAccessor.Current.CancellationToken);
+                _clock.Advance(_redisConnectionOptions.ProfilerFlushInterval);
             }
             Sut.GetSession().Should().BeNull();
         }
@@ -219,16 +204,14 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
 
     public ValueTask DisposeAsync()
     {
+        _sut?.Dispose();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 
     public ValueTask InitializeAsync()
     {
-        _clock = _fixture.Freeze<ISystemClock>();
-        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
-        _now = DateTimeOffset.UtcNow;
-        _clock.UtcNow.Returns(callInfo => _now);
+        _fixture.Inject<TimeProvider>(_clock);
         _profiledCommandProcessor = _fixture.Freeze<IProfiledCommandProcessor>();
         _profilingSessionCommandReader = _fixture.Freeze<IProfilingSessionCommandReader>();
         _logger = NullLogger<RedisProfiler>.Instance;
@@ -250,7 +233,7 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
             Substitute.For<ICachingTelemetryProvider>(),
             _logger,
             Options.Create(_redisConnectionOptions),
-            new SystemClockTimeProvider(_clock));
+            _clock);
 
     private sealed class ImmediateTickTimeProvider : TimeProvider
     {

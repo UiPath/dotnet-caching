@@ -58,7 +58,8 @@ internal sealed class RehydrationCoordinator(
             duration,
             kind,
             (_, run, ct) => rehydrateAsync(run, ct),
-            entryType);
+            entryType,
+            out _);
 
     public bool TryTriggerBatch(
         IReadOnlyList<(CacheKey Key, DateTimeOffset Expiration)> candidates,
@@ -67,7 +68,7 @@ internal sealed class RehydrationCoordinator(
         string kind,
         Func<CacheKey[], RehydrateRun, CancellationToken, ValueTask> rehydrateAsync,
         Type? entryType = null) =>
-        TryTriggerCore(candidates, policy, duration, kind, rehydrateAsync, entryType);
+        TryTriggerCore(candidates, policy, duration, kind, rehydrateAsync, entryType, out _);
 
     internal static TimeSpan RunTimeout(RehydrateOptions options, TimeSpan duration) =>
         TimeSpan.FromMilliseconds(Math.Min(int.MaxValue, Math.Max(MinTimeoutMs, options.TimeoutFraction * duration.TotalMilliseconds)));
@@ -88,6 +89,37 @@ internal sealed class RehydrationCoordinator(
                 new(TagProfile, options.Name ?? string.Empty),
                 new(TagReason, reason),
             ]);
+
+    internal bool TryTriggerCore(
+        IReadOnlyList<(CacheKey Key, DateTimeOffset Expiration)> candidates,
+        CachePolicy? policy,
+        TimeSpan duration,
+        string kind,
+        Func<CacheKey[], RehydrateRun, CancellationToken, ValueTask> rehydrateAsync,
+        Type? entryType,
+        out Task completion)
+    {
+        completion = Task.CompletedTask;
+        if (policy?.RehydrateEnabled != true || policy.Rehydrate is null)
+        {
+            return false;
+        }
+        if (duration <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        var reserved = ReserveKeysPastThreshold(candidates, policy.Rehydrate.Threshold, duration);
+        if (reserved.Count == 0)
+        {
+            return false;
+        }
+
+        var reservedKeys = reserved.ToArray();
+        completion = SpawnAsync(reservedKeys, policy.Rehydrate, duration, kind, rehydrateAsync, entryType);
+        completion.Forget();
+        return true;
+    }
 
     private static KeyValuePair<string, string>[] AdoptedTag(RehydrateRun run) =>
         run.Adopted.Count == 0 ? [] : [KeyValuePair.Create(TagAdopted, run.Adopted.Count.ToString(CultureInfo.InvariantCulture))];
@@ -110,34 +142,6 @@ internal sealed class RehydrationCoordinator(
         }
         var product = ticks * multiplier;
         return TimeSpan.FromTicks(Math.Min(product, maxCooldown.Ticks));
-    }
-
-    private bool TryTriggerCore(
-        IReadOnlyList<(CacheKey Key, DateTimeOffset Expiration)> candidates,
-        CachePolicy? policy,
-        TimeSpan duration,
-        string kind,
-        Func<CacheKey[], RehydrateRun, CancellationToken, ValueTask> rehydrateAsync,
-        Type? entryType)
-    {
-        if (policy?.RehydrateEnabled != true || policy.Rehydrate is null)
-        {
-            return false;
-        }
-        if (duration <= TimeSpan.Zero)
-        {
-            return false;
-        }
-
-        var reserved = ReserveKeysPastThreshold(candidates, policy.Rehydrate.Threshold, duration);
-        if (reserved.Count == 0)
-        {
-            return false;
-        }
-
-        var reservedKeys = reserved.ToArray();
-        SpawnAsync(reservedKeys, policy.Rehydrate, duration, kind, rehydrateAsync, entryType).Forget();
-        return true;
     }
 
     /// <summary>Reserves the candidates past <paramref name="threshold"/> that this coordinator can claim.</summary>
@@ -325,7 +329,8 @@ internal sealed class RehydrationCoordinator(
                 cacheName,
                 telemetry,
                 CancellationToken.None,
-                source: FactoryTimeout.SourceRehydrateLock).ConfigureAwait(false);
+                source: FactoryTimeout.SourceRehydrateLock,
+                clock: clock).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {

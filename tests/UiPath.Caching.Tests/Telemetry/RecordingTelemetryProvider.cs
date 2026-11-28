@@ -1,4 +1,5 @@
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Telemetry;
 
@@ -11,6 +12,11 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
     private readonly List<DependencyRecord> _dependencies = [];
     private readonly List<ExceptionRecord> _exceptions = [];
 
+    public event Action<EventRecord>? EventRecorded;
+
+    public TestSignal Signal { get; } = new();
+    public Fakes.AsyncTestSignal Changes { get; } = new();
+
     public IReadOnlyList<EventRecord> Events => Snapshot(_events);
     public IReadOnlyList<MetricRecord> Metrics => Snapshot(_metrics);
     public IReadOnlyList<DependencyRecord> Dependencies => Snapshot(_dependencies);
@@ -22,8 +28,12 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
     public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
         Record(_dependencies, new(type, target, name, data, startTime, duration, resultCode, success, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
 
-    public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
-        Record(_events, new(eventName, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
+    public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+    {
+        var record = new EventRecord(eventName, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics));
+        Record(_events, record);
+        EventRecorded?.Invoke(record);
+    }
 
     public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
         Record(_exceptions, new(ex, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
@@ -40,7 +50,10 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
         lock (_gate)
         {
             target.Add(record);
+            Signal.Pulse();
         }
+        Changes.Pulse();
+        Broadcast.OperationSignals.Shared.Completed();
     }
 
     private T[] Snapshot<T>(List<T> source)

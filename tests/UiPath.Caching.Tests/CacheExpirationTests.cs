@@ -41,7 +41,7 @@ public class CacheExpirationTests
     [Fact]
     public void ThrowIfNotFuture_rejects_now_and_the_past()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
 
         var atNow = () => CacheExpiration.ThrowIfNotFuture(now, now);
         var beforeNow = () => CacheExpiration.ThrowIfNotFuture(now.AddTicks(-1), now);
@@ -57,7 +57,7 @@ public class CacheExpirationTests
     [Fact]
     public void ThrowIfNotFuture_accepts_the_unbounded_sentinel()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
 
         CacheExpiration.ThrowIfNotFuture(DateTimeOffset.MaxValue, now).Should().Be(DateTimeOffset.MaxValue);
         CacheExpiration.ThrowIfNotFuture(now.AddTicks(1), now).Should().Be(now.AddTicks(1));
@@ -66,7 +66,7 @@ public class CacheExpirationTests
     [Fact]
     public void ToDuration_measures_the_deadline_from_now()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
 
         CacheExpiration.ToDuration(now.AddMinutes(5), now).Should().Be(TimeSpan.FromMinutes(5));
     }
@@ -74,7 +74,7 @@ public class CacheExpirationTests
     [Fact]
     public void ToDuration_keeps_the_unbounded_sentinel_unbounded()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
 
         CacheExpiration.ToDuration(DateTimeOffset.MaxValue, now).Should().Be(TimeSpan.MaxValue);
     }
@@ -82,7 +82,7 @@ public class CacheExpirationTests
     [Fact]
     public void ToDuration_rejects_a_deadline_that_has_passed()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
 
         var act = () => CacheExpiration.ToDuration(now.AddMinutes(-5), now);
 
@@ -101,7 +101,7 @@ public class CacheExpirationGuardTests
     private static readonly TimeSpan[] NonPositive = [TimeSpan.Zero, TimeSpan.FromMinutes(-5)];
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static DateTimeOffset Past => DateTimeOffset.UtcNow.AddMinutes(-5);
+    private static DateTimeOffset Past => new ManualTimeProvider().GetUtcNow().AddMinutes(-5);
 
     [Fact]
     public async Task SetAsync_rejects_a_non_positive_duration()
@@ -194,7 +194,7 @@ public class CacheExpirationGuardTests
         return new MultilayerCache(
             KnownCacheProviderNames.InMemory,
             NullCache.Instance,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(new ManualTimeProvider(), NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -204,7 +204,7 @@ public class CacheExpirationGuardTests
             cacheOptions,
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
-            clock: TimeProvider.System,
+            clock: new ManualTimeProvider(),
             logger: NullLogger.Instance);
     }
 

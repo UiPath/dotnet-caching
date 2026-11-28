@@ -16,6 +16,8 @@ namespace UiPath.Caching.Tests.MessagePack;
 [Collection(WriterPoolCollection.Name)]
 public class MessagePackOutOfMemoryTests(ITestContextAccessor testContextAccessor)
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly byte[] EmptyArray = [0x02, 0x90];
 
     private readonly MessagePackValueSerializer _serializer = new(new MessagePackValueSerializerOptions
@@ -106,7 +108,7 @@ public class MessagePackOutOfMemoryTests(ITestContextAccessor testContextAccesso
             new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false },
             new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true },
             new DefaultCachePolicyFactory(null, null, valueSerializers: registry),
-            TimeProvider.System,
+            Clock,
             NullLogger<RedisCache>.Instance)
         {
             ValueSerializers = registry,

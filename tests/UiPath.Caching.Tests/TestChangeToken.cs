@@ -2,6 +2,8 @@ namespace UiPath.Caching.Tests;
 
 internal sealed class TestChangeToken : ICacheChangeToken, IDisposable
 {
+    private readonly TaskCompletionSource _disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public bool Disposed { get; set; }
 
     public bool HasChanged { get; set; }
@@ -21,6 +23,7 @@ internal sealed class TestChangeToken : ICacheChangeToken, IDisposable
     public void Dispose()
     {
         Disposed = true;
+        _disposed.TrySetResult();
     }
 
     public IDisposable RegisterChangeCallback(Action<object?> callback, object? state)
@@ -34,11 +37,7 @@ internal sealed class TestChangeToken : ICacheChangeToken, IDisposable
 
     public async Task AssertIsDisposed()
     {
-        var tries = 0;
-        while (!Disposed && tries++ < 10)
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(15));
-        }
+        await _disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         Disposed.Should().BeTrue();
     }

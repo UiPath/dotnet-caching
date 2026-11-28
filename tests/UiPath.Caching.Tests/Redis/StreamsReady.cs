@@ -34,10 +34,27 @@ public static class StreamsReady
             return;
         }
 
-        var until = DateTime.UtcNow + Timeout;
-        while (DateTime.UtcNow < until && subscriptions.Confirmed().Count < subscriptions.Channels().Count)
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void CheckSubscriptions()
         {
-            await Task.Delay(20, TestContext.Current.CancellationToken);
+            if (subscriptions.Confirmed().Count >= subscriptions.Channels().Count)
+            {
+                ready.TrySetResult();
+            }
+        }
+
+        void OnRestored(object? sender, EventArgs e) => CheckSubscriptions();
+        var restored = (RedisPubSubTopicProvider)subscriptions;
+        subscriptions.WhenConfirmed(CheckSubscriptions);
+        restored.OnConnectionRestored += OnRestored;
+        try
+        {
+            CheckSubscriptions();
+            await ready.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            restored.OnConnectionRestored -= OnRestored;
         }
     }
 }

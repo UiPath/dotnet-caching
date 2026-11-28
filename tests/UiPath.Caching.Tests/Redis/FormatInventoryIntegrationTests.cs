@@ -599,7 +599,7 @@ public class FormatInventoryIntegrationTests(RedisContainerFixture fixture)
             NullTelemetryProvider.Instance,
             NullLoggerFactory.Instance,
             new DefaultCachePolicyFactory(null, null, valueSerializers: registry),
-            TimeProvider.System,
+            new ManualTimeProvider(DateTimeOffset.UnixEpoch),
             keyMaskingPolicy: null,
             registry);
     }

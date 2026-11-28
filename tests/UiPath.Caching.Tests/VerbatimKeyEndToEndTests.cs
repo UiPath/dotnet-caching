@@ -12,10 +12,12 @@ public class VerbatimKeyEndToEndTests
 {
     private const string Name = " Mixed:Key ";
 
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     [Fact]
     public async Task A_verbatim_key_reaches_the_inner_tier_the_memory_entry_and_the_event_unchanged()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = (MemoryCache)new MemoryCacheFactory(Clock, NullLoggerFactory.Instance).Get(new InMemoryCacheOptions());
         var inner = Substitute.For<ICache>();
         inner.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(true);
         var published = new List<CacheEventData>();
@@ -36,7 +38,7 @@ public class VerbatimKeyEndToEndTests
     [Fact]
     public async Task A_verbatim_key_is_read_locally_by_get_and_get_or_add_and_removed_by_its_exact_memory_and_event_key()
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = (MemoryCache)new MemoryCacheFactory(Clock, NullLoggerFactory.Instance).Get(new InMemoryCacheOptions());
         var inner = Substitute.For<ICache>();
         inner.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(true);
         inner.RemoveAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CancellationToken>()).Returns(true);
@@ -70,7 +72,7 @@ public class VerbatimKeyEndToEndTests
     [InlineData("Mixed:Key", "Mixed:Key ")]
     public async Task A_serialized_peer_event_invalidates_only_the_entry_whose_key_it_names(string named, string other)
     {
-        using var memory = new MemoryCache(new MemoryCacheOptions());
+        using var memory = (MemoryCache)new MemoryCacheFactory(Clock, NullLoggerFactory.Instance).Get(new InMemoryCacheOptions());
         var inner = Substitute.For<ICache>();
         inner.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(true);
         using var topic = new FanOutTopic();
@@ -125,7 +127,7 @@ public class VerbatimKeyEndToEndTests
             new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = false },
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
-            clock: TimeProvider.System,
+            clock: Clock,
             logger: NullLogger.Instance);
     }
 

@@ -124,7 +124,8 @@ internal sealed partial class RedisCache
             CompositeCacheKey.For(Array.ConvertAll(entries, e => e.Key)),
             Name,
             Telemetry,
-            token);
+            token,
+            clock: Clock);
     }
 
     private ValueTask<T?> GetOrAddCoreAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan duration, CachePolicy? policy, CancellationToken token)
@@ -303,5 +304,5 @@ internal sealed partial class RedisCache
     private Task<TResult> RunGeneratorAsync<TResult, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<TResult>> generator, TimeSpan? factoryTimeout, CancellationToken token) =>
         factoryTimeout is null || factoryTimeout.Value <= TimeSpan.Zero
             ? generator(state, token)
-            : FactoryTimeout.RunAsync(ct => generator(state, ct), factoryTimeout, cacheKey, Name, Telemetry, token);
+            : FactoryTimeout.RunAsync(ct => generator(state, ct), factoryTimeout, cacheKey, Name, Telemetry, token, clock: Clock);
 }

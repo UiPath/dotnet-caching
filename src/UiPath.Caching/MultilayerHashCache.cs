@@ -18,7 +18,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     private readonly ISharedHashTier? _versioned;
     private readonly PeerFieldLimits _peerLimits;
 
-    // Held copies a peer's write was handed to the refresh for, which lack that write: marked and read under the key's merge lock.
+    // Held copies that lack a write, which a peer's update is not merged over: one handed to the refresh for a peer's write, marked under
+    // the key's merge lock, and one this node is dropping, marked before it goes.
     private readonly ConditionalWeakTable<object, object> _awaitingRefresh = [];
 
     public MultilayerHashCache(

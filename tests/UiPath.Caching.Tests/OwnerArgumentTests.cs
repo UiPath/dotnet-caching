@@ -9,7 +9,9 @@ namespace UiPath.Caching.Tests;
 [Collection(AllocationCollection.Name)]
 public class OwnerArgumentTests
 {
-    private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+    private static readonly DateTimeOffset Deadline = Clock.GetUtcNow().AddMinutes(7);
 
     private static readonly TimeSpan Minutes = TimeSpan.FromMinutes(5);
 
@@ -24,7 +26,7 @@ public class OwnerArgumentTests
     [Fact]
     public async Task Owner_and_argument_reach_the_generator()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var owner = new Owner("o");
         Owner? seenOwner = null;
 
@@ -43,7 +45,7 @@ public class OwnerArgumentTests
     [Fact]
     public async Task A_hit_does_not_run_the_generator()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var owner = new Owner("o");
         var calls = 0;
         Task<string?> Counting(Owner o, int a, CancellationToken t)
@@ -66,8 +68,8 @@ public class OwnerArgumentTests
 #if DEBUG
         Assert.Skip("allocation counts are only stable in Release");
 #endif
-        using var cache = InMemoryMultilayer.Cache();
-        using var hashCache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
+        using var hashCache = InMemoryMultilayer.HashCache(clock: Clock);
         var owner = new Owner("o");
         CacheKey key = "k";
         CacheKey generatedKey = "g";
@@ -87,8 +89,8 @@ public class OwnerArgumentTests
     [Fact]
     public async Task A_warm_hit_allocates_nothing_for_the_typed_forms()
     {
-        using var cache = InMemoryMultilayer.Cache();
-        using var hashCache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
+        using var hashCache = InMemoryMultilayer.HashCache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var typedHash = new HashCache<string>(hashCache, new PrefixCacheKeyStrategy("app"));
         var owner = new Owner("o");
@@ -106,7 +108,7 @@ public class OwnerArgumentTests
     [Fact]
     public async Task Generator_exception_surfaces_and_nothing_is_cached()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var owner = new Owner("o");
 
         var thrown = async () => await cache.GetOrAddAsync<string, Owner, int>($"k:{1}", owner, 5, static (_, _, _) => throw new InvalidOperationException("boom"), policy: null, Ct);
@@ -119,7 +121,7 @@ public class OwnerArgumentTests
     [Fact]
     public async Task Cancelled_call_cancels_like_the_state_form_and_caches_nothing()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var owner = new Owner("o");
         using var source = new CancellationTokenSource();
         await source.CancelAsync();
@@ -194,7 +196,7 @@ public class OwnerArgumentTests
     [Fact]
     public async Task Hash_variants_pass_owner_argument_and_expiration()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var owner = new Owner("o");
 
         var plain = await cache.GetOrAddAsync<string, Owner, int>($"h:{1}", owner, 1, ComposeHash, policy: null, Ct);
@@ -208,10 +210,10 @@ public class OwnerArgumentTests
         dated["id"].Should().Be("o:3");
         option["id"].Should().Be("o:4");
         keyed["id"].Should().Be("o:5");
-        (await cache.GetCacheEntryAsync<string>("h:span", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(30), TimeSpan.FromSeconds(30));
+        (await cache.GetCacheEntryAsync<string>("h:span", policy: null, Ct)).Expiration.Should().Be(Clock.GetUtcNow().AddMinutes(30));
         (await cache.GetCacheEntryAsync<string>("h:when", policy: null, Ct)).Expiration.Should().BeCloseTo(Deadline, TimeSpan.FromSeconds(1));
         (await cache.GetCacheEntryAsync<string>("h:set", policy: null, Ct)).Expiration.Should().BeCloseTo(Deadline, TimeSpan.FromSeconds(1));
-        (await cache.GetCacheEntryAsync<string>("h:key", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(30), TimeSpan.FromSeconds(30));
+        (await cache.GetCacheEntryAsync<string>("h:key", policy: null, Ct)).Expiration.Should().Be(Clock.GetUtcNow().AddMinutes(30));
     }
 
     [Fact]
@@ -229,7 +231,7 @@ public class OwnerArgumentTests
     [Fact]
     public async Task GetOrAddWithExpiration_variants_pass_owner_argument_and_the_generated_expiration()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var owner = new Owner("o");
 
         (await cache.GetOrAddWithExpirationAsync($"e:{1}", owner, 1, ComposeExpiring, policy: null, Ct)).Should().Be("o:1");
@@ -243,7 +245,7 @@ public class OwnerArgumentTests
     [Fact]
     public async Task A_typed_cache_runs_the_generator_once_under_its_own_key_strategy()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var owner = new Owner("o");
 
@@ -261,7 +263,7 @@ public class OwnerArgumentTests
     [Fact]
     public async Task Result_variants_pass_owner_argument_and_report_whether_this_call_generated()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         ICache<string> typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var owner = new Owner("o");
 
@@ -303,7 +305,7 @@ public class OwnerArgumentTests
     [Fact]
     public async Task A_typed_hash_cache_runs_the_generator_once_under_its_own_key_strategy()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var owner = new Owner("o");
 

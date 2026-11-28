@@ -7,6 +7,8 @@ namespace UiPath.Caching.Tests;
 /// <summary>Span <c>ContainsAsync</c>, <c>GetCacheEntryAsync</c> and <c>GetOrAddAsync</c> answer as the <see cref="CacheKey"/> forms do, and string keys read the local tier by their text.</summary>
 public class SpanKeyOperationTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly Func<CancellationToken, Task<string?>> Unexpected = static _ => throw new InvalidOperationException("the generator ran on a hit");
     private static readonly Func<CancellationToken, Task<IDictionary<string, string?>>> UnexpectedHash = static _ => throw new InvalidOperationException("the generator ran on a hit");
 
@@ -42,7 +44,7 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_cache_answers_span_contains_entry_and_get_or_add_as_the_key_forms_do()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         (await cache.SetAsync<string>(" User:42 ", "v", policy: null, Ct)).Should().BeTrue();
         var expiration = (await cache.GetCacheEntryAsync<string>("user:42", policy: null, Ct)).Expiration;
 
@@ -58,7 +60,7 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_span_get_or_add_miss_runs_the_generator_once_and_stores_under_the_key()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var calls = 0;
 
         SpanReads.GetOrAdd(cache, " User:42 ", _ => { calls++; return Task.FromResult<string?>("fresh"); }, token: Ct).Should().Be("fresh");
@@ -71,15 +73,15 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_warm_get_or_add_rejects_an_expiration_the_key_form_rejects()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
-        using var hash = InMemoryMultilayer.HashCache();
+        using var hash = InMemoryMultilayer.HashCache(clock: Clock);
         var typedHash = new HashCache<string>(hash, new PrefixCacheKeyStrategy("app"));
         (await cache.SetAsync<string>("user:42", "v", policy: null, Ct)).Should().BeTrue();
         (await typed.SetAsync("user:42", "v", Ct)).Should().BeTrue();
         (await hash.SetAsync<string>("user:42", new Dictionary<string, string?> { ["f"] = "v" }, policy: null, Ct)).Should().BeTrue();
         (await typedHash.SetAsync("user:42", new Dictionary<string, string?> { ["f"] = "v" }, Ct)).Should().BeTrue();
-        var past = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var past = Clock.GetUtcNow().AddMinutes(-1);
 
         Func<Task>[] calls =
         [
@@ -102,8 +104,8 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_span_get_or_add_with_an_expiration_stores_with_it()
     {
-        using var cache = InMemoryMultilayer.Cache();
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
+        var deadline = Clock.GetUtcNow().AddMinutes(7);
 
         (await GetOrAddBySpan(cache, "user:42", TimeSpan.FromMinutes(3))).Should().Be("v");
         (await GetOrAddBySpan(cache, "user:43", deadline)).Should().Be("v");
@@ -115,7 +117,7 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_typed_cache_with_a_prefix_strategy_answers_span_operations_as_the_key_forms_do()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") }, clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync(" User:42 ", "v", Ct)).Should().BeTrue();
 
@@ -129,7 +131,7 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_hash_cache_answers_span_operations_as_the_key_forms_do()
     {
-        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
+        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") }, clock: Clock);
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync(" User:42 ", new Dictionary<string, string?> { ["f"] = "v" }, Ct)).Should().BeTrue();
         (await cache.SetAsync<string>("plain:1", new Dictionary<string, string?> { ["f"] = "p" }, policy: null, Ct)).Should().BeTrue();
@@ -181,7 +183,7 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_case_sensitive_key_reads_its_own_entry_beside_a_case_insensitive_one()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var sensitive = new CacheKey("User:42", CacheKeyCasing.Sensitive);
         (await cache.SetAsync<string>("user:42", "lower", policy: null, Ct)).Should().BeTrue();
         (await cache.SetAsync<string>(sensitive, "upper", policy: null, Ct)).Should().BeTrue();
@@ -194,8 +196,8 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task Get_or_add_rejects_a_type_that_is_not_cacheable_by_key_and_by_span()
     {
-        using var cache = InMemoryMultilayer.Cache();
-        using var hash = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
+        using var hash = InMemoryMultilayer.HashCache(clock: Clock);
 
         Func<Task>[] calls =
         [
@@ -214,7 +216,7 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_hash_cache_reads_a_case_sensitive_key_by_its_own_entry()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var sensitive = new CacheKey("User:42", CacheKeyCasing.Sensitive);
         var sensitiveName = new CacheKey("app:User:42", CacheKeyCasing.Sensitive);
@@ -230,7 +232,7 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_typed_cache_reads_a_case_sensitive_key_by_its_own_entry()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         var sensitive = new CacheKey("User:42", CacheKeyCasing.Sensitive);
         (await typed.SetAsync("user:42", "lower", Ct)).Should().BeTrue();
@@ -243,7 +245,7 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task A_typed_cache_with_a_strategy_that_declines_reads_by_key_what_it_wrote()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new DecliningStrategy());
         (await typed.SetAsync("User:42", "v", Ct)).Should().BeTrue();
 
@@ -258,7 +260,7 @@ public class SpanKeyOperationTests
     [InlineData(false)]
     public async Task A_local_hit_past_the_rehydrate_threshold_still_rehydrates(bool bySpan)
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var policy = new CachePolicy
         {
             DistributedExpiration = TimeSpan.FromMinutes(10),
@@ -278,7 +280,7 @@ public class SpanKeyOperationTests
             : await cache.GetOrAddAsync("user:42", Generator, policy, Ct);
 
         value.Should().Be("aged");
-        await rehydrated.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        await rehydrated.Task.WaitAsync(Ct);
     }
 
     [Theory]
@@ -286,7 +288,7 @@ public class SpanKeyOperationTests
     [InlineData(false)]
     public async Task A_hash_local_hit_past_the_rehydrate_threshold_still_rehydrates(bool bySpan)
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var policy = new CachePolicy
         {
             DistributedExpiration = TimeSpan.FromMinutes(10),
@@ -306,13 +308,13 @@ public class SpanKeyOperationTests
             : await cache.GetOrAddAsync("user:42", Generator, policy, Ct);
 
         values.Should().ContainKey("f").WhoseValue.Should().Be("aged");
-        await rehydrated.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        await rehydrated.Task.WaitAsync(Ct);
     }
 
     [Fact]
     public async Task A_cancelled_key_read_throws_even_on_a_warm_local_hit()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync("user:42", "v", Ct)).Should().BeTrue();
         using var cancelled = new CancellationTokenSource();
@@ -329,7 +331,7 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task Warm_string_key_reads_through_a_typed_cache_allocate_nothing()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") }, clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync("user:42", "v", Ct)).Should().BeTrue();
 
@@ -344,7 +346,7 @@ public class SpanKeyOperationTests
 #if DEBUG
         Assert.Skip("allocation counts are only stable in Release");
 #endif
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") }, clock: Clock);
         (await cache.SetAsync<string>("user:42", "v", policy: null, Ct)).Should().BeTrue();
 
         AllocatedBy(() => Completed(cache.GetAsync<string>("user:42", policy: null))).Should().Be(0);
@@ -359,7 +361,7 @@ public class SpanKeyOperationTests
 #if DEBUG
         Assert.Skip("allocation counts are only stable in Release");
 #endif
-        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
+        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") }, clock: Clock);
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync("user:42", new Dictionary<string, string?> { ["f"] = "v" }, Ct)).Should().BeTrue();
 
@@ -375,9 +377,9 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task Warm_span_contains_entry_and_get_or_add_allocate_nothing()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") }, clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
-        using var hash = InMemoryMultilayer.HashCache();
+        using var hash = InMemoryMultilayer.HashCache(clock: Clock);
         var typedHash = new HashCache<string>(hash, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync("user:42", "v", Ct)).Should().BeTrue();
         (await cache.SetAsync<string>("plain:1", "p", policy: null, Ct)).Should().BeTrue();

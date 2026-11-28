@@ -268,7 +268,6 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
                 Hit(entries, generate, token);
             }
 
-            SpinWait.SpinUntil(static () => false, 100);
             var before = GC.GetAllocatedBytesForCurrentThread();
             for (var i = 0; i < 100; i++)
             {
@@ -380,7 +379,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
     public async Task Expiration_overloads_flow_through_to_the_inner_write()
     {
         var token = testContextAccessor.Current.CancellationToken;
-        var expiration = DateTimeOffset.UtcNow.AddMinutes(7);
+        var expiration = _fixture.Create<TimeProvider>().GetUtcNow().AddMinutes(7);
 
         await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L)], Generate, expiration, null, token);
         await Sut.GetOrAddAsync<string, long>([new((CacheKey)"b", 2L)], Generate, TimeSpan.FromMinutes(3), null, token);
@@ -410,7 +409,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(_ => new TestChangeToken { ActiveChangeCallbacks = true, HasChanged = false });
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions { Clock = new TimeProviderClock(_fixture.Create<TimeProvider>()) }));
         _innerCache = Substitute.For<ICache>();
         _fixture.Inject(FillManyInner.Wrap(_innerCache, out _many));
         _options = new InMemoryRedisCacheOptions
@@ -450,7 +449,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
                 .Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(
                     k,
                     _stored.TryGetValue(k, out var v)
-                        ? new TestCacheEntry<string?> { Value = v, Expiration = DateTimeOffset.UtcNow.AddMinutes(10), Found = true }
+                        ? new TestCacheEntry<string?> { Value = v, Expiration = _fixture.Create<TimeProvider>().GetUtcNow().AddMinutes(10), Found = true }
                         : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue }))
                 .ToArray());
 

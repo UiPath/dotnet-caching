@@ -11,6 +11,7 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class ManyKeysIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
+    private readonly RedisTestSignals _signals = new();
     private readonly string _app = $"mk{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
     private readonly WarningLog _warnings = new();
@@ -91,19 +92,33 @@ public sealed class ManyKeysIntegrationTests(RedisContainerFixture fixture) : ID
     }
 
     [Fact]
-    public async Task Hundreds_of_keys_take_about_two_round_trips_of_wall_time_not_one_per_key()
+    public async Task Hundreds_of_keys_share_two_concurrent_waves_instead_of_one_round_trip_per_key()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var delay = TimeSpan.FromMilliseconds(200);
-        var (_, cache) = Node("a", o => o.BatchChunkSize = 500, new DelayedWrites(delay));
+        var writes = new GatedWrites();
+        var (_, cache) = Node("a", o => o.BatchChunkSize = 500, writes);
         var keys = Keys(300);
         var pairs = keys.Select(k => new KeyValuePair<CacheKey, string?>(k, "v")).ToArray();
         await cache.SetManyAsync(pairs, (CachePolicy?)null, Ct);
 
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        (await cache.RemoveManyAsync<string>(keys, Ct)).Should().BeEmpty();
+        writes.Hold = true;
+        var removing = cache.RemoveManyAsync<string>(keys, Ct).AsTask();
+        for (var wave = 0; wave < 2; wave++)
+        {
+            var pending = new List<TaskCompletionSource>();
+            for (var i = 0; i < keys.Length; i++)
+            {
+                pending.Add(await writes.Entered.Reader.ReadAsync(Ct));
+            }
+            removing.IsCompleted.Should().BeFalse();
+            foreach (var release in pending)
+            {
+                release.SetResult();
+            }
+        }
 
-        watch.Elapsed.Should().BeLessThan(delay * 10, "the 300 deletes share one wait and their 300 events another");
+        (await removing).Should().BeEmpty();
+        writes.Entered.Reader.TryRead(out _).Should().BeFalse("the deletes and announcements need only two waves");
     }
 
     [Fact]
@@ -138,21 +153,7 @@ public sealed class ManyKeysIntegrationTests(RedisContainerFixture fixture) : ID
         return Enumerable.Range(0, count).Select(i => (CacheKey)$"it-{run}-{i}").ToArray();
     }
 
-    private static async Task<bool> EventuallyAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20, Ct);
-        }
-
-        return await condition();
-    }
+    private Task<bool> EventuallyAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
 
     private (ServiceProvider Provider, ICache Cache) Node(string source, Action<InMemoryRedisCacheOptions>? configure = null, IResiliencePipeline? writes = null)
     {
@@ -180,6 +181,7 @@ public sealed class ManyKeysIntegrationTests(RedisContainerFixture fixture) : ID
                     o.AppShortName = _app;
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                 })
+            .ObserveRedisSignals(_signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);
@@ -218,12 +220,21 @@ public sealed class ManyKeysIntegrationTests(RedisContainerFixture fixture) : ID
         public IResiliencePipeline Get(string? name) => name == ResiliencePipelineNames.Write ? writes : EmptyResiliencePipeline.Instance;
     }
 
-    private sealed class DelayedWrites(TimeSpan delay) : IResiliencePipeline
+    private sealed class GatedWrites : IResiliencePipeline
     {
+        public System.Threading.Channels.Channel<TaskCompletionSource> Entered { get; } = System.Threading.Channels.Channel.CreateUnbounded<TaskCompletionSource>();
+
+        public bool Hold { get; set; }
+
         public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
         {
-            await Task.Delay(delay, CancellationToken.None).ConfigureAwait(false);
-            return await callback(cancellationToken).ConfigureAwait(false);
+            if (Hold)
+            {
+                var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Entered.Writer.TryWrite(release);
+                await release.Task.WaitAsync(cancellationToken);
+            }
+            return await callback(cancellationToken);
         }
     }
 }

@@ -17,6 +17,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
 
     private static readonly byte[] Unreadable = [0x1E, 1, 2];
 
+    private readonly ManualTimeProvider _time = new(DateTimeOffset.UnixEpoch);
     private readonly IDatabase _database = Substitute.For<IDatabase>();
     private readonly RecordingTelemetryProvider _telemetry = new();
     private readonly RecordingResiliencePipeline _write = new();
@@ -733,7 +734,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
 
         read.Outcome.Should().Be(SnapshotOutcome.Found);
         read.Entry!.Value.Should().Be("v");
-        read.Entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + TimeSpan.FromMinutes(3), TimeSpan.FromSeconds(10));
+        read.Entry.Expiration.Should().BeCloseTo(_time.GetUtcNow() + TimeSpan.FromMinutes(3), TimeSpan.FromSeconds(10));
     }
 
     [Fact]
@@ -812,7 +813,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         var sut = Create(out _);
         StubStore(set: true, delete: true);
 
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Committed);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Committed);
         (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.Committed);
     }
 
@@ -824,7 +825,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, cts.Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, cts.Token)).Should().Be(StoreOutcome.NotSent);
         (await sut.DeleteAsync<string>("k", cts.Token)).Should().Be(StoreOutcome.NotSent);
         _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
         _ = _database.DidNotReceiveWithAnyArgs().KeyDeleteAsync(default(RedisKey), default);
@@ -836,7 +837,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         var sut = Create(FastRegistry(), connected: false);
         StubStore(set: true, delete: true);
 
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent);
         (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.NotSent);
         _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
         _ = _database.DidNotReceiveWithAnyArgs().KeyDeleteAsync(default(RedisKey), default);
@@ -849,7 +850,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         var sut = Create(registry);
         StubStore(set: true, delete: true);
 
-        var write = await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), ResolvedPolicy(registry, "bad"), Token);
+        var write = await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), ResolvedPolicy(registry, "bad"), Token);
 
         write.Should().Be(StoreOutcome.NotSent);
         _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
@@ -858,12 +859,12 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task A_write_and_delete_that_time_out_after_sending_are_unknown()
     {
-        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromMilliseconds(100)));
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromMilliseconds(100), _time));
         var never = new TaskCompletionSource<bool>();
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(never.Task);
         _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(never.Task);
 
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
         (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.Unknown);
         _ = _database.Received(1).StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
     }
@@ -871,20 +872,20 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task A_write_delete_and_null_write_the_client_never_wrote_are_not_sent()
     {
-        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(5)));
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(5), _time));
         var unsent = new RedisConnectionException(ConnectionFailureType.UnableToConnect, CommandFlags.None, "No connection is active/available to service this operation", null, CommandStatus.WaitingToBeSent);
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(unsent));
         _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(unsent));
 
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent);
         (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.NotSent);
-        (await sut.WriteAsync<string>("k", null, DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent, "the null value is a delete or an empty write, accounted the same way");
+        (await sut.WriteAsync<string>("k", null, _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent, "the null value is a delete or an empty write, accounted the same way");
     }
 
     [Fact]
     public async Task A_delete_whose_connection_drops_after_sending_is_unknown()
     {
-        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(5)));
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(5), _time));
         _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromException<bool>(new RedisConnectionException(ConnectionFailureType.SocketClosed, CommandFlags.None, "SocketClosed", null, CommandStatus.Sent)));
 
@@ -906,68 +907,68 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         var sut = Create(out _);
         StubStore(set: false, delete: true);
 
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Failed);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Failed);
     }
 
     [Fact]
     public async Task A_write_that_landed_late_after_a_timeout_is_committed_whatever_the_retry_did()
     {
         var late = new TaskCompletionSource<bool>();
-        var sut = Create(FastRegistry(), write: new RetryOncePipeline(TimeSpan.FromMilliseconds(100), async () =>
+        var sut = Create(FastRegistry(), write: new RetryOncePipeline(_time, TimeSpan.FromMilliseconds(100), () =>
         {
             late.SetResult(true);
-            await Task.Delay(100, Token);
+            return late.Task;
         }));
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>())
             .Returns(late.Task, Task.FromException<bool>(new RedisException("lost")));
 
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Committed);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Committed);
     }
 
     [Fact]
     public async Task An_unrelated_write_a_hook_starts_during_a_timed_out_command_does_not_make_it_committed()
     {
         RedisCache? sut = null;
-        var hooked = new HookedPipeline(new GivingUpPipeline(TimeSpan.FromMilliseconds(200)), async () => await sut!.SetAsync("other", "x", TimeSpan.FromMinutes(1), policy: null, Token));
+        var hooked = new HookedPipeline(new GivingUpPipeline(TimeSpan.FromMilliseconds(200), _time), async () => await sut!.SetAsync("other", "x", TimeSpan.FromMinutes(1), policy: null, Token));
         sut = Create(FastRegistry(), write: hooked);
         var never = new TaskCompletionSource<bool>();
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(never.Task);
         _database.StringSetAsync((RedisKey)"test:str:other", Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
 
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
         hooked.HookRan.Should().BeTrue();
     }
 
     [Fact]
     public async Task A_refused_write_retried_into_a_timeout_is_unknown()
     {
-        var sut = Create(FastRegistry(), write: new RetryOncePipeline(TimeSpan.FromMilliseconds(100), () => Task.CompletedTask));
+        var sut = Create(FastRegistry(), write: new RetryOncePipeline(_time, TimeSpan.FromMilliseconds(100), () => Task.CompletedTask));
         var never = new TaskCompletionSource<bool>();
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult(false), never.Task);
 
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
     }
 
     [Fact]
     public async Task A_create_whose_reply_is_lost_is_unknown()
     {
-        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromMilliseconds(100)));
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromMilliseconds(100), _time));
         var never = new TaskCompletionSource<bool>();
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), When.NotExists, Arg.Any<CommandFlags>()).Returns(never.Task);
 
-        (await sut.TryCreateAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(AddOutcome.Unknown);
+        (await sut.TryCreateAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(AddOutcome.Unknown);
     }
 
     [Fact]
     public async Task A_create_retried_after_a_lost_reply_is_unknown_even_when_the_retry_finds_the_key()
     {
-        var sut = Create(FastRegistry(), write: new RetryOncePipeline(TimeSpan.FromMilliseconds(100), () => Task.CompletedTask));
+        var sut = Create(FastRegistry(), write: new RetryOncePipeline(_time, TimeSpan.FromMilliseconds(100), () => Task.CompletedTask));
         var never = new TaskCompletionSource<bool>();
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), When.NotExists, Arg.Any<CommandFlags>())
             .Returns(never.Task, Task.FromResult(false));
 
-        (await sut.TryCreateAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(AddOutcome.Unknown, "the first send may be the one that added it");
+        (await sut.TryCreateAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(AddOutcome.Unknown, "the first send may be the one that added it");
     }
 
     [Theory]
@@ -978,33 +979,34 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         var sut = Create(out _);
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), When.NotExists, Arg.Any<CommandFlags>()).Returns(answer);
 
-        (await sut.TryCreateAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(expected);
+        (await sut.TryCreateAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(expected);
     }
 
     [Fact]
     public async Task A_write_and_delete_cancelled_in_flight_are_unknown()
     {
-        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(30)));
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(30), _time, advance: false));
         var never = new TaskCompletionSource<bool>();
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(never.Task);
         _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(never.Task);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
-
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, cts.Token)).Should().Be(StoreOutcome.Unknown);
+        var write = sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, cts.Token);
+        await cts.CancelAsync();
+        (await write).Should().Be(StoreOutcome.Unknown);
         using var again = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        again.CancelAfter(TimeSpan.FromMilliseconds(100));
-        (await sut.DeleteAsync<string>("k", again.Token)).Should().Be(StoreOutcome.Unknown);
+        var delete = sut.DeleteAsync<string>("k", again.Token);
+        await again.CancelAsync();
+        (await delete).Should().Be(StoreOutcome.Unknown);
     }
 
     [Fact]
     public async Task A_null_value_written_as_a_delete_that_times_out_is_unknown()
     {
-        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromMilliseconds(100)));
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromMilliseconds(100), _time));
         var never = new TaskCompletionSource<bool>();
         _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(never.Task);
 
-        (await sut.WriteAsync<string>("k", null, DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
+        (await sut.WriteAsync<string>("k", null, _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
         _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
     }
 
@@ -1015,9 +1017,9 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         StubStore(set: true, delete: true);
         var unregistered = new CachePolicy { Serializer = new SerializerPolicy { Write = "nobody" } };
 
-        (await sut.WriteAsync("k", 1, DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.WriteAsync("k", 1, _time.GetUtcNow().AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent);
         (await sut.DeleteAsync<int>("k", Token)).Should().Be(StoreOutcome.NotSent);
-        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), unregistered, Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), unregistered, Token)).Should().Be(StoreOutcome.NotSent);
         _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
     }
 
@@ -1039,7 +1041,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
             writing.Cancel();
             throw new OperationCanceledException(writing.Token);
         });
-        (await other.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, writing.Token)).Should().Be(StoreOutcome.NotSent);
+        (await other.WriteAsync("k", "v", _time.GetUtcNow().AddMinutes(1), null, writing.Token)).Should().Be(StoreOutcome.NotSent);
     }
 
     [Fact]
@@ -1154,7 +1156,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
             options,
             cacheOptions,
             new DefaultCachePolicyFactory(null, defaultPolicy, valueSerializers: registry),
-            TimeProvider.System,
+            _time,
             NullLogger<RedisCache>.Instance)
         {
             ValueSerializers = registry,
@@ -1213,15 +1215,20 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         public bool TryDeserialize<T>(object? value, out T? result) => throw new NotSupportedException();
     }
 
-    private sealed class GivingUpPipeline(TimeSpan timeout) : IResiliencePipeline
+    private sealed class GivingUpPipeline(TimeSpan timeout, ManualTimeProvider clock, bool advance = true) : IResiliencePipeline
     {
         public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(timeout);
+            using var timer = clock.CreateTimer(_ => cts.Cancel(), null, timeout, Timeout.InfiniteTimeSpan);
             try
             {
-                return await callback(cts.Token).AsTask().WaitAsync(cts.Token);
+                var running = callback(cts.Token).AsTask();
+                if (advance)
+                {
+                    clock.Advance(timeout);
+                }
+                return await running.WaitAsync(cts.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -1249,14 +1256,18 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         }
     }
 
-    private sealed class RetryOncePipeline(TimeSpan wait, Func<Task> between) : IResiliencePipeline
+    private sealed class RetryOncePipeline(ManualTimeProvider clock, TimeSpan wait, Func<Task> between) : IResiliencePipeline
     {
         public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
         {
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 var running = callback(cancellationToken).AsTask();
-                var finished = await Task.WhenAny(running, Task.Delay(wait, cancellationToken));
+                using var timeout = new CancellationTokenSource(wait, clock);
+                var expired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = timeout.Token.Register(() => expired.TrySetResult());
+                clock.Advance(wait);
+                var finished = await Task.WhenAny(running, expired.Task);
                 if (finished != running)
                 {
                     await between();

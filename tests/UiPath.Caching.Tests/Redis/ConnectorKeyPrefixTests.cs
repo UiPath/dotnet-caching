@@ -291,12 +291,14 @@ public sealed class ConnectorKeyPrefixTests : IDisposable
         var database = Substitute.For<IDatabase>();
         database.ExecuteAsync("ECHO", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>()).Returns(echo.Task);
 
-        NewPrefix().Get(database, "configured:", _logger).Should().Be("configured:");
+        var prefix = NewPrefix();
+        prefix.Get(database, "configured:", _logger).Should().Be("configured:");
         Logged(level).Should().Be(0);
 
         echo.SetResult(Echo(connectorPrefix));
 
-        await WaitUntilAsync(() => Logged(level) == 1);
+        await prefix.GetAsync(database, "configured:", _logger, TestContext.Current.CancellationToken);
+        Logged(level).Should().Be(1);
     }
 
     [Fact]
@@ -414,16 +416,6 @@ public sealed class ConnectorKeyPrefixTests : IDisposable
         database.ExecuteAsync("ECHO", Arg.Is<ICollection<object>>(args => args.Single().Equals((RedisKey)ConnectorKeyPrefix.ProbeMarker)), Arg.Any<CommandFlags>())
             .Returns(Echo(prefix));
         return database;
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        for (var i = 0; i < 500 && !condition(); i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
-
-        condition().Should().BeTrue();
     }
 
     private string[] Messages(LogLevel level) =>

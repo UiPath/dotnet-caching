@@ -5,6 +5,7 @@ namespace UiPath.Caching.Tests;
 
 public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private readonly ManualTimeProvider _clock = new();
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private global::Microsoft.Extensions.Caching.Memory.IMemoryCache _memoryCache = default!;
@@ -25,13 +26,17 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
     public async Task GetOrAdd_with_null_FactoryTimeout_runs_generator_to_completion()
     {
         var token = testContextAccessor.Current.CancellationToken;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Generator(CancellationToken ct)
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(50), ct);
+            await release.Task.WaitAsync(ct);
             return "v";
         }
 
-        var result = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy: null, token: token);
+        var pending = Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, policy: null, token: token).AsTask();
+        pending.IsCompleted.Should().BeFalse();
+        release.SetResult();
+        var result = await pending;
 
         result.Should().Be("v");
     }
@@ -39,19 +44,17 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
     [Fact]
     public async Task GetOrAdd_with_FactoryTimeout_throws_TimeoutException_when_generator_exceeds_budget()
     {
-        // FactoryTimeout only surfaces as TimeoutException while the caller's own token is
-        // uncancelled — see the catch filter in FactoryTimeout.RunAsync. Pass a token this test
-        // owns rather than the ambient one the runner may cancel under load; the 50ms budget is
-        // what bounds the call, so nothing here can hang.
         using var caller = new CancellationTokenSource();
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
         async Task<string?> Generator(CancellationToken ct)
         {
-            await Task.Delay(TimeSpan.FromSeconds(10), ct);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(ct);
             return "v";
         }
 
-        var act = async () => await Sut.GetOrAddAsync(_cacheKey, Generator, policy, caller.Token);
+        var pending = Sut.GetOrAddAsync(_cacheKey, Generator, policy, caller.Token).AsTask();
+        _clock.Advance(policy.FactoryTimeout.Value);
+        var act = async () => await pending;
 
         await act.Should().ThrowAsync<TimeoutException>();
     }
@@ -75,7 +78,7 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
         async Task<string?> Generator(CancellationToken ct)
         {
             await cts.CancelAsync();
-            await Task.Delay(TimeSpan.FromSeconds(30), ct);
+            ct.ThrowIfCancellationRequested();
             return "v";
         }
 
@@ -106,6 +109,7 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
 
     public ValueTask InitializeAsync()
     {
+        _fixture.Inject<TimeProvider>(_clock);
         _cacheKey = _fixture.Create<string>();
         _topicKey = _fixture.Create<string>();
         _fixture.Freeze<ICache>();

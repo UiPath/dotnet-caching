@@ -6,6 +6,7 @@ using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Broadcast;
 using UiPath.Caching.Tests.Fakes;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests;
 
@@ -40,9 +41,11 @@ public class MultilayerHashCacheBackgroundWriteTests
     [InlineData("merge")]
     public async Task A_peer_write_during_a_pending_background_write_refreshes_the_provisional_hash(string write)
     {
+        var clock = new ManualTimeProvider();
+        var telemetry = new RecordingTelemetryProvider();
         using var c = new PeerCluster();
         // No timeout: the gates below hold the refresh read for as long as the test needs, which a slow runner can stretch past one.
-        var (a, b) = (c.Add("a"), c.Add("b", timeout: Timeout.InfiniteTimeSpan));
+        var (a, b) = (c.Add("a", clock: clock), c.Add("b", timeout: Timeout.InfiniteTimeSpan, clock: clock, telemetry: telemetry));
         var written = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var writeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var readGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -74,7 +77,7 @@ public class MultilayerHashCacheBackgroundWriteTests
             }
 
             // The provisional write reached the store and waits to answer: it stays in flight until the write gate opens.
-            await written.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await written.Task.WaitAsync(Ct);
             c.Redis.Fields().Should().BeEquivalentTo(provisional);
             var reads = b.InnerReads;
             b.Inner.ReadHold = readGate.Task;
@@ -84,15 +87,15 @@ public class MultilayerHashCacheBackgroundWriteTests
             Held(b).Should().BeEquivalentTo(provisional);
 
             // The first refresh read starts while the write is in flight; the write then promotes and leaves its turn before that read answers.
-            await CachePeers.Until(() => b.InnerReads == reads + 1);
+            await b.Inner.Changed.UntilAsync(() => b.InnerReads == reads + 1, Ct);
             CachePeers.WriteInFlight(b.Cache, "k").Should().BeTrue();
             writeGate.SetResult();
-            await CachePeers.Until(() => !CachePeers.WriteInFlight(b.Cache, "k"));
+            await CacheWork.SnapshotAsync(b.Cache);
             Held(b).Should().BeEquivalentTo(provisional);
 
             // The first read is declined, as the write moved the key under it; the retry finds no write in flight and keeps the peer's hash.
             readGate.SetResult();
-            await b.Settled();
+            await telemetry.Signal.UntilAsync(() => b.Cache.RunsInFlight == 0, Ct);
 
             Held(b).Should().BeEquivalentTo(Fields("peer"));
             b.InnerReads.Should().Be(reads + 2);
@@ -101,7 +104,7 @@ public class MultilayerHashCacheBackgroundWriteTests
         {
             writeGate.TrySetResult();
             readGate.TrySetResult();
-            await b.Settled();
+            await telemetry.Signal.UntilAsync(() => b.Cache.RunsInFlight == 0, Ct);
         }
     }
 
@@ -111,7 +114,7 @@ public class MultilayerHashCacheBackgroundWriteTests
         using var h = new Rig();
         var gate = h.Gate("k");
 
-        (await h.Cache.SetAsync<string>("k", Fields("v"), new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5)), Background, Ct)).Should().BeTrue();
+        (await h.Cache.SetAsync<string>("k", Fields("v"), new HashCacheEntryOptions(h.Clock.GetUtcNow().AddMinutes(5)), Background, Ct)).Should().BeTrue();
 
         h.Log.Should().Equal("write:k=v");
         gate.SetResult(true);
@@ -237,7 +240,6 @@ public class MultilayerHashCacheBackgroundWriteTests
 
         var remove = h.Cache.RemoveAsync<string>("k", Ct).AsTask();
 
-        await Task.Delay(100, Ct);
         remove.IsCompleted.Should().BeFalse("the unlink must not overtake the write it follows");
         gate.SetResult(true);
         (await remove).Should().BeTrue();
@@ -253,10 +255,9 @@ public class MultilayerHashCacheBackgroundWriteTests
         var gate = h.Gate("k");
         await h.Cache.SetAsync<string>("k", Fields("v"), Background, Ct);
 
-        var refresh = h.Cache.RefreshAsync<string>("k", new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5)), Background, Ct).AsTask();
+        var refresh = h.Cache.RefreshAsync<string>("k", new HashCacheEntryOptions(h.Clock.GetUtcNow().AddMinutes(5)), Background, Ct).AsTask();
         var metadata = h.Cache.SetMetadataAsync<string>("k", new Dictionary<string, string?> { ["m"] = "1" }, Ct).AsTask();
 
-        await Task.Delay(100, Ct);
         refresh.IsCompleted.Should().BeFalse();
         metadata.IsCompleted.Should().BeFalse();
         h.Log.Should().Equal("write:k=v");
@@ -274,10 +275,9 @@ public class MultilayerHashCacheBackgroundWriteTests
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 
         var metadata = h.Cache.SetMetadataAsync<string>("k", new Dictionary<string, string?> { ["m"] = "1" }, cancel.Token).AsTask();
-        await Task.Delay(100, Ct);
         await cancel.CancelAsync();
 
-        await FluentActions.Awaiting(() => metadata.WaitAsync(TimeSpan.FromSeconds(5), Ct)).Should().ThrowAsync<OperationCanceledException>();
+        await FluentActions.Awaiting(() => metadata.WaitAsync(Ct)).Should().ThrowAsync<OperationCanceledException>();
         h.Local("k").Should().NotBeNull("a cancelled caller does not drop the local copy");
         gate.SetResult(true);
         await h.SettledAsync();
@@ -325,7 +325,7 @@ public class MultilayerHashCacheBackgroundWriteTests
         {
             try
             {
-                await Task.Delay(Timeout.Infinite, token);
+                await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token);
             }
             catch (OperationCanceledException)
             {
@@ -337,7 +337,7 @@ public class MultilayerHashCacheBackgroundWriteTests
         await h.Cache.SetAsync<string>("k", Fields("v"), Background, Ct);
         await h.UntilAsync(() => h.Log.Contains("write:k=v"));
 
-        await h.Cache.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await h.DisposeWithTimeoutAsync();
         await h.SettledAsync();
 
         h.Telemetry.Received(1).TrackEvent("cache.background_write.failed", Arg.Is<TelemetryTags<string>>(t => t.Any(x => x.Key == "stage" && x.Value == "drain_cancelled")), Arg.Any<TelemetryTags<double>>());
@@ -354,7 +354,6 @@ public class MultilayerHashCacheBackgroundWriteTests
 
         var overflow = full.Cache.SetAsync<string>("other", Fields("x"), Background, Ct).AsTask();
 
-        await Task.Delay(100, Ct);
         full.Log.Should().Equal("write:k=a", "write:other=x");
         overflow.IsCompleted.Should().BeFalse();
         other.SetResult(true);
@@ -365,7 +364,6 @@ public class MultilayerHashCacheBackgroundWriteTests
         using var off = new Rig(new InMemoryRedisCacheOptions { MaxBackgroundWrites = 0 });
         var gate = off.Gate("k");
         var set = off.Cache.SetAsync<string>("k", Fields("v"), Background, Ct).AsTask();
-        await Task.Delay(100, Ct);
         set.IsCompleted.Should().BeFalse();
         gate.SetResult(true);
         (await set).Should().BeTrue();
@@ -381,7 +379,6 @@ public class MultilayerHashCacheBackgroundWriteTests
         await h.Cache.SetAsync<string>("one", Fields("a"), Background, Ct);
         var second = h.Cache.SetAsync<string>("two", Fields("b"), Background, Ct).AsTask();
 
-        await Task.Delay(100, Ct);
         second.IsCompleted.Should().BeFalse("the one place of this cache is taken");
         two.SetResult(true);
         await second;
@@ -418,7 +415,6 @@ public class MultilayerHashCacheBackgroundWriteTests
         var dispose = waiting.Cache.DisposeAsync().AsTask();
         var syncDispose = Task.Run(waiting.Cache.Dispose, Ct);
 
-        await Task.Delay(100, Ct);
         dispose.IsCompleted.Should().BeFalse();
         syncDispose.IsCompleted.Should().BeFalse();
         gate.SetResult(true);
@@ -432,7 +428,7 @@ public class MultilayerHashCacheBackgroundWriteTests
         stuck.OnToken = token => seen = token;
         await stuck.Cache.SetAsync<string>("k", Fields("v"), Background, Ct);
 
-        await stuck.Cache.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await stuck.DisposeWithTimeoutAsync();
 
         seen.IsCancellationRequested.Should().BeTrue();
         never.SetResult(false);
@@ -464,7 +460,6 @@ public class MultilayerHashCacheBackgroundWriteTests
 
         var fill = h.Cache.GetOrAddAsync<string>("k", static _ => Task.FromResult<IDictionary<string, string?>>(Fields("v")), Awaited, Ct).AsTask();
 
-        await Task.Delay(100, Ct);
         fill.IsCompleted.Should().BeFalse();
         gate.SetResult(true);
         (await fill)["f"].Should().Be("v");
@@ -496,7 +491,6 @@ public class MultilayerHashCacheBackgroundWriteTests
 
         var fill = h.Cache.GetOrAddAsync<string>("k", static _ => Task.FromResult<IDictionary<string, string?>>(Fields("v")), locked, Ct).AsTask();
 
-        await Task.Delay(100, Ct);
         fill.IsCompleted.Should().BeFalse();
         gate.SetResult(true);
         await fill;
@@ -506,12 +500,11 @@ public class MultilayerHashCacheBackgroundWriteTests
     public async Task The_distributed_cache_adapter_writes_in_the_foreground_whatever_the_policy_says()
     {
         using var h = new Rig();
-        var adapter = new UiPath.Caching.Distributed.UiPathDistributedCache(h.Cache, new UiPath.Caching.Distributed.UiPathDistributedCacheOptions(), new DefaultCacheKeyStrategy(), Background, NullLogger.Instance, TimeProvider.System, tierRetainsValues: true);
+        var adapter = new UiPath.Caching.Distributed.UiPathDistributedCache(h.Cache, new UiPath.Caching.Distributed.UiPathDistributedCacheOptions(), new DefaultCacheKeyStrategy(), Background, NullLogger.Instance, h.Clock, tierRetainsValues: true);
         var gate = h.GateAny();
 
         var set = adapter.SetAsync("k", [1, 2, 3], new Microsoft.Extensions.Caching.Distributed.DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) }, Ct);
 
-        await Task.Delay(100, Ct);
         h.Log.Should().Equal("write:k=payload");
         set.IsCompleted.Should().BeFalse("its payload may be memory the caller reclaims on return");
         gate.SetResult(true);
@@ -587,26 +580,23 @@ public class MultilayerHashCacheBackgroundWriteTests
         }
     }
 
-    private sealed class StepClock : TimeProvider
-    {
-        private DateTimeOffset _now = new(2030, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public void Advance(TimeSpan by) => _now += by;
-    }
 
     private sealed class Rig : IDisposable
     {
         private readonly object _gate = new();
+        private readonly TestSignal _changed = new();
+        private readonly TimeSpan _drainTimeout;
         private readonly List<TaskCompletionSource<bool>> _gates = [];
         private readonly Dictionary<string, TaskCompletionSource<bool>> _gated = [];
 
         public Rig(InMemoryRedisCacheOptions? options = null, IDistributedLock? distributedLock = null)
         {
-            Clock = new StepClock();
+            Clock = new ManualTimeProvider();
             options ??= new InMemoryRedisCacheOptions();
+            _drainTimeout = options.BackgroundWriteDrainTimeout;
             Telemetry = Substitute.For<ICachingTelemetryProvider>();
+            Telemetry.When(t => t.TrackEvent(Arg.Any<string>(), Arg.Any<TelemetryTags<string>>(), Arg.Any<TelemetryTags<double>>())).Do(_ => _changed.Pulse());
             var inner = Substitute.For<IHashCache>();
             ValueTaskStubs.Returns(
                 inner.SetAsync<string?>(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
@@ -683,7 +673,7 @@ public class MultilayerHashCacheBackgroundWriteTests
                 NullLogger.Instance));
         }
 
-        public StepClock Clock { get; }
+        public ManualTimeProvider Clock { get; }
 
         public MultilayerHashCache Cache { get; }
 
@@ -751,22 +741,22 @@ public class MultilayerHashCacheBackgroundWriteTests
             {
                 WrittenWhenPublished.Add(Log.Count > 0 && Log[^1].StartsWith("write:", StringComparison.Ordinal));
                 Log.Add($"event:{@event.Data?.Key}");
+                _changed.Pulse();
             }
 
             return new ValueTask<bool>(PublishResult);
         }
 
-        public async Task UntilAsync(Func<bool> condition)
-        {
-            var deadline = DateTime.UtcNow.AddSeconds(10);
-            while (!condition())
-            {
-                (DateTime.UtcNow < deadline).Should().BeTrue("the condition was not met in time: {0}", string.Join(", ", Log));
-                await Task.Delay(5, Ct);
-            }
-        }
+        public Task UntilAsync(Func<bool> condition) => _changed.UntilAsync(condition, Ct);
 
-        public Task SettledAsync() => UntilAsync(() => Cache.RunsInFlight == 0);
+        public Task SettledAsync() => CacheWork.CompleteAsync(Cache);
+
+        public async Task DisposeWithTimeoutAsync()
+        {
+            var pending = Cache.DisposeAsync().AsTask();
+            Clock.Advance(_drainTimeout);
+            await pending.WaitAsync(Ct);
+        }
 
         public void Dispose() => Cache.Dispose();
 
@@ -775,6 +765,7 @@ public class MultilayerHashCacheBackgroundWriteTests
             lock (_gate)
             {
                 Log.Add(entry);
+                _changed.Pulse();
             }
         }
 

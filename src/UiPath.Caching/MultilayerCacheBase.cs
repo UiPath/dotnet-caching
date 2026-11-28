@@ -115,7 +115,8 @@ public abstract partial class MultilayerCacheBase : IDisposable
             cacheName,
             logger,
             telemetryProvider,
-            clock);
+            clock,
+            key => BackgroundIssued?.Invoke(key));
         if (redisOptions?.RepeatInvalidationAfter is { } repeatAfter && repeatAfter > TimeSpan.Zero)
         {
             _repeats = new RepeatInvalidations(clock, repeatAfter, RemoveRepeated);
@@ -157,6 +158,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
     }
 
     public string Name { get; }
+
+    /// <summary>Test seam: runs as a background write of a key is issued, before its local write.</summary>
+    internal Action<string>? BackgroundIssued { get; set; }
 
     internal bool BackgroundWritesActive => _background.Active;
 
@@ -216,7 +220,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
         Func<CancellationToken, Task<TResult>> factory,
         TimeSpan? factoryTimeout,
         CancellationToken token) =>
-        FactoryTimeout.RunAsync(factory, factoryTimeout, cacheKey, Name, Telemetry, token);
+        FactoryTimeout.RunAsync(factory, factoryTimeout, cacheKey, Name, Telemetry, token, clock: _clock);
 
     /// <summary>The L2 write lifetime: a caller value as-is, else <see cref="ResolveDuration"/> jittered.</summary>
     protected TimeSpan ResolveWriteDuration(CachePolicy policy, TimeSpan? callerExpiration = null) =>
@@ -381,9 +385,15 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private protected void RemoveLocal(string key) =>
         _background.Apply(key, (Cache: this, Key: key), static s =>
         {
+            s.Cache.RemovingLocal(s.Key);
             s.Cache.RemoveEntry(s.Key);
             return true;
         });
+
+    /// <summary>Runs in the key's local turn, before <see cref="RemoveLocal"/> takes its entry.</summary>
+    private protected virtual void RemovingLocal(string name)
+    {
+    }
 
     /// <summary>Removes the key's local entry and its fail-safe value.</summary>
     private protected void RemoveEntry(string name)

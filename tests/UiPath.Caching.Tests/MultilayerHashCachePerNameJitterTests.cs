@@ -46,8 +46,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
             _cacheKey,
             Arg.Any<IDictionary<string, string?>>(),
             Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() >= baseTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -75,8 +75,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
             _cacheKey,
             Arg.Any<IDictionary<string, string?>>(),
             Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5)
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)),
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() > callerTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() < callerTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -103,8 +103,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
             _cacheKey,
             Arg.Any<IDictionary<string, string?>>(),
             Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow >= optionsTtl - TimeSpan.FromSeconds(5)
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow <= optionsTtl + maxJitter + TimeSpan.FromSeconds(5)),
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() >= optionsTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() <= optionsTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -130,8 +130,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         await _innerCache.Received(1).RefreshAsync<string>(
             _cacheKey,
             Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() >= baseTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -145,7 +145,7 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        var callerInstant = DateTimeOffset.UtcNow.AddMinutes(2);
+        var callerInstant = _fixture.Create<TimeProvider>().GetUtcNow().AddMinutes(2);
         var options = new HashCacheEntryOptions(ExpireTime: callerInstant);
 
         _innerCache.RefreshAsync<string>(_cacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -194,8 +194,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
             _cacheKey,
             Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
                 && !o.TimeToLive.HasValue
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5)
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() > callerTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() < callerTtl + TimeSpan.FromSeconds(5)
                 && ReferenceEquals(o.Metadata, metadata)
                 && o.SetOption == HashCacheSetOption.HashReplace),
             Arg.Any<CachePolicy?>(),
@@ -226,8 +226,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         await _innerCache.Received(1).RefreshAsync<string>(
             _cacheKey,
             Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && o.ExpireTime.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() >= baseTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - _fixture.Create<TimeProvider>().GetUtcNow() <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)
                 && ReferenceEquals(o.Metadata, metadata)
                 && o.SetOption == HashCacheSetOption.HashReplace),
             Arg.Any<CachePolicy?>(),

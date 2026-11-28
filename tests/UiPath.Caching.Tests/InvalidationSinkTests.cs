@@ -7,11 +7,14 @@ namespace UiPath.Caching.Tests;
 
 public sealed class InvalidationSinkTests : IDisposable
 {
+
     private const string Key = "hot";
     private const string ThisNode = "urn:this-node";
 
+    private static readonly ManualTimeProvider Clock = new();
+
     private readonly CapturingTopic _topic = new();
-    private readonly MemoryCache _cache = new(new MemoryCacheOptions());
+    private readonly MemoryCache _cache = new(new MemoryCacheOptions { Clock = new TimeProviderClock(Clock) });
     private readonly RecordingSink _sink;
     private readonly SingleTopicProvider _topics;
 
@@ -106,13 +109,13 @@ public sealed class InvalidationSinkTests : IDisposable
     {
         var options = new InMemoryRedisCacheOptions();
         var tokens = new ChangeTokenFactory<byte[]>(Options.Create(new CacheOptions { SourceUri = new Uri(ThisNode) }), new SystemJsonByteSerializerProxy(), NullLoggerFactory.Instance, NullTelemetryProvider.Instance);
-        var sut = new HashLocalMemorySetter(KnownCacheProviderNames.InMemoryRedis, tokens, _topics, _cache, NullLogger.Instance, TimeProvider.System, options, options, NullTelemetryProvider.Instance)
+        var sut = new HashLocalMemorySetter(KnownCacheProviderNames.InMemoryRedis, tokens, _topics, _cache, NullLogger.Instance, Clock, options, options, NullTelemetryProvider.Instance)
         {
             Invalidations = _sink,
             PeerApply = (_, _) => true,
         };
         sut.Set(
-            new CacheEntryOptions { CacheKey = Key, TopicKey = "t", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) },
+            new CacheEntryOptions { CacheKey = Key, TopicKey = "t", Expiration = Clock.GetUtcNow().AddMinutes(5) },
             new TestCacheEntry<int> { Value = 1 },
             typeof(int),
             maxExpiration: null).Should().BeTrue();
@@ -148,7 +151,7 @@ public sealed class InvalidationSinkTests : IDisposable
 
     private static void Set(LocalMemorySetter sut) =>
         sut.Set(
-            new CacheEntryOptions { CacheKey = Key, TopicKey = "t", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) },
+            new CacheEntryOptions { CacheKey = Key, TopicKey = "t", Expiration = Clock.GetUtcNow().AddMinutes(5) },
             new TestCacheEntry<int> { Value = 1 },
             typeof(int),
             maxExpiration: null).Should().BeTrue();
@@ -157,7 +160,7 @@ public sealed class InvalidationSinkTests : IDisposable
     {
         var options = new InMemoryCacheOptions();
         var tokens = new ChangeTokenFactory<byte[]>(Options.Create(new CacheOptions { SourceUri = new Uri(ThisNode) }), Substitute.For<ISerializerProxy<byte[]>>(), NullLoggerFactory.Instance, NullTelemetryProvider.Instance);
-        return new LocalMemorySetter(KnownCacheProviderNames.InMemoryRedis, tokens, _topics, _cache, NullLogger.Instance, TimeProvider.System, options, options, NullTelemetryProvider.Instance)
+        return new LocalMemorySetter(KnownCacheProviderNames.InMemoryRedis, tokens, _topics, _cache, NullLogger.Instance, Clock, options, options, NullTelemetryProvider.Instance)
         {
             Invalidations = withSink ? _sink : null,
         };

@@ -5,6 +5,8 @@ namespace UiPath.Caching.Tests;
 
 public class InMemoryQueueCacheProviderTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly string[] TwoItems = ["a", "b"];
 
     [Fact]
@@ -52,13 +54,15 @@ public class InMemoryQueueCacheProviderTests
     }
     private static InMemoryQueueCacheProvider CreateSut(InMemoryQueueCacheOptions? options = null) =>
         new(Options.Create(options ?? new InMemoryQueueCacheOptions()),
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(Clock, NullLoggerFactory.Instance),
             new SystemJsonByteSerializerProxy(),
-            TimeProvider.System);
+            Clock);
 }
 
 public class InMemoryRedisQueueCacheProviderTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     [Fact]
     public async Task Resolves_its_L2_from_the_factory_Redis_provider()
     {
@@ -71,10 +75,10 @@ public class InMemoryRedisQueueCacheProviderTests
 
         var provider = new InMemoryRedisQueueCacheProvider(
             Options.Create(new InMemoryRedisQueueCacheOptions()),
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(Clock, NullLoggerFactory.Instance),
             () => factory,
             new SystemJsonByteSerializerProxy(),
-            TimeProvider.System);
+            Clock);
 
         var cache = provider.CreateSetCache();
         cache.Should().BeOfType<MultilayerSetCache>();

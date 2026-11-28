@@ -5,14 +5,16 @@ namespace UiPath.Caching.Tests;
 /// <summary>The blocking GetOrAdd wrappers pass their generator as state to a static lambda; a real cache and a proxy answer them as before.</summary>
 public class SyncExtensionsTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public void The_sync_wrappers_run_the_generator_on_a_miss_and_not_on_a_hit()
     {
-        using var inner = InMemoryMultilayer.Cache();
+        using var inner = InMemoryMultilayer.Cache(clock: Clock);
         var cache = new Cache<string>(inner);
-        using var innerHash = InMemoryMultilayer.HashCache();
+        using var innerHash = InMemoryMultilayer.HashCache(clock: Clock);
         var hash = new HashCache<string>(innerHash);
         var calls = 0;
         string? Load()
@@ -35,7 +37,7 @@ public class SyncExtensionsTests
 
         cache.GetOrAdd("a", Load, Ct).Should().Be("v");
         cache.GetOrAdd("a", Load, TimeSpan.FromMinutes(1), Ct).Should().Be("v");
-        cache.GetOrAdd("b", Load, DateTimeOffset.UtcNow.AddMinutes(1), Ct).Should().Be("v");
+        cache.GetOrAdd("b", Load, Clock.GetUtcNow().AddMinutes(1), Ct).Should().Be("v");
         hash.GetOrAdd("h", LoadHash, Ct)["f"].Should().Be("v");
         hash.GetOrAdd("h", LoadHash, TimeSpan.FromMinutes(1), Ct)["f"].Should().Be("v");
         cache.GetOrAdd(["c", "d"], LoadMany, Ct).Select(e => e.Value).Should().Equal("m", "m");

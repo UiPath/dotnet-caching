@@ -12,11 +12,13 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public class ReadListIntegrationTests(RedisContainerFixture fixture)
 {
+
     private static readonly byte[] JsonX = "\"x\""u8.ToArray();
     private static readonly byte[] FastX = [0x10, (byte)'x'];
     private static readonly byte[] JsonMeta = "{\"m\":\"v\"}"u8.ToArray();
     private static readonly byte[] FastMeta = [0x10, .. "{\"m\":\"v\"}"u8];
 
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
     private readonly PassthroughValueSerializer _serializer = new(0x10);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -341,9 +343,9 @@ public class ReadListIntegrationTests(RedisContainerFixture fixture)
         await raw.GetDatabase().HashSetAsync(redisKey, "b", JsonX);
         var generated = new Dictionary<string, string?> { ["a"] = "generated" };
 
-        var first = await hashes.GetOrAddAsync<string>(key, _ => Task.FromResult<IDictionary<string, string?>>(generated), DateTimeOffset.UtcNow.AddMinutes(5), option, policy, Ct);
+        var first = await hashes.GetOrAddAsync<string>(key, _ => Task.FromResult<IDictionary<string, string?>>(generated), _time.GetUtcNow().AddMinutes(5), option, policy, Ct);
         var misses = telemetry.Metrics.Count(m => m.Name == "cache.serializer.unreadable");
-        var second = await hashes.GetOrAddAsync<string>(key, _ => throw new InvalidOperationException("the regenerated hash did not hit"), DateTimeOffset.UtcNow.AddMinutes(5), option, policy, Ct);
+        var second = await hashes.GetOrAddAsync<string>(key, _ => throw new InvalidOperationException("the regenerated hash did not hit"), _time.GetUtcNow().AddMinutes(5), option, policy, Ct);
 
         FieldA(first).Should().Be("generated");
         FieldA(second).Should().Be("generated");
@@ -362,7 +364,7 @@ public class ReadListIntegrationTests(RedisContainerFixture fixture)
         await raw.GetDatabase().HashDeleteAsync(redisKey, "a");
         await raw.GetDatabase().HashSetAsync(redisKey, "c", Array.Empty<byte>());
 
-        await hashes.GetOrAddAsync<string>(key, _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["a"] = "generated" }), DateTimeOffset.UtcNow.AddMinutes(5), HashCacheSetOption.HashReplace, policy, Ct);
+        await hashes.GetOrAddAsync<string>(key, _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["a"] = "generated" }), _time.GetUtcNow().AddMinutes(5), HashCacheSetOption.HashReplace, policy, Ct);
 
         (await raw.GetDatabase().HashExistsAsync(redisKey, "c")).Should().BeTrue("nothing was unreadable, so the caller's HashReplace is honored");
     }
@@ -497,7 +499,7 @@ public class ReadListIntegrationTests(RedisContainerFixture fixture)
         FormatNegotiationMode mode = FormatNegotiationMode.Force,
         Action<CacheOptions>? configure = null)
     {
-        var services = new ServiceCollection();
+        var services = new ServiceCollection().AddSingleton<TimeProvider>(_time);
         if (telemetry is not null)
         {
             services.AddSingleton<ICachingTelemetryProvider>(telemetry);

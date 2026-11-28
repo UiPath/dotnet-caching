@@ -23,9 +23,16 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
 {
     private readonly object _gate = new();
     private readonly List<ManualTimer> _timers = [];
+    private readonly Fakes.TestSignal _timerCreated = new();
+    private readonly List<(int Count, TaskCompletionSource Done)> _timerWaiters = [];
+    private readonly List<(Func<bool> Condition, TaskCompletionSource Done)> _conditions = [];
     private TimeSpan _elapsed;
     private int _created;
     private TaskCompletionSource _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public ManualTimeProvider() : this(DateTimeOffset.UnixEpoch) { }
+
+    public event Action? TimerScheduled;
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
@@ -56,6 +63,35 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         }
     }
 
+    public TimeSpan NextTimerDueIn
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Min(timer => timer.Due) - _elapsed;
+            }
+        }
+    }
+
+    public async Task WaitForTimerAsync(CancellationToken token)
+    {
+        var scheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnTimerScheduled() => scheduled.TrySetResult();
+        TimerScheduled += OnTimerScheduled;
+        try
+        {
+            if (!HasTimers)
+            {
+                await scheduled.Task.WaitAsync(token);
+            }
+        }
+        finally
+        {
+            TimerScheduled -= OnTimerScheduled;
+        }
+    }
+
     public override DateTimeOffset GetUtcNow()
     {
         lock (_gate)
@@ -77,11 +113,74 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         var timer = new ManualTimer(this, callback, state);
         lock (_gate)
         {
+            timer.Schedule(dueTime, period);
             Interlocked.Increment(ref _created);
-            timer.Change(dueTime, period);
+            WakeWaiters();
+        }
+        Armed();
+        return timer;
+    }
+
+    /// <summary>Waits until more than <paramref name="count"/> timers were ever created.</summary>
+    public Task WhenTimersCreatedAsync(int count) =>
+        _timerCreated.UntilAsync(() => TimersCreated > count, TestContext.Current.CancellationToken);
+
+    public Task WhenTimerScheduledAsync() =>
+        _timerCreated.UntilAsync(() => HasTimers, TestContext.Current.CancellationToken);
+
+    public bool HasTimerDueIn(TimeSpan remaining)
+    {
+        lock (_gate)
+        {
+            return _timers.Any(timer => timer.Due - _elapsed == remaining);
+        }
+    }
+
+    public Task WhenTimerAsync(Func<bool> condition)
+    {
+        lock (_gate)
+        {
+            if (condition())
+            {
+                return Task.CompletedTask;
+            }
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _conditions.Add((condition, done));
+            return done.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    public Task WaitForTimersAsync(int count)
+    {
+        lock (_gate)
+        {
+            if (_created >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _timerWaiters.Add((count, done));
+            return done.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>Advances to the earliest pending timer; <c>false</c> when none is pending.</summary>
+    public bool TryAdvanceToNextTimer()
+    {
+        TimeSpan by;
+        lock (_gate)
+        {
+            if (_timers.Count == 0)
+            {
+                return false;
+            }
+
+            by = _timers.Min(timer => timer.Due) - _elapsed;
         }
 
-        return timer;
+        Advance(by);
+        return true;
     }
 
     public void Advance(TimeSpan by)
@@ -122,8 +221,36 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
         }
     }
 
+    private void Armed()
+    {
+        TimerScheduled?.Invoke();
+        _timerCreated.Pulse();
+        Broadcast.OperationSignals.Shared.Completed();
+    }
+
+    private void WakeWaiters()
+    {
+        for (var i = _conditions.Count - 1; i >= 0; i--)
+        {
+            if (_conditions[i].Condition())
+            {
+                _conditions[i].Done.TrySetResult();
+                _conditions.RemoveAt(i);
+            }
+        }
+        for (var i = _timerWaiters.Count - 1; i >= 0; i--)
+        {
+            if (_timerWaiters[i].Count <= _created)
+            {
+                _timerWaiters[i].Done.TrySetResult();
+                _timerWaiters.RemoveAt(i);
+            }
+        }
+    }
+
     private void Changed()
     {
+        WakeWaiters();
         var previous = _changed;
         _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         previous.TrySetResult();
@@ -137,6 +264,17 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
 
         public bool Change(TimeSpan dueTime, TimeSpan period)
         {
+            Schedule(dueTime, period);
+            if (dueTime != Timeout.InfiniteTimeSpan)
+            {
+                owner.Armed();
+            }
+            return true;
+        }
+
+        /// <summary>Arms the timer under the provider's lock and wakes the waiters that check state, not creation.</summary>
+        public void Schedule(TimeSpan dueTime, TimeSpan period)
+        {
             lock (owner._gate)
             {
                 owner._timers.Remove(this);
@@ -144,14 +282,14 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
                 if (dueTime == Timeout.InfiniteTimeSpan)
                 {
                     Due = TimeSpan.MaxValue;
-                    owner.Changed();
-                    return true;
+                }
+                else
+                {
+                    Due = owner._elapsed + dueTime;
+                    owner._timers.Add(this);
                 }
 
-                Due = owner._elapsed + dueTime;
-                owner._timers.Add(this);
                 owner.Changed();
-                return true;
             }
         }
 
@@ -187,4 +325,9 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
             return ValueTask.CompletedTask;
         }
     }
+}
+
+internal sealed class TimeProviderClock(TimeProvider clock) : ISystemClock
+{
+    public DateTimeOffset UtcNow => clock.GetUtcNow();
 }

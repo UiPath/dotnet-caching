@@ -27,6 +27,9 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
     private int _misses;
     private long _lastMiss;
 
+    /// <summary>Raised when the doorbell turns live.</summary>
+    internal event Action? BecameLive;
+
     public bool ObservesReads => _notifyLive && notifiedPollInterval is { } notified && notified > pollInterval;
 
     /// <summary>Whether the doorbell is live, so a wait lasts the notified interval.</summary>
@@ -76,7 +79,11 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
         }
 
         _notifyLive = live;
-        if (!live)
+        if (live)
+        {
+            BecameLive?.Invoke();
+        }
+        else
         {
             Signal();
         }
@@ -194,6 +201,10 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
                 return await _semaphore.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
             }
 
+            if (await _semaphore.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
             return await WaitOnClockAsync(timeout, timeProvider, cancellationToken).ConfigureAwait(false);
         }
         catch (ObjectDisposedException)

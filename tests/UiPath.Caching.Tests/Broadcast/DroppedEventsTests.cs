@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace UiPath.Caching.Tests.Broadcast;
@@ -8,29 +9,32 @@ public class DroppedEventsTests
     public async Task Drops_while_an_expiry_runs_are_folded_into_one_more()
     {
         var runs = 0;
+        var completed = Channel.CreateUnbounded<int>();
         using var running = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
         void Expire()
         {
-            if (Interlocked.Increment(ref runs) == 1)
+            var run = Interlocked.Increment(ref runs);
+            if (run == 1)
             {
                 running.Set();
-                release.Wait(TimeSpan.FromSeconds(10));
+                release.Wait(TestContext.Current.CancellationToken);
             }
+            completed.Writer.TryWrite(run);
         }
 
         var sut = new DroppedEvents("topic", Expire, NullLogger.Instance);
 
         sut.Dropped();
-        running.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).Should().BeTrue();
+        running.Wait(TestContext.Current.CancellationToken);
         for (var i = 0; i < 100; i++)
         {
             sut.Dropped();
         }
 
         release.Set();
-        (await Eventually(() => Volatile.Read(ref runs) >= 2)).Should().BeTrue();
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        (await completed.Reader.ReadAsync(TestContext.Current.CancellationToken)).Should().Be(1);
+        (await completed.Reader.ReadAsync(TestContext.Current.CancellationToken)).Should().Be(2);
 
         Volatile.Read(ref runs).Should().Be(2, "the drops during the first expiry need one more, not one each");
     }
@@ -40,24 +44,28 @@ public class DroppedEventsTests
     {
         var inside = 0;
         var most = 0;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completed = Channel.CreateUnbounded<bool>();
         using var release = new ManualResetEventSlim();
         void Expire()
         {
             var now = Interlocked.Increment(ref inside);
             InterlockedMax(ref most, now);
-            release.Wait(TimeSpan.FromSeconds(10));
+            entered.TrySetResult();
+            release.Wait(TestContext.Current.CancellationToken);
             Interlocked.Decrement(ref inside);
+            completed.Writer.TryWrite(true);
         }
 
         var sut = new DroppedEvents("topic", Expire, NullLogger.Instance);
         sut.Dropped();
-        (await Eventually(() => Volatile.Read(ref inside) == 1)).Should().BeTrue();
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
         sut.Dropped();
         sut.Dropped();
-        await Task.Delay(200, TestContext.Current.CancellationToken);
         var duringFirst = Volatile.Read(ref most);
         release.Set();
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await completed.Reader.ReadAsync(TestContext.Current.CancellationToken);
+        await completed.Reader.ReadAsync(TestContext.Current.CancellationToken);
 
         duringFirst.Should().Be(1, "the rerun waits for the expiry in progress");
         Volatile.Read(ref most).Should().Be(1);
@@ -67,35 +75,20 @@ public class DroppedEventsTests
     public async Task An_expiry_that_throws_is_logged_and_the_next_drop_still_expires()
     {
         var runs = 0;
+        var completed = Channel.CreateUnbounded<int>();
         void Expire()
         {
-            Interlocked.Increment(ref runs);
+            completed.Writer.TryWrite(Interlocked.Increment(ref runs));
             throw new InvalidOperationException("boom");
         }
 
         var sut = new DroppedEvents("topic", Expire, NullLogger.Instance);
 
         sut.Dropped();
-        (await Eventually(() => Volatile.Read(ref runs) == 1)).Should().BeTrue();
+        (await completed.Reader.ReadAsync(TestContext.Current.CancellationToken)).Should().Be(1);
         sut.Dropped();
 
-        (await Eventually(() => Volatile.Read(ref runs) == 2)).Should().BeTrue("a throwing expiry must not leave the next drop pending for good");
-    }
-
-    private static async Task<bool> Eventually(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
-
-        return false;
+        (await completed.Reader.ReadAsync(TestContext.Current.CancellationToken)).Should().Be(2, "a throwing expiry must not leave the next drop pending for good");
     }
 
     private static void InterlockedMax(ref int target, int value)

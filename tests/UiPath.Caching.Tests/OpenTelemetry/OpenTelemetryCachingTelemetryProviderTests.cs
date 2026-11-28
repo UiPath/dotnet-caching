@@ -11,6 +11,8 @@ namespace UiPath.Caching.Tests.OpenTelemetry;
 [Collection(TelemetryListeners.Name)]
 public class OpenTelemetryCachingTelemetryProviderTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
 
     [Fact]
     public void TrackMetric_records_value_and_tags_to_meter()
@@ -62,7 +64,7 @@ public class OpenTelemetryCachingTelemetryProviderTests
             "localhost",
             "GET",
             "GET key",
-            DateTimeOffset.UtcNow,
+            Clock.GetUtcNow(),
             TimeSpan.FromMilliseconds(5),
             "OK",
             success: true);

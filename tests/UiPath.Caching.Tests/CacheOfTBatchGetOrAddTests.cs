@@ -73,7 +73,7 @@ public class CacheOfTBatchGetOrAddTests(ITestContextAccessor testContextAccessor
             Task.FromResult(ids.Select(id => new KeyValuePair<long, string?>(id, "v")).ToArray());
 
         await sut.GetOrAddAsync(Entries(1), Gen, TimeSpan.FromMinutes(1), token);
-        await sut.GetOrAddAsync(Entries(2), Gen, DateTimeOffset.UtcNow.AddMinutes(1), token);
+        await sut.GetOrAddAsync(Entries(2), Gen, new ManualTimeProvider().GetUtcNow().AddMinutes(1), token);
 
         inner.Contains("user:1").Should().BeTrue();
         inner.Contains("user:2").Should().BeTrue();

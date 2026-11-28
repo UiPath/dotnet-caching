@@ -12,6 +12,7 @@ public class StreamsFallbackTopicTests : IDisposable
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
 
+    private readonly System.Threading.Channels.Channel<bool> _switches = System.Threading.Channels.Channel.CreateUnbounded<bool>();
     private readonly List<IDisposable> _disposables = [];
     private readonly ITestContextAccessor _testContextAccessor;
     private readonly IDatabase _database;
@@ -78,7 +79,6 @@ public class StreamsFallbackTopicTests : IDisposable
 
         release.SetResult(true);
         (await _capability.WaitDecidedAsync(Wait, Token)).Should().Be(StreamsState.Supported);
-        await Task.Delay(100, Token);
 
         sut.OnStreams.Should().BeTrue();
         _streams.Created.Should().Be(1);
@@ -169,7 +169,6 @@ public class StreamsFallbackTopicTests : IDisposable
 
         _capability.Refused(StreamsFakes.UnknownCommand());
         await WaitForAsync(() => keyed.Missed.Count > 0 && broadcast.Missed.Count > 0);
-        await Task.Delay(50, Token);
 
         keyed.Missed.Should().Equal(MissedEventsReason.Lost);
         broadcast.Missed.Should().Equal(MissedEventsReason.Lost);
@@ -188,8 +187,8 @@ public class StreamsFallbackTopicTests : IDisposable
         sut.Subscribe(observer);
 
         _capability.Refused(StreamsFakes.UnknownCommand());
-        await WaitForAsync(() => _pubSub.Subscribers.Count == 1);
-        await Task.Delay(50, Token);
+        await _switches.Reader.ReadAsync(Token);
+        _pubSub.Subscribers.Should().HaveCount(1);
 
         observer.Missed.Should().BeEmpty("it is as a first attach: nothing came over Streams that could be lost");
         _streams.Disposed.Should().BeTrue();
@@ -235,7 +234,6 @@ public class StreamsFallbackTopicTests : IDisposable
 
         _capability.Refused(StreamsFakes.UnknownCommand());
         await WaitForAsync(() => !sut.OnStreams);
-        await Task.Delay(50, Token);
 
         observer.Missed.Should().BeEmpty();
     }
@@ -247,14 +245,15 @@ public class StreamsFallbackTopicTests : IDisposable
         var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         database.StreamCreateConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), Arg.Any<bool>(), Arg.Any<CommandFlags>()).Returns(_ => answer.Task);
         var capability = StreamsFakes.Capability(connector);
-        var sut = Create(capability: capability);
+        var telemetry = new RecordingTelemetryProvider();
+        var sut = Create(capability: capability, telemetry: telemetry);
         var observer = new Observer();
         sut.Subscribe(observer);
         Read();
         answer.SetException(StreamsFakes.UnknownCommand());
 
-        await WaitForAsync(() => _pubSub.Subscribers.Count == 1);
-        await Task.Delay(50, Token);
+        // The switch is tracked after it tells the observers what they lost, while the new topic is subscribed before that.
+        await WaitForAsync(() => telemetry.Events.Any(e => e.Name == Metrics.TransportChanged));
 
         observer.Missed.Should().Equal(MissedEventsReason.Lost);
         _fallback.Created.Should().Be(1);
@@ -437,7 +436,8 @@ public class StreamsFallbackTopicTests : IDisposable
         _streams.OnPublish = () =>
         {
             _capability.Refused(StreamsFakes.UnknownCommand());
-            SpinWait.SpinUntil(() => !sut.OnStreams, Wait);
+            _switches.Reader.ReadAsync(Token).AsTask().GetAwaiter().GetResult();
+            sut.OnStreams.Should().BeFalse();
         };
 
         (await sut.PublishAsync(Event(null), Token)).Should().BeTrue();
@@ -474,7 +474,6 @@ public class StreamsFallbackTopicTests : IDisposable
         release.SetResult(true);
         await _capability.WaitDecidedAsync(Wait, Token);
         _capability.Refused(StreamsFakes.UnknownCommand());
-        await Task.Delay(100, Token);
 
         _streams.Disposed.Should().BeTrue();
         _fallback.Created.Should().Be(0, "a disposed topic does not switch");
@@ -538,6 +537,8 @@ public class StreamsFallbackTopicTests : IDisposable
 
     private StreamsFallbackTopic Create(StreamsUnsupportedAction action = StreamsUnsupportedAction.PubSub, bool pubSub = true, BroadcastCapability? capability = null, ICachingTelemetryProvider? telemetry = null)
     {
+        var recorded = (RecordingTelemetryProvider?)telemetry ?? new RecordingTelemetryProvider();
+        recorded.EventRecorded += _ => _switches.Writer.TryWrite(true);
         var topic = new StreamsFallbackTopic(
             "orders",
             capability ?? _capability,
@@ -547,7 +548,7 @@ public class StreamsFallbackTopicTests : IDisposable
             new KeyedSubject<ICacheEvent>(NullLogger<KeyedSubject<ICacheEvent>>.Instance),
             NullLogger.Instance,
             onLeftStreams: () => Interlocked.Increment(ref _leftStreams),
-            telemetry: telemetry);
+            telemetry: recorded);
         _disposables.Add(topic);
         return topic;
     }
@@ -565,11 +566,10 @@ public class StreamsFallbackTopicTests : IDisposable
 
     private async Task WaitForAsync(Func<bool> condition)
     {
-        for (var attempt = 0; !condition() && attempt < 3000; attempt++)
+        while (!condition())
         {
-            await Task.Delay(10, Token);
+            await _switches.Reader.ReadAsync(Token);
         }
-
         condition().Should().BeTrue();
     }
 

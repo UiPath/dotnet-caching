@@ -196,7 +196,7 @@ internal sealed partial class MultilayerCache
         try
         {
             LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
-            var ret = await FactoryTimeout.RunAsync(state, generator, policy.FactoryTimeout, cacheEntryOptions.CacheKey, Name, Telemetry, scope.Token).ConfigureAwait(false);
+            var ret = await FactoryTimeout.RunAsync(state, generator, policy.FactoryTimeout, cacheEntryOptions.CacheKey, Name, Telemetry, scope.Token, clock: _clock).ConfigureAwait(false);
             entry = await StoreGeneratedEntryAsync(cacheEntryOptions, ret, policy, scope, localOnly).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -400,7 +400,7 @@ internal sealed partial class MultilayerCache
         try
         {
             LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
-            var generated = await FactoryTimeout.RunAsync(state, generator, policy.FactoryTimeout, cacheEntryOptions.CacheKey, Name, Telemetry, scope.Token).ConfigureAwait(false);
+            var generated = await FactoryTimeout.RunAsync(state, generator, policy.FactoryTimeout, cacheEntryOptions.CacheKey, Name, Telemetry, scope.Token, clock: _clock).ConfigureAwait(false);
             entry = await StoreGeneratedValueAsync(cacheEntryOptions, generated, policy, scope, localOnly).ConfigureAwait(false);
         }
         catch (Exception ex)

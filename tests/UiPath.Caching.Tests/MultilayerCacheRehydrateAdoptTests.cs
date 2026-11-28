@@ -13,12 +13,14 @@ public class MultilayerCacheRehydrateAdoptTests
     private static readonly TimeSpan Duration = TimeSpan.FromMinutes(10);
     private static readonly CachePolicy Warm = new() { DistributedExpiration = Duration, LocalExpiration = Duration };
 
+    private readonly ManualTimeProvider _clock = new();
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task A_fresh_inner_value_is_kept_locally_and_the_generator_does_not_run()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var telemetry = new RecordingTelemetryProvider();
         var b = peers.Add("b", telemetry: telemetry);
         await HoldingAged(peers, b, Warm);
@@ -26,8 +28,8 @@ public class MultilayerCacheRehydrateAdoptTests
         var generated = new Generated();
 
         (await b.Cache.GetOrAddAsync<string>(Key, generated.Run, Rehydrating(Warm), Ct)).Should().Be("old");
-        await CachePeers.Until(() => Tracked(telemetry, Adopted));
-        await b.Settled();
+        await telemetry.Signal.UntilAsync(() => Tracked(telemetry, Adopted), Ct);
+        await CacheWork.CompleteAsync(b.Cache);
 
         generated.Calls.Should().Be(0);
         Tracked(telemetry, Succeeded).Should().BeFalse();
@@ -40,7 +42,7 @@ public class MultilayerCacheRehydrateAdoptTests
     [InlineData("throws")]
     public async Task An_inner_value_that_is_not_fresh_enough_runs_the_generator_once(string inner)
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var telemetry = new RecordingTelemetryProvider();
         var b = peers.Add("b", telemetry: telemetry);
         await HoldingAged(peers, b, Warm);
@@ -60,8 +62,8 @@ public class MultilayerCacheRehydrateAdoptTests
         var generated = new Generated();
 
         await b.Cache.GetOrAddAsync<string>(Key, generated.Run, Rehydrating(Warm), Ct);
-        await CachePeers.Until(() => Tracked(telemetry, Succeeded));
-        await b.Settled();
+        await telemetry.Signal.UntilAsync(() => Tracked(telemetry, Succeeded), Ct);
+        await CacheWork.CompleteAsync(b.Cache);
 
         generated.Calls.Should().Be(1);
         Tracked(telemetry, Adopted).Should().BeFalse();
@@ -70,7 +72,7 @@ public class MultilayerCacheRehydrateAdoptTests
     [Fact]
     public async Task A_disconnected_cache_does_not_read_the_inner_tier_and_runs_the_generator()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var telemetry = new RecordingTelemetryProvider();
         var b = peers.Add("b", telemetry: telemetry);
         await HoldingAged(peers, b, Warm);
@@ -80,8 +82,8 @@ public class MultilayerCacheRehydrateAdoptTests
         var generated = new Generated();
 
         await b.Cache.GetOrAddAsync<string>(Key, generated.Run, Rehydrating(Warm), Ct);
-        await CachePeers.Until(() => Tracked(telemetry, Succeeded));
-        await b.Settled();
+        await telemetry.Signal.UntilAsync(() => Tracked(telemetry, Succeeded), Ct);
+        await CacheWork.CompleteAsync(b.Cache);
 
         generated.Calls.Should().Be(1);
         b.Inner.SingleReads.Should().Be(reads);
@@ -91,9 +93,10 @@ public class MultilayerCacheRehydrateAdoptTests
     [Fact]
     public async Task A_read_that_ignores_its_token_and_outlasts_the_budget_is_abandoned_and_the_generator_runs()
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var telemetry = new RecordingTelemetryProvider();
-        var b = peers.Add("b", new InMemoryRedisCacheOptions { Timeout = Timeout.InfiniteTimeSpan }, telemetry);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var b = peers.Add("b", new InMemoryRedisCacheOptions { Timeout = Timeout.InfiniteTimeSpan }, telemetry, clock: clock);
         await HoldingAged(peers, b, Warm);
         Refreshed(peers, "new");
         var late = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -105,13 +108,16 @@ public class MultilayerCacheRehydrateAdoptTests
         {
             await b.Cache.GetOrAddAsync<string>(Key, generated.Run, Rehydrating(Warm), Ct);
 
+            var budget = RehydrationCoordinator.AdoptReadTimeout(Rehydrating(Warm).Rehydrate!, Duration);
+            await clock.WhenTimerAsync(() => clock.HasTimerDueIn(budget));
+            clock.Advance(budget);
+
             // The read is still in flight: only the budget lets the run go on to the generator.
-            await CachePeers.Until(() => Tracked(telemetry, Succeeded));
+            await telemetry.Signal.UntilAsync(() => Tracked(telemetry, Succeeded), Ct);
             generated.Calls.Should().Be(1);
 
             late.SetResult();
-            await Task.Delay(200, Ct);
-            await b.Settled();
+            await CacheWork.CompleteAsync(b.Cache);
 
             Tracked(telemetry, Adopted).Should().BeFalse();
             (await b.Cache.GetAsync<string>(Key, Warm, Ct)).Should().Be("old", "the late read, a fresh \"new\", is not kept");
@@ -120,7 +126,7 @@ public class MultilayerCacheRehydrateAdoptTests
         finally
         {
             late.TrySetResult();
-            await b.Settled();
+            await CacheWork.CompleteAsync(b.Cache);
         }
     }
 
@@ -129,7 +135,7 @@ public class MultilayerCacheRehydrateAdoptTests
     [InlineData("removal")]
     public async Task An_invalidation_after_the_inner_read_refuses_the_adoption_and_the_generator_runs(string invalidation)
     {
-        using var peers = new CachePeers();
+        using var peers = new CachePeers(_clock);
         var telemetry = new RecordingTelemetryProvider();
         var a = peers.Add("a");
         var b = peers.Add("b", new InMemoryRedisCacheOptions { Timeout = Timeout.InfiniteTimeSpan }, telemetry);
@@ -143,7 +149,7 @@ public class MultilayerCacheRehydrateAdoptTests
         try
         {
             await b.Cache.GetOrAddAsync<string>(Key, generated.Run, Rehydrating(Warm), Ct);
-            await CachePeers.Until(() => b.Inner.SingleReads == reads + 1);
+            await b.Inner.Changed.UntilAsync(() => b.Inner.SingleReads == reads + 1, Ct);
 
             // The rehydrate read already holds "new" when a peer writes or removes the key.
             if (invalidation == "write")
@@ -155,10 +161,10 @@ public class MultilayerCacheRehydrateAdoptTests
                 await a.Cache.RemoveAsync<string>(Key, Ct);
             }
 
-            await b.Settled();
+            await CacheWork.CompleteAsync(b.Cache);
             release.SetResult();
-            await CachePeers.Until(() => Tracked(telemetry, Succeeded));
-            await b.Settled();
+            await telemetry.Signal.UntilAsync(() => Tracked(telemetry, Succeeded), Ct);
+            await CacheWork.CompleteAsync(b.Cache);
 
             Tracked(telemetry, Adopted).Should().BeFalse("a fill the invalidation refused is not an adoption");
             generated.Calls.Should().Be(1);
@@ -166,14 +172,13 @@ public class MultilayerCacheRehydrateAdoptTests
 
             // The generated copy is fresh, so a later hit does not rehydrate again.
             await b.Cache.GetOrAddAsync<string>(Key, generated.Run, Rehydrating(Warm), Ct);
-            await Task.Delay(300, Ct);
             generated.Calls.Should().Be(1);
             telemetry.Events.Count(e => e.Name == "cache.rehydrate.triggered").Should().Be(1);
         }
         finally
         {
             release.TrySetResult();
-            await b.Settled();
+            await CacheWork.CompleteAsync(b.Cache);
         }
     }
 

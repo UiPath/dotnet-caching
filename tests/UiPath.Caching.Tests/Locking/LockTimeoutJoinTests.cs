@@ -7,6 +7,7 @@ public class LockTimeoutJoinTests
 {
     private static readonly TimeSpan LockTimeout = TimeSpan.FromMilliseconds(50);
     private static readonly TimeSpan PastTheTimeout = TimeSpan.FromMilliseconds(400);
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -15,14 +16,14 @@ public class LockTimeoutJoinTests
     [Fact]
     public async Task A_waiter_that_times_out_waits_for_the_running_generator_instead_of_running_its_own()
     {
-        using var cache = InMemoryMultilayer.Cache(Options);
+        using var cache = InMemoryMultilayer.Cache(Options, clock: _clock);
         var holder = new Slow("holder");
         var otherCalls = 0;
 
         var held = Run(cache, "k", holder.Generate, Ct);
-        await holder.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await holder.Started.Task.WaitAsync(Ct);
         var waiter = Run(cache, "k", _ => { Interlocked.Increment(ref otherCalls); return Task.FromResult<string?>("waiter"); }, Ct);
-        await Task.Delay(PastTheTimeout, Ct);
+        _clock.Advance(PastTheTimeout);
 
         waiter.IsCompleted.Should().BeFalse("the lock wait has timed out, and the load in flight is the one to wait for");
         holder.Release.SetResult();
@@ -36,12 +37,12 @@ public class LockTimeoutJoinTests
     [Fact]
     public async Task A_slow_load_is_not_stampeded_by_the_callers_that_outwait_the_lock()
     {
-        using var cache = InMemoryMultilayer.Cache(Options);
+        using var cache = InMemoryMultilayer.Cache(Options, clock: _clock);
         var load = new Slow("loaded");
 
         var reads = Enumerable.Range(0, 25).Select(_ => Run(cache, "k", load.Generate, Ct)).ToArray();
-        await load.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        await Task.Delay(PastTheTimeout, Ct);
+        await load.Started.Task.WaitAsync(Ct);
+        _clock.Advance(PastTheTimeout);
         load.Release.SetResult();
 
         (await Task.WhenAll(reads)).Should().AllBe("loaded");
@@ -51,14 +52,14 @@ public class LockTimeoutJoinTests
     [Fact]
     public async Task A_waiter_that_cancels_stops_waiting_and_leaves_the_load_to_the_others()
     {
-        using var cache = InMemoryMultilayer.Cache(Options);
+        using var cache = InMemoryMultilayer.Cache(Options, clock: _clock);
         var holder = new Slow("holder");
         using var waiterCancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 
         var held = Run(cache, "k", holder.Generate, Ct);
-        await holder.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await holder.Started.Task.WaitAsync(Ct);
         var waiter = Run(cache, "k", holder.Generate, waiterCancellation.Token);
-        await Task.Delay(PastTheTimeout, Ct);
+        _clock.Advance(PastTheTimeout);
         await waiterCancellation.CancelAsync();
 
         await ((Func<Task>)(() => waiter)).Should().ThrowAsync<OperationCanceledException>();
@@ -70,34 +71,34 @@ public class LockTimeoutJoinTests
     [Fact]
     public async Task The_load_is_cancelled_once_every_caller_has_cancelled()
     {
-        using var cache = InMemoryMultilayer.Cache(Options);
+        using var cache = InMemoryMultilayer.Cache(Options, clock: _clock);
         var holder = new Slow("holder");
         using var holderCancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         using var waiterCancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 
         var held = Run(cache, "k", holder.Generate, holderCancellation.Token);
-        await holder.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await holder.Started.Task.WaitAsync(Ct);
         var waiter = Run(cache, "k", holder.Generate, waiterCancellation.Token);
-        await Task.Delay(PastTheTimeout, Ct);
+        _clock.Advance(PastTheTimeout);
         await holderCancellation.CancelAsync();
         await waiterCancellation.CancelAsync();
 
         await ((Func<Task>)(() => held)).Should().ThrowAsync<OperationCanceledException>();
         await ((Func<Task>)(() => waiter)).Should().ThrowAsync<OperationCanceledException>();
-        await holder.CancelledSignal.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await holder.CancelledSignal.Task.WaitAsync(Ct);
     }
 
     [Fact]
     public async Task A_holder_that_cancels_leaves_the_load_to_the_waiter_that_joined()
     {
-        using var cache = InMemoryMultilayer.Cache(Options);
+        using var cache = InMemoryMultilayer.Cache(Options, clock: _clock);
         var holder = new Slow("holder");
         using var holderCancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 
         var held = Run(cache, "k", holder.Generate, holderCancellation.Token);
-        await holder.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await holder.Started.Task.WaitAsync(Ct);
         var waiter = Run(cache, "k", holder.Generate, Ct);
-        await Task.Delay(PastTheTimeout, Ct);
+        _clock.Advance(PastTheTimeout);
         await holderCancellation.CancelAsync();
 
         await ((Func<Task>)(() => held)).Should().ThrowAsync<OperationCanceledException>();
@@ -110,13 +111,13 @@ public class LockTimeoutJoinTests
     [Fact]
     public async Task A_failed_load_fails_the_callers_that_joined_it_and_the_next_call_starts_a_new_one()
     {
-        using var cache = InMemoryMultilayer.Cache(Options);
+        using var cache = InMemoryMultilayer.Cache(Options, clock: _clock);
         var failing = new Slow("never");
 
         var held = Run(cache, "k", failing.Generate, Ct);
-        await failing.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await failing.Started.Task.WaitAsync(Ct);
         var waiter = Run(cache, "k", failing.Generate, Ct);
-        await Task.Delay(PastTheTimeout, Ct);
+        _clock.Advance(PastTheTimeout);
         failing.Fail.SetResult();
 
         await ((Func<Task>)(() => held)).Should().ThrowAsync<InvalidOperationException>();
@@ -127,7 +128,7 @@ public class LockTimeoutJoinTests
     [Fact]
     public async Task A_generator_that_supplies_its_expiration_is_joined_too()
     {
-        using var cache = InMemoryMultilayer.Cache(Options);
+        using var cache = InMemoryMultilayer.Cache(Options, clock: _clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
@@ -137,14 +138,14 @@ public class LockTimeoutJoinTests
             Interlocked.Increment(ref calls);
             started.TrySetResult();
             await release.Task;
-            return new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(5));
+            return new GeneratedValue<string>("jwt", _clock.GetUtcNow().AddMinutes(5));
         }
 
         var heldValue = cache.GetOrAddWithExpirationAsync<string>("k", Generate, Ct);
         var held = heldValue.AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var waiter = cache.GetOrAddWithExpirationAsync<string>("k", Generate, Ct).AsTask();
-        await Task.Delay(PastTheTimeout, Ct);
+        _clock.Advance(PastTheTimeout);
         release.SetResult();
 
         (await held).Should().Be("jwt");
@@ -155,7 +156,7 @@ public class LockTimeoutJoinTests
     [Fact]
     public async Task A_hash_waiter_that_times_out_waits_for_the_running_generator_too()
     {
-        using var cache = InMemoryMultilayer.HashCache(Options);
+        using var cache = InMemoryMultilayer.HashCache(Options, clock: _clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
@@ -168,10 +169,10 @@ public class LockTimeoutJoinTests
             return new Dictionary<string, string?> { ["f"] = "v" };
         }
 
-        var held = Task.Run(async () => await cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct), Ct);
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        var waiter = Task.Run(async () => await cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct), Ct);
-        await Task.Delay(PastTheTimeout, Ct);
+        var held = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
+        await started.Task.WaitAsync(Ct);
+        var waiter = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
+        _clock.Advance(PastTheTimeout);
         waiter.IsCompleted.Should().BeFalse();
         release.SetResult();
 
@@ -187,7 +188,7 @@ public class LockTimeoutJoinTests
         var holder = new Slow("holder");
 
         var first = Run(cache, "k", holder.Generate, Ct);
-        await holder.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await holder.Started.Task.WaitAsync(Ct);
         var second = Run(cache, "k", _ => Task.FromResult<string?>("second"), Ct);
 
         (await second).Should().Be("second");
@@ -196,7 +197,7 @@ public class LockTimeoutJoinTests
     }
 
     private static Task<string?> Run(MultilayerCache cache, string key, Func<CancellationToken, Task<string?>> generator, CancellationToken token) =>
-        Task.Run(async () => await cache.GetOrAddAsync(key, generator, (CachePolicy?)null, token), Ct);
+        cache.GetOrAddAsync(key, generator, (CachePolicy?)null, token).AsTask();
 
     private sealed class Slow(string value)
     {

@@ -8,8 +8,10 @@ public class SlotFanOutTests
         var groups = Enumerable.Range(0, 10).Select(i => new[] { i }).ToArray();
         var (running, peak) = (0, 0);
         var gate = new object();
+        var entered = System.Threading.Channels.Channel.CreateUnbounded<int>();
+        var releases = groups.Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
 
-        var results = await SlotFanOut.RunAsync(
+        var run = SlotFanOut.RunAsync(
             groups,
             0,
             async (_, group) =>
@@ -19,7 +21,8 @@ public class SlotFanOutTests
                     peak = Math.Max(peak, ++running);
                 }
 
-                await Task.Delay(20);
+                entered.Writer.TryWrite(group[0]);
+                await releases[group[0]].Task;
                 lock (gate)
                 {
                     running--;
@@ -31,6 +34,24 @@ public class SlotFanOutTests
             _ => { },
             maxInFlight: 3);
 
+        var active = new Queue<int>();
+        for (var i = 0; i < 3; i++)
+        {
+            active.Enqueue(await entered.Reader.ReadAsync(TestContext.Current.CancellationToken));
+        }
+
+        for (var i = 3; i < groups.Length; i++)
+        {
+            releases[active.Dequeue()].SetResult();
+            active.Enqueue(await entered.Reader.ReadAsync(TestContext.Current.CancellationToken));
+        }
+
+        foreach (var index in active)
+        {
+            releases[index].SetResult();
+        }
+
+        var results = await run;
         results.Should().Equal(Enumerable.Range(0, 10));
         peak.Should().Be(3);
     }

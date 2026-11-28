@@ -8,12 +8,14 @@ internal sealed class GatedChangeTokenFactory : IChangeTokenFactory
 
     public bool WaitUntilEntered(TimeSpan timeout, CancellationToken token) => _entered.Wait(timeout, token);
 
+    public void WaitUntilEntered(CancellationToken token) => _entered.Wait(token);
+
     public void Release() => _release.Set();
 
     public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType)
     {
         _entered.Set();
-        _release.Wait(TimeSpan.FromSeconds(30));
+        _release.Wait(TestContext.Current.CancellationToken);
         return NullCacheChangeToken.Instance;
     }
 }

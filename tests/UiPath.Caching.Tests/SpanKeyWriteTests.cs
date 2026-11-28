@@ -8,8 +8,10 @@ namespace UiPath.Caching.Tests;
 /// <summary><c>SetAsync</c> by <c>Span&lt;char&gt;</c> writes what the <see cref="CacheKey"/> forms write, and reaches a cache's span capability when it has one.</summary>
 public class SpanKeyWriteTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
-    private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+    private static readonly DateTimeOffset Deadline = Clock.GetUtcNow().AddMinutes(5);
     private static readonly IDictionary<string, string?> Fields = new Dictionary<string, string?> { ["f"] = "v" };
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -51,7 +53,7 @@ public class SpanKeyWriteTests
     [Fact]
     public async Task A_cache_writes_by_span_what_it_reads_by_key()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         (await cache.SetAsync<string>($"{Key(" User:1 ")}", "a", (CachePolicy?)null, Ct)).Should().BeTrue();
         (await cache.SetAsync<string>($"{Key("user:2")}", "b", Ttl, null, Ct)).Should().BeTrue();
@@ -61,17 +63,17 @@ public class SpanKeyWriteTests
         (await cache.GetAsync<string>("user:2", policy: null, Ct)).Should().Be("b");
         (await cache.GetAsync<string>("user:3", policy: null, Ct)).Should().Be("c");
         (await cache.GetCacheEntryAsync<string>("user:3", policy: null, Ct)).Expiration.Should().BeCloseTo(Deadline, TimeSpan.FromSeconds(1));
-        (await cache.GetCacheEntryAsync<string>("user:2", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Ttl, TimeSpan.FromSeconds(5));
+        (await cache.GetCacheEntryAsync<string>("user:2", policy: null, Ct)).Expiration.Should().Be(Clock.GetUtcNow() + Ttl);
     }
 
     [Fact]
     public async Task A_cache_rejects_an_empty_span_and_an_expiration_that_is_not_positive_as_the_key_forms_do()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
 
         var empty = async () => await cache.SetAsync<string>($"{Key("  ")}", "v", (CachePolicy?)null, Ct);
         var zero = async () => await cache.SetAsync<string>($"{Key("k")}", "v", TimeSpan.Zero, null, Ct);
-        var past = async () => await cache.SetAsync<string>($"{Key("k")}", "v", DateTimeOffset.UtcNow.AddMinutes(-1), null, Ct);
+        var past = async () => await cache.SetAsync<string>($"{Key("k")}", "v", Clock.GetUtcNow().AddMinutes(-1), null, Ct);
 
         await empty.Should().ThrowAsync<ArgumentNullException>();
         await zero.Should().ThrowAsync<ArgumentOutOfRangeException>().WithParameterName("expiration");
@@ -160,7 +162,7 @@ public class SpanKeyWriteTests
     [Fact]
     public async Task A_typed_cache_writes_by_span_what_it_reads_by_key()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") }, clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
 
         (await typed.SetAsync($"{Key(" User:1 ")}", "a", Ct)).Should().BeTrue();
@@ -176,7 +178,7 @@ public class SpanKeyWriteTests
     [Fact]
     public async Task A_hash_cache_writes_by_span_what_it_reads_by_key()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
 
         (await cache.SetAsync<string>($"{Key(" User:1 ")}", Fields, (CachePolicy?)null, Ct)).Should().BeTrue();
         (await cache.SetAsync<string>($"{Key("user:2")}", Fields, Ttl, null, Ct)).Should().BeTrue();
@@ -192,13 +194,13 @@ public class SpanKeyWriteTests
     [Fact]
     public async Task A_hash_cache_written_by_span_keeps_the_expiration_its_options_give()
     {
-        using var cache = InMemoryMultilayer.HashCache();
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(3);
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
+        var deadline = Clock.GetUtcNow().AddMinutes(3);
 
         (await cache.SetAsync<string>($"{Key("ttl")}", Fields, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(3)), null, Ct)).Should().BeTrue();
         (await cache.SetAsync<string>($"{Key("at")}", Fields, new HashCacheEntryOptions(ExpireTime: deadline), null, Ct)).Should().BeTrue();
 
-        (await cache.GetCacheEntryAsync<string>("ttl", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(3), TimeSpan.FromSeconds(30));
+        (await cache.GetCacheEntryAsync<string>("ttl", policy: null, Ct)).Expiration.Should().Be(Clock.GetUtcNow().AddMinutes(3));
         (await cache.GetCacheEntryAsync<string>("at", policy: null, Ct)).Expiration.Should().BeCloseTo(deadline, TimeSpan.FromSeconds(1));
     }
 
@@ -241,7 +243,7 @@ public class SpanKeyWriteTests
     [Fact]
     public async Task A_typed_hash_cache_writes_by_span_what_it_reads_by_key()
     {
-        using var cache = InMemoryMultilayer.HashCache();
+        using var cache = InMemoryMultilayer.HashCache(clock: Clock);
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
 
         (await typed.SetAsync($"{Key(" User:1 ")}", Fields, Ct)).Should().BeTrue();
@@ -306,7 +308,7 @@ public class SpanKeyWriteTests
     [Fact]
     public async Task A_span_write_through_a_typed_cache_allocates_less_than_building_the_key_first()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: Clock);
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         await typed.SetAsync("user:42", "v", Ct);
 

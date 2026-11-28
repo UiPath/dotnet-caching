@@ -96,11 +96,13 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
 
         static async Task<string?> Hanging(CancellationToken ct)
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(ct);
             return "late";
         }
 
-        var value = await _cache.GetOrAddAsync(Key, Hanging, Lifetime, policy, Ct);
+        var pending = _cache.GetOrAddAsync(Key, Hanging, Lifetime, policy, Ct).AsTask();
+        _clock.Advance(policy.FactoryTimeout!.Value);
+        var value = await pending;
 
         value.Should().Be("v1");
     }
@@ -261,7 +263,7 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         async Task<string?> Cancelling(CancellationToken ct)
         {
             await caller.CancelAsync();
-            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(ct);
             return "never";
         }
 
@@ -320,7 +322,7 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var pending = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(TimeSpan.FromSeconds(2));
 
         (await pending).Should().Be("v1");
@@ -328,8 +330,9 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         _cache.LateGenerations.Should().Be(1);
 
         release.SetResult("v2");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
         (await _cache.GetAsync<string>(Key, policy, Ct)).Should().Be("v2", "the late value replaced the entry");
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "stored");
     }
 
@@ -342,7 +345,7 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var pending = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(TimeSpan.FromSeconds(1));
         release.SetResult("v2");
 
@@ -375,12 +378,12 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
 
         // The generator ignores its token, so the run goes on after the caller left.
         var pending = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, policy, caller.Token).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         await caller.CancelAsync();
         await pending.Invoking(p => p).Should().ThrowAsync<OperationCanceledException>();
         _clock.Advance(TimeSpan.FromSeconds(2));
         release.SetResult("v2");
-        await CachePeers.Until(() => _cache.RunsInFlight == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.RunsInFlight == 0, Ct);
 
         _telemetry.Events.Should().NotContain(e => e.Name == "cache.fail_safe.served", "nobody was waiting for the fallback");
         _cache.LateGenerations.Should().Be(0);
@@ -394,15 +397,16 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         _clock.Advance(Lifetime * 2);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var pending = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(TimeSpan.FromSeconds(2));
         (await pending).Should().Be("v1");
 
         await _cache.RemoveAsync<string>(Key, Ct);
         release.SetResult("from-before-the-removal");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
 
         (await _cache.GetAsync<string>(Key, policy, Ct)).Should().BeNull();
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "discarded");
     }
 
@@ -414,14 +418,15 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         _clock.Advance(Lifetime * 2);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var pending = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(TimeSpan.FromSeconds(2));
         (await pending).Should().Be("v1");
 
         release.SetException(new InvalidOperationException("down"));
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
 
         (await _cache.GetOrAddAsync(Key, Throwing, Lifetime, policy, Ct)).Should().Be("v1");
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "failed");
     }
 
@@ -436,8 +441,9 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         _cache.LateGenerations.Should().Be(1);
 
         first.SetResult("late");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
         (await _cache.GetAsync<string>(Key, policy, Ct)).Should().Be("v2", "the late generator began before v2 was written");
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "discarded");
     }
 
@@ -449,9 +455,10 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
 
         (await _cache.SetAsync(Key, "newer", Lifetime, policy, Ct)).Should().BeTrue();
         release.SetResult("late");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
 
         (await _cache.GetAsync<string>(Key, policy, Ct)).Should().Be("newer");
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "discarded");
     }
 
@@ -464,7 +471,7 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         // The removal lands after the late generator saw its value current and before its store.
         _cache.LateStoreStarting = () => _cache.RemoveAsync<string>(Key, Ct).AsTask().GetAwaiter().GetResult();
         release.SetResult("late");
-        await CachePeers.Until(() => _cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => _cache.LateGenerations == 0, Ct);
 
         (await _cache.GetAsync<string>(Key, policy, Ct)).Should().BeNull("the removal is newer than the late value");
     }
@@ -477,7 +484,7 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var optedRead = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, FailSafe, Ct);
         var opted = optedRead.AsTask();
-        await CachePeers.Until(() => _cache.RunsInFlight == 1);
+        _cache.RunsInFlight.Should().Be(1);
         var plain = _cache.GetOrAddAsync(Key, Throwing, Lifetime, new CachePolicy(), Ct).AsTask();
 
         release.SetException(new InvalidOperationException("down"));
@@ -493,7 +500,7 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         _clock.Advance(Lifetime * 2);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var opted = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, FailSafe, Ct).AsTask();
-        await CachePeers.Until(() => _cache.RunsInFlight == 1);
+        _cache.RunsInFlight.Should().Be(1);
         var batch = BatchAsync();
 
         release.SetException(new InvalidOperationException("down"));
@@ -512,16 +519,17 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         _clock.Advance(Lifetime * 2);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var pending = cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(TimeSpan.FromSeconds(2));
         (await pending).Should().Be("v1");
 
         var served = logger.Warnings;
         await cache.DisposeAsync();
         release.SetResult("late");
-        await CachePeers.Until(() => cache.LateGenerations == 0);
+        await _telemetry.Signal.UntilAsync(() => cache.LateGenerations == 0, Ct);
 
         logger.Warnings.Should().Be(served, "a late generator that ends after dispose is not a failure");
+        await _telemetry.Signal.UntilAsync(() => _telemetry.Events.Any(e => e.Name == "cache.fail_safe.background"), Ct);
         _telemetry.Events.Should().Contain(e => e.Name == "cache.fail_safe.background" && e.Properties!["outcome"] == "discarded");
     }
 
@@ -581,7 +589,7 @@ public sealed class MultilayerCacheFailSafeTests : IDisposable
         _clock.Advance(Lifetime * 2);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var pending = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, policy, Ct).AsTask();
-        await CachePeers.Until(() => _clock.HasTimers);
+        await _clock.WhenTimerScheduledAsync();
         _clock.Advance(TimeSpan.FromSeconds(2));
         (await pending).Should().Be("v1");
         return release;

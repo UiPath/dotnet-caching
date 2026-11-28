@@ -11,7 +11,6 @@ namespace UiPath.Caching.Tests.Broadcast;
 public sealed class RedisStreamOwnEventAllocationTests(ITestOutputHelper output)
 {
     private const int Entries = 1000;
-    private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan FarPoll = TimeSpan.FromSeconds(30);
 
     [Theory]
@@ -28,7 +27,8 @@ public sealed class RedisStreamOwnEventAllocationTests(ITestOutputHelper output)
         var formatter = new CountingFormatter(new TestCacheEventFormatterProxy());
         var channel = Channel.CreateUnbounded<ICacheEvent>();
         using var stop = new CancellationTokenSource();
-        using var waiter = new SignalingFetchWaiter(FarPoll);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        using var waiter = new SignalingFetchWaiter(FarPoll, timeProvider: clock);
         using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
             context,
             connectionState,
@@ -42,10 +42,10 @@ public sealed class RedisStreamOwnEventAllocationTests(ITestOutputHelper output)
             () => { },
             stop.Token,
             stream,
-            new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+            clock);
 
         // The first read finds nothing and parks the reader until the poll or a signal.
-        SpinWait.SpinUntil(() => stream.HasGroup && stream.Calls(InMemoryStreamPort.Op.Read) >= 1, WaitTimeout).Should().BeTrue();
+        await stream.WhenAsync(() => stream.HasGroup && stream.Calls(InMemoryStreamPort.Op.Read) >= 1);
         for (var i = 0; i < Entries; i++)
         {
             stream.Add(Payload(i), withSourceField ? "urn:self" : null);
@@ -53,7 +53,8 @@ public sealed class RedisStreamOwnEventAllocationTests(ITestOutputHelper output)
 
         var before = GC.GetTotalAllocatedBytes(precise: true);
         waiter.Signal();
-        SpinWait.SpinUntil(() => stream.AcknowledgedCount == Entries, WaitTimeout).Should().BeTrue("every own entry is acknowledged");
+        await stream.WhenAsync(() => stream.AcknowledgedCount == Entries);
+        stream.AcknowledgedCount.Should().Be(Entries, "every own entry is acknowledged");
         var perEntry = (GC.GetTotalAllocatedBytes(precise: true) - before) / Entries;
 
         output.WriteLine($"{(withSourceField ? "with" : "without")} the source field: {perEntry} bytes per own entry, {formatter.Decodes} decodes");

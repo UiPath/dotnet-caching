@@ -15,6 +15,8 @@ namespace UiPath.Caching.Tests.Broadcast;
 [Trait("Category", "Integration")]
 public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture fixture)
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     // A mocked IServer cannot model how StackExchange.Redis builds the message, which is where this failed.
     [Fact]
     public async Task A_stream_is_discovered_through_the_per_primary_scan()
@@ -41,7 +43,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
                 Options.Create(new RedisCacheOptions { Enabled = true }),
                 Options.Create(cacheOptions),
                 NullLogger<RedisStreamHealthMaintainer>.Instance,
-                TimeProvider.System);
+                Clock);
 
             maintainer.Initialize();
             await maintainer.CheckStreamsAsync(TestContext.Current.CancellationToken);
@@ -83,7 +85,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
                 Options.Create(new RedisCacheOptions { Enabled = true }),
                 Options.Create(cacheOptions),
                 NullLogger<RedisStreamHealthMaintainer>.Instance,
-                TimeProvider.System);
+                Clock);
 
             maintainer.Initialize();
             await maintainer.CheckStreamsAsync(TestContext.Current.CancellationToken);
@@ -131,7 +133,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
                 Options.Create(new RedisCacheOptions { Enabled = true }),
                 Options.Create(cacheOptions),
                 NullLogger<RedisStreamHealthMaintainer>.Instance,
-                TimeProvider.System);
+                Clock);
 
             maintainer.Initialize();
             await maintainer.CheckStreamsAsync(TestContext.Current.CancellationToken);
@@ -178,7 +180,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
                 Options.Create(new RedisCacheOptions { Enabled = true }),
                 Options.Create(cacheOptions),
                 NullLogger<RedisStreamHealthMaintainer>.Instance,
-                TimeProvider.System);
+                Clock);
 
             maintainer.Initialize();
             await maintainer.CheckStreamsAsync(TestContext.Current.CancellationToken);
@@ -202,7 +204,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
         var streamKey = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("topic");
         var streamOptions = new RedisStreamsTopicOptions { MaintainerEnabled = true };
-        var quiet = DateTimeOffset.UtcNow.Subtract(streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var quiet = Clock.GetUtcNow().Subtract(streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
 
         using var connector = NewConnector();
         await connector.ConnectAsync(TestContext.Current.CancellationToken);
@@ -220,13 +222,13 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
             Options.Create(new RedisCacheOptions { Enabled = true }),
             Options.Create(cacheOptions),
             NullLogger<RedisStreamHealthMaintainer>.Instance,
-            TimeProvider.System);
+            Clock);
         maintainer.Initialize();
         var quarantineKey = maintainer.QuarantineKey(streamKey);
 
         try
         {
-            var elapsed = DateTimeOffset.UtcNow.Subtract(streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToString("O");
+            var elapsed = Clock.GetUtcNow().Subtract(streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToString("O");
             await db.HashSetAsync(quarantineKey, [new("caught-up", elapsed), new("behind", elapsed)]);
 
             await maintainer.CheckStreamsAsync(TestContext.Current.CancellationToken);

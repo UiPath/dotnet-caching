@@ -2,7 +2,7 @@ using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests;
 
-public class FactoryTimeoutTests(ITestContextAccessor testContextAccessor)
+public class FactoryTimeoutTests
 {
     private const string TimedOutEvent = "cache.factory.timed_out";
 
@@ -29,16 +29,22 @@ public class FactoryTimeoutTests(ITestContextAccessor testContextAccessor)
         telemetry.Exceptions.Should().BeEmpty();
     }
 
-    private Task<string> RunTimingOutFactoryAsync(RefusingTelemetryProvider telemetry) =>
-        FactoryTimeout.RunAsync<string>(
+    private static Task<string> RunTimingOutFactoryAsync(RefusingTelemetryProvider telemetry)
+    {
+        var clock = new ManualTimeProvider();
+        var pending = FactoryTimeout.RunAsync<string>(
             async ct =>
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(ct);
                 return "unreachable";
             },
             TimeSpan.FromMilliseconds(20),
             new CacheKey("k"),
             "cache",
             telemetry,
-            testContextAccessor.Current.CancellationToken);
+            TestContext.Current.CancellationToken,
+            clock: clock);
+        clock.Advance(TimeSpan.FromMilliseconds(20));
+        return pending;
+    }
 }

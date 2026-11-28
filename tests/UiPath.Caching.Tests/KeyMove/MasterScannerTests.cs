@@ -10,7 +10,7 @@ namespace UiPath.Caching.Tests.KeyMove;
 [Trait("Category", "Integration")]
 public class MasterScannerTests(RedisContainerFixture fixture)
 {
-    private static CancellationToken Ct => CancellationToken.None;
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task A_layout_that_leaves_slots_without_a_master_fails_the_scan()

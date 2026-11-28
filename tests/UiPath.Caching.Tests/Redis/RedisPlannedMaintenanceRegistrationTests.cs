@@ -21,6 +21,8 @@ public class RedisPlannedMaintenanceRegistrationTests
             ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
         }).Build();
         var services = new ServiceCollection();
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        services.AddSingleton<TimeProvider>(clock);
         services.AddLogging();
         services.AddSingleton(factory);
         services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis());
@@ -28,7 +30,7 @@ public class RedisPlannedMaintenanceRegistrationTests
         var maintenance = provider.GetRequiredService<RedisPlannedMaintenance>();
 
         await maintenance.StartAsync(TestContext.Current.CancellationToken);
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        clock.Advance(TimeSpan.FromMilliseconds(500));
 
         factory.ReceivedCalls().Should().BeEmpty();
     }

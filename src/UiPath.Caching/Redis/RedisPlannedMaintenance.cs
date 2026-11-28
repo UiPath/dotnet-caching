@@ -73,6 +73,10 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
     /// <summary>The relaxed timeout while an announced window is open.</summary>
     public TimeSpan? SuggestedTimeout => AnnouncedWindowOpen ? new TimeSpan(Volatile.Read(ref _relaxedTimeoutTicks)) : null;
 
+    internal Task ProbeTask { get; private set; } = Task.CompletedTask;
+
+    internal Task WindowTask { get; private set; } = Task.CompletedTask;
+
     // A window plus its tail, published as one word so both bounds are read together.
     private TimeSpan SeenRetention => new(Volatile.Read(ref _seenRetentionTicks));
 
@@ -635,7 +639,8 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
         _windowTimer = timer;
 
         // Inline, so the timer is armed before this returns.
-        CloseWhenElapsedAsync(next, timer).Forget();
+        WindowTask = CloseWhenElapsedAsync(next, timer);
+        WindowTask.Forget();
     }
 #pragma warning restore SER010
 
@@ -693,7 +698,8 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
         var token = tokenSource.Token;
 
         // Never skip the delegate: its finally disposes both sources and clears InProgress.
-        Task.Run(() => ProbeUntilCancelledAsync(tokenSource, deadline, token), CancellationToken.None).Forget();
+        ProbeTask = Task.Run(() => ProbeUntilCancelledAsync(tokenSource, deadline, token), CancellationToken.None);
+        ProbeTask.Forget();
     }
 
     private async Task ProbeUntilCancelledAsync(CancellationTokenSource tokenSource, CancellationTokenSource deadline, CancellationToken token)
@@ -738,9 +744,9 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
         Task? probeTask = null;
         try
         {
-            probeTask = _redisConnector.Database.StringSetAsync("probeRedis_" + Environment.MachineName, DateTime.UtcNow.ToString(CultureInfo.InvariantCulture), expiry: TimeSpan.FromDays(1));
+            probeTask = _redisConnector.Database.StringSetAsync("probeRedis_" + Environment.MachineName, _clock.GetUtcNow().UtcDateTime.ToString(CultureInfo.InvariantCulture), expiry: TimeSpan.FromDays(1));
 
-            await probeTask.WaitAsync(_hangingTime, token).ConfigureAwait(false);
+            await probeTask.WaitAsync(_hangingTime, _clock, token).ConfigureAwait(false);
             _disconnectedSince = null;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -769,7 +775,7 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
 
         try
         {
-            await Task.Delay(_probeInterval, token).ConfigureAwait(false);
+            await Task.Delay(_probeInterval, _clock, token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {

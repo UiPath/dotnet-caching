@@ -19,6 +19,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
     private static readonly FormatNegotiationOptions Negotiation = new() { AdvertiseInterval = TimeSpan.FromMilliseconds(100), LivenessWindow = TimeSpan.FromMilliseconds(100) };
     private static readonly TimeSpan Quarantine = TimeSpan.FromMilliseconds(200);
 
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
     private readonly CacheOptions _cacheOptions = new() { Enabled = true, AppShortName = $"rp{Guid.NewGuid():N}"[..10] };
     private readonly RecordingTelemetryProvider _telemetry = new();
     private RedisConnector? _connector;
@@ -77,7 +78,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
 
         await PassAsync();
         (await GroupsAsync()).Should().Contain(owner, "the first pass only quarantines");
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await AdvertiseAsync("urn:alive");
 
         await PassAsync();
@@ -106,7 +107,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         }
 
         var maintainer = await PassAsync();
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await AdvertiseAsync("urn:alive");
         await PassAsync();
 
@@ -142,7 +143,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         {
             await AdvertiseAsync(owner);
             await PassAsync();
-            await Task.Delay(Quarantine, Ct);
+            await AdvanceAsync(Quarantine);
         }
 
         (await GroupsAsync()).Should().Contain(owner);
@@ -157,11 +158,11 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         Assert.SkipUnless(fixture.Enabled, Skip);
         Assert.SkipUnless(fixture.ServerVersion >= new Version(7, 2), "Idle time counts read attempts from Redis 7.2.");
         await JoinAsync(owner);
-        await Task.Delay(TimeSpan.FromMilliseconds(1300), Ct);
+        await AdvanceAsync(TimeSpan.FromMilliseconds(1300));
 
         await AdvertiseAsync("urn:alive");
         await PassAsync();
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await AdvertiseAsync("urn:alive");
         await PassAsync();
 
@@ -175,13 +176,12 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         Assert.SkipUnless(fixture.Enabled, Skip);
         const string owner = "urn:silent-but-alive";
         await JoinAsync(owner);
-        var until = DateTime.UtcNow + TimeSpan.FromMilliseconds(1000) + (Quarantine * 4);
-        while (DateTime.UtcNow < until)
+        for (var pass = 0; pass < 18; pass++)
         {
             await Db.StreamReadGroupAsync(_stream, owner, owner, ">", 1);
             await AdvertiseAsync("urn:alive");
             await PassAsync();
-            await Task.Delay(100, Ct);
+            await AdvanceAsync(TimeSpan.FromMilliseconds(100));
         }
 
         (await GroupsAsync()).Should().Contain(owner);
@@ -198,7 +198,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         await AdvertiseAsync("urn:alive");
         await AdvertiseAsync(owner, ageMs: 5000);
         await PassAsync();
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
 
         // Its entry is still stale, but it reads the stream again: the delete script sees a consumer idle for less than the quarantine.
         await Db.StreamReadGroupAsync(_stream, owner, owner, ">", 1);
@@ -214,10 +214,10 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         Assert.SkipUnless(fixture.Enabled, Skip);
         const string owner = "urn:unknown-node";
         await JoinAsync(owner);
-        await Task.Delay(TimeSpan.FromMilliseconds(1300), Ct);
+        await AdvanceAsync(TimeSpan.FromMilliseconds(1300));
 
         await PassAsync();
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await PassAsync();
 
         (await GroupsAsync()).Should().Contain(owner, "with nobody advertising, an absent owner cannot be judged");
@@ -229,11 +229,11 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         Assert.SkipUnless(fixture.Enabled, Skip);
         const string owner = "urn:gone-node";
         await JoinAsync(owner);
-        await Task.Delay(TimeSpan.FromMilliseconds(1300), Ct);
+        await AdvanceAsync(TimeSpan.FromMilliseconds(1300));
         await Db.StringSetAsync(NodeListKey, "not a hash");
 
         await PassAsync();
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await PassAsync();
 
         (await GroupsAsync()).Should().Contain(owner);
@@ -252,7 +252,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         await AdvertiseAsync("urn:alive");
         await AdvertiseAsync(owner, left: left, ageMs: left ? 0 : 5000);
         await PassAsync();
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await AdvertiseAsync("urn:alive");
 
         // The owner returns right after the pass's first read of the node list, before the re-check that precedes the delete.
@@ -281,7 +281,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         await AdvertiseAsync("urn:alive");
         await AdvertiseAsync(owner, left: true);
         await PassAsync();
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await AdvertiseAsync("urn:alive");
 
         await PassAsync(before: (method, _) => method.Name == nameof(IDatabaseAsync.LockQueryAsync) ? (true, Task.FromResult(new RedisValue("another-maintainer"))) : (false, null));
@@ -314,7 +314,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         await AdvertiseAsync("urn:alive");
         await AdvertiseAsync(owner, left: true);
         await PassAsync(before: RefuseScripts);
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await AdvertiseAsync("urn:alive");
 
         await PassAsync(before: RefuseScripts);
@@ -333,7 +333,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         await AdvertiseAsync("urn:alive");
         await AdvertiseAsync(owner, left: true);
         await PassAsync(before: RefuseScripts);
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await Db.StreamReadGroupAsync(_stream, owner, owner, ">", 1);
         await AdvertiseAsync("urn:alive");
 
@@ -352,7 +352,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         await AdvertiseAsync("urn:alive");
         await AdvertiseAsync(owner, ageMs: 5000);
         await PassAsync(before: RefuseScripts);
-        await Task.Delay(Quarantine * 2, Ct);
+        await AdvanceAsync(Quarantine * 2);
         await AdvertiseAsync("urn:alive");
 
         await PassAsync(before: RefuseScripts);
@@ -365,6 +365,12 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
         method.Name == nameof(IDatabaseAsync.ScriptEvaluateAsync)
             ? (true, Task.FromException<RedisResult>(new RedisCommandException("scripts are disabled")))
             : (false, null);
+
+    private async Task AdvanceAsync(TimeSpan elapsed)
+    {
+        _clock.Advance(elapsed);
+        await RedisConsumerClock.AdvanceAsync(Db, _stream, elapsed);
+    }
 
     private async Task JoinAsync(string node)
     {
@@ -395,7 +401,7 @@ public sealed class DepartedGroupDeleteTests(RedisContainerFixture fixture) : IA
             Options.Create(RedisOptions),
             Options.Create(_cacheOptions),
             NullLogger<RedisStreamHealthMaintainer>.Instance,
-            TimeProvider.System);
+            _clock);
         maintainer.Initialize();
 
         // Each pass is a new maintainer; the lock of the last one would still be held for its interval.

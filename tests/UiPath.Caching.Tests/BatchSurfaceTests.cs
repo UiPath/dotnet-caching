@@ -42,7 +42,7 @@ public class BatchSurfaceTests
         (await cache.RemoveManyAsync<string>(["a"], Ct)).Should().BeEmpty();
         (await cache.SetManyAsync<string>([new("a", "v")], (CachePolicy?)null, Ct)).Should().BeEmpty();
         (await cache.SetManyAsync<string>([new("a", "v")], TimeSpan.FromMinutes(1), null, Ct)).Should().BeEmpty();
-        (await cache.SetManyAsync<string>([new("a", "v")], DateTimeOffset.UtcNow.AddMinutes(1), null, Ct)).Should().BeEmpty();
+        (await cache.SetManyAsync<string>([new("a", "v")], new ManualTimeProvider().GetUtcNow().AddMinutes(1), null, Ct)).Should().BeEmpty();
         (await hashes.RemoveManyAsync<string>(["a"], Ct)).Should().BeEmpty();
         (await hashes.SetManyAsync<string>([new("a", new Dictionary<string, string?> { ["f"] = "v" })], new HashCacheEntryOptions(), null, Ct)).Should().BeEmpty();
         (await hashes.RemoveFieldsAsync<string>("a", ["f"], Ct)).Should().BeTrue();

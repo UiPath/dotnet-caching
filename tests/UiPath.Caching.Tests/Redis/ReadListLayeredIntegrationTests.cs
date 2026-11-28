@@ -13,10 +13,12 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public class ReadListLayeredIntegrationTests(RedisContainerFixture fixture)
 {
+
     private static readonly byte[] JsonX = "\"x\""u8.ToArray();
     private static readonly byte[] FastX = [0x10, (byte)'x'];
     private static readonly byte[] FastMeta = [0x10, .. "{\"m\":\"v\"}"u8];
 
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
     private readonly PassthroughValueSerializer _serializer = new(0x10);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -45,8 +47,8 @@ public class ReadListLayeredIntegrationTests(RedisContainerFixture fixture)
         var runs = 0;
         var generated = new Dictionary<string, string?> { ["a"] = "generated" };
 
-        var first = await Hashes(subject).GetOrAddAsync<string>(key, _ => Generate(ref runs, generated), DateTimeOffset.UtcNow.AddMinutes(5), option, Policy(subject), Ct);
-        var next = await Hashes(peer).GetOrAddAsync<string>(key, _ => throw new InvalidOperationException("the regenerated hash did not hit"), DateTimeOffset.UtcNow.AddMinutes(5), option, Policy(peer), Ct);
+        var first = await Hashes(subject).GetOrAddAsync<string>(key, _ => Generate(ref runs, generated), _time.GetUtcNow().AddMinutes(5), option, Policy(subject), Ct);
+        var next = await Hashes(peer).GetOrAddAsync<string>(key, _ => throw new InvalidOperationException("the regenerated hash did not hit"), _time.GetUtcNow().AddMinutes(5), option, Policy(peer), Ct);
 
         FieldA(first).Should().Be("generated");
         FieldA(next).Should().Be("generated");
@@ -69,7 +71,7 @@ public class ReadListLayeredIntegrationTests(RedisContainerFixture fixture)
         await raw.GetDatabase().HashSetAsync(redisKey, "_metadata_", FastMeta);
         var runs = 0;
 
-        await Hashes(subject).GetOrAddAsync<string>(key, _ => Generate(ref runs, new Dictionary<string, string?> { ["a"] = "generated" }), DateTimeOffset.UtcNow.AddMinutes(5), HashCacheSetOption.HashReplace, Policy(subject), Ct);
+        await Hashes(subject).GetOrAddAsync<string>(key, _ => Generate(ref runs, new Dictionary<string, string?> { ["a"] = "generated" }), _time.GetUtcNow().AddMinutes(5), HashCacheSetOption.HashReplace, Policy(subject), Ct);
 
         runs.Should().Be(1);
         (await raw.GetDatabase().HashExistsAsync(redisKey, "_metadata_")).Should().BeTrue("a hash with no user field missed, and nothing was unreadable, so the caller's HashReplace is honored");
@@ -91,7 +93,7 @@ public class ReadListLayeredIntegrationTests(RedisContainerFixture fixture)
         using var subject = Build(app, versioned, foreign);
         var generated = new Dictionary<string, string?> { ["a"] = "generated" };
 
-        var result = await Hashes(subject).GetOrAddAsync<string>(key, _ => Task.FromResult<IDictionary<string, string?>>(generated), DateTimeOffset.UtcNow.AddMinutes(5), HashCacheSetOption.HashReplace, Policy(subject, "fastonly-locked"), Ct);
+        var result = await Hashes(subject).GetOrAddAsync<string>(key, _ => Task.FromResult<IDictionary<string, string?>>(generated), _time.GetUtcNow().AddMinutes(5), HashCacheSetOption.HashReplace, Policy(subject, "fastonly-locked"), Ct);
 
         FieldA(result).Should().Be("generated");
         (await raw.GetDatabase().HashExistsAsync(redisKey, "b")).Should().BeFalse("the re-read under the lock found a field the policy cannot read, so the write replaces the key");
@@ -132,7 +134,7 @@ public class ReadListLayeredIntegrationTests(RedisContainerFixture fixture)
 
     private ServiceProvider Build(string app, bool versioned, IDistributedLock? distributedLock = null)
     {
-        var services = new ServiceCollection();
+        var services = new ServiceCollection().AddSingleton<TimeProvider>(_time);
         services.AddCaching(
             b =>
             {

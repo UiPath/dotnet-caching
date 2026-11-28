@@ -88,7 +88,6 @@ public class CacheKeyHandlerTests
                 Build(cache, Id, machine);
             }
 
-            SpinWait.SpinUntil(static () => false, 100);
             var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
             for (var i = 0; i < 100; i++)
             {

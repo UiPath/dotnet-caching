@@ -10,7 +10,7 @@ internal static class InMemoryMultilayer
 {
     public static MultilayerCache Cache(InMemoryCacheOptions? options = null, ICache? inner = null, bool connectionMonitor = false, TimeProvider? clock = null, ITopicFactory? topics = null, IChangeTokenFactory? tokens = null, IMemoryCacheFactory? memory = null, IDistributedLock? distributedLock = null)
     {
-        clock ??= TimeProvider.System;
+        clock ??= new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         options ??= new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = connectionMonitor };
         return RunTables.Track(new MultilayerCache(
@@ -30,14 +30,15 @@ internal static class InMemoryMultilayer
             logger: NullLogger.Instance));
     }
 
-    public static MultilayerHashCache HashCache(InMemoryCacheOptions? options = null, IHashCache? inner = null, bool connectionMonitor = false, IMemoryCacheFactory? memory = null, IDistributedLock? distributedLock = null)
+    public static MultilayerHashCache HashCache(InMemoryCacheOptions? options = null, IHashCache? inner = null, bool connectionMonitor = false, IMemoryCacheFactory? memory = null, IDistributedLock? distributedLock = null, TimeProvider? clock = null)
     {
+        clock ??= new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         options ??= new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = connectionMonitor };
         return RunTables.Track(new MultilayerHashCache(
             KnownCacheProviderNames.InMemory,
             inner ?? NullHashCache.Instance,
-            memory ?? new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            memory ?? new MemoryCacheFactory(clock, NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -47,7 +48,7 @@ internal static class InMemoryMultilayer
             cacheOptions,
             distributedLock: distributedLock ?? NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
-            clock: TimeProvider.System,
+            clock: clock,
             logger: NullLogger.Instance));
     }
 }

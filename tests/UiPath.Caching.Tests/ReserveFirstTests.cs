@@ -7,12 +7,14 @@ namespace UiPath.Caching.Tests;
 /// <summary>A miss takes its key in the run table before any lock: callers join the run at once, however long it takes, and TryAdd takes the same key.</summary>
 public class ReserveFirstTests
 {
+    private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task Callers_join_a_run_for_longer_than_the_local_lock_timeout()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(20) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(20) }, clock: _clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
@@ -26,9 +28,9 @@ public class ReserveFirstTests
 
         var firstValue = cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct);
         var first = firstValue.AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var joiners = Enumerable.Range(0, 7).Select(_ => cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct).AsTask()).ToArray();
-        await Task.Delay(200, Ct);
+        _clock.Advance(TimeSpan.FromMilliseconds(200));
         joiners.Should().OnlyContain(j => !j.IsCompleted);
         release.SetResult();
 
@@ -39,7 +41,7 @@ public class ReserveFirstTests
     [Fact]
     public async Task A_failing_run_fails_every_caller_that_joined_it()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
@@ -53,7 +55,7 @@ public class ReserveFirstTests
 
         var firstValue = cache.GetOrAddAsync<string>("k", Failing, policy: null, Ct);
         var first = firstValue.AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var joiners = Enumerable.Range(0, 7).Select(_ => cache.GetOrAddAsync<string>("k", Failing, policy: null, Ct).AsTask()).ToArray();
         release.SetResult();
 
@@ -78,7 +80,7 @@ public class ReserveFirstTests
                 Interlocked.Increment(ref stored);
                 return new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Added, null));
             });
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: _clock);
         using var leaving = new CancellationTokenSource();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -91,20 +93,20 @@ public class ReserveFirstTests
 
         var starterValue = cache.GetOrAddAsync<string>("k", Generate, policy: null, leaving.Token);
         var starter = starterValue.AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var joiner = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
         await leaving.CancelAsync();
         await starter.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
         release.SetResult();
 
-        (await joiner.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().Be("generated");
+        (await joiner.WaitAsync(Ct)).Should().Be("generated");
         stored.Should().Be(1, "the joiner still waits for the run, so its value is stored for the next caller");
     }
 
     [Fact]
     public async Task A_cancelled_caller_gets_its_cancellation_through_the_task_as_it_does_for_an_async_method()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
         ValueTask<string?> call = default;
@@ -118,7 +120,7 @@ public class ReserveFirstTests
     [Fact]
     public async Task A_missing_key_is_reported_through_the_task_too()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         ValueTask<string?> call = default;
 
         var start = () => call = cache.GetOrAddAsync<string>(default, Generated, policy: null, Ct);
@@ -148,7 +150,7 @@ public class ReserveFirstTests
                 return new ValueTask<ICacheEntry<string?>>(lateRead.Task);
             });
         ValueTaskStubs.Returns(inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new FillResult<string>(FillOutcome.Added, null));
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalMaxExpiration = TimeSpan.FromMilliseconds(1), LocalMaxExpirationDisconnected = TimeSpan.FromMilliseconds(1) }, inner);
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalMaxExpiration = TimeSpan.FromMilliseconds(1), LocalMaxExpirationDisconnected = TimeSpan.FromMilliseconds(1) }, inner, clock: _clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var running = 0;
@@ -170,12 +172,12 @@ public class ReserveFirstTests
 
         var firstValue = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct);
         var first = firstValue.AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var late = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
-        await lateReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await lateReadStarted.Task.WaitAsync(Ct);
         release.SetResult();
         (await first).Should().Be("generated");
-        await Task.Delay(50, Ct);
+        _clock.Advance(TimeSpan.FromMilliseconds(50));
         lateRead.SetResult(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue });
 
         (await late).Should().Be("generated");
@@ -186,7 +188,7 @@ public class ReserveFirstTests
     [Fact]
     public async Task A_run_that_failed_leaves_the_key_free_for_the_next_caller()
     {
-        using var cache = InMemoryMultilayer.Cache();
+        using var cache = InMemoryMultilayer.Cache(clock: _clock);
         var generations = Generations(cache);
 
         await cache.Invoking(c => c.GetOrAddAsync<string>("k", _ => throw new InvalidOperationException("boom"), policy: null, Ct).AsTask()).Should().ThrowAsync<InvalidOperationException>();
@@ -198,7 +200,7 @@ public class ReserveFirstTests
     [Fact]
     public async Task TryAdd_while_a_run_generates_the_key_loses_after_the_wait_and_the_generated_value_stands()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(50) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(50) }, clock: _clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 #pragma warning disable S4144 // Each test closes over its own gates, so the body cannot be shared.
@@ -211,9 +213,11 @@ public class ReserveFirstTests
 #pragma warning restore S4144
 
         var run = cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
 
-        (await cache.TryAddAsync<string>("k", "added", policy: null, Ct)).Should().BeFalse();
+        var add = cache.TryAddAsync<string>("k", "added", policy: null, Ct).AsTask();
+        _clock.Advance(TimeSpan.FromMilliseconds(50));
+        (await add).Should().BeFalse();
         release.SetResult();
 
         (await run).Should().Be("generated");
@@ -223,7 +227,7 @@ public class ReserveFirstTests
     [Fact]
     public async Task TryAdd_waits_for_a_run_that_ends_within_the_local_lock_timeout_and_then_finds_the_key()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromSeconds(30) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromSeconds(30) }, clock: _clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 #pragma warning disable S4144 // Each test closes over its own gates, so the body cannot be shared.
@@ -237,9 +241,9 @@ public class ReserveFirstTests
 
         var runValue = cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct);
         var run = runValue.AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var add = cache.TryAddAsync<string>("k", "added", policy: null, Ct).AsTask();
-        await Task.Delay(100, Ct);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
         add.IsCompleted.Should().BeFalse("it waits for the run, as it waited for the lock the run held");
         release.SetResult();
 
@@ -251,7 +255,7 @@ public class ReserveFirstTests
     [Fact]
     public async Task TryAdd_wins_when_a_run_that_stored_nothing_ends_while_it_waits()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromSeconds(30) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromSeconds(30) }, clock: _clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Nothing(CancellationToken _)
@@ -263,9 +267,9 @@ public class ReserveFirstTests
 
         var runValue = cache.GetOrAddAsync<string>("k", Nothing, policy: null, Ct);
         var run = runValue.AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var add = cache.TryAddAsync<string>("k", "added", policy: null, Ct).AsTask();
-        await Task.Delay(100, Ct);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
         release.SetResult();
 
         (await add).Should().BeTrue();
@@ -286,7 +290,7 @@ public class ReserveFirstTests
                 innerAddCalled.TrySetResult();
                 return new ValueTask<bool>(innerAdd.Task);
             });
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: _clock);
         var generated = 0;
         Task<string?> Generate(CancellationToken _)
         {
@@ -296,9 +300,9 @@ public class ReserveFirstTests
 
         var addValue = cache.TryAddAsync<string>("k", "added", policy: null, Ct);
         var add = addValue.AsTask();
-        await innerAddCalled.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await innerAddCalled.Task.WaitAsync(Ct);
         var miss = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
-        await Task.Delay(100, Ct);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
         miss.IsCompleted.Should().BeFalse("the key is taken by the TryAdd");
         innerAdd.SetResult(true);
 
@@ -320,7 +324,7 @@ public class ReserveFirstTests
                 innerAddCalled.TrySetResult();
                 return new ValueTask<bool>(innerAdd.Task);
             });
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: _clock);
         var generations = Generations(cache);
         var generated = 0;
         Task<string?> Generate(CancellationToken _)
@@ -331,9 +335,9 @@ public class ReserveFirstTests
 
         var addValue = cache.TryAddAsync<string>("k", "added", policy: null, Ct);
         var add = addValue.AsTask();
-        await innerAddCalled.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await innerAddCalled.Task.WaitAsync(Ct);
         var miss = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
-        await Task.Delay(100, Ct);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
         innerAdd.SetResult(false);
 
         (await add).Should().BeFalse();
@@ -349,10 +353,12 @@ public class ReserveFirstTests
         ValueTaskStubs.Returns(
             inner.TryAddAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
             _ => throw new InvalidOperationException("inner tier down"));
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: _clock);
         var generations = Generations(cache);
 
-        (await cache.TryAddAsync<string>("k", "added", policy: null, Ct)).Should().BeFalse();
+        var add = cache.TryAddAsync<string>("k", "added", policy: null, Ct).AsTask();
+        _clock.Advance(TimeSpan.FromMilliseconds(50));
+        (await add).Should().BeFalse();
 
         generations.Count.Should().Be(0);
         (await cache.GetOrAddAsync<string>("k", Generated, policy: null, Ct)).Should().Be("generated");
@@ -370,12 +376,12 @@ public class ReserveFirstTests
                 innerAddCalled.TrySetResult();
                 return new ValueTask<bool>(UntilCancelled(call.Arg<CancellationToken>()));
             });
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: _clock);
         var generations = Generations(cache);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 
         var add = cache.TryAddAsync<string>("k", "added", policy: null, cancellation.Token).AsTask();
-        await innerAddCalled.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await innerAddCalled.Task.WaitAsync(Ct);
         await cancellation.CancelAsync();
 
         await add.Invoking(a => a).Should().ThrowAsync<OperationCanceledException>();
@@ -388,23 +394,23 @@ public class ReserveFirstTests
     {
         var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true } };
         var gate = new GatedDistributedLock();
-        using var cache = InMemoryMultilayer.Cache(inner: MissingInner(), distributedLock: gate);
+        using var cache = InMemoryMultilayer.Cache(inner: MissingInner(), distributedLock: gate, clock: _clock);
         using var leaving = new CancellationTokenSource();
 
         var starterValue = cache.GetOrAddAsync<string>("k", Generated, policy, leaving.Token);
         var starter = starterValue.AsTask();
-        await gate.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await gate.Waiting.Task.WaitAsync(Ct);
         var joiner = cache.GetOrAddAsync<string>("k", Generated, policy, Ct).AsTask();
         await leaving.CancelAsync();
         await starter.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
         gate.Release.SetResult();
 
-        (await joiner.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().Be("generated", "the read under the lock runs for the run, not for the caller that left");
+        (await joiner.WaitAsync(Ct)).Should().Be("generated", "the read under the lock runs for the run, not for the caller that left");
     }
 
     private static async Task<bool> UntilCancelled(CancellationToken token)
     {
-        await Task.Delay(Timeout.Infinite, token);
+        await new TaskCompletionSource().Task.WaitAsync(token);
         return true;
     }
 

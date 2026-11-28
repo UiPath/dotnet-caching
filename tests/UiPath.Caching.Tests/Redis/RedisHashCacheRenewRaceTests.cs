@@ -16,8 +16,11 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class RedisHashCacheRenewRaceTests(RedisContainerFixture fixture)
 {
+
     private static readonly string RunTag = Guid.NewGuid().ToString("N")[..8];
     private static readonly TimeSpan Life = TimeSpan.FromMinutes(5);
+
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -73,7 +76,7 @@ public sealed class RedisHashCacheRenewRaceTests(RedisContainerFixture fixture)
 
         var options = expiry switch
         {
-            "past" => new HashCacheEntryOptions(ExpireTime: DateTimeOffset.UtcNow.AddMinutes(-1)),
+            "past" => new HashCacheEntryOptions(ExpireTime: _time.GetUtcNow().AddMinutes(-1)),
             "future" => new HashCacheEntryOptions(TimeToLive: TimeSpan.FromHours(2)),
             _ => new HashCacheEntryOptions(ExpireTime: DateTimeOffset.MaxValue),
         };
@@ -95,7 +98,7 @@ public sealed class RedisHashCacheRenewRaceTests(RedisContainerFixture fixture)
         await real.KeyDeleteAsync(redisKey);
     }
 
-    private static RedisHashCache Create(IDatabase database)
+    private RedisHashCache Create(IDatabase database)
     {
         var connector = Substitute.For<IRedisConnector>();
         connector.Database.Returns(database);
@@ -116,7 +119,7 @@ public sealed class RedisHashCacheRenewRaceTests(RedisContainerFixture fixture)
             new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false },
             new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true },
             new DefaultCachePolicyFactory(null, null),
-            TimeProvider.System,
+            _time,
             NullLogger<RedisHashCache>.Instance);
     }
 }

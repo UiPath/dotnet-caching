@@ -17,7 +17,7 @@ public class HandlerKeyCacheTests
     internal static readonly Func<int, CancellationToken, Task<GeneratedValue<string>>> StateGenExp = (_, _) => Task.FromResult(new GeneratedValue<string>("v"));
     internal static readonly CachePolicy? Policy = null;
     internal static readonly TimeSpan Minute = TimeSpan.FromMinutes(1);
-    internal static readonly DateTimeOffset Later = DateTimeOffset.UtcNow.AddHours(1);
+    internal static readonly DateTimeOffset Later = new ManualTimeProvider().GetUtcNow().AddHours(1);
 
     internal static readonly (string Tag, bool SpanPath, Func<ICache, string, int, Task> Call)[] UntypedCases =
     [

@@ -6,8 +6,10 @@ namespace UiPath.Caching.Tests;
 /// <summary>The span forms of <c>TryAddAsync</c>, <c>RefreshAsync</c>, <c>RemoveFieldsAsync</c> and <c>SetMetadataAsync</c> build the <see cref="CacheKey"/> and call the <see cref="CacheKey"/> member, so a proxy answers them from the setup it already has.</summary>
 public class SpanKeyDefaultWriteTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
-    private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+    private static readonly DateTimeOffset Deadline = Clock.GetUtcNow().AddMinutes(5);
     private static readonly HashCacheEntryOptions Options = new(TimeToLive: Ttl);
     private static readonly string[] Fields = ["f"];
     private static readonly IDictionary<string, string?> Metadata = new Dictionary<string, string?> { ["m"] = "1" };

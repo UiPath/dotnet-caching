@@ -2,7 +2,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace UiPath.Caching.Tests.Broadcast;
 
-public class RedisPubSubTopicProviderTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
+public class RedisPubSubTopicProviderTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private RedisPubSubTopicOptions _redisPubSubTopicOptions = default!;
@@ -22,18 +22,13 @@ public class RedisPubSubTopicProviderTests(ITestContextAccessor testContextAcces
     }
 
     [Fact]
-    public async Task Disposing_topic_removes_it_from_provider()
+    public void Disposing_topic_removes_it_from_provider()
     {
-        var token = testContextAccessor.Current.CancellationToken;
         TopicKey topicKey = _fixture.Create<string>();
         var topic = Sut.Create(topicKey);
         topic.Should().NotBeNull();
         Sut.Keys.Should().NotBeEmpty();
         topic.Dispose();
-        for (var attempt = 0; Sut.Keys.Count > 0 && attempt < 50; attempt++)
-        {
-            await Task.Delay(20, token);
-        }
         Sut.Keys.Should().BeEmpty();
     }
 

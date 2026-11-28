@@ -11,11 +11,16 @@ using UiPath.Caching.Policies;
 using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Fakes;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.Broadcast;
 
 public class StreamsFallbackWiringTests(ITestContextAccessor testContextAccessor)
 {
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+    private readonly RecordingTelemetryProvider _telemetry = new();
+    private readonly System.Threading.Channels.Channel<bool> _changes = System.Threading.Channels.Channel.CreateUnbounded<bool>();
+
     private CancellationToken Token => testContextAccessor.Current.CancellationToken;
 
     [Fact]
@@ -212,7 +217,7 @@ public class StreamsFallbackWiringTests(ITestContextAccessor testContextAccessor
     [Fact]
     public void The_Streams_provider_stays_registered_once_when_added_twice()
     {
-        var services = new ServiceCollection();
+        var services = new ServiceCollection().AddSingleton<TimeProvider>(new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         var builder = new CachingBuilder(services, new ConfigurationBuilder().Build());
 
         builder.AddRedisStreams(streams => { }).AddRedisStreams(streams => { });
@@ -263,7 +268,7 @@ public class StreamsFallbackWiringTests(ITestContextAccessor testContextAccessor
             .AddSingleton(Options.Create(new RedisCacheOptions()))
             .AddSingleton(new ValueSerializerRegistry([RegistryEntry.Of("fast", new PassthroughValueSerializer(0x10))]))
             .AddSingleton<ISerializerProxy<byte[]>>(new SystemJsonByteSerializerProxy())
-            .AddSingleton(TimeProvider.System)
+            .AddSingleton<TimeProvider>(new ManualTimeProvider(DateTimeOffset.UnixEpoch))
             .AddSingleton<ICachePolicyFactory>(sp => new DefaultCachePolicyFactory(null, null, valueSerializers: sp.GetRequiredService<ValueSerializerRegistry>())));
 
         var negotiation = FormatNegotiation.Create(services);
@@ -288,7 +293,7 @@ public class StreamsFallbackWiringTests(ITestContextAccessor testContextAccessor
 
     private static ServiceProvider BuildOrdered(Dictionary<string, string?> configuration, Action<ICachingBuilder> register)
     {
-        var services = new ServiceCollection();
+        var services = new ServiceCollection().AddSingleton<TimeProvider>(new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         var builder = new CachingBuilder(services, new ConfigurationBuilder().AddInMemoryCollection(configuration).Build());
         services
             .AddSingleton(StreamsFakes.Connector(out _, out _))
@@ -327,24 +332,13 @@ public class StreamsFallbackWiringTests(ITestContextAccessor testContextAccessor
         Substitute.For<IRedisProfiler>(),
         NullLoggerFactory.Instance);
 
-    private static RedisStreamsTopicProvider Provider(IRedisConnector connector, RedisStreamsTopicOptions options, RedisPubSubTopicProvider? fallback)
-    {
-        var cacheOptions = Options.Create(new CacheOptions { AppShortName = "app" });
-        var registry = new PerTopicOptionsRegistry<RedisStreamsTopicOptions>(new ConfigurationBuilder().Build().GetSection("Topics"));
-        var formatter = Substitute.For<IEventFormatterProxy<ICacheEvent>>();
-        var resilience = Substitute.For<IResiliencePipelineProvider>();
-        return fallback is null && options.StreamsUnsupported == StreamsUnsupportedAction.PubSub
-            ? new RedisStreamsTopicProvider(Options.Create(options), cacheOptions, registry, connector, formatter, resilience, NullLoggerFactory.Instance, NullTelemetryProvider.Instance, Substitute.For<IRedisProfiler>())
-            : new RedisStreamsTopicProvider(Options.Create(options), cacheOptions, registry, connector, formatter, resilience, NullLoggerFactory.Instance, NullTelemetryProvider.Instance, Substitute.For<IRedisProfiler>(), fallback);
-    }
-
     private static ServiceProvider Build(
         Action<RedisStreamsTopicOptions> streams,
         Action<RedisPubSubTopicOptions>? pubSub = null,
         Dictionary<string, string?>? configure = null,
         Action<IServiceCollection>? extra = null)
     {
-        var services = new ServiceCollection();
+        var services = new ServiceCollection().AddSingleton<TimeProvider>(new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         var builder = new CachingBuilder(services, new ConfigurationBuilder().AddInMemoryCollection(configure ?? []).Build());
         services
             .AddSingleton(StreamsFakes.Connector(out _, out _))
@@ -364,13 +358,25 @@ public class StreamsFallbackWiringTests(ITestContextAccessor testContextAccessor
         return services.BuildServiceProvider();
     }
 
+    private RedisStreamsTopicProvider Provider(IRedisConnector connector, RedisStreamsTopicOptions options, RedisPubSubTopicProvider? fallback)
+    {
+        _telemetry.EventRecorded += _ => _changes.Writer.TryWrite(true);
+        var cacheOptions = Options.Create(new CacheOptions { AppShortName = "app" });
+        var registry = new PerTopicOptionsRegistry<RedisStreamsTopicOptions>(new ConfigurationBuilder().Build().GetSection("Topics"));
+        var formatter = Substitute.For<IEventFormatterProxy<ICacheEvent>>();
+        var resilience = Substitute.For<IResiliencePipelineProvider>();
+        return fallback is null && options.StreamsUnsupported == StreamsUnsupportedAction.PubSub
+            ? new RedisStreamsTopicProvider(Options.Create(options), cacheOptions, registry, connector, formatter, resilience, NullLoggerFactory.Instance, _telemetry, Substitute.For<IRedisProfiler>(), _clock)
+            : new RedisStreamsTopicProvider(Options.Create(options), cacheOptions, registry, connector, formatter, resilience, NullLoggerFactory.Instance, _telemetry, Substitute.For<IRedisProfiler>(), fallback, _clock);
+    }
+
     private async Task WaitForAsync(Func<bool> condition)
     {
-        for (var attempt = 0; !condition() && attempt < 3000; attempt++)
+        _clock.Advance(TimeSpan.Zero);
+        while (!condition())
         {
-            await Task.Delay(10, Token);
+            await _changes.Reader.ReadAsync(Token);
         }
-
         condition().Should().BeTrue();
     }
 }

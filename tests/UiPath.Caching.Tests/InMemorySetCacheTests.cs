@@ -32,10 +32,10 @@ public class InMemorySetCacheTests
         var sut = new MultilayerSetCache(
             KnownCacheProviderNames.InMemory,
             NullSetCache.Instance,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(new ManualTimeProvider(), NullLoggerFactory.Instance),
             new RawByteSerializerProxy(),
             new InMemoryQueueCacheOptions { DefaultExpiration = null },
-            TimeProvider.System);
+            new ManualTimeProvider());
         var payload = new byte[] { 1, 2, 3 };
 
         (await sut.AddAsync("k", payload, (CachePolicy?)null, Ct)).Should().BeTrue();
@@ -235,7 +235,7 @@ public class InMemorySetCacheTests
     private static MultilayerSetCache CreateSut(InMemoryQueueCacheOptions? options = null, TimeProvider? clock = null)
     {
         options ??= new InMemoryQueueCacheOptions();
-        var cacheClock = clock ?? TimeProvider.System;
+        var cacheClock = clock ?? new ManualTimeProvider();
         return new MultilayerSetCache(
             KnownCacheProviderNames.InMemory,
             NullSetCache.Instance,

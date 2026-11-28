@@ -8,6 +8,11 @@ namespace UiPath.Caching.Tests.Negotiation;
 
 public class EventFormatNegotiationTests
 {
+    private const int Calls = 100;
+
+    // An allocation per event adds at least one 24-byte object to every call; a one-off allocation by the runtime adds less.
+    private const ulong UnderOneObjectPerCall = (Calls * 24) - 1;
+
     private static readonly string[] Binary = ["02"];
     private static readonly string[] Json = ["json"];
     private static readonly string[] Both = ["json", "02"];
@@ -185,8 +190,8 @@ public class EventFormatNegotiationTests
         var viaFixed = Allocated(() => fixedJson.Encode(original));
         var direct = Allocated(() => plain.Encode(original));
 
-        viaNodeList.Should().Be(viaFixed, "reading the decision costs nothing");
-        viaFixed.Should().Be(direct, "and neither does the wrapper");
+        viaNodeList.Should().BeCloseTo(viaFixed, UnderOneObjectPerCall, "reading the decision costs nothing");
+        viaFixed.Should().BeCloseTo(direct, UnderOneObjectPerCall, "and neither does the wrapper");
     }
 
     private static EventFormatRegistry Registry(bool write)
@@ -201,7 +206,7 @@ public class EventFormatNegotiationTests
         action();
         action();
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 100; i++)
+        for (var i = 0; i < Calls; i++)
         {
             action();
         }

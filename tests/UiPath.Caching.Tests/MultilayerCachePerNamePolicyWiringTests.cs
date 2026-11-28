@@ -39,7 +39,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > policyTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() > policyTtl - TimeSpan.FromSeconds(5) && d - _fixture.Create<TimeProvider>().GetUtcNow() < policyTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -60,7 +60,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() > callerTtl - TimeSpan.FromSeconds(5) && d - _fixture.Create<TimeProvider>().GetUtcNow() < callerTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -85,7 +85,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > defaultTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < defaultTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() > defaultTtl - TimeSpan.FromSeconds(5) && d - _fixture.Create<TimeProvider>().GetUtcNow() < defaultTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -109,7 +109,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > optionsTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < optionsTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() > optionsTtl - TimeSpan.FromSeconds(5) && d - _fixture.Create<TimeProvider>().GetUtcNow() < optionsTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -132,7 +132,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > floor - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < floor + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() > floor - TimeSpan.FromSeconds(5) && d - _fixture.Create<TimeProvider>().GetUtcNow() < floor + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -195,7 +195,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > defaultTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < defaultTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() > defaultTtl - TimeSpan.FromSeconds(5) && d - _fixture.Create<TimeProvider>().GetUtcNow() < defaultTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -215,7 +215,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > optionsTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < optionsTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() > optionsTtl - TimeSpan.FromSeconds(5) && d - _fixture.Create<TimeProvider>().GetUtcNow() < optionsTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -235,11 +235,11 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var cacheEntry = _fixture.Freeze<Microsoft.Extensions.Caching.Memory.ICacheEntry>();
         _memoryCache.CreateEntry(Arg.Any<object>()).Returns(cacheEntry);
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(new TestCacheEntry<string?> { Value = "v", Found = true, Expiration = DateTimeOffset.UtcNow.AddHours(1) });
+            .Returns(new TestCacheEntry<string?> { Value = "v", Found = true, Expiration = _fixture.Create<TimeProvider>().GetUtcNow().AddHours(1) });
 
         _ = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: TestContext.Current.CancellationToken);
 
-        var nowPlusPolicyCap = DateTimeOffset.UtcNow.Add(policyCap);
+        var nowPlusPolicyCap = _fixture.Create<TimeProvider>().GetUtcNow().Add(policyCap);
         cacheEntry.AbsoluteExpiration.Should().BeCloseTo(nowPlusPolicyCap,
             TimeSpan.FromSeconds(5),
             "the L1 entry's absolute expiration must come from policy.LocalExpiration, not from LocalMaxExpiration or the L2 entry's 1-hour TTL");
@@ -257,11 +257,11 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var cacheEntry = _fixture.Freeze<Microsoft.Extensions.Caching.Memory.ICacheEntry>();
         _memoryCache.CreateEntry(Arg.Any<object>()).Returns(cacheEntry);
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(new TestCacheEntry<string?> { Value = "v", Found = true, Expiration = DateTimeOffset.UtcNow.AddHours(1) });
+            .Returns(new TestCacheEntry<string?> { Value = "v", Found = true, Expiration = _fixture.Create<TimeProvider>().GetUtcNow().AddHours(1) });
 
         _ = await Sut.GetCacheEntryAsync<string>(_cacheKey, callerPolicy, TestContext.Current.CancellationToken);
 
-        var nowPlusCallerCap = DateTimeOffset.UtcNow.Add(callerPolicyCap);
+        var nowPlusCallerCap = _fixture.Create<TimeProvider>().GetUtcNow().Add(callerPolicyCap);
         cacheEntry.AbsoluteExpiration.Should().BeCloseTo(nowPlusCallerCap,
             TimeSpan.FromSeconds(5),
             "the L1 entry's absolute expiration must come from the CALLER-supplied policy.LocalExpiration, not from LocalMaxExpiration or the L2 entry's 1-hour TTL");
@@ -287,8 +287,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await _innerCache.Received(1).RefreshAsync<string>(
             _cacheKey,
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > policyTtl - TimeSpan.FromSeconds(5)
-                && d - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() > policyTtl - TimeSpan.FromSeconds(5)
+                && d - _fixture.Create<TimeProvider>().GetUtcNow() < policyTtl + TimeSpan.FromSeconds(5)),
                 Arg.Any<CachePolicy?>(),
                 Arg.Any<CancellationToken>());
     }
@@ -313,8 +313,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && d - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() >= baseTtl - TimeSpan.FromSeconds(5)
+                && d - _fixture.Create<TimeProvider>().GetUtcNow() <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -339,8 +339,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5)
-                && d - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() > callerTtl - TimeSpan.FromSeconds(5)
+                && d - _fixture.Create<TimeProvider>().GetUtcNow() < callerTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -365,8 +365,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).TryFillAsync<string>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && d - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() >= baseTtl - TimeSpan.FromSeconds(5)
+                && d - _fixture.Create<TimeProvider>().GetUtcNow() <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -390,8 +390,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= optionsTtl - TimeSpan.FromSeconds(5)
-                && d - DateTimeOffset.UtcNow <= optionsTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() >= optionsTtl - TimeSpan.FromSeconds(5)
+                && d - _fixture.Create<TimeProvider>().GetUtcNow() <= optionsTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -416,8 +416,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && d - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() >= baseTtl - TimeSpan.FromSeconds(5)
+                && d - _fixture.Create<TimeProvider>().GetUtcNow() <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -442,8 +442,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await _innerCache.Received(1).SetAsync<string?>(
             Arg.Any<KeyValuePair<CacheKey, string?>[]>(),
-            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && d - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - _fixture.Create<TimeProvider>().GetUtcNow() >= baseTtl - TimeSpan.FromSeconds(5)
+                && d - _fixture.Create<TimeProvider>().GetUtcNow() <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -462,7 +462,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var ttls = new List<TimeSpan>();
         _innerCache.SetAsync<string?>(_cacheKey,
             Arg.Any<string?>(),
-                Arg.Do<DateTimeOffset>(d => ttls.Add(d - DateTimeOffset.UtcNow)),
+                Arg.Do<DateTimeOffset>(d => ttls.Add(d - _fixture.Create<TimeProvider>().GetUtcNow())),
                 Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>())
             .Returns(true);
@@ -511,7 +511,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     public async Task GetCacheEntry_L2_hit_populates_L1_uncapped_when_LocalMaxExpiration_is_unbounded()
     {
         _options.LocalMaxExpiration = TimeSpan.MaxValue;
-        var l2Expiration = DateTimeOffset.UtcNow.AddHours(1);
+        var l2Expiration = _fixture.Create<TimeProvider>().GetUtcNow().AddHours(1);
 
         var cacheEntry = _fixture.Freeze<Microsoft.Extensions.Caching.Memory.ICacheEntry>();
         _memoryCache.CreateEntry(Arg.Any<object>()).Returns(cacheEntry);

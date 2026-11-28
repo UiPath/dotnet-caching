@@ -43,7 +43,7 @@ public class FormatMigratorTests
         }
 
         offered.Should().BeTrue();
-        (await ranInsideTheCall.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().BeFalse();
+        (await ranInsideTheCall.Task.WaitAsync(Ct)).Should().BeFalse();
         await WaitForAsync(() => Outcomes("done") == 1);
     }
 
@@ -212,7 +212,7 @@ public class FormatMigratorTests
         });
 
         Offer("a").Should().BeTrue();
-        await running.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await running.Task.WaitAsync(Ct);
         Offer("b").Should().BeTrue();
         Offer("c").Should().BeTrue();
         Offer("d").Should().BeFalse();
@@ -232,17 +232,26 @@ public class FormatMigratorTests
         var order = new List<int>();
         var inFlight = 0;
         var overlapped = false;
+        var entered = System.Threading.Channels.Channel.CreateUnbounded<int>();
+        var releases = Enumerable.Range(0, 20).Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
 
         for (var i = 0; i < 20; i++)
         {
             sut.TryEnqueue(Owner, $"k{i}", "Redis", 1, i, state => async _ =>
             {
                 overlapped |= Interlocked.Increment(ref inFlight) > 1;
-                await Task.Delay(1, Ct);
+                entered.Writer.TryWrite(state);
+                await releases[state].Task.WaitAsync(Ct);
                 order.Add(state);
                 Interlocked.Decrement(ref inFlight);
                 return RewriteTally.Of(RewriteOutcome.Done);
             }).Should().BeTrue();
+        }
+
+        for (var i = 0; i < 20; i++)
+        {
+            (await entered.Reader.ReadAsync(Ct)).Should().Be(i);
+            releases[i].SetResult();
         }
 
         await WaitForAsync(() => Outcomes("done") == 20);
@@ -288,7 +297,7 @@ public class FormatMigratorTests
             s.running.SetResult();
             try
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                await new TaskCompletionSource().Task.WaitAsync(token);
             }
             catch (OperationCanceledException)
             {
@@ -298,7 +307,7 @@ public class FormatMigratorTests
 
             return RewriteTally.Of(RewriteOutcome.Done);
         }).Should().BeTrue();
-        await running.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await running.Task.WaitAsync(Ct);
         sut.TryEnqueue(Owner, "queued", "Redis", 1, 0, _ => _ =>
         {
             queuedRan = true;
@@ -307,8 +316,8 @@ public class FormatMigratorTests
 
         sut.Dispose();
 
-        await canceled.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        await sut.Stopped.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await canceled.Task.WaitAsync(Ct);
+        await sut.Stopped.WaitAsync(Ct);
         queuedRan.Should().BeFalse();
         Outcomes("dropped").Should().Be(2, "the queued job and the one that was canceled");
         Outcomes("failed").Should().Be(0);
@@ -327,13 +336,13 @@ public class FormatMigratorTests
             await s.finish.Task;
             return RewriteTally.Of(RewriteOutcome.Done);
         }).Should().BeTrue();
-        await running.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await running.Task.WaitAsync(Ct);
 
         sut.Dispose();
 
         sut.Stopped.IsCompleted.Should().BeFalse("the write in flight is finished, and its buffer returned, before the worker ends");
         finish.SetResult();
-        await sut.Stopped.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await sut.Stopped.WaitAsync(Ct);
         Outcomes("done").Should().Be(1, "a job that ran to its end is counted as it ended");
     }
 
@@ -351,7 +360,7 @@ public class FormatMigratorTests
         }).Should().BeFalse();
 
         starts.Should().Be(0);
-        await sut.Stopped.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await sut.Stopped.WaitAsync(Ct);
         sut.Dispose();
     }
 
@@ -376,13 +385,13 @@ public class FormatMigratorTests
             sut.TryEnqueue(Owner, "k", "Redis", 1, running, static tcs => async token =>
             {
                 tcs.SetResult();
-                await Task.Delay(Timeout.InfiniteTimeSpan, token).ContinueWith(_ => { }, CancellationToken.None);
+                await new TaskCompletionSource().Task.WaitAsync(token).ContinueWith(_ => { }, CancellationToken.None);
                 throw new InvalidOperationException("late");
             }).Should().BeTrue();
-            await running.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await running.Task.WaitAsync(Ct);
 
             sut.Dispose();
-            await sut.Stopped.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await sut.Stopped.WaitAsync(Ct);
 #pragma warning disable S1215 // The test needs the finalizers to run so an unobserved task exception surfaces.
             GC.Collect();
             GC.WaitForPendingFinalizers();
@@ -473,7 +482,7 @@ public class FormatMigratorTests
             return RewriteTally.Of(RewriteOutcome.Done);
         });
         Offer("a").Should().BeTrue();
-        await running.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await running.Task.WaitAsync(Ct);
         Offer("b").Should().BeFalse();
         var gated = sut.GatedClaims;
 
@@ -632,14 +641,14 @@ public class FormatMigratorTests
         sut.EnqueueClaimed("Redis", Claim(sut, 100, "inflight"), 100, running, static tcs => async token =>
         {
             tcs.SetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            await new TaskCompletionSource().Task.WaitAsync(token);
             return default;
         }).Should().BeTrue();
-        await running.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await running.Task.WaitAsync(Ct);
         sut.EnqueueClaimed("Redis", Claim(sut, 100, "queued"), 100, 0, static _ => _ => ValueTask.FromResult(default(RewriteTally))).Should().BeTrue();
 
         sut.Dispose();
-        await sut.Stopped.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await sut.Stopped.WaitAsync(Ct);
 
         Outcomes("dropped").Should().Be(200, "the hundred in flight, cancelled, and the hundred behind it");
     }
@@ -683,11 +692,11 @@ public class FormatMigratorTests
             await s.proceed.Task;
             throw new InvalidOperationException("the connection closed");
         });
-        await running.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await running.Task.WaitAsync(Ct);
         _clock.Advance(FormatMigrator.LogInterval + TimeSpan.FromSeconds(1));
         sut.Dispose();
         proceed.SetResult();
-        await sut.Stopped.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await sut.Stopped.WaitAsync(Ct);
 
         logger.Records.Where(r => r.Level == LogLevel.Warning).Should().HaveCount(2, "a failure while shutting down is not a warning");
         logger.Records.Should().Contain(r => r.Level == LogLevel.Debug);
@@ -757,17 +766,22 @@ public class FormatMigratorTests
         return claimed;
     }
 
-    private static async Task WaitForAsync(Func<bool> condition)
+    private async Task WaitForAsync(Func<bool> condition)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (!condition())
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Recorded(MetricRecord _) { if (condition()) { done.TrySetResult(); } }
+        _telemetry.MetricRecorded += Recorded;
+        try
         {
-            if (DateTime.UtcNow > deadline)
+            if (condition())
             {
-                throw new TimeoutException("The condition did not become true.");
+                done.TrySetResult();
             }
-
-            await Task.Delay(5, Ct);
+            await done.Task.WaitAsync(Ct);
+        }
+        finally
+        {
+            _telemetry.MetricRecorded -= Recorded;
         }
     }
 

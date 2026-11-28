@@ -5,14 +5,13 @@ namespace UiPath.Caching.Tests;
 
 public class BackgroundWritesTests
 {
-    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(5);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public void Before_the_first_background_write_nothing_is_tracked_and_a_read_spanning_it_is_not_kept()
     {
-        var writes = new BackgroundWrites(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), TimeProvider.System);
+        var writes = new BackgroundWrites(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), new ManualTimeProvider());
         var mark = writes.Mark("k");
 
         using (var turn = writes.Enter("k"))
@@ -31,7 +30,7 @@ public class BackgroundWritesTests
     [Fact]
     public void A_fill_tells_a_change_since_its_mark_from_a_local_write_that_refused()
     {
-        var writes = new BackgroundWrites(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), TimeProvider.System);
+        var writes = new BackgroundWrites(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), new ManualTimeProvider());
         writes.TryReserve().Should().BeTrue();
         writes.Release();
         var mark = writes.Mark("k");
@@ -48,7 +47,7 @@ public class BackgroundWritesTests
         var local = new List<string>();
         using var firstIssued = new ManualResetEventSlim();
         using var secondDone = new ManualResetEventSlim();
-        var writes = new BackgroundWrites(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), TimeProvider.System, onIssued: _ =>
+        var writes = new BackgroundWrites(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), new ManualTimeProvider(), onIssued: _ =>
         {
             if (!firstIssued.IsSet)
             {
@@ -96,7 +95,7 @@ public class BackgroundWritesTests
         order.Should().Equal("background");
 
         background.SetResult();
-        (await write.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
+        (await write.AsTask().WaitAsync(Ct)).Should().BeTrue();
         order.Should().Equal("background", "write");
         await writes.DrainAsync();
     }
@@ -129,7 +128,7 @@ public class BackgroundWritesTests
     public async Task A_replacing_write_past_the_limit_gives_its_place_back_and_is_counted()
     {
         var telemetry = Substitute.For<ICachingTelemetryProvider>();
-        var writes = new BackgroundWrites(2, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, telemetry, TimeProvider.System);
+        var writes = new BackgroundWrites(2, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, telemetry, new ManualTimeProvider());
         var gate = Gate();
         Reserve(writes, "k", async _ => await gate.Task);
         Reserve(writes, "k", _ => ValueTask.CompletedTask);
@@ -176,8 +175,8 @@ public class BackgroundWritesTests
         writes.InFlight.Should().Be(3);
 
         awaited.SetResult();
-        (await write.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
-        await started.Task.WaitAsync(Wait, Ct);
+        (await write.AsTask().WaitAsync(Ct)).Should().BeTrue();
+        await started.Task.WaitAsync(Ct);
 
         var kept = writes.Run("k", 0, static _ => true, (_, _) => Ran(ran, "new"));
         writes.InFlight.Should().Be(2, "a write past the limit that can no longer replace the queued one takes no place");
@@ -187,7 +186,7 @@ public class BackgroundWritesTests
         var foreground = writes.WriteAsync("k", ran, null, static (r, _) => Wrote(r, "new"), static (_, written, _) => written, Ct);
         queued.SetResult();
         other.SetResult();
-        (await foreground.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
+        (await foreground.AsTask().WaitAsync(Ct)).Should().BeTrue();
         await writes.DrainAsync();
         ran.Should().Equal("awaited", "queued", "new");
         writes.InFlight.Should().Be(0);
@@ -240,18 +239,18 @@ public class BackgroundWritesTests
     [Fact]
     public async Task A_replaced_write_does_not_start_before_the_write_that_replaced_it_has_made_its_local_write()
     {
-        var gate = Gate();
+        var gate = new TaskCompletionSource();
         var started = Gate();
         var issued = 0;
         var localDone = false;
         bool? sawLocal = null;
-        var writes = new BackgroundWrites(4, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), TimeProvider.System, onIssued: _ =>
+        var writes = new BackgroundWrites(4, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), new ManualTimeProvider(), onIssued: _ =>
         {
             if (++issued == 3)
             {
                 // Between the swap and the local write: the job must not start here.
                 gate.SetResult();
-                started.Task.Wait(TimeSpan.FromMilliseconds(250), Ct);
+                started.Task.IsCompleted.Should().BeFalse();
             }
         });
         Reserve(writes, "k", async _ => await gate.Task);
@@ -294,7 +293,7 @@ public class BackgroundWritesTests
             {
                 if (i == Count)
                 {
-                    await Task.WhenAll(awaited).WaitAsync(Wait, Ct);
+                    await Task.WhenAll(awaited).WaitAsync(Ct);
                 }
 
                 if ((i == Count || rng.Next(100) >= awaitedPercent) && writes.TryReserve("k", true))
@@ -337,8 +336,8 @@ public class BackgroundWritesTests
                 }
             }
 
-            (await Task.WhenAll(awaited).WaitAsync(Wait, Ct)).Should().OnlyContain(w => w);
-            await writes.DrainAsync().WaitAsync(Wait, Ct);
+            (await Task.WhenAll(awaited).WaitAsync(Ct)).Should().OnlyContain(w => w);
+            await writes.DrainAsync().WaitAsync(Ct);
             inner.Last().Should().Be(Count);
             Volatile.Read(ref local).Should().Be(Count);
             writes.InFlight.Should().Be(0);
@@ -362,7 +361,7 @@ public class BackgroundWritesTests
 
         awaited.IsCompleted.Should().BeFalse();
         gate.SetResult();
-        (await awaited.WaitAsync(Wait, Ct)).Should().BeTrue();
+        (await awaited.WaitAsync(Ct)).Should().BeTrue();
         await writes.DrainAsync();
         ran.Should().Equal("v1", "v2", "v4");
     }
@@ -381,7 +380,7 @@ public class BackgroundWritesTests
         order.Should().BeEmpty();
 
         background.SetResult();
-        (await write.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
+        (await write.AsTask().WaitAsync(Ct)).Should().BeTrue();
         order.Should().Equal("write");
         await writes.DrainAsync();
     }
@@ -399,7 +398,7 @@ public class BackgroundWritesTests
         order.Should().Equal("before");
 
         background.SetResult();
-        await write.AsTask().WaitAsync(Wait, Ct);
+        await write.AsTask().WaitAsync(Ct);
         order.Should().Equal("before", "write");
         await writes.DrainAsync();
     }
@@ -413,7 +412,7 @@ public class BackgroundWritesTests
 
         var write = writes.WriteAsync("k", 0, null, static (_, _) => ValueTask.FromResult(true), static (_, written, _) => written, Ct);
 
-        (await write.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
+        (await write.AsTask().WaitAsync(Ct)).Should().BeTrue();
         background.SetResult();
         await writes.DrainAsync();
     }
@@ -440,7 +439,7 @@ public class BackgroundWritesTests
         Reserve(writes, "k", _ => ValueTask.CompletedTask);
         inner.SetResult();
 
-        (await first.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
+        (await first.AsTask().WaitAsync(Ct)).Should().BeTrue();
         log.Should().Equal("superseded");
         await writes.DrainAsync();
     }
@@ -467,7 +466,7 @@ public class BackgroundWritesTests
         Reserve(writes, "k", _ => ValueTask.CompletedTask);
         inner.SetResult();
 
-        (await first.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
+        (await first.AsTask().WaitAsync(Ct)).Should().BeTrue();
         log.Should().BeEmpty();
         await writes.DrainAsync();
     }
@@ -497,9 +496,9 @@ public class BackgroundWritesTests
         var second = WriteVersioned(writes, log, "second", newer, 5);
 
         newer.SetResult();
-        await second.WaitAsync(Wait, Ct);
+        await second.WaitAsync(Ct);
         older.SetResult();
-        await first.WaitAsync(Wait, Ct);
+        await first.WaitAsync(Ct);
 
         log.Should().Equal("second set", "first superseded");
     }
@@ -516,9 +515,9 @@ public class BackgroundWritesTests
         var second = WriteVersioned(writes, log, "second", newer, 5);
 
         older.SetResult();
-        await first.WaitAsync(Wait, Ct);
+        await first.WaitAsync(Ct);
         newer.SetResult();
-        await second.WaitAsync(Wait, Ct);
+        await second.WaitAsync(Ct);
 
         log.Should().Equal("first set", "second set");
     }
@@ -542,7 +541,7 @@ public class BackgroundWritesTests
     public void A_refused_fill_is_counted_by_why_it_was_refused()
     {
         var telemetry = new Telemetry.RecordingTelemetryProvider();
-        var writes = new BackgroundWrites(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, telemetry, TimeProvider.System);
+        var writes = new BackgroundWrites(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, telemetry, new ManualTimeProvider());
         writes.Track();
         var mark = writes.Mark("k");
         writes.Touch("k");
@@ -667,7 +666,7 @@ public class BackgroundWritesTests
         writes.TryReserve().Should().BeFalse("a closing cache takes no more background writes");
 
         gate.SetResult();
-        await drain.WaitAsync(Wait, Ct);
+        await drain.WaitAsync(Ct);
         seen.IsCancellationRequested.Should().BeFalse();
     }
 
@@ -689,7 +688,7 @@ public class BackgroundWritesTests
         (await seen.Task).IsCancellationRequested.Should().BeFalse();
 
         clock.Elapse();
-        await drain.WaitAsync(Wait, Ct);
+        await drain.WaitAsync(Ct);
 
         (await seen.Task).IsCancellationRequested.Should().BeTrue();
     }
@@ -721,11 +720,11 @@ public class BackgroundWritesTests
 
         var drain = writes.DrainAsync();
         clock.Elapse();
-        await drain.WaitAsync(Wait, Ct);
+        await drain.WaitAsync(Ct);
 
         behind.Should().BeFalse("it was cancelled while it waited");
         stuck.SetResult();
-        (await awaited.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
+        (await awaited.AsTask().WaitAsync(Ct)).Should().BeTrue();
     }
 
     [Fact]
@@ -939,7 +938,7 @@ public class BackgroundWritesTests
     }
 
     private static BackgroundWrites Create(int limit = 8, TimeSpan? drainTimeout = null, TimeProvider? clock = null) =>
-        new(limit, drainTimeout ?? TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), clock ?? TimeProvider.System);
+        new(limit, drainTimeout ?? TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), clock ?? new ManualTimeProvider());
 
     private static TaskCompletionSource Gate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 

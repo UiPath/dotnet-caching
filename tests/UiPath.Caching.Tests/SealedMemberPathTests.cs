@@ -7,8 +7,10 @@ namespace UiPath.Caching.Tests;
 /// <summary>Each sealed member takes the capability interface on a cache that implements it, and the matching <see cref="CacheKey"/> member on one that does not.</summary>
 public class SealedMemberPathTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
-    private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+    private static readonly DateTimeOffset Deadline = Clock.GetUtcNow().AddMinutes(5);
     private static readonly string[] Fields = ["f"];
     private static readonly Func<CancellationToken, Task<string?>> Load = static _ => Task.FromResult<string?>("v");
     private static readonly Func<int, CancellationToken, Task<string?>> LoadState = static (n, _) => Task.FromResult<string?>($"v{n}");
@@ -22,7 +24,7 @@ public class SealedMemberPathTests
     [Fact]
     public async Task A_capable_cache_answers_every_sealed_member()
     {
-        using var owner = InMemoryMultilayer.Cache();
+        using var owner = InMemoryMultilayer.Cache(clock: Clock);
         ICache cache = owner;
 
         (await cache.GetOrAddAsync($"{Key("a")}", Load, null, Ct)).Should().Be("v");
@@ -79,7 +81,7 @@ public class SealedMemberPathTests
     [Fact]
     public async Task A_capable_typed_cache_answers_every_sealed_member()
     {
-        using var owner = InMemoryMultilayer.Cache();
+        using var owner = InMemoryMultilayer.Cache(clock: Clock);
         ICache<string> cache = new Cache<string>(owner, new PrefixCacheKeyStrategy("app"));
 
         (await cache.GetOrAddAsync($"{Key("a")}", Load, Ct)).Should().Be("v");
@@ -133,7 +135,7 @@ public class SealedMemberPathTests
     [Fact]
     public async Task A_capable_hash_cache_answers_every_sealed_member()
     {
-        using var owner = InMemoryMultilayer.HashCache();
+        using var owner = InMemoryMultilayer.HashCache(clock: Clock);
         IHashCache cache = owner;
 
         (await cache.GetOrAddAsync($"{Key("a")}", LoadHash, null, Ct))["f"].Should().Be("v");
@@ -189,7 +191,7 @@ public class SealedMemberPathTests
     [Fact]
     public async Task A_capable_typed_hash_cache_answers_every_sealed_member()
     {
-        using var owner = InMemoryMultilayer.HashCache();
+        using var owner = InMemoryMultilayer.HashCache(clock: Clock);
         IHashCache<string> cache = new HashCache<string>(owner, new PrefixCacheKeyStrategy("app"));
 
         (await cache.GetOrAddAsync($"{Key("a")}", LoadHash, Ct))["f"].Should().Be("v");
@@ -242,7 +244,7 @@ public class SealedMemberPathTests
     [Fact]
     public async Task A_capable_cache_answers_the_argument_and_state_members()
     {
-        using var owner = InMemoryMultilayer.Cache();
+        using var owner = InMemoryMultilayer.Cache(clock: Clock);
         ICache cache = owner;
         ICache<string> typed = new Cache<string>(owner, new PrefixCacheKeyStrategy("app"));
 
@@ -259,7 +261,7 @@ public class SealedMemberPathTests
     [Fact]
     public async Task A_capable_hash_cache_answers_the_state_members()
     {
-        using var owner = InMemoryMultilayer.HashCache();
+        using var owner = InMemoryMultilayer.HashCache(clock: Clock);
         IHashCache cache = owner;
         IHashCache<string> typed = new HashCache<string>(owner, new PrefixCacheKeyStrategy("app"));
 

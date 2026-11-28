@@ -140,8 +140,9 @@ public class KeyedSubjectTests
     public void OnNext_logs_slow_observer_when_call_exceeds_threshold()
     {
         var logger = new RecordingLogger();
-        var sut = new KeyedSubject<ICacheEvent>(logger, TimeSpan.FromMilliseconds(20));
-        sut.Subscribe(new DelayingKeyedObserver("key1", TimeSpan.FromMilliseconds(80)));
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var sut = new KeyedSubject<ICacheEvent>(logger, TimeSpan.FromMilliseconds(20), clock);
+        sut.Subscribe(new DelayingKeyedObserver("key1", clock, TimeSpan.FromMilliseconds(80)));
 
         sut.OnNext(CreateEvent("key1"));
 
@@ -153,7 +154,7 @@ public class KeyedSubjectTests
     public void OnNext_does_not_log_slow_observer_when_call_is_fast()
     {
         var logger = new RecordingLogger();
-        var sut = new KeyedSubject<ICacheEvent>(logger, TimeSpan.FromMilliseconds(500));
+        var sut = new KeyedSubject<ICacheEvent>(logger, TimeSpan.FromMilliseconds(500), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         sut.Subscribe(new TestKeyedObserver("key1"));
 
         sut.OnNext(CreateEvent("key1"));
@@ -534,6 +535,7 @@ public class KeyedSubjectTests
             var sut = new KeyedSubject<ICacheEvent>(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
             var observers = new ConcurrentBag<TestKeyedObserver>();
             using var start = new Barrier(5);
+            using var subscribed = new CountdownEvent(4);
             void SubscribeMany()
             {
                 start.SignalAndWait(TestContext.Current.CancellationToken);
@@ -542,13 +544,17 @@ public class KeyedSubjectTests
                     var observer = new TestKeyedObserver($"key{i % 16}");
                     observers.Add(observer);
                     sut.Subscribe(observer);
+                    if (i == 0)
+                    {
+                        subscribed.Signal();
+                    }
                 }
             }
 
             var subscribers = Enumerable.Range(0, 4).Select(_ => OnDedicatedThread(SubscribeMany, TestContext.Current.CancellationToken)).ToArray();
 
             start.SignalAndWait(TestContext.Current.CancellationToken);
-            Thread.SpinWait(20_000);
+            subscribed.Wait(TestContext.Current.CancellationToken);
             sut.OnCompleted();
             await Task.WhenAll(subscribers);
 
@@ -698,10 +704,10 @@ public class KeyedSubjectTests
         public void OnEventsMissed(MissedEventsReason reason) => throw new InvalidOperationException("boom on events missed");
     }
 
-    private sealed class DelayingKeyedObserver(string key, TimeSpan delay) : IKeyedObserver<ICacheEvent>
+    private sealed class DelayingKeyedObserver(string key, ManualTimeProvider clock, TimeSpan delay) : IKeyedObserver<ICacheEvent>
     {
         public string Key { get; } = key;
-        public void OnNext(ICacheEvent value) => Thread.Sleep(delay);
+        public void OnNext(ICacheEvent value) => clock.Advance(delay);
         public void OnError(Exception error) { }
         public void OnCompleted() { }
     }

@@ -16,7 +16,7 @@ namespace UiPath.Caching.Tests.Redis;
 public class RedisCacheTryAddTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
-    private readonly DateTimeOffset _now = DateTimeOffset.UtcNow;
+    private readonly DateTimeOffset _now = DateTimeOffset.UnixEpoch;
     private readonly RecordingTelemetryProvider _telemetry = new();
     private ISystemClock _clock = default!;
     private RedisCacheOptions _cacheOptions = default!;

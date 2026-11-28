@@ -39,7 +39,7 @@ public class MultilayerSetOrderTests
     {
         using var rig = new Rig();
 
-        (await rig.Hash.SetAsync<string>("k", Fields, new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5)), policy: null, Ct)).Should().BeTrue();
+        (await rig.Hash.SetAsync<string>("k", Fields, new HashCacheEntryOptions(new ManualTimeProvider().GetUtcNow().AddMinutes(5)), policy: null, Ct)).Should().BeTrue();
 
         rig.Log.Should().Equal("write:k", "event:k");
     }
@@ -109,7 +109,6 @@ public class MultilayerSetOrderTests
         await rig.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<string?>("fresh"), Rehydrating, Ct);
 
         await rig.UntilAsync(() => rig.Log.Contains("write:k"));
-        await Task.Delay(100, Ct);
         rig.Log.Should().Equal("write:k");
     }
 
@@ -135,7 +134,6 @@ public class MultilayerSetOrderTests
         await rig.Hash.GetOrAddAsync<string>("k", _ => Task.FromResult(Fields), Rehydrating, Ct);
 
         await rig.UntilAsync(() => rig.Log.Contains("write:k"));
-        await Task.Delay(100, Ct);
         rig.Log.Should().Equal("write:k");
     }
 
@@ -205,6 +203,7 @@ public class MultilayerSetOrderTests
     private sealed class Rig : IDisposable
     {
         private readonly object _gate = new();
+        private readonly TestSignal _changed = new();
 
         public Rig(bool failingMemory = false)
         {
@@ -219,7 +218,7 @@ public class MultilayerSetOrderTests
             topics.Get(Arg.Any<string?>()).Returns(provider);
             var locks = Substitute.For<IDistributedLock>();
             locks.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(Substitute.For<IAsyncDisposable>());
-            IMemoryCacheFactory memory = failingMemory ? new ThrowingMemoryCacheFactory() : new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance);
+            IMemoryCacheFactory memory = failingMemory ? new ThrowingMemoryCacheFactory() : new MemoryCacheFactory(new ManualTimeProvider(), NullLoggerFactory.Instance);
             var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = false };
 
             InnerCache = Substitute.For<ICache>();
@@ -237,7 +236,7 @@ public class MultilayerSetOrderTests
                     Add($"write:{call.ArgAt<CacheKey>(0).Name}");
                     return new ValueTask<bool>(WriteResult);
                 });
-            Cache = RunTables.Track(new MultilayerCache(KnownCacheProviderNames.InMemoryRedis, InnerCache, memory, NullChangeTokenFactory.Instance, topics, events, NullTelemetryProvider.Instance, options, options, cacheOptions, locks, NullCachePolicyFactory.Instance, TimeProvider.System, NullLogger.Instance));
+            Cache = RunTables.Track(new MultilayerCache(KnownCacheProviderNames.InMemoryRedis, InnerCache, memory, NullChangeTokenFactory.Instance, topics, events, NullTelemetryProvider.Instance, options, options, cacheOptions, locks, NullCachePolicyFactory.Instance, new ManualTimeProvider(), NullLogger.Instance));
 
             InnerHash = Substitute.For<IHashCache>();
             ValueTaskStubs.Returns(
@@ -247,7 +246,7 @@ public class MultilayerSetOrderTests
                     Add($"write:{call.ArgAt<CacheKey>(0).Name}");
                     return WriteThrows ? throw new InvalidOperationException("redis is down") : new ValueTask<bool>(WriteResult);
                 });
-            Hash = RunTables.Track(new MultilayerHashCache(KnownCacheProviderNames.InMemoryRedis, InnerHash, memory, NullChangeTokenFactory.Instance, topics, events, NullTelemetryProvider.Instance, options, options, cacheOptions, locks, NullCachePolicyFactory.Instance, TimeProvider.System, NullLogger.Instance));
+            Hash = RunTables.Track(new MultilayerHashCache(KnownCacheProviderNames.InMemoryRedis, InnerHash, memory, NullChangeTokenFactory.Instance, topics, events, NullTelemetryProvider.Instance, options, options, cacheOptions, locks, NullCachePolicyFactory.Instance, new ManualTimeProvider(), NullLogger.Instance));
         }
 
         public MultilayerCache Cache { get; }
@@ -275,12 +274,12 @@ public class MultilayerSetOrderTests
         public void InnerEntry() =>
             ValueTaskStubs.Returns(
                 InnerCache.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
-                new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "old", Expiration = DateTimeOffset.UtcNow.AddMinutes(2) }));
+                new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "old", Expiration = new ManualTimeProvider().GetUtcNow().AddMinutes(2) }));
 
         public void InnerHashEntry() =>
             ValueTaskStubs.Returns(
                 InnerHash.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
-                new ValueTask<ICacheEntry<IDictionary<string, string?>>>(new TestCacheEntry<IDictionary<string, string?>> { Value = new Dictionary<string, string?> { ["f"] = "old" }, Expiration = DateTimeOffset.UtcNow.AddMinutes(2) }));
+                new ValueTask<ICacheEntry<IDictionary<string, string?>>>(new TestCacheEntry<IDictionary<string, string?>> { Value = new Dictionary<string, string?> { ["f"] = "old" }, Expiration = new ManualTimeProvider().GetUtcNow().AddMinutes(2) }));
 
         public ValueTask<bool> Publish(ICacheEvent @event)
         {
@@ -299,15 +298,7 @@ public class MultilayerSetOrderTests
             return new ValueTask<bool>(PublishResultFor?.Invoke(key) ?? PublishResult);
         }
 
-        public async Task UntilAsync(Func<bool> condition)
-        {
-            var deadline = DateTime.UtcNow.AddSeconds(10);
-            while (!condition())
-            {
-                (DateTime.UtcNow < deadline).Should().BeTrue("the condition was not met in time: {0}", string.Join(", ", Log));
-                await Task.Delay(5, Ct);
-            }
-        }
+        public Task UntilAsync(Func<bool> condition) => _changed.UntilAsync(condition, Ct);
 
         public void Dispose()
         {
@@ -320,6 +311,7 @@ public class MultilayerSetOrderTests
             lock (_gate)
             {
                 Log.Add(entry);
+                _changed.Pulse();
             }
         }
     }

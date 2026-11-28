@@ -10,6 +10,8 @@ namespace UiPath.Caching.Tests.Broadcast;
 
 public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+    private readonly Channel<bool> _changes = Channel.CreateUnbounded<bool>();
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private readonly TimeSpan _delay = 50.Milliseconds();
     private readonly TaskCompletionSource _subscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -29,7 +31,6 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         Sut();
         var action = await WaitForSubscribeAsync();
         action(_redisChannel, RedisValue.Null);
-        await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out _).Should().BeFalse();
     }
 
@@ -39,7 +40,6 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         Sut();
         var action = await WaitForSubscribeAsync();
         action(_redisChannel, (RedisValue)_fixture.Create<string>());
-        await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out _).Should().BeFalse();
     }
 
@@ -99,7 +99,6 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         Sut();
         var action = await WaitForSubscribeAsync();
         action(_redisChannel, (RedisValue)new byte[] { 0x02, 0xDF, 0xFF, 0xFF, 0xFF, 0xFF });
-        await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
 
         Volatile.Read(ref dropped).Should().Be(1);
     }
@@ -117,7 +116,6 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         Sut();
         var action = await WaitForSubscribeAsync();
         action(_redisChannel, (RedisValue)expectedString);
-        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out _).Should().Be(valid);
     }
 
@@ -127,22 +125,17 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         var redis = _fixture.Freeze<IRedisConnector>();
         redis.Subscriber.Returns(_subscriber);
         var resubscribed = 0;
-        _fixture.Inject<Action>(() => Interlocked.Increment(ref resubscribed));
+        _fixture.Inject<Action>(() => { Interlocked.Increment(ref resubscribed); _changes.Writer.TryWrite(true); });
         var subscribes = 0;
         _subscriber.When(x => x.Subscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
             .Do(_ => Interlocked.Increment(ref subscribes));
 
         Sut();
         await WaitForSubscribeAsync();
-        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
         Volatile.Read(ref resubscribed).Should().Be(0, "nothing was cached before the first subscription");
 
         redis.OnReconnected += Raise.Event<EventHandler>(redis, EventArgs.Empty);
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline && Volatile.Read(ref resubscribed) == 0)
-        {
-            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
-        }
+        await EventuallyAsync(() => !(Volatile.Read(ref resubscribed) == 0));
 
         Volatile.Read(ref subscribes).Should().Be(2);
         Volatile.Read(ref resubscribed).Should().Be(1);
@@ -154,14 +147,12 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         var redis = _fixture.Freeze<IRedisConnector>();
         redis.Subscriber.Returns(_subscriber);
         var gaps = 0;
-        _fixture.Inject<Action>(() => Interlocked.Increment(ref gaps));
+        _fixture.Inject<Action>(() => { Interlocked.Increment(ref gaps); _changes.Writer.TryWrite(true); });
         _options.SubscriberDueTime = TimeSpan.FromMilliseconds(200);
 
         Sut().MarkSubscribed();
         await WaitForSubscribeAsync();
-        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
         Sut().MarkSubscribed();
-        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
 
         Volatile.Read(ref gaps).Should().Be(1, "only the observer that joined before the subscription could have missed a publication");
     }
@@ -181,20 +172,18 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
                 if (Interlocked.Increment(ref subscribes) == 1)
                 {
                     inFirstSubscribe.Set();
-                    releaseFirst.Wait(TimeSpan.FromSeconds(10));
+                    releaseFirst.Wait(testContextAccessor.Current.CancellationToken);
                 }
             });
 
         Sut();
-        inFirstSubscribe.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
+        var subscribing = Task.Run(() => _clock.Advance(_options.SubscriberDueTime!.Value), testContextAccessor.Current.CancellationToken);
+        inFirstSubscribe.Wait(testContextAccessor.Current.CancellationToken);
         redis.OnReconnected += Raise.Event<EventHandler>(redis, EventArgs.Empty);
         releaseFirst.Set();
+        await subscribing;
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline && Volatile.Read(ref subscribes) < 2)
-        {
-            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
-        }
+        await EventuallyAsync(() => !(Volatile.Read(ref subscribes) < 2));
 
         Volatile.Read(ref subscribes).Should().BeGreaterThanOrEqualTo(2, "the attempt that began before the reconnect subscribed the retired connection");
     }
@@ -206,7 +195,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         full.Writer.TryWrite(new TestCacheEvent()).Should().BeTrue();
         _fixture.Inject(full.Writer);
         var dropped = 0;
-        _fixture.Inject<Action>(() => Interlocked.Increment(ref dropped));
+        _fixture.Inject<Action>(() => { Interlocked.Increment(ref dropped); _changes.Writer.TryWrite(true); });
         var expected = _fixture.Create<TestCacheEvent>();
         expected.Valid = true;
 
@@ -225,7 +214,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         var redis = _fixture.Freeze<IRedisConnector>();
         redis.Subscriber.Returns(_subscriber);
         var gaps = 0;
-        _fixture.Inject<Action>(() => Interlocked.Increment(ref gaps));
+        _fixture.Inject<Action>(() => { Interlocked.Increment(ref gaps); _changes.Writer.TryWrite(true); });
 
         Sut();
         await WaitForSubscribeAsync();
@@ -236,8 +225,8 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
 
         redis.OnConnectionRestored += Raise.Event<EventHandler>(redis, EventArgs.Empty);
         redis.OnConnectionRestored += Raise.Event<EventHandler>(redis, EventArgs.Empty);
-        await Task.Delay(_delay.Multiply(4), testContextAccessor.Current.CancellationToken);
 
+        if (expected > 0) { await EventuallyAsync(() => Volatile.Read(ref gaps) == expected); }
         Volatile.Read(ref gaps).Should().Be(expected, "publications while the connection was down never arrived, and a second restore found no outage");
     }
 
@@ -247,7 +236,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         var redis = _fixture.Freeze<IRedisConnector>();
         redis.Subscriber.Returns(_subscriber);
         var gaps = 0;
-        _fixture.Inject<Action>(() => Interlocked.Increment(ref gaps));
+        _fixture.Inject<Action>(() => { Interlocked.Increment(ref gaps); _changes.Writer.TryWrite(true); });
         var first = new DnsEndPoint("node-1", 6379);
         var second = new DnsEndPoint("node-2", 6379);
         Sut();
@@ -258,15 +247,10 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         RaiseConnectionEvent(redis, failed: true, first, ConnectionType.Interactive);
         RaiseConnectionEvent(redis, failed: false, first, ConnectionType.Interactive);
         RaiseConnectionEvent(redis, failed: false, first, ConnectionType.Subscription);
-        await Task.Delay(_delay.Multiply(4), testContextAccessor.Current.CancellationToken);
         Volatile.Read(ref gaps).Should().Be(0, "the second node's subscription is still down");
 
         RaiseConnectionEvent(redis, failed: false, second, ConnectionType.Subscription);
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline && Volatile.Read(ref gaps) == 0)
-        {
-            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
-        }
+        await EventuallyAsync(() => !(Volatile.Read(ref gaps) == 0));
 
         Volatile.Read(ref gaps).Should().Be(1);
     }
@@ -282,7 +266,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         _subscriber.When(s => s.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
             .Do(_ => Interlocked.Increment(ref subscribes));
         var gaps = 0;
-        _fixture.Inject<Action>(() => Interlocked.Increment(ref gaps));
+        _fixture.Inject<Action>(() => { Interlocked.Increment(ref gaps); _changes.Writer.TryWrite(true); });
         var node = new DnsEndPoint("node-1", 6379);
         Sut();
         await WaitForSubscribeAsync();
@@ -343,18 +327,20 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
                 if (Interlocked.Increment(ref subscribes) == 1)
                 {
                     inFirstSubscribe.Set();
-                    releaseFirst.Wait(TimeSpan.FromSeconds(10));
+                    releaseFirst.Wait(testContextAccessor.Current.CancellationToken);
                 }
             });
         var gaps = 0;
-        _fixture.Inject<Action>(() => Interlocked.Increment(ref gaps));
+        _fixture.Inject<Action>(() => { Interlocked.Increment(ref gaps); _changes.Writer.TryWrite(true); });
         var node = new DnsEndPoint("node-1", 6379);
         Sut();
-        inFirstSubscribe.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
+        var subscribing = Task.Run(() => _clock.Advance(_options.SubscriberDueTime!.Value), testContextAccessor.Current.CancellationToken);
+        inFirstSubscribe.Wait(testContextAccessor.Current.CancellationToken);
         _subscriber.Multiplexer.Returns(Substitute.For<IConnectionMultiplexer>());
 
         redis.OnReconnected += Raise.Event<EventHandler>(redis, EventArgs.Empty);
         releaseFirst.Set();
+        await subscribing;
         RaiseConnectionEvent(redis, failed: true, new DnsEndPoint("node-2", 6379), ConnectionType.Subscription, retired);
         await EventuallyAsync(() => Volatile.Read(ref subscribes) >= 2 && Volatile.Read(ref gaps) == 1);
         RaiseConnectionEvent(redis, failed: true, node, ConnectionType.Subscription);
@@ -370,14 +356,13 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         var redis = _fixture.Freeze<IRedisConnector>();
         redis.Subscriber.Returns(_subscriber);
         var gaps = 0;
-        _fixture.Inject<Action>(() => Interlocked.Increment(ref gaps));
+        _fixture.Inject<Action>(() => { Interlocked.Increment(ref gaps); _changes.Writer.TryWrite(true); });
         var node = new DnsEndPoint("node-1", 6379);
         Sut();
         await WaitForSubscribeAsync();
 
         RaiseConnectionEvent(redis, failed: true, node, ConnectionType.Interactive);
         RaiseConnectionEvent(redis, failed: false, node, ConnectionType.Interactive);
-        await Task.Delay(_delay.Multiply(4), testContextAccessor.Current.CancellationToken);
 
         Volatile.Read(ref gaps).Should().Be(0, "publications arrive on the subscription connection");
     }
@@ -415,7 +400,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
             .Do(_ =>
             {
                 inSubscribe.Set();
-                release.Wait(TimeSpan.FromSeconds(10));
+                release.Wait(testContextAccessor.Current.CancellationToken);
                 Interlocked.Increment(ref registered);
                 subscribed.TrySetResult();
             });
@@ -423,10 +408,12 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
             .Do(_ => Interlocked.Decrement(ref registered));
 
         var sut = Sut();
-        inSubscribe.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
+        var subscribing = Task.Run(() => _clock.Advance(_options.SubscriberDueTime!.Value), testContextAccessor.Current.CancellationToken);
+        inSubscribe.Wait(testContextAccessor.Current.CancellationToken);
         sut.Dispose();
         release.Set();
-        await subscribed.Task.WaitAsync(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken);
+        await subscribing;
+        await subscribed.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
         await EventuallyAsync(() => Volatile.Read(ref registered) == 0);
         sut.Dispose();
 
@@ -462,7 +449,9 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
 
         var sut = Sut();
         var mark = sut.MarkSubscribed();
-        var before = await subscribedAgain.Task.WaitAsync(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken);
+        _clock.Advance(TimeSpan.Zero);
+        _clock.Advance(_delay);
+        var before = await subscribedAgain.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
         await EventuallyAsync(() => sut.ActivatedSince(mark));
 
         before.Should().Be(0, "the handler the failed subscribe registered is gone before the next attempt adds it again");
@@ -496,12 +485,14 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
 
     public ValueTask DisposeAsync()
     {
+        _sut?.Dispose();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 
     public ValueTask InitializeAsync()
     {
+        _fixture.Inject<TimeProvider>(_clock);
         _redisChannel = RedisChannel.Literal(_fixture.Create<string>());
         _fixture.Inject(_redisChannel);
         _formatter = new CacheClearEventFormatterProxy();
@@ -544,10 +535,10 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
 
     private async Task EventuallyAsync(Func<bool> condition)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline && !condition())
+        _clock.Advance(_delay);
+        while (!condition())
         {
-            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
+            await _changes.Reader.ReadAsync(testContextAccessor.Current.CancellationToken);
         }
     }
 
@@ -568,19 +559,27 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         Sut();
         var action = await WaitForSubscribeAsync();
         action(_redisChannel, (RedisValue)body);
-        await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
 
         _channel.Reader.TryRead(out _).Should().BeFalse();
         return (Volatile.Read(ref dropped), Volatile.Read(ref gaps));
     }
 
-    private RedisPubSubSubjectWriter<ICacheEvent> Sut() =>
-        _sut ??= _fixture.Create<RedisPubSubSubjectWriter<ICacheEvent>>();
+    private RedisPubSubSubjectWriter<ICacheEvent> Sut()
+    {
+        if (_sut is null)
+        {
+            _sut = _fixture.Create<RedisPubSubSubjectWriter<ICacheEvent>>();
+            _sut.Subscribed += () => _changes.Writer.TryWrite(true);
+        }
+        return _sut;
+    }
 
-    private Task<Action<RedisChannel, RedisValue>> WaitForSubscribeAsync() =>
-        _subscribeCalled.Task
-            .WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken)
-            .ContinueWith(_ => _capturedAction!, TaskContinuationOptions.OnlyOnRanToCompletion);
+    private async Task<Action<RedisChannel, RedisValue>> WaitForSubscribeAsync()
+    {
+        _clock.Advance(_options.SubscriberDueTime!.Value);
+        await _subscribeCalled.Task.WaitAsync(testContextAccessor.Current.CancellationToken);
+        return _capturedAction!;
+    }
 
     private sealed class WarningLogger : Microsoft.Extensions.Logging.ILogger
     {

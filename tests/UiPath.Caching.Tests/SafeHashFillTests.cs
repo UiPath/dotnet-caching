@@ -5,6 +5,8 @@ namespace UiPath.Caching.Tests;
 /// <summary>A hash fill writes only an absent key: a hash a peer wrote while the generator ran is the answer and is not replaced.</summary>
 public class SafeHashFillTests
 {
+    private static readonly ManualTimeProvider Clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static readonly CachePolicy Awaited = new() { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30) };
 
     private static readonly CachePolicy Background = new() { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30), BackgroundDistributedWrite = true };
@@ -19,7 +21,7 @@ public class SafeHashFillTests
     public async Task A_fill_never_replaces_a_hash_a_peer_wrote_while_its_generator_ran(HashCacheSetOption option)
     {
         // The peer's event is not heard, so the write is found by the fill itself, which is the NX of the key.
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var (writer, other) = (c.Add("a"), c.Add("b"));
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -30,8 +32,8 @@ public class SafeHashFillTests
             return Fields(("a", "1"));
         }
 
-        var call = writer.Cache.GetOrAddAsync<string>("k", Generate, DateTimeOffset.UtcNow.AddMinutes(5), option, Awaited, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var call = writer.Cache.GetOrAddAsync<string>("k", Generate, Clock.GetUtcNow().AddMinutes(5), option, Awaited, Ct).AsTask();
+        await started.Task.WaitAsync(Ct);
 
         (await other.Cache.SetAsync<string>("k", Fields(("z", "0")), Merge, Awaited, Ct)).Should().BeTrue();
         release.SetResult();
@@ -48,7 +50,7 @@ public class SafeHashFillTests
     [InlineData(true)]
     public async Task A_hash_fill_whose_key_was_changed_while_its_generator_ran_writes_and_keeps_nothing(bool removed)
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -59,8 +61,8 @@ public class SafeHashFillTests
             return Fields(("a", "1"));
         }
 
-        var call = writer.Cache.GetOrAddAsync<string>("k", Generate, DateTimeOffset.UtcNow.AddMinutes(5), HashCacheSetOption.KeyReplace, Awaited, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var call = writer.Cache.GetOrAddAsync<string>("k", Generate, Clock.GetUtcNow().AddMinutes(5), HashCacheSetOption.KeyReplace, Awaited, Ct).AsTask();
+        await started.Task.WaitAsync(Ct);
 
         if (removed)
         {
@@ -90,7 +92,7 @@ public class SafeHashFillTests
     [Fact]
     public async Task A_fill_of_an_absent_hash_writes_it_and_keeps_it()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var writer = c.Add("a");
 
         (await writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1")));
@@ -104,7 +106,7 @@ public class SafeHashFillTests
     [Fact]
     public async Task A_background_fill_that_finds_the_hash_stored_drops_the_copy_it_kept_ahead_of_the_write()
     {
-        using var c = new PeerCluster { AutoDeliver = false };
+        using var c = new PeerCluster(Clock) { AutoDeliver = false };
         var (writer, other) = (c.Add("a"), c.Add("b"));
         var release = new TaskCompletionSource();
         writer.Inner.Hold = release.Task;
@@ -121,7 +123,7 @@ public class SafeHashFillTests
     [Fact]
     public async Task A_background_fill_waiting_in_the_queue_sends_no_command_when_a_peer_removed_the_key_meanwhile()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         writer.Inner.Hold = release.Task;
@@ -144,12 +146,13 @@ public class SafeHashFillTests
     [Fact]
     public async Task A_hash_fill_is_not_kept_locally_when_the_key_is_removed_after_its_write()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var (writer, other) = (c.Add("a"), c.Add("b"));
         var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        writer.Inner.AfterWrite = _ => landed.Task;
+        var written = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        writer.Inner.AfterWrite = _ => { written.TrySetResult(); return landed.Task; };
         var fill = writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Awaited, Ct).AsTask();
-        await CachePeers.Until(() => c.Redis.Fields() is not null);
+        await written.Task.WaitAsync(Ct);
 
         await other.Cache.RemoveAsync<string>("k", Ct);
         landed.SetResult();
@@ -161,13 +164,14 @@ public class SafeHashFillTests
     [Fact]
     public async Task A_hash_fill_is_not_kept_locally_when_the_key_changes_while_the_keep_waits_for_the_key_turn()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var writer = c.Add("a");
         var background = (BackgroundWrites)typeof(MultilayerCacheBase).GetField("_background", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(writer.Cache)!;
         var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        writer.Inner.AfterWrite = _ => landed.Task;
+        var written = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        writer.Inner.AfterWrite = _ => { written.TrySetResult(); return landed.Task; };
         var fill = writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Awaited, Ct).AsTask();
-        await CachePeers.Until(() => c.Redis.Fields() is not null);
+        await written.Task.WaitAsync(Ct);
 
         // Holds the key's turn after the write, so the keep that follows waits for it.
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -180,9 +184,8 @@ public class SafeHashFillTests
         }
 
         var holder = Task.Run(() => background.Apply("k", 0, Hold), Ct);
-        await held.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await held.Task.WaitAsync(Ct);
         landed.SetResult();
-        await Task.Delay(300, Ct);
         fill.IsCompleted.Should().BeFalse("the keep waits for the key's turn");
 
         background.NoteChange("k");
@@ -198,7 +201,7 @@ public class SafeHashFillTests
     [Fact]
     public async Task A_fill_over_an_unreadable_hash_replaces_it()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var writer = c.Add("a");
         c.Redis.WriteUnreadableQuietly("k");
 
@@ -210,7 +213,7 @@ public class SafeHashFillTests
     [Fact]
     public async Task A_fill_that_found_an_unreadable_hash_leaves_what_a_peer_wrote_since()
     {
-        using var c = new PeerCluster();
+        using var c = new PeerCluster(Clock);
         var writer = c.Add("a");
         c.Redis.WriteUnreadableQuietly("k");
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -223,14 +226,14 @@ public class SafeHashFillTests
         }
 
         var call = writer.Cache.GetOrAddAsync<string>("k", Generate, Awaited, Ct).AsTask();
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await started.Task.WaitAsync(Ct);
         var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         writer.Inner.ReadHold = landed.Task;
         writer.Inner.HeldReadSnapshots = true;
         var reads = writer.InnerReads;
         release.SetResult();
 
-        await CachePeers.Until(() => writer.InnerReads > reads || call.IsCompleted);
+        await writer.Inner.Changes.WaitUntil(() => writer.InnerReads > reads);
         call.IsCompleted.Should().BeFalse("the fill reads the unreadable hash before it replaces it");
         c.Redis.Write("k", Fields(("z", "0")), new HashCacheEntryOptions(SetOption: HashCacheSetOption.KeyReplace), default, counted: false);
         landed.SetResult();

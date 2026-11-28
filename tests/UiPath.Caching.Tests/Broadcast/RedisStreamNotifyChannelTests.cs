@@ -8,6 +8,7 @@ namespace UiPath.Caching.Tests.Broadcast;
 public class RedisStreamNotifyChannelTests
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private readonly ManualTimeProvider _clock = NewClock();
 
     [Fact]
     public async Task Incoming_pubsub_message_signals_waiter()
@@ -25,16 +26,18 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.SubscribeAsync(channel, Arg.Any<Action<RedisChannel, RedisValue>>()))
             .Do(ci => captured.TrySetResult(ci.Arg<Action<RedisChannel, RedisValue>>()!));
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
 
-        var capturedHandler = await captured.Task.WaitAsync(30.Seconds(), token);
+        var capturedHandler = await captured.Task.WaitAsync(token);
 
         var waitTask = waiter.WaitAsync(token);
         capturedHandler(channel, RedisValue.EmptyString);
 
-        var completed = await Task.WhenAny(waitTask, Task.Delay(2.Seconds(), token));
-        completed.Should().BeSameAs(waitTask);
+        await waitTask.WaitAsync(token);
+
+        waitTask.IsCompletedSuccessfully.Should().BeTrue("the incoming message signals the waiter");
     }
 
     [Fact]
@@ -54,14 +57,16 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.SubscribeAsync(sharded, Arg.Any<Action<RedisChannel, RedisValue>>())).Do(_ => subscribedSharded.TrySetResult());
         subscriber.When(s => s.SubscribeAsync(literal, Arg.Any<Action<RedisChannel, RedisValue>>())).Do(_ => subscribedLiteral.TrySetResult());
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(sharded, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self");
-        await subscribedSharded.Task.WaitAsync(30.Seconds(), token);
-        await Task.Delay(100.Milliseconds(), token);
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(sharded, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        await subscribedSharded.Task.WaitAsync(token);
+        _clock.Advance(100.Milliseconds());
 
         sut.UseChannel(literal);
+        _clock.Advance(10.Milliseconds());
 
-        await subscribedLiteral.Task.WaitAsync(30.Seconds(), token);
+        await subscribedLiteral.Task.WaitAsync(token);
         subscriber.Received(1).Unsubscribe(sharded, Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
     }
 
@@ -82,23 +87,27 @@ public class RedisStreamNotifyChannelTests
         var subscribedLiteral = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         subscriber.When(s => s.SubscribeAsync(literal, Arg.Any<Action<RedisChannel, RedisValue>>())).Do(_ => subscribedLiteral.TrySetResult());
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
         RedisStreamNotifyChannel? sut = null;
-        sut = new RedisStreamNotifyChannel(sharded, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", _ =>
+        sut = new RedisStreamNotifyChannel(
+            sharded,
+            redis,
+            _fixture.Create<ILogger>(),
+            waiter,
+            null,
+            10.Milliseconds(),
+            "self",
+            _ =>
         {
             sut!.UseChannel(literal);
             return true;
-        });
+        },
+            clock: _clock);
         using var owned = sut;
+        _clock.Advance(10.Milliseconds());
+        _clock.Advance(10.Milliseconds());
 
-        await subscribedLiteral.Task.WaitAsync(30.Seconds(), token);
-        // Live a moment after the subscribe call returns.
-        var until = DateTime.UtcNow + 10.Seconds();
-        while (!waiter.NotifyLive && DateTime.UtcNow < until)
-        {
-            await Task.Delay(10, token);
-        }
-
+        await subscribedLiteral.Task.WaitAsync(token);
         waiter.NotifyLive.Should().BeTrue();
     }
 
@@ -118,19 +127,20 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.SubscribeAsync(channel, Arg.Any<Action<RedisChannel, RedisValue>>()))
             .Do(ci => captured.TrySetResult(ci.Arg<Action<RedisChannel, RedisValue>>()!));
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
 
-        var capturedHandler = await captured.Task.WaitAsync(30.Seconds(), token);
+        var capturedHandler = await captured.Task.WaitAsync(token);
         // The subscribe itself signals once; drain that before ringing.
         await waiter.WaitAsync(token);
 
         var waitTask = waiter.WaitAsync(token);
         capturedHandler(channel, "self");
-        (await Task.WhenAny(waitTask, Task.Delay(300.Milliseconds(), token))).Should().NotBeSameAs(waitTask, "this node's own entries are never dispatched, so its own ring is not worth a read");
+        waitTask.IsCompleted.Should().BeFalse( "this node's own entries are never dispatched, so its own ring is not worth a read");
 
         capturedHandler(channel, "other");
-        (await Task.WhenAny(waitTask, Task.Delay(2.Seconds(), token))).Should().BeSameAs(waitTask);
+        await waitTask.WaitAsync(token);
     }
 
     [Fact]
@@ -161,9 +171,11 @@ public class RedisStreamNotifyChannelTests
                 }
             });
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 50.Milliseconds(), 10.Milliseconds(), "self");
-        await twoCalls.Task.WaitAsync(30.Seconds(), token);
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 50.Milliseconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        _clock.Advance(50.Milliseconds());
+        await twoCalls.Task.WaitAsync(token);
 
         Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(2);
     }
@@ -182,13 +194,14 @@ public class RedisStreamNotifyChannelTests
             return ValueTask.FromException(new ObjectDisposedException(nameof(IRedisConnector)));
         });
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 20.Milliseconds(), 10.Milliseconds(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 20.Milliseconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
 
-        await firstCall.Task.WaitAsync(5.Seconds(), token);
-        await Task.Delay(200.Milliseconds(), token);
+        await firstCall.Task.WaitAsync(token);
+        _clock.Advance(200.Milliseconds());
         var settled = Volatile.Read(ref calls);
-        await Task.Delay(300.Milliseconds(), token);
+        _clock.Advance(300.Milliseconds());
 
         settled.Should().Be(1);
         Volatile.Read(ref calls).Should().Be(settled, "a connector that is gone for good is not tried again");
@@ -205,8 +218,8 @@ public class RedisStreamNotifyChannelTests
             return ValueTask.FromException(new ObjectDisposedException(nameof(IRedisConnector)));
         });
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 1.Hours(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 1.Hours(), "self", clock: _clock);
         var subscribe = typeof(RedisStreamNotifyChannel).GetMethod("Subscribe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
 
         // The failed connect completes synchronously, so the first tick is done when Invoke returns.
@@ -228,8 +241,8 @@ public class RedisStreamNotifyChannelTests
             return ValueTask.FromException(new ObjectDisposedException(nameof(IRedisConnector)));
         });
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 1.Hours(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 1.Hours(), "self", clock: _clock);
         var subscribe = typeof(RedisStreamNotifyChannel).GetMethod("Subscribe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
         var entered = new ManualResetEventSlim();
         var gate = new ManualResetEventSlim();
@@ -241,11 +254,11 @@ public class RedisStreamNotifyChannelTests
         };
 
         var tickB = Task.Run(() => subscribe.Invoke(sut, [null]), token);
-        entered.Wait(30.Seconds(), token).Should().BeTrue();
+        entered.Wait(token);
         // Tick A runs the disposed-connector path to the end while B holds the stale view of the flags.
         subscribe.Invoke(sut, [null]);
         gate.Set();
-        await tickB.WaitAsync(30.Seconds(), token);
+        await tickB.WaitAsync(token);
 
         Volatile.Read(ref calls).Should().Be(1, "the re-check after the interlock stops a tick that passed the guard before the flag was set");
     }
@@ -275,18 +288,20 @@ public class RedisStreamNotifyChannelTests
             return Task.CompletedTask;
         });
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 10.Milliseconds(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
 
-        await first.Task.WaitAsync(10.Seconds(), token);
+        await first.Task.WaitAsync(token);
         redis.OnReconnected += Raise.Event();
+        _clock.Advance(10.Milliseconds());
 
-        await second.Task.WaitAsync(10.Seconds(), token);
+        await second.Task.WaitAsync(token);
         second.Task.IsCompletedSuccessfully.Should().BeTrue();
     }
 
     [Fact]
-    public async Task A_retired_multiplexer_failing_the_subscribe_step_does_not_end_the_resubscribes()
+    public void A_retired_multiplexer_failing_the_subscribe_step_does_not_end_the_resubscribes()
     {
         var token = TestContext.Current.CancellationToken;
         var channel = RedisChannel.Literal("notify:test");
@@ -302,24 +317,14 @@ public class RedisStreamNotifyChannelTests
                 ? Task.FromException(new ObjectDisposedException(nameof(IConnectionMultiplexer)))
                 : Task.CompletedTask);
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 1.Hours(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 1.Hours(), "self", clock: _clock);
         var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
         var subscribe = typeof(RedisStreamNotifyChannel).GetMethod("Subscribe", flags)!;
-        var subscribing = typeof(RedisStreamNotifyChannel).GetField("_subscribing", flags)!;
 
         subscribe.Invoke(sut, [null]);
-        var deadline = DateTime.UtcNow + 30.Seconds();
-        while (DateTime.UtcNow < deadline && (Volatile.Read(ref attempts) == 0 || (int)subscribing.GetValue(sut)! != 0))
-        {
-            await Task.Delay(5.Milliseconds(), token);
-        }
         redis.OnReconnected += Raise.Event();
         subscribe.Invoke(sut, [null]);
-        while (DateTime.UtcNow < deadline && Volatile.Read(ref attempts) < 2)
-        {
-            await Task.Delay(5.Milliseconds(), token);
-        }
 
         Volatile.Read(ref attempts).Should().Be(2, "an ObjectDisposedException past the connect is not the connector being gone");
     }
@@ -340,10 +345,13 @@ public class RedisStreamNotifyChannelTests
             return ValueTask.FromException(new RedisConnectionException(ConnectionFailureType.UnableToConnect, CommandFlags.None, "down"));
         });
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 20.Milliseconds(), 10.Milliseconds(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 20.Milliseconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
 
-        await threeCalls.Task.WaitAsync(30.Seconds(), token);
+        _clock.Advance(20.Milliseconds());
+        _clock.Advance(20.Milliseconds());
+        await threeCalls.Task.WaitAsync(token);
 
         Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(3, "a transient failure is retried while the channel is alive");
     }
@@ -364,9 +372,10 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.SubscribeAsync(channel, Arg.Any<Action<RedisChannel, RedisValue>>()))
             .Do(_ => subscribed.TrySetResult(true));
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self");
-        await subscribed.Task.WaitAsync(30.Seconds(), token);
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        await subscribed.Task.WaitAsync(token);
 
         sut.Dispose();
 
@@ -391,13 +400,16 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.SubscribeAsync(channel, Arg.Any<Action<RedisChannel, RedisValue>>()))
             .Do(_ => subscribed.TrySetResult(true));
 
-        using var waiter = new SignalingFetchWaiter(50.Milliseconds());
-        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self");
-        await subscribed.Task.WaitAsync(30.Seconds(), token);
+        using var waiter = new SignalingFetchWaiter(50.Milliseconds(), timeProvider: _clock);
+        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        await subscribed.Task.WaitAsync(token);
 
         sut.Dispose();
 
-        Func<Task> act = async () => await waiter.WaitAsync(token);
+        var wait = waiter.WaitAsync(token);
+        _clock.Advance(50.Milliseconds());
+        Func<Task> act = () => wait;
         await act.Should().NotThrowAsync();
     }
 
@@ -431,13 +443,16 @@ public class RedisStreamNotifyChannelTests
                 }
             });
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds(), "self");
-        await firstCall.Task.WaitAsync(30.Seconds(), token);
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        await firstCall.Task.WaitAsync(token);
 
         redis.OnReconnected += Raise.Event();
+        _clock.Advance(10.Milliseconds());
 
-        await secondCall.Task.WaitAsync(30.Seconds(), token);
+        _clock.Advance(10.Milliseconds());
+        await secondCall.Task.WaitAsync(token);
         Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(2);
     }
 
@@ -463,6 +478,7 @@ public class RedisStreamNotifyChannelTests
                 {
                     // Mid-attempt, before it disables its own timer: this subscribe is against the old connection.
                     redis.OnReconnected += Raise.Event();
+        _clock.Advance(10.Milliseconds());
                 }
                 if (n >= 2)
                 {
@@ -470,10 +486,12 @@ public class RedisStreamNotifyChannelTests
                 }
             });
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
 
-        await secondCall.Task.WaitAsync(30.Seconds(), token);
+        _clock.Advance(10.Milliseconds());
+        await secondCall.Task.WaitAsync(token);
         Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(2);
     }
 
@@ -493,9 +511,10 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.SubscribeAsync(channel, Arg.Any<Action<RedisChannel, RedisValue>>()))
             .Do(_ => subscribed.TrySetResult(true));
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self");
-        await subscribed.Task.WaitAsync(30.Seconds(), token);
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        await subscribed.Task.WaitAsync(token);
 
         sut.Dispose();
         Action act = () => sut.Dispose();
@@ -524,9 +543,10 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
             .Do(_ => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "down"));
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self");
-        await subscribed.Task.WaitAsync(30.Seconds(), token);
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        await subscribed.Task.WaitAsync(token);
 
         Action act = () => sut.Dispose();
 
@@ -549,9 +569,10 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.SubscribeAsync(channel, Arg.Any<Action<RedisChannel, RedisValue>>()))
             .Do(_ => subscribed.TrySetResult(true));
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self");
-        await subscribed.Task.WaitAsync(30.Seconds(), token);
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        await subscribed.Task.WaitAsync(token);
         sut.Dispose();
 
         Action act = () => redis.OnReconnected += Raise.Event();
@@ -591,20 +612,22 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
             .Do(_ => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "stale"));
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds(), "self");
-        await firstSubscribed.Task.WaitAsync(30.Seconds(), token);
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        await firstSubscribed.Task.WaitAsync(token);
 
         redis.OnReconnected += Raise.Event();
+        _clock.Advance(10.Milliseconds());
 
-        await secondSubscribed.Task.WaitAsync(30.Seconds(), token);
+        await secondSubscribed.Task.WaitAsync(token);
         Volatile.Read(ref subscribeCalls).Should().BeGreaterThanOrEqualTo(2);
     }
 
     [Theory]
     [InlineData("NOPERM No permissions to access a channel")]
     [InlineData("ERR unknown command 'SUBSCRIBE'")]
-    public async Task A_subscription_the_server_refuses_is_warned_about_once_and_not_tried_again(string error)
+    public void A_subscription_the_server_refuses_is_warned_about_once_and_not_tried_again(string error)
     {
         var token = TestContext.Current.CancellationToken;
         var channel = RedisChannel.Literal("notify:test");
@@ -623,11 +646,13 @@ public class RedisStreamNotifyChannelTests
             });
         var logger = new RecordingLogger();
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, logger, waiter, 50.Milliseconds(), 10.Milliseconds(), "self");
-        (await LiveRig.EventuallyAsync(() => Task.FromResult(logger.Records.Any(r => r.Message.Contains("polls only"))))).Should().BeTrue();
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, logger, waiter, 50.Milliseconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        logger.Records.Any(r => r.Message.Contains("polls only")).Should().BeTrue();
         redis.OnReconnected += Raise.Event();
-        await Task.Delay(300, token);
+        _clock.Advance(10.Milliseconds());
+        _clock.Advance(300.Milliseconds());
 
         Volatile.Read(ref calls).Should().Be(1, "the server will refuse it again; this topic polls");
         logger.Records.Should().ContainSingle(r => r.Level == LogLevel.Warning && r.Message.Contains("polls only"));
@@ -640,8 +665,8 @@ public class RedisStreamNotifyChannelTests
         var channel = RedisChannel.Literal("notify:test");
         var redis = _fixture.Freeze<IRedisConnector>();
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 60.Seconds(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 60.Seconds(), "self", clock: _clock);
 
         _ = redis.DidNotReceive().Subscriber;
         _ = redis.DidNotReceive().ConnectAsync(Arg.Any<CancellationToken>());
@@ -666,10 +691,12 @@ public class RedisStreamNotifyChannelTests
         var subscribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         subscriber.When(s => s.SubscribeAsync(channel, Arg.Any<Action<RedisChannel, RedisValue>>())).Do(_ => subscribed.TrySetResult());
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 50.Milliseconds(), 10.Milliseconds(), "self");
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 50.Milliseconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
 
-        await subscribed.Task.WaitAsync(30.Seconds(), token);
+        _clock.Advance(50.Milliseconds());
+        await subscribed.Task.WaitAsync(token);
         Volatile.Read(ref connects).Should().BeGreaterThan(1, "the retry found the connection up and subscribed");
         _ = multiplexer.DidNotReceive().TimeoutMilliseconds;
     }
@@ -693,19 +720,21 @@ public class RedisStreamNotifyChannelTests
             return pending.Task;
         });
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds(), "self");
-        await started.Task.WaitAsync(30.Seconds(), token);
+        var unsubscribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        subscriber.When(x => x.Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>())).Do(_ => unsubscribed.TrySetResult());
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        await started.Task.WaitAsync(token);
 
-        // Dispose waits five seconds for the attempt, then gives up; the server answers after that.
-        await Task.Run(sut.Dispose, token);
+        var timerCount = _clock.TimersCreated;
+        var disposing = Task.Run(sut.Dispose, token);
+        await _clock.WaitForTimersAsync(timerCount + 1);
+        _clock.Advance(5.Seconds());
+        await disposing;
         pending.SetResult();
 
-        var deadline = DateTime.UtcNow + 10.Seconds();
-        while (DateTime.UtcNow < deadline && !subscriber.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ISubscriber.Unsubscribe)))
-        {
-            await Task.Delay(20, token);
-        }
+        await unsubscribed.Task.WaitAsync(token);
 
 #pragma warning disable S6966 // The code under test calls the sync Unsubscribe, so that is what is verified.
         subscriber.Received(1).Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
@@ -737,9 +766,12 @@ public class RedisStreamNotifyChannelTests
             });
         var logger = new RecordingLogger();
 
-        using var waiter = new SignalingFetchWaiter(5.Seconds());
-        using var sut = new RedisStreamNotifyChannel(channel, redis, logger, waiter, 50.Milliseconds(), 10.Milliseconds(), "self");
-        await subscribed.Task.WaitAsync(30.Seconds(), token);
+        using var waiter = new SignalingFetchWaiter(5.Seconds(), timeProvider: _clock);
+        using var sut = new RedisStreamNotifyChannel(channel, redis, logger, waiter, 50.Milliseconds(), 10.Milliseconds(), "self", clock: _clock);
+        _clock.Advance(10.Milliseconds());
+        _clock.Advance(50.Milliseconds());
+        _clock.Advance(50.Milliseconds());
+        await subscribed.Task.WaitAsync(token);
 
         logger.Records.Where(r => r.Message.Contains("subscribe error")).Select(r => r.Level).Should().Equal(LogLevel.Warning, LogLevel.Debug);
         logger.Records.Should().NotContain(r => r.Level == LogLevel.Error);
@@ -758,22 +790,26 @@ public class RedisStreamNotifyChannelTests
     {
         using var rig = new LiveRig(_fixture, clock: NewClock());
 
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
     }
 
     [Fact]
     public async Task A_failed_connection_ends_the_long_wait_in_progress_and_the_poll_interval_applies()
     {
         using var rig = new LiveRig(_fixture, clock: NewClock());
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
+        await rig.DrainAsync();
         var wait = rig.Waiter.WaitAsync(CancellationToken.None);
         rig.Clock!.Advance(1.Seconds());
-        await Task.Delay(100.Milliseconds(), TestContext.Current.CancellationToken);
         wait.IsCompleted.Should().BeFalse();
 
         rig.Redis.OnConnectionFailed += Raise.Event();
 
-        await wait.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+        await wait.WaitAsync(TestContext.Current.CancellationToken);
         (await rig.PollsAsync()).Should().BeTrue();
     }
 
@@ -781,7 +817,9 @@ public class RedisStreamNotifyChannelTests
     public async Task A_restored_connection_with_the_subscription_up_gets_the_notified_interval_again()
     {
         using var rig = new LiveRig(_fixture, clock: NewClock());
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
         rig.Redis.OnConnectionFailed += Raise.Event();
         (await rig.PollsAsync()).Should().BeTrue();
         rig.Subscriber.IsConnected(rig.Channel).Returns(true);
@@ -797,7 +835,9 @@ public class RedisStreamNotifyChannelTests
         var first = new IPEndPoint(IPAddress.Loopback, 7000);
         var second = new IPEndPoint(IPAddress.Loopback, 7001);
         using var rig = new LiveRig(_fixture, clock: NewClock());
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
         RaiseConnectionEvent(rig.Redis, failed: true, first, ConnectionType.Subscription);
         (await rig.PollsAsync()).Should().BeTrue();
 
@@ -815,26 +855,31 @@ public class RedisStreamNotifyChannelTests
     {
         var endPoint = new IPEndPoint(IPAddress.Loopback, 7000);
         using var rig = new LiveRig(_fixture, clock: NewClock());
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
         RaiseConnectionEvent(rig.Redis, failed: true, endPoint, ConnectionType.Subscription);
         await rig.DrainAsync();
 
         RaiseConnectionEvent(rig.Redis, failed: false, endPoint, ConnectionType.Subscription);
 
-        Func<Task> read = () => rig.Waiter.WaitAsync(CancellationToken.None);
-        await read.Should().CompleteWithinAsync(2.Seconds(), "a ring sent before the subscription was taken again is lost, so the restore reads once");
+        await rig.Waiter.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
     public async Task A_subscription_failure_before_a_reconnect_does_not_outlive_the_resubscribe()
     {
         using var rig = new LiveRig(_fixture, clock: NewClock());
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
         RaiseConnectionEvent(rig.Redis, failed: true, new IPEndPoint(IPAddress.Loopback, 7000), ConnectionType.Subscription);
 
         rig.Redis.OnReconnected += Raise.Event();
 
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
     }
 
     [Fact]
@@ -856,7 +901,9 @@ public class RedisStreamNotifyChannelTests
             return Task.CompletedTask;
         });
         created.Subscriber.Multiplexer.Returns(retired);
-        (await LiveRig.EventuallyAsync(created.WaitsLongAsync)).Should().BeTrue();
+        created.Subscribe();
+        created.SubscriptionFinished();
+        (await created.WaitsLongAsync()).Should().BeTrue();
         var current = Substitute.For<IConnectionMultiplexer>();
         current.TimeoutMilliseconds.Returns(5000);
         created.Subscriber.Multiplexer.Returns(current);
@@ -864,7 +911,9 @@ public class RedisStreamNotifyChannelTests
         Volatile.Write(ref reconnecting, 1);
         created.Redis.OnReconnected += Raise.Event();
 
-        (await LiveRig.EventuallyAsync(async () => Volatile.Read(ref resubscribes) >= 1 && await created.WaitsLongAsync())).Should().BeTrue("the retired connection never reports its restore");
+        created.Subscribe();
+        created.SubscriptionFinished();
+        (Volatile.Read(ref resubscribes) >= 1 && await created.WaitsLongAsync()).Should().BeTrue("the retired connection never reports its restore");
     }
 
     [Fact]
@@ -874,9 +923,13 @@ public class RedisStreamNotifyChannelTests
         current.TimeoutMilliseconds.Returns(5000);
         using var rig = new LiveRig(_fixture, clock: NewClock());
         rig.Subscriber.Multiplexer.Returns(current);
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
         rig.Redis.OnReconnected += Raise.Event();
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
 
         RaiseConnectionEvent(rig.Redis, failed: true, new IPEndPoint(IPAddress.Loopback, 7000), ConnectionType.Subscription, current);
 
@@ -887,7 +940,9 @@ public class RedisStreamNotifyChannelTests
     public async Task A_failed_command_connection_keeps_the_notified_interval()
     {
         using var rig = new LiveRig(_fixture, clock: NewClock());
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
 
         RaiseConnectionEvent(rig.Redis, failed: true, new IPEndPoint(IPAddress.Loopback, 7000), ConnectionType.Interactive);
 
@@ -911,7 +966,9 @@ public class RedisStreamNotifyChannelTests
             // The subscription connection is still down: a timer tick queued before the subscribe answered retries, and fails.
             throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "down");
         });
-        (await LiveRig.EventuallyAsync(() => Task.FromResult(logger.Records.Any(r => r.Message.StartsWith("Stream notify subscribed", StringComparison.Ordinal))))).Should().BeTrue();
+        created.Subscribe();
+        created.SubscriptionFinished();
+        logger.Records.Any(r => r.Message.StartsWith("Stream notify subscribed", StringComparison.Ordinal)).Should().BeTrue();
 
         (await created.PollsAsync()).Should().BeTrue("the subscription went down after the subscribe answered");
     }
@@ -922,20 +979,27 @@ public class RedisStreamNotifyChannelTests
         var resubscribe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
         using var rig = new LiveRig(_fixture, clock: NewClock(), subscribe: () => Interlocked.Increment(ref calls) == 1 ? Task.CompletedTask : resubscribe.Task);
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
 
         rig.Redis.OnReconnected += Raise.Event();
 
-        (await LiveRig.EventuallyAsync(async () => !await rig.WaitsLongAsync())).Should().BeTrue();
+        rig.Subscribe();
+        (await rig.PollsAsync()).Should().BeTrue();
         resubscribe.SetResult();
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
     }
 
     [Fact]
     public async Task A_forced_reconnect_ends_the_notified_interval_before_the_resubscribe_is_due()
     {
         using var rig = new LiveRig(_fixture, clock: NewClock(), dueTime: 1500.Milliseconds());
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
 
         rig.Redis.OnReconnected += Raise.Event();
 
@@ -963,16 +1027,20 @@ public class RedisStreamNotifyChannelTests
 
                 return never.Task;
             });
-            await firstStarted.Task.WaitAsync(30.Seconds(), TestContext.Current.CancellationToken);
+            rig.Subscribe();
+            await firstStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
             using var start = new Barrier(2);
 
             await Task.WhenAll(
                 Task.Run(() => { start.SignalAndWait(); first.SetResult(); }, TestContext.Current.CancellationToken),
                 Task.Run(() => { start.SignalAndWait(); rig.Redis.OnReconnected += Raise.Event(); }, TestContext.Current.CancellationToken));
-            (await LiveRig.EventuallyAsync(() => Task.FromResult(Volatile.Read(ref calls) >= 2 && (int)subscribing.GetValue(rig.Bell)! == 1))).Should().BeTrue();
+            rig.SubscriptionFinished();
+            rig.Subscribe();
+            (Volatile.Read(ref calls) >= 2 && (int)subscribing.GetValue(rig.Bell)! == 1).Should().BeTrue();
 
             ((bool)notifyLive.GetValue(rig.Waiter)!).Should().BeFalse($"iteration {i}: the reconnect dropped the subscription, and its retry has not completed");
             never.SetException(new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "done"));
+            rig.SubscriptionFinished();
         }
     }
 
@@ -993,10 +1061,12 @@ public class RedisStreamNotifyChannelTests
 
             return never.Task;
         });
-        await firstStarted.Task.WaitAsync(30.Seconds(), TestContext.Current.CancellationToken);
+        rig.Subscribe();
+        await firstStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         rig.Redis.OnReconnected += Raise.Event();
         first.SetResult();
+        rig.SubscriptionFinished();
 
         (await rig.PollsAsync()).Should().BeTrue("it may sit on the connection the reconnect replaced, so the retry decides");
     }
@@ -1005,7 +1075,7 @@ public class RedisStreamNotifyChannelTests
     public async Task A_subscription_the_server_refuses_never_gets_the_notified_interval()
     {
         using var rig = new LiveRig(_fixture, clock: NewClock(), subscribe: () => throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM No permissions to access a channel"));
-        await Task.Delay(300.Milliseconds(), TestContext.Current.CancellationToken);
+        rig.Clock.Advance(300.Milliseconds());
 
         (await rig.PollsAsync()).Should().BeTrue();
     }
@@ -1014,7 +1084,7 @@ public class RedisStreamNotifyChannelTests
     public async Task A_failed_subscribe_keeps_the_poll_interval()
     {
         using var rig = new LiveRig(_fixture, clock: NewClock(), subscribe: () => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "boom"));
-        await Task.Delay(300.Milliseconds(), TestContext.Current.CancellationToken);
+        rig.Clock.Advance(300.Milliseconds());
 
         (await rig.PollsAsync()).Should().BeTrue();
     }
@@ -1023,7 +1093,9 @@ public class RedisStreamNotifyChannelTests
     public async Task Disposing_the_channel_ends_the_notified_interval()
     {
         using var rig = new LiveRig(_fixture, clock: NewClock());
-        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Subscribe();
+        rig.SubscriptionFinished();
+        (await rig.WaitsLongAsync()).Should().BeTrue();
 
         rig.Bell.Dispose();
 
@@ -1067,9 +1139,10 @@ public class RedisStreamNotifyChannelTests
                 Subscriber.SubscribeAsync(Channel, Arg.Any<Action<RedisChannel, RedisValue>>()).Returns(_ => subscribe());
             }
 
-            Clock = clock as ManualTimeProvider;
-            Waiter = new SignalingFetchWaiter(50.Milliseconds(), 30.Seconds(), clock);
-            Bell = new RedisStreamNotifyChannel(Channel, Redis, logger ?? fixture.Create<ILogger>(), Waiter, 50.Milliseconds(), dueTime ?? 10.Milliseconds(), "self");
+            Clock = clock as ManualTimeProvider ?? NewClock();
+            DueTime = dueTime ?? 10.Milliseconds();
+            Waiter = new SignalingFetchWaiter(50.Milliseconds(), 30.Seconds(), Clock);
+            Bell = new RedisStreamNotifyChannel(Channel, Redis, logger ?? fixture.Create<ILogger>(), Waiter, 50.Milliseconds(), DueTime, "self", clock: Clock);
         }
 
         public RedisChannel Channel { get; }
@@ -1081,30 +1154,26 @@ public class RedisStreamNotifyChannelTests
         public SignalingFetchWaiter Waiter { get; }
 
         /// <summary>The manual clock the waiter runs on; the timing helpers need the rig built with one.</summary>
-        public ManualTimeProvider? Clock { get; }
+        public ManualTimeProvider Clock { get; }
+
+        public TimeSpan DueTime { get; }
 
         public RedisStreamNotifyChannel Bell { get; }
 
-        public static async Task<bool> EventuallyAsync(Func<Task<bool>> condition)
+        public void Subscribe()
         {
-            var until = DateTime.UtcNow + 10.Seconds();
-            while (DateTime.UtcNow < until)
-            {
-                if (await condition())
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            Clock.Advance(DueTime);
         }
+
+        public void SubscriptionFinished() =>
+            ((ManualResetEventSlim)typeof(RedisStreamNotifyChannel).GetField("_subscribingDone", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(Bell)!).Wait(TestContext.Current.CancellationToken);
 
         /// <summary>Consumes a pending wake, if any, by running a 1 ms wait past its timeout.</summary>
         public async Task DrainAsync()
         {
             var drain = Waiter.WaitAsync(1.Milliseconds(), CancellationToken.None);
             Clock!.Advance(1.Milliseconds());
-            await drain.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+            await drain.WaitAsync(TestContext.Current.CancellationToken);
         }
 
         /// <summary>True when a wait is still pending after the clock moves past the poll interval but not the notified one, so the notified interval is in force; a pending wake is drained first. Only a starved test thread can make a poll look long, and a test that expects the poll interval asks <see cref="PollsAsync"/>.</summary>
@@ -1113,7 +1182,7 @@ public class RedisStreamNotifyChannelTests
             await DrainAsync();
             var wait = Waiter.WaitAsync(CancellationToken.None);
             Clock!.Advance(1.Seconds());
-            var long_ = await Task.WhenAny(wait, Task.Delay(100.Milliseconds(), TestContext.Current.CancellationToken)) != wait && Waiter.NotifyLive;
+            var long_ = !wait.IsCompleted && Waiter.NotifyLive;
             Waiter.Signal();
             await wait;
             return long_;
@@ -1125,10 +1194,8 @@ public class RedisStreamNotifyChannelTests
             await DrainAsync();
             var wait = Waiter.WaitAsync(CancellationToken.None);
             Clock!.Advance(1.Seconds());
-            var polled = await Task.WhenAny(wait, Task.Delay(10.Seconds(), TestContext.Current.CancellationToken)) == wait;
-            Waiter.Signal();
-            await wait;
-            return polled;
+            await wait.WaitAsync(TestContext.Current.CancellationToken);
+            return true;
         }
 
         public void Dispose()

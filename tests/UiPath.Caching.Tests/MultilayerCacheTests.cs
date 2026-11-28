@@ -469,7 +469,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
             return Task.FromResult<string?>("fresh");
         }
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(new TestCacheEntry<string?> { Value = null, Found = true, Expiration = DateTimeOffset.UtcNow.AddMinutes(5) });
+            .Returns(new TestCacheEntry<string?> { Value = null, Found = true, Expiration = _clock.UtcNow.AddMinutes(5) });
 
         var actual = await Sut.GetOrAddAsync(_cacheKey, (Func<CancellationToken, Task<string?>>)Generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
 
@@ -652,7 +652,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         var actual = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
 
-        actual = await Sut.SetAsync(_cacheKey, value, DateTimeOffset.UtcNow.AddMinutes(5), token: testContextAccessor.Current.CancellationToken);
+        actual = await Sut.SetAsync(_cacheKey, value, _clock.UtcNow.AddMinutes(5), token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
     }
 
@@ -765,6 +765,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
             CompactionPercentage = 0.3,
             ExpirationScanFrequency = TimeSpan.FromSeconds(2),
         }));
@@ -789,6 +790,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<string>();
@@ -813,10 +815,11 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _clock = _fixture.Freeze<ISystemClock>();
         _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<string>();
@@ -900,6 +903,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
             CompactionPercentage = 0.3,
             ExpirationScanFrequency = TimeSpan.FromSeconds(2),
         }));
@@ -929,6 +933,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<string>();
@@ -956,10 +961,11 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _clock = _fixture.Freeze<ISystemClock>();
         _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
-        var now = DateTimeOffset.UtcNow;
+        var now = new ManualTimeProvider().GetUtcNow();
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
 
         var expected = _fixture.Create<string>();
@@ -1004,7 +1010,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     [Fact]
     public async Task Refresh_value_DateTimeOffset()
     {
-        var expiration = DateTimeOffset.UtcNow.AddDays(1);
+        var expiration = _clock.UtcNow.AddDays(1);
         await Sut.RefreshAsync<string>(_cacheKey, expiration, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.Received(1).Remove(_innerCacheKey.Name);
         await _innerCache.Received(1).RefreshAsync<string>(_innerCacheKey, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
@@ -1032,7 +1038,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     [InlineData(true)]
     public async Task Refresh_inner_cache_exception_DateTimeOffset(bool eventFired)
     {
-        var expiration = DateTimeOffset.UtcNow.AddDays(1);
+        var expiration = _clock.UtcNow.AddDays(1);
         _innerCache.RefreshAsync<string>(_innerCacheKey, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new Exception());
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
@@ -1165,6 +1171,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
         var token = new TestChangeToken
         {
@@ -1189,6 +1196,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
+            Clock = _clock,
         }));
         var token = new TestChangeToken
         {
@@ -1248,7 +1256,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     public async Task A_span_read_while_disconnected_follows_UseLocalOnlyWhenDisconnected(bool useLocalOnlyWhenDisconnected)
     {
         var expected = _fixture.Create<string>();
-        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions { Clock = _clock }));
         _logger.IsEnabled(LogLevel.Trace).Returns(false);
         _options.UseLocalOnlyWhenDisconnected = useLocalOnlyWhenDisconnected;
         _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
@@ -1587,7 +1595,8 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _innerCache = _fixture.Freeze<ICache>();
         _logger = _fixture.Freeze<ILogger>();
         _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
-        _clock = new SystemClock();
+        _clock = new TimeProviderClock(new ManualTimeProvider());
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         _options = new()
         {
             // These tests assume a tier that is never seen as disconnected; the ones about disconnection turn the monitor on.

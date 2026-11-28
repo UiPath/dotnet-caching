@@ -6,6 +6,7 @@ using UiPath.Caching.Config;
 using UiPath.Caching.Redis;
 using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Broadcast;
 using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Redis;
@@ -895,23 +896,7 @@ public sealed class RemoveTombstoneRedisIntegrationTests(RedisContainerFixture f
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);
-        var topic = (RedisPubSubTopic<ICacheEvent>)provider.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub)
-            .Create(new DefaultTopicKeyStrategy().GetTopicKey(typeof(string)));
-        var subscribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void Ready() => subscribed.TrySetResult();
-        topic.Subscribed += Ready;
-        using var subscription = topic.Subscribe(Substitute.For<IObserver<ICacheEvent>>());
-        try
-        {
-            if (!topic.IsSubscribed)
-            {
-                await subscribed.Task.WaitAsync(Ct);
-            }
-        }
-        finally
-        {
-            topic.Subscribed -= Ready;
-        }
+        await provider.ListenAsync();
         return new TestNode(provider, telemetry);
     }
 

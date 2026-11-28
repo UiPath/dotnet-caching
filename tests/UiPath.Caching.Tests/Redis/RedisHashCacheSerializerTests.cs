@@ -13,8 +13,10 @@ namespace UiPath.Caching.Tests.Redis;
 [Collection(WriterPoolCollection.Name)]
 public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAccessor)
 {
+
     private const string UnreadableMetric = "cache.serializer.unreadable";
 
+    private readonly ManualTimeProvider _time = new(DateTimeOffset.UnixEpoch);
     private readonly IDatabase _database = Substitute.For<IDatabase>();
     private readonly ITransaction _transaction = Substitute.For<ITransaction>();
     private readonly RecordingTelemetryProvider _telemetry = new();
@@ -30,7 +32,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     {
         var sut = Create(out var registry);
         var written = CaptureWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, options, ResolvedPolicy(registry), Token);
 
@@ -45,7 +47,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     {
         var sut = Create(out _);
         var written = CaptureWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, options, policy: null, Token);
 
@@ -60,7 +62,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     {
         var sut = Create(out var registry);
         var written = CaptureWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?>());
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?>());
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, options, ResolvedPolicy(registry), Token);
 
@@ -73,7 +75,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     {
         var sut = Create(out var registry);
         var written = CaptureWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?>(), SetOption: HashCacheSetOption.HashReplace);
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?>(), SetOption: HashCacheSetOption.HashReplace);
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, options, ResolvedPolicy(registry), Token);
 
@@ -92,7 +94,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         var dropping = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _database.HashDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>()).Returns(dropping.Task);
         var values = Enumerable.Range(0, 5).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?>(), SetOption: HashCacheSetOption.HashReplace);
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?>(), SetOption: HashCacheSetOption.HashReplace);
 
         var setting = sut.SetAsync("k", values, options, ResolvedPolicy(registry), cts.Token).AsTask();
         await cts.CancelAsync();
@@ -106,7 +108,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     {
         var sut = Create(out var registry);
         CaptureWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?>());
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?>());
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, options, ResolvedPolicy(registry), Token);
 
@@ -119,7 +121,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     {
         var sut = Create(out var registry);
         var written = CaptureWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" }, SetOption: HashCacheSetOption.HashReplace);
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" }, SetOption: HashCacheSetOption.HashReplace);
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, options, ResolvedPolicy(registry), Token);
 
@@ -133,7 +135,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     {
         var sut = Create(out _);
         var written = CaptureWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?>(), SetOption: HashCacheSetOption.HashReplace);
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?>(), SetOption: HashCacheSetOption.HashReplace);
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, options, policy: null, Token);
 
@@ -160,7 +162,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     {
         var sut = Create(out _);
         var written = CaptureWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?>());
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?>());
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, options, policy: null, Token);
 
@@ -240,7 +242,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         CaptureWrites();
         _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
         var values = new Dictionary<string, string?> { ["a"] = "x" };
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
         Task<IDictionary<string, string?>> Generate(CancellationToken token) => Task.FromResult<IDictionary<string, string?>>(values);
 
         (await MethodsOf(async () => await sut.GetItemAsync<string>("k", "a", policy, Token))).Should().Equal("GetAsync");
@@ -308,7 +310,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     {
         var sut = Create(out var registry);
         var written = CaptureWrites();
-        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
+        var options = new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5), Metadata: new Dictionary<string, string?> { ["m"] = "v" });
         var policy = ResolvedPolicy(registry);
 
         await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x", ["b"] = "y" }, options, policy, Token);
@@ -331,7 +333,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         var written = CaptureWrites();
         var policy = new DefaultCachePolicyFactory(null, new CachePolicy { Serializer = new SerializerPolicy { Write = "extended" } }, valueSerializers: registry).Default!;
 
-        await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5)), policy, Token);
+        await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = "x" }, new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5)), policy, Token);
         _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(written.Single());
         _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(1));
         var entry = await sut.GetCacheEntryAsync<string>("k", policy: null, Token);
@@ -349,7 +351,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         var policy = ResolvedPolicy(registry);
         byte[] payload = [0xFF, 0xFE, 0x00, 0x80, 0xC3, 0x28];
 
-        await sut.SetAsync("k", new Dictionary<string, byte[]?> { ["a"] = payload }, new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5)), policy, Token);
+        await sut.SetAsync("k", new Dictionary<string, byte[]?> { ["a"] = payload }, new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5)), policy, Token);
         _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(written.Single());
         _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(1));
         var entry = await sut.GetCacheEntryAsync<byte[]>("k", policy: null, Token);
@@ -402,7 +404,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         _transaction.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
         _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns([Entry("a", [0x10, 1])]);
 
-        await sut.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["a"] = "fresh" }), DateTimeOffset.UtcNow.AddMinutes(1), HashCacheSetOption.HashReplace, policy: null, Token);
+        await sut.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["a"] = "fresh" }), _time.GetUtcNow().AddMinutes(1), HashCacheSetOption.HashReplace, policy: null, Token);
 
         _ = _transaction.Received().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
         _telemetry.Metrics.Should().NotContain(m => m.Name == UnreadableMetric);
@@ -607,7 +609,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         CaptureWrites();
         var body = new string('x', 1000);
 
-        await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = body }, new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5)), ResolvedPolicy(registry), Token);
+        await sut.SetAsync("k", new Dictionary<string, string?> { ["a"] = body }, new HashCacheEntryOptions(_time.GetUtcNow().AddMinutes(5)), ResolvedPolicy(registry), Token);
 
         var warnings = logger.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(ILogger.Log) && (LogLevel)c.GetArguments()[0]! == LogLevel.Warning)
@@ -688,7 +690,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
             options,
             cacheOptions,
             new DefaultCachePolicyFactory(null, defaultPolicy, valueSerializers: registry),
-            TimeProvider.System,
+            _time,
             logger ?? NullLogger<RedisHashCache>.Instance)
         {
             ValueSerializers = registry,

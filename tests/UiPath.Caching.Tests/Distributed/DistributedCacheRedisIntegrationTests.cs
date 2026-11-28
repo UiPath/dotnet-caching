@@ -28,7 +28,7 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var token = TestContext.Current.CancellationToken;
         var key = Unique();
-        using var provider = Build(fixture.ConnectionString);
+        using var provider = await BuildAsync(fixture.ConnectionString);
         var cache = provider.GetRequiredService<IDistributedCache>();
 
         await cache.SetAsync(key,
@@ -53,7 +53,7 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var token = TestContext.Current.CancellationToken;
         var key = Unique();
-        using var provider = Build(fixture.ConnectionString);
+        using var provider = await BuildAsync(fixture.ConnectionString);
         var cache = provider.GetRequiredService<IDistributedCache>();
         await using var multiplexer = await ConnectAsync();
         var database = multiplexer.GetDatabase();
@@ -89,7 +89,7 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var token = TestContext.Current.CancellationToken;
         var key = Unique();
-        using var provider = Build(fixture.ConnectionString);
+        using var provider = await BuildAsync(fixture.ConnectionString);
         var cache = provider.GetRequiredService<IDistributedCache>();
 
         await cache.SetAsync(key,
@@ -112,7 +112,7 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var token = TestContext.Current.CancellationToken;
         var key = Unique();
-        using var provider = Build(fixture.ConnectionString);
+        using var provider = await BuildAsync(fixture.ConnectionString);
         var cache = provider.GetRequiredService<IDistributedCache>();
         await using var multiplexer = await ConnectAsync();
         var database = multiplexer.GetDatabase();
@@ -150,7 +150,7 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var token = TestContext.Current.CancellationToken;
         var key = Unique();
-        using var provider = Build(fixture.ConnectionString);
+        using var provider = await BuildAsync(fixture.ConnectionString);
         var hash = provider.GetRequiredKeyedService<IHashCache>(
             DistributedCacheCollectionExtensions.DistributedCacheServiceKey);
         var cacheKey = new CacheKey($"{UiPathDistributedCacheOptions.DefaultKeyPrefix}:{key}", CacheKeyCasing.Sensitive);
@@ -160,14 +160,14 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
 
         await hash.SetAsync(cacheKey, new Dictionary<string, byte[]?> { ["data"] = [1] }, TimeSpan.FromMinutes(5), null, token);
 
-        var applied = await hash.RefreshAsync<byte[]>(cacheKey, DateTimeOffset.UtcNow.AddMinutes(30), null, token);
+        var applied = await hash.RefreshAsync<byte[]>(cacheKey, provider.GetRequiredService<TimeProvider>().ToDateTimeOffset(TimeSpan.FromMinutes(30)), null, token);
 
         applied.Should().BeTrue("the reply is observed, so the result is meaningful");
         (await database.KeyTimeToLiveAsync(redisKey)).Should()
             .BeGreaterThan(TimeSpan.FromMinutes(10), "no polling needed once the reply is awaited");
 
         var absent = new CacheKey($"{UiPathDistributedCacheOptions.DefaultKeyPrefix}:{Unique()}", CacheKeyCasing.Sensitive);
-        (await hash.RefreshAsync<byte[]>(absent, DateTimeOffset.UtcNow.AddMinutes(30), null, token))
+        (await hash.RefreshAsync<byte[]>(absent, provider.GetRequiredService<TimeProvider>().ToDateTimeOffset(TimeSpan.FromMinutes(30)), null, token))
             .Should().BeFalse("a missing key is now distinguishable from a hit");
 
         await hash.RemoveAsync<byte[]>(cacheKey, token);
@@ -180,7 +180,7 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var token = TestContext.Current.CancellationToken;
         var key = Unique();
-        using var provider = Build(fixture.ConnectionString);
+        using var provider = await BuildAsync(fixture.ConnectionString);
         var cache = provider.GetRequiredService<IDistributedCache>();
         var buffered = cache.Should().BeAssignableTo<IBufferDistributedCache>().Subject;
         await using var multiplexer = await ConnectAsync();
@@ -208,8 +208,13 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
     }
 #endif
 
-    private static ServiceProvider Build(string connectionString) =>
-        new ServiceCollection()
+    private static async Task<ServiceProvider> BuildAsync(string connectionString)
+    {
+        await using var connection = await ConnectionMultiplexer.ConnectAsync(connectionString);
+        var time = (RedisResult[])(await connection.GetDatabase().ExecuteAsync("TIME"))!;
+        var clock = new ManualTimeProvider(DateTimeOffset.FromUnixTimeSeconds((long)time[0]).AddTicks((long)time[1] * 10));
+        return new ServiceCollection()
+            .AddSingleton<TimeProvider>(clock)
             .AddCaching(
                 b =>
                 {
@@ -219,6 +224,7 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
                 },
                 o => o.AppShortName = AppShortName)
             .BuildServiceProvider();
+    }
 
     private static string Unique() => $"it-{Guid.NewGuid():N}";
 

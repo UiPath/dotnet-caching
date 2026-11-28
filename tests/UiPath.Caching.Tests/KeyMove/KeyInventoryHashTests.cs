@@ -12,7 +12,7 @@ public class KeyInventoryHashTests(RedisContainerFixture fixture)
 {
     private const int Cap = 3;
 
-    private static CancellationToken Ct => CancellationToken.None;
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task A_hash_cache_is_judged_by_HLEN_in_one_batch_with_a_string_cache_judged_by_STRLEN_and_no_value_is_ever_read()

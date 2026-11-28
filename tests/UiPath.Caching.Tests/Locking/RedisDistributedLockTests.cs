@@ -10,6 +10,7 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
     private const string OperationRelease = "distributedlock.release";
     private const string PropOperation = "operation";
 
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     [Fact]
@@ -129,12 +130,14 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
         var sut = NewLock(redis);
         var token = testContextAccessor.Current.CancellationToken;
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(200), token);
-        sw.Stop();
+        var acquiring = sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(200), token).AsTask();
+        acquiring.IsCompleted.Should().BeFalse();
+        await _clock.WaitForTimersAsync(1);
+        _clock.Advance(TimeSpan.FromMilliseconds(200));
+        var lease = await acquiring;
 
         lease.Should().BeSameAs(NoOpAsyncDisposable.Instance);
-        sw.ElapsedMilliseconds.Should().BeGreaterThanOrEqualTo(180, "the locker should retry until the wait timeout elapses");
+        _clock.GetElapsedTime(0).Should().Be(TimeSpan.FromMilliseconds(200));
     }
 
     [Fact]
@@ -168,7 +171,11 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
         var sut = NewLock(redis, telemetry: telemetry);
         var token = testContextAccessor.Current.CancellationToken;
 
-        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(150), token);
+        var acquiring = sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(150), token).AsTask();
+        acquiring.IsCompleted.Should().BeFalse();
+        await _clock.WaitForTimersAsync(1);
+        _clock.Advance(TimeSpan.FromMilliseconds(150));
+        var lease = await acquiring;
 
         lease.Should().BeSameAs(NoOpAsyncDisposable.Instance);
         telemetry.Events.Should().Contain(e => e.Name == "cache.distributedlock.timeout");
@@ -216,23 +223,25 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
     {
         var delay = RedisDistributedLock.ComputeRetryDelayWithJitter(
             hasDeadline: true,
-            startTimestamp: System.Diagnostics.Stopwatch.GetTimestamp(),
+            startTimestamp: _clock.GetTimestamp(),
             waitTimeout: TimeSpan.FromSeconds(10),
             pollInterval: TimeSpan.FromMilliseconds(50),
-            jitterUnit: jitterUnit);
+            jitterUnit: jitterUnit,
+            clock: _clock);
         delay.TotalMilliseconds.Should().BeApproximately(expectedMs, precision: 5);
     }
 
     [Fact]
     public void ComputeRetryDelay_clamps_to_remaining_budget()
     {
-        var start = System.Diagnostics.Stopwatch.GetTimestamp() - System.Diagnostics.Stopwatch.Frequency; // ~1s in the past
+        var start = _clock.GetTimestamp() - _clock.TimestampFrequency; // ~1s in the past
         var delay = RedisDistributedLock.ComputeRetryDelayWithJitter(
             hasDeadline: true,
             startTimestamp: start,
             waitTimeout: TimeSpan.FromMilliseconds(1100),
             pollInterval: TimeSpan.FromMilliseconds(500),
-            jitterUnit: 0.5);
+            jitterUnit: 0.5,
+            clock: _clock);
         delay.Should().BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(200),
             "remaining budget (~100ms) is smaller than jittered poll interval (~500ms), so the delay must clamp to remaining");
     }
@@ -245,20 +254,22 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
             startTimestamp: 0,
             waitTimeout: TimeSpan.Zero,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            jitterUnit: 0.5);
+            jitterUnit: 0.5,
+            clock: _clock);
         delay.Should().Be(TimeSpan.Zero);
     }
 
     [Fact]
     public void ComputeRetryDelay_returns_zero_when_deadline_already_exceeded()
     {
-        var start = System.Diagnostics.Stopwatch.GetTimestamp() - 10 * System.Diagnostics.Stopwatch.Frequency;
+        var start = _clock.GetTimestamp() - 10 * _clock.TimestampFrequency;
         var delay = RedisDistributedLock.ComputeRetryDelayWithJitter(
             hasDeadline: true,
             startTimestamp: start,
             waitTimeout: TimeSpan.FromMilliseconds(500),
             pollInterval: TimeSpan.FromMilliseconds(50),
-            jitterUnit: 0.5);
+            jitterUnit: 0.5,
+            clock: _clock);
         delay.Should().Be(TimeSpan.Zero);
     }
 
@@ -274,7 +285,11 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
         var sut = NewLock(redis);
         var token = testContextAccessor.Current.CancellationToken;
 
-        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(300), token);
+        var acquiring = sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(300), token).AsTask();
+        acquiring.IsCompleted.Should().BeFalse();
+        await _clock.WaitForTimersAsync(1);
+        _clock.Advance(TimeSpan.FromMilliseconds(300));
+        var lease = await acquiring;
 
         lease.Should().BeSameAs(NoOpAsyncDisposable.Instance);
         callCount.Should().BeGreaterThanOrEqualTo(2, "the retry loop must fire at least once before giving up");
@@ -407,7 +422,11 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
         var sut = NewLock(redis, new CacheOptions { DistributedLockPollInterval = TimeSpan.FromMilliseconds(1) }, telemetry);
         var token = testContextAccessor.Current.CancellationToken;
 
-        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(5), token);
+        var acquiring = sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(5), token).AsTask();
+        acquiring.IsCompleted.Should().BeFalse();
+        await _clock.WaitForTimersAsync(1);
+        _clock.Advance(TimeSpan.FromMilliseconds(5));
+        var lease = await acquiring;
 
         lease.Should().BeSameAs(NoOpAsyncDisposable.Instance, "waiting out the deadline degrades to the no-op lease");
         telemetry.Exceptions.Should().Contain(RefusingTelemetryProvider.Failure);
@@ -469,6 +488,6 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
     {
         redis ??= _fixture.Freeze<IRedisConnector>();
         var opts = Options.Create(options ?? new CacheOptions());
-        return new RedisDistributedLock(redis, opts, telemetry ?? NullTelemetryProvider.Instance);
+        return new RedisDistributedLock(redis, opts, telemetry ?? NullTelemetryProvider.Instance, _clock);
     }
 }

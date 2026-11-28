@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 
@@ -38,6 +37,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
     private readonly RedisStreamSubjectWriter<T> _subscriber;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly RedisStreamContext _context;
+    private readonly TimeProvider _clock;
     private readonly IEventSubject<T> _subject;
     private readonly IConnectionState _connectionState;
     private readonly IRedisConnector _redis;
@@ -88,6 +88,24 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
     {
     }
 
+    public RedisStreamsTopic(
+        TopicKey topicKey,
+        IConnectionState connectionState,
+        IRedisConnector redis,
+        Func<IEventSubject<T>> subjectFactory,
+        IEventFormatterProxy<T> formatter,
+        IResiliencePipelineProvider resiliencePipelineProvider,
+        RedisStreamsTopicOptions streamOptions,
+        CacheOptions cacheOptions,
+        ILogger<RedisStreamsTopic<T>> logger,
+        ICachingTelemetryProvider cachingTelemetryProvider,
+        IRedisProfiler redisProfiler,
+        TimeProvider clock,
+        CancellationToken stopToken)
+        : this(topicKey, connectionState, redis, subjectFactory, formatter, resiliencePipelineProvider, streamOptions, cacheOptions, logger, cachingTelemetryProvider, redisProfiler, onRefused: null, onRead: null, stopToken, clock)
+    {
+    }
+
     /// <param name="onRefused">Told of an exception that may mean the server does not run, or will not let this node run, the Streams commands: from a publish, a read or a group create.</param>
     internal RedisStreamsTopic(
         TopicKey topicKey,
@@ -103,8 +121,10 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         IRedisProfiler redisProfiler,
         Action<Exception>? onRefused,
         Action? onRead,
-        CancellationToken stopToken)
+        CancellationToken stopToken,
+        TimeProvider? clock = null)
     {
+        _clock = clock ?? TimeProvider.System;
         _onRefused = onRefused;
         RedisStreamsTopicOptionsValidator.ThrowIfInvalid(streamOptions);
         TopicKey = topicKey;
@@ -121,9 +141,10 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, streamOptions);
         _ownSource = StreamSource.Of(_context.SourceUri);
-        _waiter = new SignalingFetchWaiter(streamOptions.PollInterval, streamOptions.EffectiveNotifiedPollInterval);
+        _waiter = new SignalingFetchWaiter(streamOptions.PollInterval, streamOptions.EffectiveNotifiedPollInterval, _clock);
         _wakeEvery = streamOptions.MaxLength is { } maxLength ? Math.Max(1, maxLength / 2) : 0;
         DoorbellSpacing = streamOptions.EffectiveNotifyMinInterval;
+        _lastDoorbell = _clock.GetTimestamp() - (long)(DoorbellSpacing.TotalSeconds * _clock.TimestampFrequency);
         if (_streamOptions.NotifyEnabled)
         {
             // A custom strategy is not switched: its channel is the operator's, and a literal one of ours may not be where they listen.
@@ -141,7 +162,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
                 streamOptions.NotifySubscriberTimeout,
                 streamOptions.NotifySubscriberDueTime,
                 _context.ConsumerName,
-                SwitchToLiteral);
+                SwitchToLiteral,
+                _clock);
             // A new connection may be to another topology.
             _redis.OnReconnected += OnReconnected;
         }
@@ -149,8 +171,15 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         // Run later on the pool, by which time the writer the drop reports through is in place.
         var dropped = new DroppedEvents(topicKey, () => _subscriber!.ReportLoss(), _logger);
         var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, capacity, streamOptions.FullMode, _ => dropped.Dropped());
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _waiter, () => _subject.Invalidate(MissedEventsReason.Lost), _stopTokenSource.Token, onRefused: onRefused, onRead: onRead);
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _waiter, () => _subject.Invalidate(MissedEventsReason.Lost), _stopTokenSource.Token, clock: _clock, onRefused: onRefused, onRead: onRead);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
+    }
+
+    /// <summary>Raised when this topic's doorbell subscription turns live.</summary>
+    internal event Action? NotifyLiveSet
+    {
+        add => _waiter.BecameLive += value;
+        remove => _waiter.BecameLive -= value;
     }
 
     public TopicKey TopicKey { get; }
@@ -389,7 +418,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
     /// <summary>Takes the doorbell for an entry that rings in its own command: only while none is in flight and the spacing has passed.</summary>
     private bool TryTakeDoorbellForAdd() =>
         _ringInAdd
-        && (DoorbellSpacing <= TimeSpan.Zero || Stopwatch.GetElapsedTime(Volatile.Read(ref _lastDoorbell)) >= DoorbellSpacing)
+        && (DoorbellSpacing <= TimeSpan.Zero || _clock.GetElapsedTime(Volatile.Read(ref _lastDoorbell)) >= DoorbellSpacing)
         && Interlocked.CompareExchange(ref _doorbell, DoorbellSending, DoorbellIdle) == DoorbellIdle;
 
     /// <summary>Hands the doorbell back after an entry that carried it; the rings folded meanwhile, or an entry added without its doorbell (<paramref name="owed"/>), get a doorbell of their own.</summary>
@@ -397,7 +426,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
     {
         if (rung)
         {
-            Volatile.Write(ref _lastDoorbell, Stopwatch.GetTimestamp());
+            Volatile.Write(ref _lastDoorbell, _clock.GetTimestamp());
             Volatile.Write(ref _doorbellFailures, 0);
         }
 
@@ -596,13 +625,13 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
     private async Task<bool> WaitDoorbellSpacingAsync(CancellationToken stop)
     {
         // Rings that arrive while this wait runs fold into the doorbell it lets through.
-        var wait = DoorbellSpacing - Stopwatch.GetElapsedTime(Volatile.Read(ref _lastDoorbell));
+        var wait = DoorbellSpacing - _clock.GetElapsedTime(Volatile.Read(ref _lastDoorbell));
         if (wait <= TimeSpan.Zero)
         {
             return false;
         }
 
-        await Task.Delay(wait, stop).ConfigureAwait(false);
+        await Task.Delay(wait, _clock, stop).ConfigureAwait(false);
         return Interlocked.Exchange(ref _doorbell, DoorbellSending) == DoorbellRingAgain;
     }
 
@@ -611,11 +640,11 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscription
         Task<long>? publish = null;
         try
         {
-            Volatile.Write(ref _lastDoorbell, Stopwatch.GetTimestamp());
+            Volatile.Write(ref _lastDoorbell, _clock.GetTimestamp());
             // On the primary, like the XADD: a doorbell behind it on the same connection cannot overtake the entry.
             // Through the multiplexer's own database: a connector's key-prefixed one would prefix the channel too, and the subscriber, which carries no key prefix, would never hear it.
             publish = _redis.Database.Multiplexer.GetDatabase().PublishAsync(_notify!.Channel, _context.ConsumerName, CommandFlags.DemandMaster);
-            await publish.WaitAsync(DoorbellTimeout, stop).ConfigureAwait(false);
+            await publish.WaitAsync(DoorbellTimeout, _clock, stop).ConfigureAwait(false);
             Volatile.Write(ref _doorbellFailures, 0);
             return true;
         }

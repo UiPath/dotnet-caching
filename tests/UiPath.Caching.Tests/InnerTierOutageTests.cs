@@ -10,6 +10,8 @@ namespace UiPath.Caching.Tests;
 /// <summary>Reads that share one inner read, values kept when the inner tier refuses them, and the local tier across an outage.</summary>
 public class InnerTierOutageTests
 {
+    private static readonly ManualTimeProvider Clock = new();
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // A waiter past the lock timeout runs the generator itself, which a loaded machine would otherwise reach.
@@ -23,10 +25,10 @@ public class InnerTierOutageTests
         var reads = 0;
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => { Interlocked.Increment(ref reads); return new ValueTask<ICacheEntry<string?>>(release.Task); });
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: Clock);
 
         var callers = Enumerable.Range(0, 10).Select(_ => cache.GetAsync<string>("user:42", policy: null, Ct).AsTask()).ToArray();
-        release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) });
+        release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = Clock.GetUtcNow().AddMinutes(5) });
 
         (await Task.WhenAll(callers)).Should().AllBe("v");
         reads.Should().Be(1);
@@ -42,12 +44,12 @@ public class InnerTierOutageTests
         var reads = 0;
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => { Interlocked.Increment(ref reads); return new ValueTask<ICacheEntry<string?>>(release.Task); });
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: Clock);
 
         var shortLivedRead = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromSeconds(1) }, Ct);
         var shortLived = shortLivedRead.AsTask();
         var longLived = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) }, Ct).AsTask();
-        release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) });
+        release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = Clock.GetUtcNow().AddMinutes(5) });
 
         (await shortLived, await longLived).Should().Be(("v", "v"));
         reads.Should().Be(2, "each keeps the hit with its own policy's local lifetime");
@@ -61,12 +63,12 @@ public class InnerTierOutageTests
         var reads = 0;
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => { Interlocked.Increment(ref reads); return new ValueTask<ICacheEntry<string?>>(release.Task); });
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: Clock);
 
         var aRead = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) }, Ct);
         var a = aRead.AsTask();
         var b = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) }, Ct).AsTask();
-        release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) });
+        release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = Clock.GetUtcNow().AddMinutes(5) });
 
         (await a, await b).Should().Be(("v", "v"));
         reads.Should().Be(1, "two policies built separately with the same local lifetime read alike");
@@ -80,7 +82,7 @@ public class InnerTierOutageTests
         var reads = 0;
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => { Interlocked.Increment(ref reads); return new ValueTask<ICacheEntry<IDictionary<string, string?>>>(release.Task); });
-        using var cache = InMemoryMultilayer.HashCache(inner: inner);
+        using var cache = InMemoryMultilayer.HashCache(inner: inner, clock: Clock);
 
         var aRead = cache.GetItemAsync<string>("user:42", "a", policy: null, Ct);
         var a = aRead.AsTask();
@@ -88,7 +90,7 @@ public class InnerTierOutageTests
         release.SetResult(new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = new Dictionary<string, string?> { ["a"] = "1", ["b"] = "2" },
-            Expiration = DateTimeOffset.UtcNow.AddMinutes(5),
+            Expiration = Clock.GetUtcNow().AddMinutes(5),
         });
 
         (await a, await b).Should().Be(("1", "2"));
@@ -103,17 +105,19 @@ public class InnerTierOutageTests
             .Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
         inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new FillResult<string>(FillOutcome.Failed, null));
-        using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner);
+        using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner, clock: Clock);
         var generated = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Generate(CancellationToken token)
         {
             Interlocked.Increment(ref generated);
-            await Task.Delay(50, token);
+            await release.Task.WaitAsync(token);
             return "fresh";
         }
 
         var callers = Enumerable.Range(0, 8).Select(_ => cache.GetOrAddAsync("user:42", Generate, policy: null, Ct).AsTask()).ToArray();
 
+        release.SetResult();
         (await Task.WhenAll(callers)).Should().AllBe("fresh");
         generated.Should().Be(1, "the callers waiting on the local lock reuse the value the inner tier refused");
     }
@@ -126,17 +130,19 @@ public class InnerTierOutageTests
             .Returns(new ValueTask<ICacheEntry<IDictionary<string, string?>>>(new TestCacheEntry<IDictionary<string, string?>> { Expiration = DateTimeOffset.MinValue }));
         inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(false);
-        using var cache = InMemoryMultilayer.HashCache(WaitingOutTheGenerator, inner: inner);
+        using var cache = InMemoryMultilayer.HashCache(WaitingOutTheGenerator, inner: inner, clock: Clock);
         var generated = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<IDictionary<string, string?>> Generate(CancellationToken token)
         {
             Interlocked.Increment(ref generated);
-            await Task.Delay(50, token);
+            await release.Task.WaitAsync(token);
             return new Dictionary<string, string?> { ["f"] = "fresh" };
         }
 
         var callers = Enumerable.Range(0, 8).Select(_ => cache.GetOrAddAsync<string>("user:42", Generate, policy: null, Ct).AsTask()).ToArray();
 
+        release.SetResult();
         (await Task.WhenAll(callers)).Should().AllSatisfy(values => values.Should().ContainKey("f"));
         generated.Should().Be(1, "the callers waiting on the local lock reuse the value the inner tier refused");
     }
@@ -149,17 +155,19 @@ public class InnerTierOutageTests
             .Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
         inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns<ValueTask<FillResult<string>>>(_ => throw new InvalidOperationException("inner write failed"));
-        using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner);
+        using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner, clock: Clock);
         var generated = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Generate(CancellationToken token)
         {
             Interlocked.Increment(ref generated);
-            await Task.Delay(50, token);
+            await release.Task.WaitAsync(token);
             return "fresh";
         }
 
         var callers = Enumerable.Range(0, 8).Select(_ => cache.GetOrAddAsync("user:42", Generate, policy: null, Ct).AsTask()).ToArray();
 
+        release.SetResult();
         (await Task.WhenAll(callers)).Should().AllBe("fresh");
         generated.Should().Be(1, "a write that throws is refused like one that returns false");
     }
@@ -171,12 +179,13 @@ public class InnerTierOutageTests
     {
         var inner = BatchMissInner(out var many);
         many.Answer = (keys, _, _) => throws ? throw new InvalidOperationException("inner write failed") : Array.ConvertAll(keys, _ => FillOutcome.Failed);
-        using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner);
+        using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner, clock: Clock);
         var generated = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<KeyValuePair<int, string?>[]> Generate(int[] states, CancellationToken token)
         {
             Interlocked.Increment(ref generated);
-            await Task.Delay(50, token);
+            await release.Task.WaitAsync(token);
             return Array.ConvertAll(states, s => new KeyValuePair<int, string?>(s, $"fresh{s}"));
         }
 
@@ -184,6 +193,7 @@ public class InnerTierOutageTests
             .Select(_ => cache.GetOrAddAsync<string, int>([new("user:1", 1), new("user:2", 2)], Generate, policy: null, Ct).AsTask())
             .ToArray();
 
+        release.SetResult();
         (await Task.WhenAll(callers)).Should().AllSatisfy(values => values.Select(v => v.Value).Should().Equal("fresh1", "fresh2"));
         generated.Should().Be(1, "the callers waiting on the local lock reuse the values the inner tier refused");
     }
@@ -207,7 +217,7 @@ public class InnerTierOutageTests
             cts.Cancel();
             return answersFalse ? Array.ConvertAll(keys, _ => FillOutcome.Failed) : throw new OperationCanceledException(cts.Token);
         };
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: Clock);
         var generated = 0;
         Task<KeyValuePair<int, string?>[]> Generate(int[] states, CancellationToken _)
         {
@@ -239,7 +249,7 @@ public class InnerTierOutageTests
                 .Returns(new ValueTask<ICacheEntry<IDictionary<string, string?>>>(new TestCacheEntry<IDictionary<string, string?>> { Expiration = DateTimeOffset.MinValue }));
             inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
                 .Returns(_ => CancelWrite(cts, answersFalse), _ => new ValueTask<bool>(false));
-            using var cache = InMemoryMultilayer.HashCache(inner: inner);
+            using var cache = InMemoryMultilayer.HashCache(inner: inner, clock: Clock);
             Task<IDictionary<string, string?>> Generate(CancellationToken _)
             {
                 Interlocked.Increment(ref generated);
@@ -256,7 +266,7 @@ public class InnerTierOutageTests
                 .Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
             inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
                 .Returns(_ => CancelFill(cts, answersFalse), _ => new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Failed, null)));
-            using var cache = InMemoryMultilayer.Cache(inner: inner);
+            using var cache = InMemoryMultilayer.Cache(inner: inner, clock: Clock);
             Task<string?> Generate(CancellationToken _)
             {
                 Interlocked.Increment(ref generated);
@@ -290,7 +300,7 @@ public class InnerTierOutageTests
                 .Returns(new ValueTask<ICacheEntry<IDictionary<string, string?>>>(new TestCacheEntry<IDictionary<string, string?>> { Expiration = DateTimeOffset.MinValue }));
             inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
                 .Returns(true);
-            using var cache = InMemoryMultilayer.HashCache(options, inner);
+            using var cache = InMemoryMultilayer.HashCache(options, inner, clock: Clock);
             await cache.GetOrAddAsync<string>("user:42", _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = "v" }), policy: null, Ct);
         }
         else
@@ -300,7 +310,7 @@ public class InnerTierOutageTests
                 .Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
             inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
                 .Returns(new FillResult<string>(FillOutcome.Added, null));
-            using var cache = InMemoryMultilayer.Cache(options, inner);
+            using var cache = InMemoryMultilayer.Cache(options, inner, clock: Clock);
             await cache.GetOrAddAsync("user:42", _ => Task.FromResult<string?>("v"), policy: null, Ct);
         }
 
@@ -314,8 +324,8 @@ public class InnerTierOutageTests
         var state = (IConnectionState)inner;
         state.IsConnected.Returns(false);
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(_ => new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddHours(1) }));
-        var now = DateTimeOffset.UtcNow;
+            .Returns(_ => new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "v", Expiration = Clock.GetUtcNow().AddHours(1) }));
+        var now = Clock.GetUtcNow();
         var systemClock = Substitute.For<Microsoft.Extensions.Internal.ISystemClock>();
         systemClock.UtcNow.Returns(_ => now);
         var clock = new SystemClockTimeProvider(systemClock);
@@ -338,12 +348,12 @@ public class InnerTierOutageTests
         var reads = 0;
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => { Interlocked.Increment(ref reads); return new ValueTask<ICacheEntry<string?>>(release.Task); });
-        using var cache = InMemoryMultilayer.Cache(inner: inner);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, clock: Clock);
 
         var shortCapRead = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpirationDisconnected = TimeSpan.FromSeconds(1) }, Ct);
         var shortCap = shortCapRead.AsTask();
         var longCap = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpirationDisconnected = TimeSpan.FromMinutes(1) }, Ct).AsTask();
-        release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) });
+        release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = Clock.GetUtcNow().AddMinutes(5) });
 
         (await shortCap, await longCap).Should().Be(("v", "v"));
         reads.Should().Be(2, "a read that finds the tier down keeps the hit for its own policy's disconnected cap");
@@ -359,11 +369,11 @@ public class InnerTierOutageTests
         state.IsConnected.Returns(false);
         inner.GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(call => new ValueTask<KeyValuePair<CacheKey, ICacheEntry<string?>>[]>(call.Arg<CacheKey[]>()
-                .Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddHours(1) }))
+                .Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, new TestCacheEntry<string?> { Value = "v", Expiration = Clock.GetUtcNow().AddHours(1) }))
                 .ToArray()));
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(_ => new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddHours(1) }));
-        var now = DateTimeOffset.UtcNow;
+            .Returns(_ => new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "v", Expiration = Clock.GetUtcNow().AddHours(1) }));
+        var now = Clock.GetUtcNow();
         var systemClock = Substitute.For<Microsoft.Extensions.Internal.ISystemClock>();
         systemClock.UtcNow.Returns(_ => now);
         var clock = new SystemClockTimeProvider(systemClock);
@@ -395,7 +405,7 @@ public class InnerTierOutageTests
         var state = (IConnectionState)inner;
         state.IsConnected.Returns(true);
         inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(true);
-        using var cache = InMemoryMultilayer.Cache(inner: inner, connectionMonitor: true);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, connectionMonitor: true, clock: Clock);
         (await cache.SetAsync<string>("user:42", "v", policy: null, Ct)).Should().BeTrue();
 
         state.IsConnected.Returns(false);
@@ -421,7 +431,7 @@ public class InnerTierOutageTests
             Substitute.For<ISerializerProxy<byte[]>>(),
             NullLoggerFactory.Instance,
             NullTelemetryProvider.Instance);
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { ClearLocalOnReconnect = clearLocalOnReconnect }, ReadOnce(), connectionMonitor: true, topics: Topics(broadcast), tokens: tokens);
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { ClearLocalOnReconnect = clearLocalOnReconnect }, ReadOnce(), connectionMonitor: true, topics: Topics(broadcast), tokens: tokens, clock: Clock);
         (await cache.GetAsync<string>("user:42", policy: null, Ct)).Should().Be("v");
 
         ((IMissedEventsObserver)observer!).OnEventsMissed(reason);
@@ -448,7 +458,7 @@ public class InnerTierOutageTests
             Substitute.For<ISerializerProxy<byte[]>>(),
             NullLogger<ChangeToken<byte[]>>.Instance,
             NullTelemetryProvider.Instance));
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { ClearLocalOnReconnect = clearLocalOnReconnect }, ReadOnce(), connectionMonitor: true, topics: Topics(broadcast), tokens: tokens);
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { ClearLocalOnReconnect = clearLocalOnReconnect }, ReadOnce(), connectionMonitor: true, topics: Topics(broadcast), tokens: tokens, clock: Clock);
         (await cache.GetAsync<string>("user:42", policy: null, Ct)).Should().Be("v");
 
         ((IMissedEventsObserver)observer!).OnEventsMissed(reason);
@@ -463,7 +473,7 @@ public class InnerTierOutageTests
         var state = (IConnectionState)inner;
         state.IsConnected.Returns(true);
         StubReadOnce(inner);
-        using var cache = InMemoryMultilayer.Cache(inner: inner, connectionMonitor: true);
+        using var cache = InMemoryMultilayer.Cache(inner: inner, connectionMonitor: true, clock: Clock);
         (await cache.GetAsync<string>("user:42", policy: null, Ct)).Should().Be("v");
 
         state.IsConnected.Returns(false);
@@ -480,7 +490,7 @@ public class InnerTierOutageTests
         var connector = Substitute.For<IRedisConnector>();
         connector.IsConnected.Returns(true);
         using var streams = StreamsProvider(connector);
-        using var cache = InMemoryMultilayer.Cache(inner: ReadOnce(), connectionMonitor: true, topics: Topics(streams));
+        using var cache = InMemoryMultilayer.Cache(inner: ReadOnce(), connectionMonitor: true, topics: Topics(streams), clock: Clock);
         (await cache.GetAsync<string>("user:42", policy: null, Ct)).Should().Be("v");
 
         connector.IsConnected.Returns(false);
@@ -517,7 +527,7 @@ public class InnerTierOutageTests
 
     private static void StubReadOnce(ICache inner) =>
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(
-            new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) }),
+            new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "v", Expiration = Clock.GetUtcNow().AddMinutes(5) }),
             new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
 
     private static ITopicFactory Topics(ITopicProvider provider)

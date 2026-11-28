@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using UiPath.Caching.Config;
+using UiPath.Caching.Tests.Broadcast;
 
 namespace UiPath.Caching.Tests.Redis;
 
@@ -11,6 +12,8 @@ public sealed class FailSafeIntegrationTests(RedisContainerFixture fixture) : ID
     private static readonly TimeSpan LocalLifetime = TimeSpan.FromMilliseconds(400);
     private static readonly CachePolicy FailSafe = new() { FailSafeEnabled = true, LocalExpiration = LocalLifetime, DistributedExpiration = TimeSpan.FromMinutes(5), FailSafeCooldown = TimeSpan.Zero };
 
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
+    private readonly RedisTestSignals _signals = new();
     private readonly string _app = $"fs{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
 
@@ -26,6 +29,7 @@ public sealed class FailSafeIntegrationTests(RedisContainerFixture fixture) : ID
         var shortLived = CachePolicyMerger.Merge(new CachePolicy { DistributedExpiration = TimeSpan.FromMilliseconds(500) }, FailSafe);
         (await node.GetOrAddAsync<string>(key, static _ => Task.FromResult<string?>("v1"), shortLived, Ct)).Should().Be("v1");
         await Task.Delay(TimeSpan.FromMilliseconds(800), Ct);
+        _time.Advance(TimeSpan.FromMilliseconds(800));
 
         (await node.GetOrAddAsync<string>(key, Throwing, shortLived, Ct)).Should().Be("v1");
 
@@ -69,6 +73,7 @@ public sealed class FailSafeIntegrationTests(RedisContainerFixture fixture) : ID
         (await node.GetOrAddAsync<string>(key, static _ => Task.FromResult<string?>("v1"), shortLived, Ct)).Should().Be("v1");
         (await node.GetOrAddAsync<string>(key, Throwing, shortLived, Ct)).Should().Be("v1", "a hit never runs the generator");
         await Task.Delay(TimeSpan.FromMilliseconds(800), Ct);
+        _time.Advance(TimeSpan.FromMilliseconds(800));
 
         var act = async () => await node.GetOrAddAsync<string>(key, Throwing, shortLived, Ct);
         await act.Should().ThrowAsync<InvalidOperationException>("the Redis-only provider keeps no fail-safe value");
@@ -89,7 +94,7 @@ public sealed class FailSafeIntegrationTests(RedisContainerFixture fixture) : ID
     private static string Unique() => $"it-{Guid.NewGuid():N}";
 
     // The peer's subscription starts with its first read; a write before its consumer group exists is reported as a gap.
-    private static async Task WarmAsync(ICache writer, ICache peer)
+    private async Task WarmAsync(ICache writer, ICache peer)
     {
         var key = Unique();
         (await peer.SetAsync(key, "old", Ct)).Should().BeTrue();
@@ -97,25 +102,11 @@ public sealed class FailSafeIntegrationTests(RedisContainerFixture fixture) : ID
         (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "new")).Should().BeTrue("the peer's subscription to the topic is live");
     }
 
-    private static async Task<bool> EventuallyAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20, Ct);
-        }
-
-        return false;
-    }
+    private Task<bool> EventuallyAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
 
     private ICache Node(string source, string providerName = KnownCacheProviderNames.InMemoryRedis)
     {
-        var provider = new ServiceCollection()
+        var provider = new ServiceCollection().AddSingleton<TimeProvider>(_time)
             .AddCaching(
                 b =>
                 {
@@ -129,9 +120,12 @@ public sealed class FailSafeIntegrationTests(RedisContainerFixture fixture) : ID
                     o.AppShortName = _app;
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
                 })
+            .ObserveRedisSignals(_signals)
+            .SubscribeBroadcastAtOnce()
             .BuildServiceProvider();
         _nodes.Add(provider);
         StreamsReady.Await(provider);
+        provider.Listen();
         return provider.GetRequiredService<ICacheFactory>().CreateCache(providerName);
     }
 }

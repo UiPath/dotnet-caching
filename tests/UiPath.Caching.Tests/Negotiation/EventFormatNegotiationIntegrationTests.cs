@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using StackExchange.Redis;
@@ -7,7 +8,10 @@ using UiPath.Caching.Broadcast.Redis;
 using UiPath.Caching.Config;
 using UiPath.Caching.MessagePack;
 using UiPath.Caching.Negotiation;
+using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Broadcast;
 using UiPath.Caching.Tests.Redis;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.Negotiation;
 
@@ -15,6 +19,8 @@ namespace UiPath.Caching.Tests.Negotiation;
 [Trait("Category", "Integration")]
 public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixture)
 {
+    private DateTimeOffset _now = DateTimeOffset.UnixEpoch;
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -104,17 +110,16 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         var provider = (RedisPubSubTopicProvider)node.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub);
         var subscriptions = (IPubSubSubscriptions)provider;
         var channel = $"{app}:ps:string";
+        await node.SubscriptionConnectedAsync();
         provider.Create(new TopicKey("string"));
         subscriptions.Channels().Should().Equal(channel);
         subscriptions.Confirmed().Should().BeEmpty("the subscription goes in place on a timer, not when the topic is made");
 
         // Whenever the node would claim the subscription, the server must already count it: the claim never comes first.
-        var until = DateTime.UtcNow.AddSeconds(30);
-        while (subscriptions.Confirmed().Count == 0)
-        {
-            Assert.True(DateTime.UtcNow < until, "The subscription was not confirmed in time.");
-            await Task.Delay(1, Ct);
-        }
+        var confirmed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        subscriptions.WhenConfirmed(() => confirmed.TrySetResult());
+        Clock(node).Advance(TimeSpan.FromSeconds(5));
+        await confirmed.Task.WaitAsync(Ct);
 
         (await RedisTestKeys.SubscribersAsync(raw, channel)).Should().Be(1);
         subscriptions.Confirmed().Should().BeEquivalentTo(new Dictionary<string, int> { [channel] = 1 });
@@ -148,6 +153,8 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         var topic = new TopicKey("string");
         await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = raw.GetDatabase();
+        var time = (RedisResult[])(await db.ExecuteAsync("TIME"))!;
+        _now = DateTimeOffset.FromUnixTimeMilliseconds((long)time[0] * 1000 + (long)time[1] / 1000);
         using var a = Node(app, "node-a", pubSub: true, write: true);
         using var b = Node(app, "node-b", pubSub: true, write: true);
         var serviceA = Service(a);
@@ -155,35 +162,51 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         var writes = a.GetRequiredService<IEventWrites>();
         var cache = a.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
         var received = new ConcurrentQueue<byte[]>();
+        var delivered = Channel.CreateUnbounded<byte[]>();
+        void Receive(RedisChannel _, RedisValue value)
+        {
+            received.Enqueue((byte[])value!);
+            delivered.Writer.TryWrite((byte[])value!);
+        }
         var nodeListKey = NodeListStore.KeyFor(new CacheOptions { AppShortName = app }, new RedisCacheOptions());
         try
         {
-            a.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub).Create(topic);
-            b.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub).Create(topic);
-            await serviceA.StartAsync(Ct);
-            await serviceB.StartAsync(Ct);
+            await a.SubscriptionConnectedAsync();
+            await b.SubscriptionConnectedAsync();
+            var topicA = a.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub).Create(topic);
+            var topicB = b.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisPubSub).Create(topic);
+            await BroadcastNodeSignals.ReadyAsync(topicA, Clock(a));
+            await BroadcastNodeSignals.ReadyAsync(topicB, Clock(b));
 
             // Both nodes subscribed and said so: nothing is unaccounted for, so after the hold the events are binary.
-            await WaitAsync(() => writes.Writes, TimeSpan.FromSeconds(40));
-            await raw.GetSubscriber().SubscribeAsync(channel, (_, value) => received.Enqueue((byte[])value!));
+            await ViewsAsync(a, b);
+            Clock(a).Advance(TimeSpan.FromSeconds(2));
+            await ViewsAsync(a, b);
+            writes.Writes.Should().BeTrue();
+            await raw.GetSubscriber().SubscribeAsync(channel, Receive);
 
             // A subscriber nobody advertised: two views, and the writes are JSON again.
-            await WaitAsync(() => !writes.Writes, TimeSpan.FromSeconds(15));
+            await ViewsAsync(a, b);
+            writes.Writes.Should().BeFalse();
             await cache.SetAsync("k1", "json-while-blocked", TimeSpan.FromMinutes(1), policy: null, Ct);
-            await WaitAsync(() => received.Any(body => body[0] == (byte)'{'), TimeSpan.FromSeconds(10));
+            (await delivered.Reader.ReadAsync(Ct))[0].Should().Be((byte)'{');
             received.Should().NotContain(body => body[0] == MessagePackFormats.Event);
 
             // It leaves: two clean views and the hold, and they are binary.
             await raw.GetSubscriber().UnsubscribeAsync(channel);
-            await WaitAsync(() => writes.Writes, TimeSpan.FromSeconds(40));
+            await ViewsAsync(a, b);
+            Clock(a).Advance(TimeSpan.FromSeconds(2));
+            await ViewsAsync(a, b);
+            writes.Writes.Should().BeTrue();
             received.Clear();
-            await raw.GetSubscriber().SubscribeAsync(channel, (_, value) => received.Enqueue((byte[])value!));
+            await raw.GetSubscriber().SubscribeAsync(channel, Receive);
             await cache.SetAsync("k2", "binary-until-it-returns", TimeSpan.FromMinutes(1), policy: null, Ct);
-            await WaitAsync(() => !received.IsEmpty, TimeSpan.FromSeconds(10));
+            await delivered.Reader.ReadAsync(Ct);
             received.Should().Contain(body => body[0] == MessagePackFormats.Event, "the returning subscriber is not yet seen, and a node that reads both loses nothing");
 
             // Seen in two views, it stops them again.
-            await WaitAsync(() => !writes.Writes, TimeSpan.FromSeconds(15));
+            await ViewsAsync(a, b);
+            writes.Writes.Should().BeFalse();
         }
         finally
         {
@@ -202,6 +225,8 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         var topic = new TopicKey("string");
         await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var db = raw.GetDatabase();
+        var time = (RedisResult[])(await db.ExecuteAsync("TIME"))!;
+        _now = DateTimeOffset.FromUnixTimeMilliseconds((long)time[0] * 1000 + (long)time[1] / 1000);
         using var node = Node(app, "node-a", pubSub: false, write: true);
         var service = Service(node);
         var writes = node.GetRequiredService<IEventWrites>();
@@ -213,25 +238,33 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
             await db.StreamAddAsync(streamKey, "f", "v");
             await db.StreamCreateConsumerGroupAsync(streamKey, "urn:node-old", "0-0");
             await db.StreamReadGroupAsync(streamKey, "urn:node-old", "urn:node-old", ">", 1);
-            node.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisStreams).Create(topic);
-            await service.StartAsync(Ct);
+            var subscribed = node.GetRequiredService<ITopicFactory>().Get(KnownTopicNames.RedisStreams).Create(topic);
+            await BroadcastNodeSignals.ReadyAsync(subscribed, Clock(node));
+            await service.TickAsync(Ct);
 
             for (var i = 0; i < 8; i++)
             {
                 await db.StreamReadGroupAsync(streamKey, "urn:node-old", "urn:node-old", ">", 1);
-                await Task.Delay(500, Ct);
+                Clock(node).Advance(TimeSpan.FromMilliseconds(500));
+                await service.TickAsync(Ct);
             }
 
             writes.Writes.Should().BeFalse("a live group without an advertisement may not read binary events");
             await cache.SetAsync("k1", "json-while-blocked", TimeSpan.FromMinutes(1), policy: null, Ct);
             (await LastBodyAsync(db, streamKey))[0].Should().Be((byte)'{');
 
-            await WaitAsync(() => writes.Writes, TimeSpan.FromSeconds(30));
+            Clock(node).Advance(TimeSpan.FromSeconds(10));
+            await RedisConsumerClock.AdvanceAsync(db, streamKey, TimeSpan.FromSeconds(10), "urn:node-old");
+            await service.TickAsync(Ct);
+            Clock(node).Advance(TimeSpan.FromSeconds(2));
+            await service.TickAsync(Ct);
+            writes.Writes.Should().BeTrue();
             await cache.SetAsync("k2", "binary", TimeSpan.FromMinutes(1), policy: null, Ct);
             (await LastBodyAsync(db, streamKey))[0].Should().Be(MessagePackFormats.Event);
 
             await db.StreamReadGroupAsync(streamKey, "urn:node-old", "urn:node-old", ">", 1);
-            await WaitAsync(() => !writes.Writes, TimeSpan.FromSeconds(5));
+            await service.TickAsync(Ct);
+            writes.Writes.Should().BeFalse();
             await cache.SetAsync("k3", "json-again", TimeSpan.FromMinutes(1), policy: null, Ct);
             (await LastBodyAsync(db, streamKey))[0].Should().Be((byte)'{');
         }
@@ -245,35 +278,27 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
 
     private static async Task<byte[]> LastBodyAsync(IDatabase db, RedisKey stream)
     {
-        // The topic publishes just after the call returns on a background thread; look until the entry is there.
-        for (var i = 0; i < 50; i++)
-        {
-            var last = await db.StreamRangeAsync(stream, count: 1, messageOrder: Order.Descending);
-            if (last.Length > 0 && last[0].Values.FirstOrDefault(v => v.Value.Length() > 1) is { Value.IsNull: false } body)
-            {
-                return (byte[])body.Value!;
-            }
+        var last = await db.StreamRangeAsync(stream, count: 1, messageOrder: Order.Descending);
+        last.Should().ContainSingle();
+        return (byte[])last[0].Values.First(value => value.Value.Length() > 1).Value!;
+    }
 
-            await Task.Delay(100, Ct);
-        }
+    private static ManualTimeProvider Clock(ServiceProvider node) => (ManualTimeProvider)node.GetRequiredService<TimeProvider>();
 
-        throw new TimeoutException("No event reached the stream.");
+    private static async Task ViewsAsync(ServiceProvider a, ServiceProvider b)
+    {
+        await Service(a).AdvertiseAsync(Ct);
+        await Service(b).AdvertiseAsync(Ct);
+        await Service(a).RefreshAsync(Ct);
+        await Service(b).RefreshAsync(Ct);
+        await Service(a).RefreshAsync(Ct);
+        await Service(b).RefreshAsync(Ct);
     }
 
     private static async Task<long[]> SumAsync(RedisSubscriberSource source, IReadOnlyList<string> channels)
     {
         var counts = await Task.WhenAll(source.Endpoints().Select(endpoint => source.CountAsync(endpoint, channels, Ct)));
         return [.. channels.Select((_, i) => counts.Sum(count => count!.Channels[i]))];
-    }
-
-    private static async Task WaitAsync(Func<bool> condition, TimeSpan timeout)
-    {
-        var until = DateTime.UtcNow + timeout;
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < until, "The condition did not hold in time.");
-            await Task.Delay(100, Ct);
-        }
     }
 
     private static string App() => $"fe{Guid.NewGuid():N}"[..12];
@@ -284,6 +309,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
     private ServiceProvider Node(string app, string source, bool pubSub, bool write, IRedisChannelStrategy? strategy = null) =>
         new ServiceCollection()
             .AddLogging()
+            .AddSingleton<TimeProvider>(new ManualTimeProvider(_now))
             .AddCaching(
                 b =>
                 {
@@ -307,7 +333,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
                     }
                     else
                     {
-                        b.AddRedisStreams(o => { o.Enabled = true; o.MaintainerEnabled = false; });
+                        b.AddRedisStreams(o => { o.Enabled = true; o.MaintainerEnabled = false; o.NotifyEnabled = false; });
                     }
 
                     b.AddBroadcast();

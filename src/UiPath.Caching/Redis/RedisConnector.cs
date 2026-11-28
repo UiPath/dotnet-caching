@@ -162,6 +162,10 @@ public sealed partial class RedisConnector : IRedisConnector
         }
     }
 
+    internal Task ReconnectTask { get; private set; } = Task.CompletedTask;
+
+    internal Task TopologyScan { get; private set; } = Task.CompletedTask;
+
     private IConnectionMultiplexer ConnectionMultiplexer => GetConnectionTask().GetAwaiter().GetResult();
 
     public EndPoint[] GetEndPoints(bool configuredOnly = false)
@@ -519,7 +523,8 @@ public sealed partial class RedisConnector : IRedisConnector
         }
 
         // Not cancellable: the body has to run to release the hold it was queued with.
-        Task.Run(() => ReconnectAsync(current), CancellationToken.None).Forget();
+        ReconnectTask = Task.Run(() => ReconnectAsync(current), CancellationToken.None);
+        ReconnectTask.Forget();
     }
 
     private async Task CloseAndDisposeAsync(Task<IConnectionMultiplexer> multiplexerTask)
@@ -1051,7 +1056,8 @@ public sealed partial class RedisConnector : IRedisConnector
         Volatile.Write(ref _topologyChangedAt, now);
         if (Interlocked.CompareExchange(ref _topologyScanScheduled, 1, 0) == 0)
         {
-            ScanOnceTopologySettlesAsync().Forget();
+            TopologyScan = ScanOnceTopologySettlesAsync();
+            TopologyScan.Forget();
         }
     }
 

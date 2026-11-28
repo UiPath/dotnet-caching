@@ -8,6 +8,8 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public sealed class CrossSlotBatchIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
+
+    private readonly ManualTimeProvider _time = new(fixture.TimeOrigin);
     private readonly string _app = $"cs{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
 
@@ -28,7 +30,7 @@ public sealed class CrossSlotBatchIntegrationTests(RedisContainerFixture fixture
         (await cache.GetAsync<string>(keys, null, Ct)).Should().Equal(pairs);
         var entries = await cache.GetCacheEntriesAsync<string>(keys, null, Ct);
         entries.Select(e => (e.Key, e.Value.Value)).Should().Equal(pairs.Select(p => (p.Key, p.Value)));
-        entries.Should().AllSatisfy(e => e.Value.Expiration.Should().BeAfter(DateTimeOffset.UtcNow));
+        entries.Should().AllSatisfy(e => e.Value.Expiration.Should().BeAfter(_time.GetUtcNow()));
 
         (await cache.RemoveAsync<string>(keys, Ct)).Should().BeTrue();
 
@@ -78,7 +80,7 @@ public sealed class CrossSlotBatchIntegrationTests(RedisContainerFixture fixture
 
     private ICache Cache(string provider)
     {
-        var node = new ServiceCollection()
+        var node = new ServiceCollection().AddSingleton<TimeProvider>(_time)
             .AddLogging()
             .AddCaching(
                 b =>

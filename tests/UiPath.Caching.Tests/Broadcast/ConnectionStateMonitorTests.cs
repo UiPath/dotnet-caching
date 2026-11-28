@@ -1,13 +1,14 @@
 namespace UiPath.Caching.Tests.Broadcast;
 
-public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
+public class ConnectionStateMonitorTests : IAsyncLifetime
 {
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IConnectionState[] _connectionStates = default!;
 
     private ConnectionStateMonitor? _sut = null;
 
-    private ConnectionStateMonitor Sut => _sut ??= _fixture.Create<ConnectionStateMonitor>();
+    private ConnectionStateMonitor Sut => _sut ??= new ConnectionStateMonitor(_fixture.Create<UiPath.Caching.Telemetry.ICachingTelemetryProvider>(), TimeSpan.FromMilliseconds(100), _clock, _connectionStates);
 
     [Fact]
     public void Works_as_expected()
@@ -29,7 +30,7 @@ public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccesso
     }
 
     [Fact]
-    public async Task Works_as_expected_when_no_events()
+    public void Works_as_expected_when_no_events()
     {
         var _isConnected0 = false;
         var _isConnected1 = true;
@@ -38,7 +39,8 @@ public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccesso
         Sut.IsConnected.Should().BeFalse();
         _isConnected0 = true;
 
-        await WaitUntilAsync(() => Sut.IsConnected, TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromMilliseconds(100));
+        Sut.IsConnected.Should().BeTrue();
     }
 
     [Fact]
@@ -50,6 +52,7 @@ public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccesso
 
     public ValueTask DisposeAsync()
     {
+        _sut?.Dispose();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
@@ -62,18 +65,4 @@ public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccesso
         return ValueTask.CompletedTask;
     }
 
-    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            if (predicate())
-            {
-                return;
-            }
-            await Task.Delay(20, token);
-        }
-        throw new TimeoutException($"Predicate was not satisfied within {timeout}.");
-    }
 }
-

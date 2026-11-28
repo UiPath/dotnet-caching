@@ -47,7 +47,8 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
             var pollInterval = TimeSpan.FromMilliseconds(50);
             var context = new RedisStreamContext(stream, field, consumer, group, new Uri("urn:this-source"), 10, pollInterval, false, false);
 
-            using var waiter = new SignalingFetchWaiter(pollInterval);
+            var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+            using var waiter = new ObservedFetchWaiter(pollInterval, clock);
             using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
                 context,
                 connectionState,
@@ -59,18 +60,15 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
                 NullRedisProfiler.Instance,
                 waiter,
                 () => { },
-                stop.Token);
+                stop.Token,
+                clock: clock);
 
             for (var i = 0; i < 2; i++)
             {
-                await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+                await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TestContext.Current.CancellationToken);
             }
 
-            var deadline = DateTime.UtcNow.AddSeconds(10);
-            while ((await db.StreamPendingAsync(stream, group)).PendingMessageCount > 0 && DateTime.UtcNow < deadline)
-            {
-                await Task.Delay(20, TestContext.Current.CancellationToken);
-            }
+            await waiter.WaitForIdleAsync();
 
             (await db.StreamPendingAsync(stream, group)).PendingMessageCount.Should().Be(0, "the deleted entry is acknowledged too");
         }
@@ -111,7 +109,8 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
             var context = new RedisStreamContext(stream, field, "consumer", group, new Uri("urn:this-source"), 10, pollInterval, false, false);
 
             var before = await EvalCallsAsync(admin);
-            using var waiter = new SignalingFetchWaiter(pollInterval);
+            var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+            using var waiter = new ObservedFetchWaiter(pollInterval, clock);
             using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
                 context,
                 connectionState,
@@ -123,13 +122,16 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
                 NullRedisProfiler.Instance,
                 waiter,
                 () => { },
-                stop.Token);
+                stop.Token,
+                clock: clock);
             sut.MarkSubscribed();
 
             for (var i = 0; i < 5; i++)
             {
+                await waiter.WaitForIdleAsync();
                 await db.StreamAddAsync(stream, field, $"entry-{i}");
-                await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+                waiter.Signal();
+                await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TestContext.Current.CancellationToken);
             }
 
             var scripts = await EvalCallsAsync(admin) - before;
@@ -160,6 +162,7 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
         var db = connector.Database;
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10], SourceUri = new Uri("urn:node") };
         var options = new RedisStreamsTopicOptions { Enabled = true };
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         var stream = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("orders");
         var connectionState = Substitute.For<IConnectionState>();
         connectionState.IsConnected.Returns(true);
@@ -180,6 +183,7 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
                 NullLogger<RedisStreamsTopic<ICacheEvent>>.Instance,
                 NullTelemetryProvider.Instance,
                 NullRedisProfiler.Instance,
+                clock,
                 stop.Token);
             var ev = new TestCacheEvent { Id = "e1", Type = "set", Source = new Uri("urn:node"), Data = new CacheEventData("order:1") };
             (await topic.PublishAsync(ev, TestContext.Current.CancellationToken)).Should().BeTrue();
@@ -246,7 +250,8 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
             var channel = Channel.CreateUnbounded<ICacheEvent>();
             var pollInterval = TimeSpan.FromMilliseconds(50);
             var context = new RedisStreamContext(stream, field, "consumer", group, new Uri("urn:this-source"), 10, pollInterval, false, false);
-            using var waiter = new SignalingFetchWaiter(pollInterval);
+            var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+            using var waiter = new ObservedFetchWaiter(pollInterval, clock);
             using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
                 context,
                 connectionState,
@@ -258,21 +263,20 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
                 NullRedisProfiler.Instance,
                 waiter,
                 () => { },
-                stop.Token);
+                stop.Token,
+                clock: clock);
             sut.MarkSubscribed();
 
+            await waiter.WaitForIdleAsync();
             await db.StreamAddAsync(stream, [new NameValueEntry(field, "own-new"), new NameValueEntry("src", "urn:this-source")]);
             await db.StreamAddAsync(stream, [new NameValueEntry(field, "theirs-new"), new NameValueEntry("src", "urn:other-source")]);
             await db.StreamAddAsync(stream, field, "own-old");
             var last = await db.StreamAddAsync(stream, field, "theirs-old");
+            waiter.Signal();
 
             (await NextAsync(channel)).Id.Should().Be("theirs-new");
             (await NextAsync(channel)).Id.Should().Be("theirs-old");
-            var deadline = DateTime.UtcNow.AddSeconds(10);
-            while (DateTime.UtcNow < deadline && ((await db.StreamPendingAsync(stream, group)).PendingMessageCount > 0 || await LastDeliveredAsync(db, stream, group) != last))
-            {
-                await Task.Delay(20, TestContext.Current.CancellationToken);
-            }
+            await waiter.WaitForIdleAsync();
 
             (await db.StreamPendingAsync(stream, group)).PendingMessageCount.Should().Be(0, "the own entries are acknowledged too");
             (await LastDeliveredAsync(db, stream, group)).Should().Be(last);
@@ -287,7 +291,7 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
     }
 
     private static Task<ICacheEvent> NextAsync(Channel<ICacheEvent> channel) =>
-        channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TestContext.Current.CancellationToken);
 
     private static async Task<RedisValue> LastDeliveredAsync(IDatabase db, RedisKey stream, RedisValue group) =>
         Array.Find(await db.StreamGroupInfoAsync(stream), g => g.Name == group).LastDeliveredId;

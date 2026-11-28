@@ -51,6 +51,8 @@ internal sealed class FakeNodeListServer
             .Returns(call => Task.FromResult((long)call.ArgAt<RedisValue[]>(1).Count(f => _hash.Remove((string)f!))));
     }
 
+    public event Action? Written;
+
     public IDatabase Database { get; }
 
     /// <summary>When set, a write waits for it before it lands, as a slow Redis would hold it.</summary>
@@ -114,6 +116,7 @@ internal sealed class FakeNodeListServer
         {
             Events.Add("write");
             _hash[(string)arguments[0]!] = NowMs.ToString(CultureInfo.InvariantCulture) + "|" + (string)arguments[1]!;
+            Written?.Invoke();
             return RedisResult.Create((RedisValue)NowMs);
         }
 

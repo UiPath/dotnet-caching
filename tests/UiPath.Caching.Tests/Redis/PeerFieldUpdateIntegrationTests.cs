@@ -12,6 +12,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
 {
     private static readonly string[] InnerReadCommands = ["EXEC", "EVAL_RO", "EVALSHA_RO", "HGETALL"];
 
+    private readonly RedisTestSignals _signals = new();
     private readonly string _app = $"pf{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
 
@@ -28,14 +29,15 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         await WarmAsync(writer, peer);
         var key = Unique();
         (await writer.Hashes.SetAsync<string>(key, Fields(("a", "1"), ("b", "2")), TimeSpan.FromMinutes(10), Ct)).Should().BeTrue();
-        _ = peer.Profiler.Session.FinishProfiling().ToList();
+        peer.Profiler.Reset();
+        await peer.Signals.DeliveredAsync(key, 1, Ct);
         (await peer.Hashes.GetAsync<string>(key, Ct)).Should().HaveCount(2);
-        await EventsConsumedAsync(peer);
         (await peer.Hashes.GetAsync<string>(key, Ct)).Should().HaveCount(2);
-        _ = peer.Profiler.Session.FinishProfiling().ToList();
+        peer.Profiler.Reset();
 
         (await writer.Hashes.SetAsync<string>(key, Fields(("c", "3")), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10), SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
-        var seen = await UntilAsync(async () => (await peer.Hashes.GetAsync<string>(key, Ct)).ContainsKey("c"));
+        await peer.Signals.DeliveredAsync(key, 2, Ct);
+        var seen = (await peer.Hashes.GetAsync<string>(key, Ct)).ContainsKey("c");
 
         seen.Should().BeTrue("the peer's event is applied to its copy");
         (await peer.Hashes.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("c", "3")));
@@ -53,14 +55,15 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         await WarmAsync(writer, peer);
         var key = Unique();
         (await writer.Hashes.SetAsync<string>(key, Fields(("a", "1"), ("b", "2")), TimeSpan.FromMinutes(10), Ct)).Should().BeTrue();
-        _ = peer.Profiler.Session.FinishProfiling().ToList();
+        peer.Profiler.Reset();
+        await peer.Signals.DeliveredAsync(key, 1, Ct);
         (await peer.Hashes.GetAsync<string>(key, Ct)).Should().HaveCount(2);
-        await EventsConsumedAsync(peer);
         (await peer.Hashes.GetAsync<string>(key, Ct)).Should().HaveCount(2);
-        _ = peer.Profiler.Session.FinishProfiling().ToList();
+        peer.Profiler.Reset();
 
         (await writer.Hashes.SetAsync<string>(key, Fields(("c", "3")), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10), SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
-        var seen = await UntilAsync(async () => (await peer.Hashes.GetAsync<string>(key, Ct)).ContainsKey("c"));
+        await peer.Signals.DeliveredAsync(key, 2, Ct);
+        var seen = (await peer.Hashes.GetAsync<string>(key, Ct)).ContainsKey("c");
 
         seen.Should().BeTrue("the peer's event is applied to its copy");
         (await peer.Hashes.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("c", "3")));
@@ -74,8 +77,8 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var nodes = new[] { Node("a", peerFieldUpdates: true), Node("b", peerFieldUpdates: true) };
         await WarmAsync(nodes[0], nodes[1]);
+        await WarmAsync(nodes[1], nodes[0]);
         var keys = Enumerable.Range(0, 20).Select(_ => Unique()).ToArray();
-        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(20));
 
         // An update applied under the change token's lock waited for the merge lock, while a read keeping its value held the merge lock
         // and waited to register on that token: every caller of the node then stalled behind the two.
@@ -83,7 +86,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         {
             var node = nodes[w % 2];
             var random = new Random(w);
-            while (!stop.IsCancellationRequested)
+            for (var iteration = 0; iteration < 512; iteration++)
             {
                 var key = keys[random.Next(keys.Length)];
                 if ((await node.Hashes.GetAsync<string>(key, Ct)).Count == 0 || random.Next(4) == 0)
@@ -96,7 +99,6 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         var workers = Enumerable.Range(0, 32).Select(w => Task.Run(() => Work(w), Ct)).ToArray();
 
         var all = Task.WhenAll(workers);
-        (await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(40), Ct))).Should().BeSameAs(all, "every caller returns once the load stops");
         await all;
     }
 
@@ -106,16 +108,16 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var nodes = new[] { Node("a", peerFieldUpdates: true), Node("b", peerFieldUpdates: true) };
         await WarmAsync(nodes[0], nodes[1]);
+        await WarmAsync(nodes[1], nodes[0]);
         var keys = Enumerable.Range(0, 6).Select(_ => Unique()).ToArray();
         var background = new CachePolicy { BackgroundDistributedWrite = true };
 
         // A few field names that every writer shares, so the order the writes took in the hash decides what each copy must hold.
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S1994:\"for\" loop increment clauses should modify the loops' counters", Justification = "The loop runs until cancelled; the counter only numbers the writes.")]
-        async Task Work(int round, int w, CancellationToken stop)
+        async Task Work(int round, int w)
         {
             var node = nodes[w % 2];
             var random = new Random(round * 100 + w);
-            for (var i = 0; !stop.IsCancellationRequested; i++)
+            for (var i = 0; i < 64; i++)
             {
                 var key = keys[random.Next(keys.Length)];
                 if (random.Next(3) == 0)
@@ -150,8 +152,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
 
         for (var round = 0; round < 8; round++)
         {
-            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-            await Task.WhenAll(Enumerable.Range(0, 16).Select(w => Task.Run(() => Work(round, w, stop.Token), Ct)));
+            await Task.WhenAll(Enumerable.Range(0, 16).Select(w => Task.Run(() => Work(round, w), Ct)));
 
             (await UntilAsync(Agree)).Should().BeTrue($"once the writes and their events of round {round} are done, no node keeps a copy that differs from the hash");
         }
@@ -175,7 +176,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
 
         await redis.GetDatabase().HashSetAsync(composed, "_version_", long.MaxValue);
         (await peer.Hashes.GetAsync<string>(key, Ct)).Should().HaveCount(1);
-        await EventsConsumedAsync(peer);
+        await peer.Signals.DeliveredAsync(key, 1, Ct);
 
         (await writer.Hashes.SetAsync<string>(key, Fields(("b", "2")), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10), SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
 
@@ -372,7 +373,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         var many = Enumerable.Range(0, 2000).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
         await writer.Hashes.SetAsync<string>(key, many, TimeSpan.FromMinutes(10), Ct);
         (await peer.Hashes.GetAsync<string>(key, Ct)).Should().HaveCount(2000);
-        _ = peer.Profiler.Session.FinishProfiling().ToList();
+        peer.Profiler.Reset();
 
         await writer.Hashes.SetAsync<string>(key, Fields(("extra", "1")), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10), SetOption: HashCacheSetOption.HashReplace), Ct);
 
@@ -391,54 +392,31 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     }
 
     // A node's first subscription to a topic starts while its first read returns, and the gap it reports clears what the node holds.
+    private static string Unique() => $"it-{Guid.NewGuid():N}";
+
+    private static Dictionary<string, string?> Fields(params (string Field, string Value)[] fields) =>
+        fields.ToDictionary(f => f.Field, f => (string?)f.Value);
+
     private static async Task WarmAsync(Peer writer, Peer node)
     {
         Assert.SkipUnless(node.OnStreams, "Waits for the node's XREADGROUP, and this server's topics broadcast over Pub/Sub, not Streams.");
         var key = Unique();
         await writer.Hashes.SetAsync<string>(key, Fields(("w", "1")), TimeSpan.FromMinutes(10), Ct);
         await node.Hashes.GetAsync<string>(key, Ct);
-        var seen = new List<string>();
-        (await UntilAsync(() =>
+
+        // A write published before the node's group exists is skipped and told as a loss, so one is written until it arrives.
+        for (var delivered = false; !delivered;)
         {
-            seen.AddRange(node.Profiler.Session.FinishProfiling().Select(c => c.Command));
-            return Task.FromResult(seen.Contains("XREADGROUP"));
-        })).Should().BeTrue("the node's reader of the topic is up");
-        await Task.Delay(300, Ct);
+            var missed = node.Signals.Missed;
+            var probe = Unique();
+            await writer.Hashes.SetAsync<string>(probe, Fields(("w", "1")), TimeSpan.FromMinutes(10), Ct);
+            delivered = await node.Signals.DeliveredSinceAsync(probe, missed, Ct);
+        }
     }
+
+    private Task<bool> UntilAsync(Func<Task<bool>> condition) => _signals.UntilAsync(condition, Ct);
 
     // The write that made the hash is announced too: its event drops a copy read before it arrived, so the test starts from a copy read after it.
-    private static async Task EventsConsumedAsync(Peer node)
-    {
-        Assert.SkipUnless(node.OnStreams, "Waits for the node's XACK, and this server's topics broadcast over Pub/Sub, not Streams.");
-        var seen = new List<string>();
-        (await UntilAsync(() =>
-        {
-            seen.AddRange(node.Profiler.Session.FinishProfiling().Select(c => c.Command));
-            return Task.FromResult(seen.Contains("XACK"));
-        })).Should().BeTrue("the node consumed the event of the write that made the hash");
-        await Task.Delay(100, Ct);
-    }
-
-    private static string Unique() => $"it-{Guid.NewGuid():N}";
-
-    private static Dictionary<string, string?> Fields(params (string Field, string Value)[] fields) =>
-        fields.ToDictionary(f => f.Field, f => (string?)f.Value);
-
-    private static async Task<bool> UntilAsync(Func<Task<bool>> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < until)
-        {
-            if (await condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(20, Ct);
-        }
-
-        return false;
-    }
 
     private async Task<long?> Counted(string key) =>
         await Raw(key, "_version_") & ((1L << HashVersion.CounterBits) - 1);
@@ -495,6 +473,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     private Peer Node(string source, bool peerFieldUpdates, int fieldBatch = 1000, bool readScripts = false, bool headered = false)
     {
         var profiler = new CommandCountingProfiler();
+        var signals = new RedisTestSignals(_signals.Pulse);
         var provider = new ServiceCollection()
             .AddSingleton<IRedisProfiler>(profiler)
             .AddCaching(
@@ -528,20 +507,23 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
                         o.DefaultCachePolicy = new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } };
                     }
                 })
+            .ObserveRedisSignals(signals)
             .BuildServiceProvider();
         _nodes.Add(provider);
         var onStreams = StreamsReady.Await(provider);
         var factory = provider.GetRequiredService<ICacheFactory>();
-        return new Peer(factory.CreateHashCache(KnownCacheProviderNames.InMemoryRedis), factory.CreateHashCache(KnownCacheProviderNames.Redis), profiler, onStreams);
+        return new Peer(factory.CreateHashCache(KnownCacheProviderNames.InMemoryRedis), factory.CreateHashCache(KnownCacheProviderNames.Redis), profiler, onStreams, signals);
     }
 
-    private sealed record Peer(IHashCache Hashes, IHashCache Redis, CommandCountingProfiler Profiler, bool OnStreams);
+    private sealed record Peer(IHashCache Hashes, IHashCache Redis, CommandCountingProfiler Profiler, bool OnStreams, RedisTestSignals Signals);
 
     private sealed class CommandCountingProfiler : IRedisProfiler
     {
-        public ProfilingSession Session { get; } = new();
+        public ProfilingSession Session { get; private set; } = new();
 
         public int Count => 0;
+
+        public void Reset() => Session = new();
 
         public ProfilingSession? GetSession() => Session;
 

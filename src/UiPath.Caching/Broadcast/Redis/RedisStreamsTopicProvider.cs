@@ -16,6 +16,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     private readonly ConcurrentDictionary<TopicKey, RedisKey> _streamKeys = new();
     private readonly BroadcastCapability _capability;
     private readonly StreamsProbeSettings _probeSettings;
+    private readonly TimeProvider _clock;
     private bool _disposed;
 
     public RedisStreamsTopicProvider(
@@ -32,6 +33,21 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     {
     }
 
+    public RedisStreamsTopicProvider(
+        IOptions<RedisStreamsTopicOptions> redisStreamsTopicOptionsAccessor,
+        IOptions<CacheOptions> cacheOptionsAccessor,
+        PerTopicOptionsRegistry<RedisStreamsTopicOptions> registry,
+        IRedisConnector redis,
+        IEventFormatterProxy<ICacheEvent> formatter,
+        IResiliencePipelineProvider resiliencePipelineProvider,
+        ILoggerFactory loggerFactory,
+        ICachingTelemetryProvider cachingTelemetryProvider,
+        IRedisProfiler redisProfiler,
+        TimeProvider clock)
+        : this(redisStreamsTopicOptionsAccessor, cacheOptionsAccessor, registry, redis, formatter, resiliencePipelineProvider, loggerFactory, cachingTelemetryProvider, redisProfiler, pubSubFallback: null, clock)
+    {
+    }
+
     /// <param name="pubSubFallback">The Pub/Sub provider the topics fall back to when the server does not run Streams, when <see cref="RedisStreamsTopicOptions.StreamsUnsupported"/> asks for it.</param>
     internal RedisStreamsTopicProvider(
         IOptions<RedisStreamsTopicOptions> redisStreamsTopicOptionsAccessor,
@@ -43,9 +59,11 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         ILoggerFactory loggerFactory,
         ICachingTelemetryProvider cachingTelemetryProvider,
         IRedisProfiler redisProfiler,
-        IPubSubFallback? pubSubFallback)
+        IPubSubFallback? pubSubFallback,
+        TimeProvider? clock = null)
         : base(redis, cachingTelemetryProvider, redisProfiler, loggerFactory, redisStreamsTopicOptionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
+        _clock = clock ?? TimeProvider.System;
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
         _registry = registry;
@@ -111,7 +129,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             _probeSettings,
             action == StreamsUnsupportedAction.PubSub ? PubSubFallback : null,
             onRead => CreateStreamsTopic(topicKey, resolved, onRead),
-            new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold),
+            new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold, _clock),
             _logger,
             onLeftStreams: () => _streamKeys.TryRemove(topicKey, out _),
             telemetry: Telemetry);
@@ -137,7 +155,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         topicKey,
         ConnectionState,
         Redis,
-        () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold),
+        () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold, _clock),
         _formatter,
         _resiliencePipelineProvider,
         resolved,
@@ -147,7 +165,8 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         Profiler,
         onRefused: ex => _capability.Refused(ex),
         onRead: onRead,
-        _stopTokenSource.Token);
+        _stopTokenSource.Token,
+        _clock);
 
     private RedisStreamsTopicOptions? ResolveOptions(TopicKey topicKey) =>
         _registry.Resolve(topicKey, _redisStreamsTopicOptions.Clone, _logger);
