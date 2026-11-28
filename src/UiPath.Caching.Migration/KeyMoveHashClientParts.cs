@@ -6,7 +6,7 @@ namespace UiPath.Caching.Migration;
 /// <param name="InPlaceKey">The caller key to L, in logical text.</param>
 /// <param name="NativeKey">K1N: the caller key to N.</param>
 /// <param name="MaxHashFields">The most fields a hash may have to be promoted.</param>
-/// <param name="Plain">The path of not-started and of an unmanaged cache.</param>
+/// <param name="Plain">The path of off and of an unmanaged cache.</param>
 /// <param name="Mappable">False for a key whose maps do not round trip, which is never promoted.</param>
 internal sealed record KeyMoveHashClientParts<T>(
     string Group,

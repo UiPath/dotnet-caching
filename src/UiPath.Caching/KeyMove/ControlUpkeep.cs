@@ -4,9 +4,9 @@ namespace UiPath.Caching.KeyMove;
 
 internal sealed class ControlUpkeep(ControlRecordReader records, TransitionSequence sequence, StateStore store, KeyMoveStateOptions options, TimeProvider time, Action<string, string>? report = null)
 {
-    /// <summary>ready to drained, and closed until <c>lswept</c> names the current id, own control records that scripts still check.</summary>
+    /// <summary>preparing to copied, and done until <c>lswept</c> names the current id, own control records that scripts still check.</summary>
     public static bool Applies(StateRecord state) =>
-        state.Durable && (state.State is KeyMoveStates.Ready or KeyMoveStates.Barrier or KeyMoveStates.Moving or KeyMoveStates.Drained || (state.State == KeyMoveStates.Closed && state.Swept != state.Id));
+        state.Durable && (state.State is KeyMoveStates.Preparing or KeyMoveStates.Switching or KeyMoveStates.Copying or KeyMoveStates.Copied || (state.State == KeyMoveStates.Done && state.Swept != state.Id));
 
     /// <summary>The X12 target: the same state and direction under <c>ep</c> plus one and a new id, with the managed set when it changes.</summary>
     public static StateTarget SameState(StateRecord state, string? newCaches, TimeProvider time) => new(
@@ -47,7 +47,7 @@ internal sealed class ControlUpkeep(ControlRecordReader records, TransitionSeque
         return verdict;
     }
 
-    /// <summary>X12: the same state under <c>ep</c> plus one and a new id, through the standard sequence. A changed managed set is allowed only in ready and barrier.</summary>
+    /// <summary>X12: the same state under <c>ep</c> plus one and a new id, through the standard sequence. A changed managed set is allowed only in preparing and switching.</summary>
     /// <param name="newCaches">The encoded managed set to write with it, or null to keep the stored one.</param>
     public async Task<TransitionResult> RebuildAsync(string group, StateRecord state, string? newCaches, SequenceOptions? sequenceOptions, CancellationToken cancellationToken)
     {
@@ -56,9 +56,9 @@ internal sealed class ControlUpkeep(ControlRecordReader records, TransitionSeque
             return new TransitionResult(TransitionOutcome.StateChanged, Detail: "a transition is in flight; it is resumed, not rebuilt");
         }
 
-        if (newCaches is not null && newCaches != state.Caches && !(state.State is KeyMoveStates.Ready or KeyMoveStates.Barrier && state.Direction == "fwd"))
+        if (newCaches is not null && newCaches != state.Caches && !(state.State is KeyMoveStates.Preparing or KeyMoveStates.Switching && state.Direction == "fwd"))
         {
-            throw new InvalidOperationException($"The managed set is frozen outside ready and barrier: the group is in {KeyMoveStates.NameOf(state.State)} {state.Direction}.");
+            throw new InvalidOperationException($"The managed set is frozen outside preparing and switching: the group is in {KeyMoveStates.NameOf(state.State, state.Direction)} {state.Direction}.");
         }
 
         var target = SameState(state, newCaches, time);

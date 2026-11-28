@@ -18,9 +18,9 @@ internal enum WriteStep
     /// <summary>BUMP(G, N, del) forward, BUMP(GL, L, del) in reverse.</summary>
     BumpDel,
 
-    /// <summary>The native <c>SET N</c> of closed.</summary>
+    /// <summary>The native <c>SET N</c> of done.</summary>
     NativeSet,
 
-    /// <summary>The native <c>DEL N</c> of closed.</summary>
+    /// <summary>The native <c>DEL N</c> of done.</summary>
     NativeDel,
 }

@@ -130,7 +130,7 @@ internal sealed class InstanceMoveClaim(ClaimStore src, ClaimStore dstMirror, IG
 
     public Task<ClaimOutcome> CertifyAsync(string group, string token, long ep, string terminal, LeaseFence? fence, CancellationToken cancellationToken)
     {
-        var swept = terminal == KeyMoveStates.Closed;
+        var swept = terminal == KeyMoveStates.Done;
         return StepAsync(group, () => src.CertifyAsync(AuthorityKind + group, token, ep, swept), () => dstMirror.CertifyAsync(MirrorKind + group, token, ep, swept), cancellationToken);
     }
 

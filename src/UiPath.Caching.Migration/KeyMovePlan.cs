@@ -17,7 +17,7 @@ internal readonly record struct KeyMovePlan(KeyMoveMode Mode, GroupRules Rules)
                 return Mode.ToString();
             }
 
-            return KeyMoveStates.NameOf(act.State) + (act.Direction == "rev" ? " (reverse)" : string.Empty);
+            return KeyMoveStates.NameOf(act.State, act.Direction);
         }
     }
 }

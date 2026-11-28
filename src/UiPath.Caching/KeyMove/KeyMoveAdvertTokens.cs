@@ -1,6 +1,6 @@
 namespace UiPath.Caching.KeyMove;
 
-/// <param name="recycled">The <c>ep</c> of the not-started identity after which the node recycled its data connections, or null.</param>
+/// <param name="recycled">The <c>ep</c> of the off identity after which the node recycled its data connections, or null.</param>
 internal sealed class KeyMoveAdvertTokens(
     IReadOnlyList<GroupRegistration> groups,
     Func<string, IReadOnlyList<string>> caches,

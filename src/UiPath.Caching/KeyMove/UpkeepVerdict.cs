@@ -10,6 +10,6 @@ internal enum UpkeepVerdict
     /// <summary>A record above the state's <c>ep</c>, or at it under another id: the state rolled back or conflicts, never a Rebuild.</summary>
     IdentityConflict,
 
-    /// <summary>not-started, closed after the sweep, or an uncommitted state: no upkeep.</summary>
+    /// <summary>off, done after the sweep, or an uncommitted state: no upkeep.</summary>
     NotApplicable,
 }

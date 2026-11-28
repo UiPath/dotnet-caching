@@ -14,6 +14,6 @@ internal enum StepKind
 
     ColdStart,
 
-    /// <summary>X12 in ready or barrier for the cache set every fresh node advertises, which differs from the stored one.</summary>
+    /// <summary>X12 in preparing or switching for the cache set every fresh node advertises, which differs from the stored one.</summary>
     RebuildCaches,
 }

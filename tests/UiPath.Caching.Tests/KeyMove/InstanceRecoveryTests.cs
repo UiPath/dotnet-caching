@@ -23,7 +23,7 @@ public sealed class InstanceRecoveryTests(TwoServerFixture fixture)
         rk.Reports.Should().Contain(("src_records_missing", kit.Group));
         var rebuilt = (await kit.ReadStateAsync())!;
         rebuilt.Ep.Should().Be(moved.Ep + 1);
-        rebuilt.State.Should().Be(KeyMoveStates.Ready);
+        rebuilt.State.Should().Be(KeyMoveStates.Preparing);
         rebuilt.Durable.Should().BeTrue();
         (await kit.RecordAsync(RecordSide.Src)).Should().Contain("ep", rebuilt.Ep.ToString(System.Globalization.CultureInfo.InvariantCulture)).And.Contain("dur", "1");
         (await rk.SrcFieldAsync()).Should().Be($"open|{InstanceRecoveryKit.Token}|inst|", "OPEN with restore from ct");
@@ -60,7 +60,7 @@ public sealed class InstanceRecoveryTests(TwoServerFixture fixture)
         result.Transition!.Outcome.Should().Be(TransitionOutcome.Completed);
         var state = (await kit.ReadStateAsync())!;
         state.Ep.Should().BeGreaterThan(moved.Ep);
-        state.State.Should().Be(KeyMoveStates.Ready);
+        state.State.Should().Be(KeyMoveStates.Preparing);
         state.Claim.Should().Be(InstanceRecoveryKit.Token, "ct comes from the Src claim");
         state.Move.Should().Be(InstanceMoveClaim.Descriptor);
         (await kit.RecordAsync(RecordSide.Dst))["ep"].Should().Be(state.Ep.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -90,7 +90,7 @@ public sealed class InstanceRecoveryTests(TwoServerFixture fixture)
         var state = (await kit.ReadStateAsync())!;
 
         // A Src cut leaves no committed record, so the state is the one the transition started from; a Dst cut still let the Src record commit, so the committed target stands.
-        state.State.Should().Be(cutSide == RecordSide.Src ? KeyMoveStates.NotStarted : KeyMoveStates.Ready);
+        state.State.Should().Be(cutSide == RecordSide.Src ? KeyMoveStates.Off : KeyMoveStates.Preparing);
         state.Ep.Should().BeGreaterThan(cutEp);
     }
 
@@ -103,7 +103,7 @@ public sealed class InstanceRecoveryTests(TwoServerFixture fixture)
         var higher = moved.Ep + 40;
         await kit.RawSrc.HashSetAsync(kit.SrcRecord, "ep", higher);
         await rk.FlushStateAsync();
-        await kit.RawDst.HashSetAsync(kit.DstRecord, [new HashEntry("ep", moved.Ep), new HashEntry("id", moved.Id), new HashEntry("st", KeyMoveStates.Ready), new HashEntry("dir", "fwd"), new HashEntry("dur", "1"), new HashEntry("np", "0"), new HashEntry("c:c1", "n")]);
+        await kit.RawDst.HashSetAsync(kit.DstRecord, [new HashEntry("ep", moved.Ep), new HashEntry("id", moved.Id), new HashEntry("st", KeyMoveStates.Preparing), new HashEntry("dir", "fwd"), new HashEntry("dur", "1"), new HashEntry("np", "0"), new HashEntry("c:c1", "n")]);
 
         var result = await rk.StateRecovery.ReassertAsync(kit.Group, "confirm", null, null, null, TestContext.Current.CancellationToken);
 
@@ -134,7 +134,7 @@ public sealed class InstanceRecoveryTests(TwoServerFixture fixture)
     }
 
     [Fact]
-    public async Task A_not_started_certificate_requires_a_durable_state_of_the_same_identity_and_the_matching_release()
+    public async Task An_off_certificate_requires_a_durable_state_of_the_same_identity_and_the_matching_release()
     {
         await using var rk = await InstanceRecoveryKit.CreateAsync(fixture);
         var kit = rk.Kit;
@@ -147,10 +147,10 @@ public sealed class InstanceRecoveryTests(TwoServerFixture fixture)
         await rk.Recovery.RefreshAsync(kit.Group, moved, TestContext.Current.CancellationToken);
 
         (await rk.SrcFieldAsync()).Should().StartWith("open|");
-        rk.Alerts.Should().Contain(a => a.Code == "claim_cert_unpublished" && a.Detail == "the claim carries a not-started certificate and the state does not show that identity as DURABLE with the matching rel; it is not released");
+        rk.Alerts.Should().Contain(a => a.Code == "claim_cert_unpublished" && a.Detail == "the claim carries an off certificate and the state does not show that identity as DURABLE with the matching rel; it is not released");
 
         // A durable S0 of another identity, or with no rel, does not publish it either.
-        var published = moved with { State = KeyMoveStates.NotStarted, Direction = "none", Durable = true, Release = $"{InstanceRecoveryKit.Token}:{moved.Ep}:S0" };
+        var published = moved with { State = KeyMoveStates.Off, Direction = "none", Durable = true, Release = $"{InstanceRecoveryKit.Token}:{moved.Ep}:S0" };
         await rk.Recovery.RefreshAsync(kit.Group, published with { Ep = moved.Ep + 1 }, TestContext.Current.CancellationToken);
         await rk.Recovery.RefreshAsync(kit.Group, published with { Release = string.Empty }, TestContext.Current.CancellationToken);
         (await rk.SrcFieldAsync()).Should().StartWith("open|");
@@ -163,7 +163,7 @@ public sealed class InstanceRecoveryTests(TwoServerFixture fixture)
     }
 
     [Fact]
-    public async Task A_closed_certificate_requires_a_closed_state_and_reports_a_readable_alert()
+    public async Task A_done_certificate_requires_a_done_state_and_reports_a_readable_alert()
     {
         await using var rk = await InstanceRecoveryKit.CreateAsync(fixture);
         var moved = await rk.MoveToS1Async();
@@ -172,7 +172,7 @@ public sealed class InstanceRecoveryTests(TwoServerFixture fixture)
 
         await rk.Recovery.RefreshAsync(rk.Kit.Group, moved, TestContext.Current.CancellationToken);
 
-        rk.Alerts.Should().Contain(a => a.Code == "claim_orphan" && a.Detail == "the claim carries a closed certificate and the state does not show closed; it is not closed");
+        rk.Alerts.Should().Contain(a => a.Code == "claim_orphan" && a.Detail == "the claim carries a done certificate and the state does not show done; it is not closed");
         (await rk.SrcFieldAsync()).Should().StartWith("open|");
     }
 

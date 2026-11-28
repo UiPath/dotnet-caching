@@ -3,7 +3,7 @@ using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>Handles managed cache operations during key move, one admitted unit at a time. not-started and unmanaged caches use the router's per-group path.</summary>
+/// <summary>Handles managed cache operations during key move, one admitted unit at a time. off and unmanaged caches use the router's per-group path.</summary>
 internal sealed partial class KeyMoveClient<T> : IPathClient<T>, IDisposable
     where T : class
 {

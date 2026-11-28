@@ -63,7 +63,7 @@ internal sealed class DriverKit : IAsyncDisposable
     public static async Task<DriverKit> CreateAsync(RedisContainerFixture fixture, bool useScripts = true, StageDriverOptions? options = null, KeyMoveStateOptions? state = null, bool withMonitor = false, Func<ITransitionSequence, ITransitionSequence>? wrapSequence = null, bool retireSweeper = true, Func<StateKit, MarkerSweeper>? sweeperFactory = null)
     {
         var kit = await StateKit.StandaloneAsync(fixture, useScripts, state ?? new KeyMoveStateOptions { ExpectedReplicasPerMaster = 0, EvictionPolicyAttested = true });
-        return new DriverKit(kit, options ?? new StageDriverOptions { UpgradeHold = TimeSpan.Zero, AckStable = TimeSpan.Zero, DrainedSoak = TimeSpan.Zero }, withMonitor, wrapSequence, retireSweeper, sweeperFactory);
+        return new DriverKit(kit, options ?? new StageDriverOptions { UpgradeHold = TimeSpan.Zero, AckStable = TimeSpan.Zero, CopiedSoak = TimeSpan.Zero }, withMonitor, wrapSequence, retireSweeper, sweeperFactory);
     }
 
     public async Task<StateRecord> StateAsync() => (await Kit.Store.ReadAsync(Group, CancellationToken.None))!;

@@ -326,7 +326,7 @@ internal sealed class KeyMoveNode
         Runtime = RuntimeOf(wiring);
     }
 
-    // Read the flag every 2 s from ready through drained, and for listed groups waiting in not-started or unknown. Read closed or unlisted groups every minute.
+    // Read the flag every 2 s from preparing through copied, and for listed groups waiting in off or unknown. Read done or unlisted groups every minute.
     private bool IsActive(string group)
     {
         var rules = _monitor.RulesFor(group);
@@ -336,13 +336,13 @@ internal sealed class KeyMoveNode
         }
 
         var stage = rules.Acting?.State;
-        return stage is KeyMoveStates.Ready or KeyMoveStates.Barrier or KeyMoveStates.Moving or KeyMoveStates.Drained || (stage is null or KeyMoveStates.NotStarted && _setup.Groups.Any(g => g.Name == group && g.Listed));
+        return stage is KeyMoveStates.Preparing or KeyMoveStates.Switching or KeyMoveStates.Copying or KeyMoveStates.Copied || (stage is null or KeyMoveStates.Off && _setup.Groups.Any(g => g.Name == group && g.Listed));
     }
 
-    // Before acknowledging not-started from X11, a node recycles its data connections once for that identity and advertises rc.
+    // Before acknowledging off from X11, a node recycles its data connections once for that identity and advertises rc.
     private bool BeforeAck(string group)
     {
-        if (_monitor.CurrentState(group) is not { State: KeyMoveStates.NotStarted, Durable: true } state || state.Field(StateFields.ColdStart).Length == 0)
+        if (_monitor.CurrentState(group) is not { State: KeyMoveStates.Off, Durable: true } state || state.Field(StateFields.ColdStart).Length == 0)
         {
             return true;
         }

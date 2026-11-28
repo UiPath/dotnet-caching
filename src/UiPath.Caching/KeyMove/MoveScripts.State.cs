@@ -64,11 +64,11 @@ internal sealed partial class MoveScripts
 
     private const string InitScript = $$"""
         if redis.call('EXISTS', KEYS[1]) == 0 then
-          redis.call('HSET', KEYS[1], 'st', '{{KeyMoveStates.NotStarted}}', 'dir', 'none', 'ep', ARGV[1], 'id', ARGV[2], 'dur', '1', 'nPop', '0',
-            'prev', '{{KeyMoveStates.NotStarted}}:none:0:' .. ARGV[1] .. ':' .. ARGV[2], 'caches', ARGV[3], 'cs', ARGV[4], 'upd', ARGV[5])
+          redis.call('HSET', KEYS[1], 'st', '{{KeyMoveStates.Off}}', 'dir', 'none', 'ep', ARGV[1], 'id', ARGV[2], 'dur', '1', 'nPop', '0',
+            'prev', '{{KeyMoveStates.Off}}:none:0:' .. ARGV[1] .. ':' .. ARGV[2], 'caches', ARGV[3], 'cs', ARGV[4], 'upd', ARGV[5])
           return 1
         end
-        if redis.call('HGET', KEYS[1], 'st') == '{{KeyMoveStates.NotStarted}}' then
+        if redis.call('HGET', KEYS[1], 'st') == '{{KeyMoveStates.Off}}' then
           redis.call('HSET', KEYS[1], 'caches', ARGV[3], 'cs', ARGV[4], 'upd', ARGV[5])
           return 2
         end
@@ -88,7 +88,7 @@ internal sealed partial class MoveScripts
     }
 
     /// <summary>DURABLE: marks the stored identity committed and copies it into <c>prev</c>; a repeat writes both again, so a following WAIT has an offset to confirm.</summary>
-    /// <param name="release">The claim certificate <c>rel</c>, written in the same step for a not-started target of a group that holds a claim; empty for none.</param>
+    /// <param name="release">The claim certificate <c>rel</c>, written in the same step for a off target of a group that holds a claim; empty for none.</param>
     /// <returns>1 written (also for a repeat); 0 when the stored id differs or the hash is unreadable.</returns>
     public async Task<long> DurableAsync(RedisKey state, string id, string release = "") =>
         await DurableWrite(state, id, release).RunAsync().ConfigureAwait(false);
@@ -165,7 +165,7 @@ internal sealed partial class MoveScripts
         });
 
     /// <summary>ALLACK: records that every fresh node acknowledged the identity, only while it is the stored one; a repeat writes the same value again.</summary>
-    /// <param name="t3At">The time of the first acknowledgement of a moving identity, written in the same step so it is never missing next to <c>allAck</c>; null for any other state.</param>
+    /// <param name="t3At">The time of the first acknowledgement of a copying identity, written in the same step so it is never missing next to <c>allAck</c>; null for any other state.</param>
     /// <returns>1 written; 0 when the stored id differs; <see cref="LeaseNotHeld"/> when the fence's lease is not the caller's.</returns>
     public async Task<long> AllAckAsync(RedisKey state, string id, LeaseFence? fence = null, long? t3At = null)
     {
@@ -204,7 +204,7 @@ internal sealed partial class MoveScripts
         }).ConfigureAwait(false);
     }
 
-    /// <summary>X0: creates the not-started state above the server clock and <paramref name="highestRecordEp"/>, or refreshes the set of a not-started state; any later stage is refused.</summary>
+    /// <summary>X0: creates the off state above the server clock and <paramref name="highestRecordEp"/>, or refreshes the set of a off state; any later stage is refused.</summary>
     public async Task<InitResult> InitAsync(RedisKey state, string caches, string cacheSet, long highestRecordEp, long updatedAt)
     {
         var micros = await ServerMicrosecondsAsync(state).ConfigureAwait(false);
@@ -229,12 +229,12 @@ internal sealed partial class MoveScripts
                 return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? StateCreated : null;
             }
 
-            if (stage != KeyMoveStates.NotStarted)
+            if (stage != KeyMoveStates.Off)
             {
                 return StateNotInitial;
             }
 
-            transaction.AddCondition(Condition.HashEqual(state, StateFields.State, KeyMoveStates.NotStarted));
+            transaction.AddCondition(Condition.HashEqual(state, StateFields.State, KeyMoveStates.Off));
             queued.Add(transaction.HashSetAsync(state, [new(StateFields.Caches, caches), new(StateFields.CacheSet, cacheSet), new(StateFields.Updated, updatedAt)], Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? StateRefreshed : null;
         }).ConfigureAwait(false);
@@ -353,8 +353,8 @@ internal sealed partial class MoveScripts
         queued.Add(transaction.HashSetAsync(
             state,
             [
-                new(StateFields.State, KeyMoveStates.NotStarted), new(StateFields.Direction, "none"), new(StateFields.Ep, ep), new(StateFields.Id, id), new(StateFields.Durable, "1"),
-                new(StateFields.NPop, "0"), new(StateFields.Prev, StateRecord.FormatPrev(KeyMoveStates.NotStarted, "none", 0, ep, id)), new(StateFields.Caches, caches),
+                new(StateFields.State, KeyMoveStates.Off), new(StateFields.Direction, "none"), new(StateFields.Ep, ep), new(StateFields.Id, id), new(StateFields.Durable, "1"),
+                new(StateFields.NPop, "0"), new(StateFields.Prev, StateRecord.FormatPrev(KeyMoveStates.Off, "none", 0, ep, id)), new(StateFields.Caches, caches),
                 new(StateFields.CacheSet, cacheSet), new(StateFields.Updated, updatedAt),
             ],
             Master));

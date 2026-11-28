@@ -410,7 +410,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         var record = state.ToControlRecord([.. state.CacheIds.Select(cid => (cid, MoveScripts.NewNonce()))]);
 
         // The default limit is written on the records' field count: the fixed fields, the cache list, one gate per cache and the markers a record may hold. The leader's LIMSET changes it later.
-        if (state is { State: KeyMoveStates.Moving, Direction: "fwd" })
+        if (state is { State: KeyMoveStates.Copying, Direction: "fwd" })
         {
             record = record with { Limit = MarkerSweeper.Floor(state) + options.MarkerLimit };
         }

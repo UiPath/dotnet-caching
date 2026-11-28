@@ -8,20 +8,20 @@ namespace UiPath.Caching.Migration.Tests;
 public class KeyMoveOperationsTests
 {
     [Theory]
-    [InlineData(KeyMoveStates.NotStarted, KeyMoveStage.NotStarted)]
-    [InlineData(KeyMoveStates.Ready, KeyMoveStage.Ready)]
-    [InlineData(KeyMoveStates.Barrier, KeyMoveStage.Barrier)]
-    [InlineData(KeyMoveStates.Moving, KeyMoveStage.Moving)]
-    [InlineData(KeyMoveStates.Drained, KeyMoveStage.Drained)]
-    [InlineData(KeyMoveStates.Closed, KeyMoveStage.Closed)]
-    [InlineData("", KeyMoveStage.NotStarted)]
+    [InlineData(KeyMoveStates.Off, KeyMoveStage.Off)]
+    [InlineData(KeyMoveStates.Preparing, KeyMoveStage.Preparing)]
+    [InlineData(KeyMoveStates.Switching, KeyMoveStage.Switching)]
+    [InlineData(KeyMoveStates.Copying, KeyMoveStage.Copying)]
+    [InlineData(KeyMoveStates.Copied, KeyMoveStage.Copied)]
+    [InlineData(KeyMoveStates.Done, KeyMoveStage.Done)]
+    [InlineData("", KeyMoveStage.Off)]
     public void Each_stored_state_is_one_stage(string state, KeyMoveStage stage) =>
         KeyMoveOperations.StatusOf("g", State(state, "fwd")).Stage.Should().Be(stage);
 
     [Fact]
     public void The_status_carries_the_direction_the_holds_the_valid_approvals_the_residue_and_the_wait()
     {
-        var bare = State(KeyMoveStates.Drained, "rev", residue: new Dictionary<string, long> { ["a"] = 3 });
+        var bare = State(KeyMoveStates.Copied, "rev", residue: new Dictionary<string, long> { ["a"] = 3 });
         var at = new DateTimeOffset(2026, 11, 25, 10, 0, 0, TimeSpan.Zero);
         var values = new Dictionary<string, string>
         {
@@ -36,7 +36,7 @@ public class KeyMoveOperationsTests
 
         status.Should().BeEquivalentTo(new KeyMoveStatus(
             "g",
-            KeyMoveStage.Drained,
+            KeyMoveStage.Copied,
             true,
             true,
             "maintenance",
@@ -51,7 +51,7 @@ public class KeyMoveOperationsTests
     public void A_state_with_no_wait_holds_or_approvals_shows_none()
     {
         var values = new Dictionary<string, string> { [StateFields.BlockedAt] = "123" };
-        var status = KeyMoveOperations.StatusOf("g", State(KeyMoveStates.Ready, "fwd") with { Values = values });
+        var status = KeyMoveOperations.StatusOf("g", State(KeyMoveStates.Preparing, "fwd") with { Values = values });
 
         status.Should().Match<KeyMoveStatus>(s => !s.Reverse && s.OperatorHold == null && s.AutomaticHold == null && s.Approvals.Count == 0 && s.Residue.Count == 0 && s.BlockingGates.Count == 0);
         status.BlockedSince.Should().BeNull("a time without reasons is no wait");

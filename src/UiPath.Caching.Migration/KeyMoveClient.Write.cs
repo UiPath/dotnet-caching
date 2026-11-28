@@ -23,10 +23,10 @@ internal sealed partial class KeyMoveClient<T>
     {
         return plan.Mode switch
         {
-            KeyMoveMode.Ready => [SourceStep(delete)],
-            KeyMoveMode.Barrier when !_p.NoOrigin => [SourceStep(delete)],
-            KeyMoveMode.Moving or KeyMoveMode.Drained => DualWriteSteps(delete),
-            KeyMoveMode.Closed => NativeWriteSteps(delete, plan.Act is { Swept: true }),
+            KeyMoveMode.Preparing => [SourceStep(delete)],
+            KeyMoveMode.Switching when !_p.NoOrigin => [SourceStep(delete)],
+            KeyMoveMode.Copying or KeyMoveMode.Copied => DualWriteSteps(delete),
+            KeyMoveMode.Done => NativeWriteSteps(delete, plan.Act is { Swept: true }),
 
             // Reverse: Src is N and the target is L under GL.
             KeyMoveMode.ReverseS1 when !_p.NoOrigin => [SourceStep(delete), WriteStep.BumpDel],

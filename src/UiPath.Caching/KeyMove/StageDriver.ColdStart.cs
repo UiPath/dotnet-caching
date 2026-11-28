@@ -9,7 +9,7 @@ internal sealed partial class StageDriver
     {
         var key = services.Names.State(group);
         var marker = state.Field(StateFields.ColdStart);
-        if (state.State == KeyMoveStates.Closed)
+        if (state.State == KeyMoveStates.Done)
         {
             if (marker.Length == 0)
             {
@@ -28,7 +28,7 @@ internal sealed partial class StageDriver
             }
 
             var ep = state.Ep + 1;
-            var target = new StateTarget(KeyMoveStates.NotStarted, "none", 0, ep, MoveScripts.NewNonce(), StateRecord.FormatPrev(state.State, state.Direction, state.NPop, state.Ep, state.Id), time.GetUtcNow().ToUnixTimeMilliseconds(), Clear: [StateFields.Fg, StateFields.Rg]);
+            var target = new StateTarget(KeyMoveStates.Off, "none", 0, ep, MoveScripts.NewNonce(), StateRecord.FormatPrev(state.State, state.Direction, state.NPop, state.Ep, state.Id), time.GetUtcNow().ToUnixTimeMilliseconds(), Clear: [StateFields.Fg, StateFields.Rg]);
             return await services.Sequence.RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 1), target, new SequenceOptions(Ledger: services.Ledger, HoldsLease: () => services.HoldsLease(group), Fence: Fence(group)), cancellationToken).ConfigureAwait(false);
         }
 
@@ -40,13 +40,13 @@ internal sealed partial class StageDriver
         var key = services.Names.State(group);
         if (marker != NoClaim)
         {
-            if (Settle(group, await services.Claim.CertifyAsync(group, marker, state.Ep, KeyMoveStates.NotStarted, Fence(group), cancellationToken).ConfigureAwait(false)) == ClaimOutcome.Failed)
+            if (Settle(group, await services.Claim.CertifyAsync(group, marker, state.Ep, KeyMoveStates.Off, Fence(group), cancellationToken).ConfigureAwait(false)) == ClaimOutcome.Failed)
             {
                 Notify(group, "claim_release_failed", marker);
                 return null;
             }
 
-            await services.Scripts.FieldsAsync(key, state.Id, [(StateFields.Release, $"{marker}:{state.Ep}:{KeyMoveStates.NotStarted}")], [], Fence(group)).ConfigureAwait(false);
+            await services.Scripts.FieldsAsync(key, state.Id, [(StateFields.Release, $"{marker}:{state.Ep}:{KeyMoveStates.Off}")], [], Fence(group)).ConfigureAwait(false);
             if (Settle(group, await services.Claim.ReleaseIdleAsync(group, marker, Fence(group), cancellationToken).ConfigureAwait(false)) == ClaimOutcome.Failed)
             {
                 Notify(group, "claim_release_failed", marker);

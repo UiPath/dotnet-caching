@@ -543,7 +543,7 @@ public sealed class KeyMoveCodecTests(RedisFixture fixture) : IAsyncLifetime
         (await operations.ApproveAsync(Group, KeyMoveApprovalKinds.Start, "release floor attested", "op", Ct)).Should().Be(KeyMoveApproval.Stored);
         (await operations.ApproveAsync(Group, "invented", "x", "op", Ct)).Should().Be(KeyMoveApproval.UnknownKind);
         var held = await operations.GetStatusAsync(Group, Ct);
-        held.Should().Match<KeyMoveStatus>(s => s.Group == Group && s.Stage == KeyMoveStage.NotStarted && !s.Reverse && s.OperatorHold == "maintenance");
+        held.Should().Match<KeyMoveStatus>(s => s.Group == Group && s.Stage == KeyMoveStage.Off && !s.Reverse && s.OperatorHold == "maintenance");
         held.Approvals.Should().Equal(KeyMoveApprovalKinds.Start);
         (await Db.HashGetAsync($"{Library}mg:{{{Group}}}:state", StateFields.Caches)).ToString().Should().Be("items");
 

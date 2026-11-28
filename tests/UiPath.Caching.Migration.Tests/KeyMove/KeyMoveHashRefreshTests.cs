@@ -199,16 +199,16 @@ public sealed class KeyMoveHashRefreshTests(RedisFixture fixture)
     }
 
     [Theory]
-    [InlineData(KeyMoveStates.Ready, "ready")]
-    [InlineData(KeyMoveStates.Barrier, "barrier")]
-    [InlineData(KeyMoveStates.Moving, "moving")]
-    [InlineData(KeyMoveStates.Drained, "drained")]
+    [InlineData(KeyMoveStates.Preparing, "preparing")]
+    [InlineData(KeyMoveStates.Switching, "switching")]
+    [InlineData(KeyMoveStates.Copying, "copying")]
+    [InlineData(KeyMoveStates.Copied, "copied")]
     public async Task A_refresh_that_carries_metadata_is_refused_before_the_keys_have_moved_and_one_without_it_works(string state, string stageName)
     {
         await using var kit = await KeyMoveHashKit.CreateAsync(fixture);
         await kit.Kit.PrepareAsync("k");
-        await kit.Kit.SetStateAsync(state, nPop: state is KeyMoveStates.Ready or KeyMoveStates.Barrier ? 0 : 1);
-        await kit.SetAsync(state is KeyMoveStates.Ready or KeyMoveStates.Barrier ? kit.L("k") : kit.N("k"), Original, TimeSpan.FromMinutes(1));
+        await kit.Kit.SetStateAsync(state, nPop: state is KeyMoveStates.Preparing or KeyMoveStates.Switching ? 0 : 1);
+        await kit.SetAsync(state is KeyMoveStates.Preparing or KeyMoveStates.Switching ? kit.L("k") : kit.N("k"), Original, TimeSpan.FromMinutes(1));
 
         var emptyMetadata = new Dictionary<string, string?>();
         var ownerMetadata = new Dictionary<string, string?> { ["owner"] = "me" };

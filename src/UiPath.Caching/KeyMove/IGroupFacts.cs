@@ -6,14 +6,14 @@ internal interface IGroupFacts
     /// <summary>Configuration attests the release floor in place of start consent.</summary>
     bool ReleaseFloorAttested { get; }
 
-    /// <summary>The group has a cache without an origin, which gets the barrier.</summary>
+    /// <summary>The group has a cache without an origin, so it enters switching.</summary>
     bool HasNoOrigin(string group, IReadOnlyList<string> cacheIds);
 
     bool TakesClaim(string group);
 
     string ClaimDescriptor(string group);
 
-    /// <summary>The longest <c>MaxSourceTtl</c> of the group's caches, which caps the DRAINED soak; null when unknown.</summary>
+    /// <summary>The longest <c>MaxSourceTtl</c> of the group's caches, which caps the COPIED soak; null when unknown.</summary>
     TimeSpan? LongestSourceTtl(string group);
 
     /// <summary>Every cache of the group registered <c>AcceptRefill</c>, which X11 needs.</summary>

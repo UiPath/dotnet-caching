@@ -47,14 +47,14 @@ internal sealed partial class KeyMoveHashClient<T>
     // Where L is written, a format that has no field for metadata could not keep it: the write is refused before anything is stored.
     internal void ThrowIfMetadataRefused(IDictionary<string, string?>? metadata, KeyMovePlan plan)
     {
-        if (metadata is not null && plan.Mode is KeyMoveMode.Ready or KeyMoveMode.Barrier or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4 && !_p.InPlace.CarriesMetadata)
+        if (metadata is not null && plan.Mode is KeyMoveMode.Preparing or KeyMoveMode.Switching or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4 && !_p.InPlace.CarriesMetadata)
         {
             throw new NotSupportedException($"The hash cache '{_p.CacheId}' keeps its in-place hashes in a format that has no field for metadata, so a write that carries metadata cannot run in state {plan.StageName}.");
         }
     }
 
     /// <summary>The steps of a write form for a state, in the order they run; null where the cache is closed.</summary>
-    /// <param name="residue">For a field delete in drained: L holds the hash, so its field goes first.</param>
+    /// <param name="residue">For a field delete in copied: L holds the hash, so its field goes first.</param>
     internal HashWriteStep[]? StepsFor(KeyMovePlan plan, HashWriteKind kind, bool residue = false)
     {
         var src = kind switch
@@ -65,19 +65,19 @@ internal sealed partial class KeyMoveHashClient<T>
         };
         switch (plan.Mode)
         {
-            case KeyMoveMode.Ready:
+            case KeyMoveMode.Preparing:
                 return [src];
-            case KeyMoveMode.Barrier:
+            case KeyMoveMode.Switching:
                 return _p.NoOrigin ? null : [src];
-            case KeyMoveMode.Moving:
-            case KeyMoveMode.Drained:
-                return MovingSteps(plan, kind, residue);
-            case KeyMoveMode.Closed:
+            case KeyMoveMode.Copying:
+            case KeyMoveMode.Copied:
+                return CopyingSteps(plan, kind, residue);
+            case KeyMoveMode.Done:
                 return MovedSteps(plan, kind);
             case KeyMoveMode.ReverseS1 when !_p.NoOrigin:
                 return ReverseSourceSteps(kind);
             case KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4 when !_p.NoOrigin:
-                return ReverseMovingSteps(plan, kind, residue);
+                return CopyingBackSteps(plan, kind, residue);
             default:
                 return null;
         }
@@ -113,7 +113,7 @@ internal sealed partial class KeyMoveHashClient<T>
         return plan.Act is { Swept: true } ? [last] : [first, last];
     }
 
-    // In ready(rev), Src is N and L is deleted under GL. Refuse a field write there before building it.
+    // In returning, Src is N and L is deleted under GL. Refuse a field write there before building it.
     private static HashWriteStep[]? ReverseSourceSteps(HashWriteKind kind) => kind switch
     {
         HashWriteKind.Delete => [HashWriteStep.SrcDel, HashWriteStep.BumpDel],
@@ -121,8 +121,8 @@ internal sealed partial class KeyMoveHashClient<T>
         _ => null,
     };
 
-    // In moving(rev) and drained(rev), delete N first, then write L under GL. Merge only where N holds no hash.
-    private static HashWriteStep[] ReverseMovingSteps(KeyMovePlan plan, HashWriteKind kind, bool residue) => kind switch
+    // In copying-back and copied-back, delete N first, then write L under GL. Merge only where N holds no hash.
+    private static HashWriteStep[] CopyingBackSteps(KeyMovePlan plan, HashWriteKind kind, bool residue) => kind switch
     {
         HashWriteKind.Delete => [HashWriteStep.SrcDel, HashWriteStep.BumpDel],
         HashWriteKind.Replace => [HashWriteStep.SrcDel, HashWriteStep.DstWrite],
@@ -131,8 +131,8 @@ internal sealed partial class KeyMoveHashClient<T>
     };
 
     private static bool NeedsSourceProbe(WriteRun run) =>
-        !run.Applied && (run.Kind == HashWriteKind.Merge && run.Plan.Mode is KeyMoveMode.Moving or KeyMoveMode.Drained or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4
-            || run.Kind == HashWriteKind.DeleteFields && run.Plan.Mode is KeyMoveMode.Drained or KeyMoveMode.ReverseS4);
+        !run.Applied && (run.Kind == HashWriteKind.Merge && run.Plan.Mode is KeyMoveMode.Copying or KeyMoveMode.Copied or KeyMoveMode.ReverseS3 or KeyMoveMode.ReverseS4
+            || run.Kind == HashWriteKind.DeleteFields && run.Plan.Mode is KeyMoveMode.Copied or KeyMoveMode.ReverseS4);
 
     private static Turn EmptyWrite(WriteRun run)
     {
@@ -155,7 +155,7 @@ internal sealed partial class KeyMoveHashClient<T>
         }
     }
 
-    private HashWriteStep[] MovingSteps(KeyMovePlan plan, HashWriteKind kind, bool residue) => kind switch
+    private HashWriteStep[] CopyingSteps(KeyMovePlan plan, HashWriteKind kind, bool residue) => kind switch
     {
         HashWriteKind.Delete => [HashWriteStep.SrcDel, HashWriteStep.BumpDel],
 
@@ -165,7 +165,7 @@ internal sealed partial class KeyMoveHashClient<T>
 
         // A merge runs after the hash has been promoted, or when L holds none.
         HashWriteKind.Merge => [HashWriteStep.DstWrite],
-        _ => plan.Mode == KeyMoveMode.Drained && !residue ? [HashWriteStep.DstFieldsDel] : [HashWriteStep.SrcFieldsDel, HashWriteStep.DstFieldsDel],
+        _ => plan.Mode == KeyMoveMode.Copied && !residue ? [HashWriteStep.DstFieldsDel] : [HashWriteStep.SrcFieldsDel, HashWriteStep.DstFieldsDel],
     };
 
     private async ValueTask<WriteResult> WriteManagedAsync(string key, HashWriteKind kind, IDictionary<string, T?>? fields, HashWriteOptions options, string[]? names, KeyMovePlan plan, CancellationToken cancellationToken)
@@ -261,7 +261,7 @@ internal sealed partial class KeyMoveHashClient<T>
     {
         run.Residue = false;
 
-        // A field write in ready(rev) would need to pick the side holding the key, which races a whole replace.
+        // A field write in returning would need to pick the side holding the key, which races a whole replace.
         if (run.Plan.Mode == KeyMoveMode.ReverseS1 && !_p.NoOrigin && run.Kind is HashWriteKind.Merge or HashWriteKind.DeleteFields)
         {
             return Turn.Done(Blocked("reverse_barrier"));
@@ -419,7 +419,7 @@ internal sealed partial class KeyMoveHashClient<T>
         _ => _p.Plain.SetAsync(key, fields!, options, cancellationToken),
     };
 
-    // For merges in moving and drained, and field-delete residue checks in drained. A partial N hides unmerged L fields, so merges wait for promotion.
+    // For merges in copying and copied, and field-delete residue checks in copied. A partial N hides unmerged L fields, so merges wait for promotion.
     private async ValueTask<(WriteResult? Refused, bool Replan, bool Residue)> ProbeSourceAsync(string key, HashWriteKind kind, KeyMovePlan plan, CancellationToken cancellationToken)
     {
         var reverse = KeyMovePlanning.IsReverseWrite(plan.Mode);
@@ -434,7 +434,7 @@ internal sealed partial class KeyMoveHashClient<T>
             return (null, false, present == true);
         }
 
-        // N holds the hash: drained(rev) has no promoter, so merging on L would hide N's fields. moving(rev) promotes it first.
+        // N holds the hash: copied-back has no promoter, so merging on L would hide N's fields. copying-back promotes it first.
         if (plan.Mode == KeyMoveMode.ReverseS4)
         {
             return (Blocked("reverse_residue"), false, true);
@@ -442,9 +442,9 @@ internal sealed partial class KeyMoveHashClient<T>
 
         var promotion = reverse ? _reversePromotion : _promotion;
 
-        if (plan.Mode == KeyMoveMode.Drained)
+        if (plan.Mode == KeyMoveMode.Copied)
         {
-            // drained has no promoter: L's hash stays whole, promotable or not, because a partial N would hide it.
+            // copied has no promoter: L's hash stays whole, promotable or not, because a partial N would hide it.
             return (Blocked("src_residue"), false, true);
         }
 

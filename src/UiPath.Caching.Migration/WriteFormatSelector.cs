@@ -23,8 +23,8 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
     /// <summary>Told when a group's switch is held for its move, with the group and the pending format.</summary>
     public Action<KeyMoveAlert>? Alert { get; set; }
 
-    /// <summary>True while the node acts under a state in which the group's keys move (ready to drained, either direction).</summary>
-    public static bool Moving(GroupRules rules) => rules.Acting is { State: KeyMoveStates.Ready or KeyMoveStates.Barrier or KeyMoveStates.Moving or KeyMoveStates.Drained };
+    /// <summary>True while the node acts under a state in which the group's keys move (preparing to copied, either direction).</summary>
+    public static bool Moving(GroupRules rules) => rules.Acting is { State: KeyMoveStates.Preparing or KeyMoveStates.Switching or KeyMoveStates.Copying or KeyMoveStates.Copied };
 
     /// <summary>The hold of the node's own key move groups: until the node has read a group's state it may be in the middle of a move, as a node that restarted during one is, so it holds then too.</summary>
     public static Func<string, bool> HoldFrom(GroupStateMonitor monitor, IReadOnlySet<string> groups) =>

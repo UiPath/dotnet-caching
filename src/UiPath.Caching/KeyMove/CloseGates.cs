@@ -14,8 +14,8 @@ internal static class CloseGates
             failures.Add(new GateFailure(KeyMoveGateIds.CloseAcks, string.Join(',', i.Fresh.Where(a => !a.Acknowledges(i.Group, state)).Select(a => a.Node))));
         }
 
-        var soak = i.Facts.LongestSourceTtl(i.Group) is { } ttl && ttl < options.DrainedSoak ? ttl : options.DrainedSoak;
-        var drainedAt = Moment(state.Field(StateFields.DrainedAt));
+        var soak = i.Facts.LongestSourceTtl(i.Group) is { } ttl && ttl < options.CopiedSoak ? ttl : options.CopiedSoak;
+        var drainedAt = Moment(state.Field(StateFields.CopiedAt));
         if (drainedAt is null || i.Now - drainedAt < soak)
         {
             Overridable(KeyMoveGateIds.CloseSoak, drainedAt is null ? "drained_at_unknown" : "soak", forced, failures, overrides);

@@ -118,7 +118,7 @@ internal sealed class MoverUnitRunner
     // One pass of the unit from its stored cursor to the cursor's return to zero. Returns how long to wait before the next pass, or null when the pass ended without finishing.
     private async Task<TimeSpan?> RunPassAsync(KeyMoveData data, CancellationToken cancellationToken)
     {
-        // Start a pass only in moving, in the runner's direction, with every node's acknowledgement. Re-read the state before every batch.
+        // Start a pass only in copying, in the runner's direction, with every node's acknowledgement. Re-read the state before every batch.
         if (!await _stillAllowed(cancellationToken).ConfigureAwait(false))
         {
             return null;
@@ -266,7 +266,7 @@ internal sealed class MoverUnitRunner
             {
                 if (moved != EndBatch && writtenCache is { } cache)
                 {
-                    KeyMoveTelemetry.CountWrittenAfterMoving(cache, _group);
+                    KeyMoveTelemetry.CountWrittenAfterCopying(cache, _group);
                 }
 
                 return moved;
@@ -295,7 +295,7 @@ internal sealed class MoverUnitRunner
     // The pause comes first, and ownership is judged after it, so a key is never scheduled on an ownership or identity that was lost while paused.
     private async Task<bool> MayMoveAsync(PassKeys pass, RenewalCount renewal, CancellationToken cancellationToken)
     {
-        if (!await WaitWhilePausedAsync(pass, cancellationToken).ConfigureAwait(false) || !HoldsLease() || !MovingS3())
+        if (!await WaitWhilePausedAsync(pass, cancellationToken).ConfigureAwait(false) || !HoldsLease() || !CopyingStage())
         {
             return false;
         }
@@ -403,8 +403,8 @@ internal sealed class MoverUnitRunner
 
     private bool HoldsLease() => _time.GetElapsedTime(_renewedAt) < _options.LeaseTtl;
 
-    // moving in the runner's direction, under its identity.
-    private bool MovingS3() => _plane.RulesFor(_group).Acting is { State: KeyMoveStates.Moving } acting && acting.Direction == _direction && acting.Id == _identity;
+    // copying in the runner's direction, under its identity.
+    private bool CopyingStage() => _plane.RulesFor(_group).Acting is { State: KeyMoveStates.Copying } acting && acting.Direction == _direction && acting.Id == _identity;
 
     // A lease that has to be taken again, not extended, lapsed under this runner, so another may have run the unit since.
     private async Task<bool> RenewAsync(KeyMoveData data, RedisKey lease, long leaseMs)
@@ -595,11 +595,11 @@ internal sealed class MoverUnitRunner
     {
         private bool _recorded;
 
-        public bool StillHeld => runner.HoldsLease() && runner.MovingS3();
+        public bool StillHeld => runner.HoldsLease() && runner.CopyingStage();
 
         public async ValueTask<bool> HoldsAsync(CancellationToken cancellationToken)
         {
-            if (!runner.HoldsLease() || !runner.MovingS3())
+            if (!runner.HoldsLease() || !runner.CopyingStage())
             {
                 return false;
             }
@@ -610,12 +610,12 @@ internal sealed class MoverUnitRunner
             }
 
             // Each await can outlast the lease, so what it answered is judged again before it is believed.
-            if (!await runner.RenewAsync(data, lease, leaseMs).ConfigureAwait(false) || !runner.HoldsLease() || !runner.MovingS3())
+            if (!await runner.RenewAsync(data, lease, leaseMs).ConfigureAwait(false) || !runner.HoldsLease() || !runner.CopyingStage())
             {
                 return false;
             }
 
-            return await runner._stillAllowed(cancellationToken).ConfigureAwait(false) && runner.HoldsLease() && runner.MovingS3();
+            return await runner._stillAllowed(cancellationToken).ConfigureAwait(false) && runner.HoldsLease() && runner.CopyingStage();
         }
 
         /// <summary>A new key begins: its publish may be recorded again.</summary>

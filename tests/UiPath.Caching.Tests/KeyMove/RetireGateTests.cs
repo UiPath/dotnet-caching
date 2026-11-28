@@ -57,10 +57,10 @@ public class RetireGateTests(RedisContainerFixture fixture)
         kit.Alerts.Should().NotContain(a => a.Code == "step_failed");
         (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.RetireMarkers, "the sweep cannot delete", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
 
-        var moving = await kit.StepUntilAsync("S3", "rev", advance: Ten);
+        var copying = await kit.StepUntilAsync("S3", "rev", advance: Ten);
 
         kit.Alerts.Should().Contain(("gate_override", ApprovalKinds.RetireMarkers));
-        moving.RetiringGeneration.Should().BeEmpty();
+        copying.RetiringGeneration.Should().BeEmpty();
     }
 
     [Fact]
@@ -69,9 +69,9 @@ public class RetireGateTests(RedisContainerFixture fixture)
         await using var kit = await DriverKit.CreateAsync(fixture);
         var (_, ls) = await ToReverseWithMarkersAsync(kit, 3);
 
-        var moving = await kit.StepUntilAsync("S3", "rev", advance: Ten);
+        var copying = await kit.StepUntilAsync("S3", "rev", advance: Ten);
 
-        moving.RetiringGeneration.Should().BeEmpty();
+        copying.RetiringGeneration.Should().BeEmpty();
         foreach (var l in ls)
         {
             (await kit.Kit.ControlDb.KeyExistsAsync(l)).Should().BeFalse("the superseded copy is deleted before the reverse is served");
@@ -87,10 +87,10 @@ public class RetireGateTests(RedisContainerFixture fixture)
         var (_, ls) = await ToReverseWithMarkersAsync(kit, 2);
         (await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.RetireMarkers, "the markers may stay", "op", CancellationToken.None)).Should().Be(ApproveResult.Stored);
 
-        var moving = await kit.StepUntilAsync("S3", "rev", advance: Ten);
+        var copying = await kit.StepUntilAsync("S3", "rev", advance: Ten);
 
         kit.Alerts.Should().Contain(("gate_override", ApprovalKinds.RetireMarkers));
-        moving.RetiringGeneration.Should().BeEmpty();
+        copying.RetiringGeneration.Should().BeEmpty();
         var left = await Markers(kit);
         left.Should().HaveCount(2);
         foreach (var (field, value) in left)
@@ -115,10 +115,10 @@ public class RetireGateTests(RedisContainerFixture fixture)
         var reverse = await kit.StateAsync();
         Approval.ValidFor(reverse, ApprovalKinds.RetireMarkers).Should().NotBeNull();
 
-        var moving = await kit.StepUntilAsync("S3", "rev", advance: Ten);
+        var copying = await kit.StepUntilAsync("S3", "rev", advance: Ten);
 
-        Approval.ValidFor(moving, ApprovalKinds.RetireMarkers).Should().BeNull();
-        moving.Id.Should().NotBe(reverse.Id);
+        Approval.ValidFor(copying, ApprovalKinds.RetireMarkers).Should().BeNull();
+        copying.Id.Should().NotBe(reverse.Id);
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public class RetireGateTests(RedisContainerFixture fixture)
     public async Task A_marker_whose_binding_is_neither_fg_nor_rg_deletes_nothing_and_after_the_retire_gate_no_old_marker_reaches_L()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         var l = "gen-l-" + Guid.NewGuid().ToString("N");
         var record = kit.Kit.Names.Control(kit.Group, 0);
         await kit.Kit.ControlDb.StringSetAsync(l, "forward-copy");
@@ -203,8 +203,8 @@ public class RetireGateTests(RedisContainerFixture fixture)
 
         // A reverse writer put a legitimate value at L; a unit that started in S3 holds the old identity, and one that read the state late holds the new one.
         await kit.Kit.ControlDb.StringSetAsync(l, "written-by-the-reverse");
-        (await kit.Kit.Scripts.SourceDeleteGuardedAsync(l, record, fwd.Id, drained.ForwardGeneration)).Should().Be(MoveScripts.IdentityMismatch);
-        (await kit.Kit.Scripts.SourceDeleteGuardedAsync(l, record, current.Id, drained.ForwardGeneration)).Should().Be(MoveScripts.BindingEnded);
+        (await kit.Kit.Scripts.SourceDeleteGuardedAsync(l, record, fwd.Id, copied.ForwardGeneration)).Should().Be(MoveScripts.IdentityMismatch);
+        (await kit.Kit.Scripts.SourceDeleteGuardedAsync(l, record, current.Id, copied.ForwardGeneration)).Should().Be(MoveScripts.BindingEnded);
 
         (await kit.Kit.ControlDb.StringGetAsync(l)).Should().Be("written-by-the-reverse");
     }
@@ -220,7 +220,7 @@ public class RetireGateTests(RedisContainerFixture fixture)
     // The group in S1(rev) with markers of the retiring generation, each with its copy of L.
     private static async Task<(string Generation, List<string> Ls)> ToReverseWithMarkersAsync(DriverKit kit, int markers)
     {
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         kit.Fleet.All(n => n.Fl = 2);
         await kit.StepUntilAsync("S1", "rev", advance: Ten);
         var record = kit.Kit.Names.Control(kit.Group, 0);
@@ -228,13 +228,13 @@ public class RetireGateTests(RedisContainerFixture fixture)
         foreach (var l in ls)
         {
             await kit.Kit.ControlDb.StringSetAsync(l, "superseded");
-            await kit.Kit.ControlDb.HashSetAsync(record, "sm:" + l, drained.ForwardGeneration + "|n");
+            await kit.Kit.ControlDb.HashSetAsync(record, "sm:" + l, copied.ForwardGeneration + "|n");
         }
 
-        return (drained.ForwardGeneration, ls);
+        return (copied.ForwardGeneration, ls);
     }
 
-    private static async Task<StateRecord> ToDrainedAsync(DriverKit kit)
+    private static async Task<StateRecord> ToCopiedAsync(DriverKit kit)
     {
         await kit.PrepareAsync();
         await kit.StepUntilAsync("S3");

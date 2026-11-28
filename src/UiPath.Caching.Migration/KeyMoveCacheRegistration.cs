@@ -11,7 +11,7 @@ public sealed class KeyMoveCacheRegistration
     /// <summary>The key move group the cache moves with; the router registration names the same group.</summary>
     public required string Group { get; init; }
 
-    /// <summary>The cache has no origin to refill it, so its group takes the barrier and its writes close during it; <see cref="AtMostOnce"/> implies it.</summary>
+    /// <summary>The cache has no origin to refill it, so its group enters switching and its writes close during it; <see cref="AtMostOnce"/> implies it.</summary>
     public bool NoOrigin { get; init; }
 
     /// <summary>The cache holds claims that two creators must not both win across the flip, so it is treated as <see cref="NoOrigin"/>; the runbook also holds its claim traffic during a reverse.</summary>
@@ -20,7 +20,7 @@ public sealed class KeyMoveCacheRegistration
     /// <summary>The app refills what is lost: it consents to the cold start of X11 (which purges N and the L residue), and accepts that a late native write can leave a stale native key or delete an in-place key.</summary>
     public bool AcceptRefill { get; init; }
 
-    /// <summary>The longest life of a value the old client wrote, which bounds the canary and the soak before CLOSED; null when unknown.</summary>
+    /// <summary>The longest life of a value the old client wrote, which bounds the canary and the soak before done; null when unknown.</summary>
     public TimeSpan? MaxSourceTtl { get; init; }
 
     /// <summary>Glob over every in-place key of the cache, without the connection's key prefix.</summary>

@@ -3,7 +3,7 @@ using UiPath.Caching.KeyMove;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>The library path of a managed hash cache while its group is in key move: the forms for the whole hash and for its fields, one admitted unit at a time, with the plain path used for not-started and for a cache the state does not manage.</summary>
+/// <summary>The library path of a managed hash cache while its group is in key move: the forms for the whole hash and for its fields, one admitted unit at a time, with the plain path used for off and for a cache the state does not manage.</summary>
 internal sealed partial class KeyMoveHashClient<T> : IHashPathClient<T>, IDisposable
     where T : class
 {

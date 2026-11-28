@@ -161,7 +161,7 @@ public class KeyMoveRegistrationTests
     }
 
     [Fact]
-    public static void AtMostOnce_implies_NoOrigin_so_the_group_takes_the_S2_barrier()
+    public static void AtMostOnce_implies_NoOrigin_so_the_group_takes_the_S2_switching()
     {
         var setup = Builder(Routed("a", "g1")).UseKeyMove(new Stage(), p => p.UseLibraryKeyPrefix("lib:").AddGroup("g1").AddCache(Cache("a", atMostOnce: true))).BuildKeyMove()!;
 

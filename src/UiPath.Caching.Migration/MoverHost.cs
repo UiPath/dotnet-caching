@@ -90,14 +90,14 @@ internal sealed class MoverHost
         await CancelAndDisposeWhenDoneAsync(stop, loop).ConfigureAwait(false);
     }
 
-    // moving in either direction with dur=1 and every fresh node's acknowledgement (allAck equals id), while this node acts under it.
+    // copying in either direction with dur=1 and every fresh node's acknowledgement (allAck equals id), while this node acts under it.
     private static (long MoveId, string Identity, string Direction)? Allowed(StateRecord? state, GroupRules rules) =>
-        state is { State: KeyMoveStates.Moving, Direction: MoverPasses.Forward or MoverPasses.Reverse, Durable: true, MoveId: { } id } && state.AllAck == state.Id
+        state is { State: KeyMoveStates.Copying, Direction: MoverPasses.Forward or MoverPasses.Reverse, Durable: true, MoveId: { } id } && state.AllAck == state.Id
         && rules is { Relevant: true, Acting: { } acting } && acting.Id == state.Id && acting.Direction == state.Direction
             ? (id, state.Id, state.Direction)
             : null;
 
-    private static bool ActsMoving(GroupRules rules) => rules is { Relevant: true, Acting.Direction: MoverPasses.Forward or MoverPasses.Reverse };
+    private static bool ActsCopying(GroupRules rules) => rules is { Relevant: true, Acting.Direction: MoverPasses.Forward or MoverPasses.Reverse };
 
     private static async Task RunUnitAsync(MoverUnitRunner runner, CancellationToken cancellationToken)
     {
@@ -189,7 +189,7 @@ internal sealed class MoverHost
         var rules = _plane.RulesFor(_group);
 
         // The stored state is read only while the node's rules say a move acts, so a group with no move costs the server nothing.
-        var state = ActsMoving(rules) ? await _readState(cancellationToken).ConfigureAwait(false) : null;
+        var state = ActsCopying(rules) ? await _readState(cancellationToken).ConfigureAwait(false) : null;
         var key = Allowed(state, rules);
         if (key != _runningKey)
         {

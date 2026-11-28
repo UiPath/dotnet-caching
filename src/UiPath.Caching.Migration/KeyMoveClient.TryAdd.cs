@@ -79,7 +79,7 @@ internal sealed partial class KeyMoveClient<T>
             return await _p.Plain.ExpireTimeAsync(key, cancellationToken).ConfigureAwait(false);
         }
 
-        // The read plan checks N in closed, L in ready and barrier, otherwise N, L, then N again. Read only life, without decoding or promotion.
+        // The read plan checks N in done, L in preparing and switching, otherwise N, L, then N again. Read only life, without decoding or promotion.
         var data = Data;
         if (data is null || !data.IsConnected())
         {
@@ -127,7 +127,7 @@ internal sealed partial class KeyMoveClient<T>
                 return await PlainCreateAsync(key, value, px, cancellationToken).ConfigureAwait(false);
             }
 
-            // Union and closed modes refuse creates. barrier and reverse write modes also refuse creates for NoOrigin caches.
+            // Union and done modes refuse creates. switching and reverse write modes also refuse creates for NoOrigin caches.
             if (CreateIsClosed(plan.Mode))
             {
                 throw Unavailable();
@@ -235,8 +235,8 @@ internal sealed partial class KeyMoveClient<T>
     // True for L, read through the source side; false for N.
     private bool[] ExpirySides() => PlanFor(write: false).Mode switch
     {
-        KeyMoveMode.Closed => [false],
-        KeyMoveMode.Ready or KeyMoveMode.Barrier => [true],
+        KeyMoveMode.Done => [false],
+        KeyMoveMode.Preparing or KeyMoveMode.Switching => [true],
         _ => [false, true, false],
     };
 
@@ -276,7 +276,7 @@ internal sealed partial class KeyMoveClient<T>
         }
 
         using var unit = admitted ?? throw Unavailable();
-        if (Data is not { } data || !data.IsConnected() || SourceUnavailable(plan.Mode is not (KeyMoveMode.Drained or KeyMoveMode.Closed)))
+        if (Data is not { } data || !data.IsConnected() || SourceUnavailable(plan.Mode is not (KeyMoveMode.Copied or KeyMoveMode.Done)))
         {
             return TryAddResult<T>.Failed(WriteOutcome.NotSent);
         }
@@ -285,19 +285,19 @@ internal sealed partial class KeyMoveClient<T>
         try
         {
             var mode = plan.Mode;
-            if (mode is KeyMoveMode.Ready or KeyMoveMode.Barrier or KeyMoveMode.Drained or KeyMoveMode.Closed or KeyMoveMode.ReverseS1 or KeyMoveMode.ReverseS4)
+            if (mode is KeyMoveMode.Preparing or KeyMoveMode.Switching or KeyMoveMode.Copied or KeyMoveMode.Done or KeyMoveMode.ReverseS1 or KeyMoveMode.ReverseS4)
             {
                 await At(FillPoint(mode)).ConfigureAwait(false);
             }
 
             WriteLease lease = default;
-            var inPlaceBytes = mode is KeyMoveMode.Ready or KeyMoveMode.Barrier or KeyMoveMode.ReverseS4 ? Source.Codec.Encode(value, out lease) : null;
+            var inPlaceBytes = mode is KeyMoveMode.Preparing or KeyMoveMode.Switching or KeyMoveMode.ReverseS4 ? Source.Codec.Encode(value, out lease) : null;
             using var format = lease;
             var code = mode switch
             {
-                KeyMoveMode.Ready or KeyMoveMode.Barrier => await Source.SetAsync(key, unit.Id, inPlaceBytes!, px, true).ConfigureAwait(false),
-                KeyMoveMode.Closed => CreatedCode(await data.Db.StringSetAsync(Key(n), _p.Native.Encode(value), Expiry(px), When.NotExists, Master).ConfigureAwait(false)),
-                KeyMoveMode.Drained => await data.Scripts.FillAsync(Fenced(data, n), unit.Id, _p.Native.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
+                KeyMoveMode.Preparing or KeyMoveMode.Switching => await Source.SetAsync(key, unit.Id, inPlaceBytes!, px, true).ConfigureAwait(false),
+                KeyMoveMode.Done => CreatedCode(await data.Db.StringSetAsync(Key(n), _p.Native.Encode(value), Expiry(px), When.NotExists, Master).ConfigureAwait(false)),
+                KeyMoveMode.Copied => await data.Scripts.FillAsync(Fenced(data, n), unit.Id, _p.Native.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
                 KeyMoveMode.ReverseS1 => await CreateOnNativeAsync(data, n, key, value, px, unit).ConfigureAwait(false),
                 KeyMoveMode.ReverseS4 => await data.Scripts.FillAsync(ReverseFenced(data, key), unit.Id, inPlaceBytes!, px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false),
                 KeyMoveMode.ReverseS3 => await CaptureAndPublishAsync(data, Source.Key(key), key, value, px, unit, cancellationToken, reverse: true).ConfigureAwait(false),
@@ -326,7 +326,7 @@ internal sealed partial class KeyMoveClient<T>
             _ => MoveScripts.GateRefused,
         };
 
-    // In ready(rev), fill N under G, then delete L under GL only if created. Claim after creation, so a refused trailing step neither reruns nor undoes it.
+    // In returning, fill N under G, then delete L under GL only if created. Claim after creation, so a refused trailing step neither reruns nor undoes it.
     private async ValueTask<long> CreateOnNativeAsync(KeyMoveData data, string n, string key, T value, long px, AdmittedUnit unit)
     {
         var created = await data.Scripts.FillAsync(Fenced(data, n), unit.Id, _p.Native.Encode(value), px, MoveScripts.NewNonce(), FenceTtlMs).ConfigureAwait(false);
@@ -349,7 +349,7 @@ internal sealed partial class KeyMoveClient<T>
         return MoveScripts.Published;
     }
 
-    // In moving, capture the target fence, check both masters for the key, then recheck the target after probing the source. Publish with NX and a relative TTL (tcap -1, no deadline, no -3).
+    // In copying, capture the target fence, check both masters for the key, then recheck the target after probing the source. Publish with NX and a relative TTL (tcap -1, no deadline, no -3).
     // Forward the target is N under G; reverse it is L under GL, and N is the source.
     private async ValueTask<long> CaptureAndPublishAsync(KeyMoveData data, string target, string key, T value, long px, AdmittedUnit unit, CancellationToken cancellationToken, bool reverse = false)
     {

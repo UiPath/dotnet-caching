@@ -14,14 +14,14 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
     public async Task A_jump_down_from_4_to_2_waits_FlagLowerHold_then_runs_X7_X8_X9_and_X10_after_the_release_consent()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         kit.Fleet.All(n => n.Fl = 2);
 
         await StepsAsync(kit, 6, Ten);
         (await kit.StateAsync()).State.Should().Be("S4", "a lower view that lasts less than FlagLowerHold starts no X7");
 
         var reverse = await kit.StepUntilAsync("S1", "rev", advance: Ten);
-        reverse.Should().Match<StateRecord>(s => s.NPop == 1 && s.MoveId == s.Ep && s.Ep > drained.Ep);
+        reverse.Should().Match<StateRecord>(s => s.NPop == 1 && s.MoveId == s.Ep && s.Ep > copied.Ep);
         (await kit.StepUntilAsync("S3", "rev")).NPop.Should().Be(1);
         await kit.StepUntilAsync("S4", "rev");
 
@@ -41,7 +41,7 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         using var overrides = new KeyMoveMeterRecorder("cache.keymove.gate_overrides", kit.Group);
-        await ToDrainedAsync(kit);
+        await ToCopiedAsync(kit);
         kit.Fleet.All(n => n.Fl = 2);
         kit.Fleet.Nodes[1].Km = false;
         kit.Facts.NodeListSettled = false;
@@ -66,7 +66,7 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
     public async Task A_hold_never_pauses_the_way_back()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        await ToDrainedAsync(kit);
+        await ToCopiedAsync(kit);
         (await kit.Commands.HoldAsync(kit.Group, "operator pause")).Should().BeTrue();
         kit.Fleet.All(n => n.Fl = 2);
 
@@ -80,7 +80,7 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
     public async Task X13_is_one_step_back_from_S4_to_S3_after_FlagLowerHold_and_writes_a_new_move_id()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         kit.Fleet.All(n => n.Fl = 3);
 
         await StepsAsync(kit, 5, Ten);
@@ -89,14 +89,14 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
         var back = await kit.StepUntilAsync("S3", advance: Ten);
 
         back.MoveId.Should().Be(back.Ep);
-        back.Ep.Should().BeGreaterThan(drained.Ep);
+        back.Ep.Should().BeGreaterThan(copied.Ep);
     }
 
     [Fact]
     public async Task A_raise_during_a_reverse_waits_for_S0_and_the_library_then_starts_forward_again_because_the_flag_still_asks()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        await ToDrainedAsync(kit);
+        await ToCopiedAsync(kit);
         kit.Fleet.All(n => n.Fl = 2);
         await kit.StepUntilAsync("S1", "rev", advance: Ten);
 
@@ -117,7 +117,7 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
     public async Task A_further_lowering_during_a_reverse_changes_nothing_and_the_reverse_never_runs_X6()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        await ToDrainedAsync(kit);
+        await ToCopiedAsync(kit);
         kit.Fleet.All(n => n.Fl = 2);
         await kit.StepUntilAsync("S1", "rev", advance: Ten);
 
@@ -141,14 +141,14 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
     public async Task The_flag_below_5_in_S5_is_ignored_with_an_alert_and_nothing_goes_back()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        await ToDrainedAsync(kit);
+        await ToCopiedAsync(kit);
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.Close, "residue acknowledged", "op", CancellationToken.None);
-        var closed = await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
+        var done = await kit.StepUntilAsync("S5", advance: TimeSpan.FromSeconds(30));
         kit.Fleet.All(n => n.Fl = 1);
 
         await StepsAsync(kit, 12, Ten);
 
-        (await kit.StateAsync()).Should().Match<StateRecord>(s => s.State == "S5" && s.Ep == closed.Ep);
+        (await kit.StateAsync()).Should().Match<StateRecord>(s => s.State == "S5" && s.Ep == done.Ep);
         kit.Alerts.Should().Contain(("flag_below_closed", kit.Group));
     }
 
@@ -207,7 +207,7 @@ public class StageDriverReverseTests(RedisContainerFixture fixture)
         await kit.StepUntilAsync("S4");
     }
 
-    private static async Task<StateRecord> ToDrainedAsync(DriverKit kit)
+    private static async Task<StateRecord> ToCopiedAsync(DriverKit kit)
     {
         await kit.PrepareAsync();
         await kit.StepUntilAsync("S3");

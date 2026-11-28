@@ -16,8 +16,8 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         await kit.PrepareAsync();
-        var ready = await kit.StepUntilAsync("S1");
-        var inFlight = await TransitOnlyAsync(kit, ready, "S3", "fwd", 1);
+        var preparing = await kit.StepUntilAsync("S1");
+        var inFlight = await TransitOnlyAsync(kit, preparing, "S3", "fwd", 1);
         kit.Fleet.Nodes[0].Fl = 2;
 
         var outcome = await kit.StepAsync();
@@ -33,12 +33,12 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         await kit.PrepareAsync();
-        var ready = await kit.StepUntilAsync("S1");
-        var target = StateKit.TargetFrom(ready, "S3", "fwd", 1);
-        (await kit.Kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(ready), target, null, CancellationToken.None)).Outcome.Should().Be(TransitionOutcome.Completed);
+        var preparing = await kit.StepUntilAsync("S1");
+        var target = StateKit.TargetFrom(preparing, "S3", "fwd", 1);
+        (await kit.Kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(preparing), target, null, CancellationToken.None)).Outcome.Should().Be(TransitionOutcome.Completed);
 
         // The commit marker of the state is lost in a failover while the records show dur=1: the commit began.
-        await kit.Kit.Db.HashSetAsync(kit.Kit.StateKey, [new HashEntry("dur", "0"), new HashEntry("prev", StateRecord.FormatPrev(ready.State, ready.Direction, ready.NPop, ready.Ep, ready.Id))]);
+        await kit.Kit.Db.HashSetAsync(kit.Kit.StateKey, [new HashEntry("dur", "0"), new HashEntry("prev", StateRecord.FormatPrev(preparing.State, preparing.Direction, preparing.NPop, preparing.Ep, preparing.Id))]);
         kit.Fleet.All(n => n.Fl = 2);
 
         (await kit.StepAsync(Ten))!.Plan.Kind.Should().Be(StepKind.None, "the commit began, so the leader neither abandons nor hurries");
@@ -53,8 +53,8 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
     public async Task X7_in_flight_is_abandoned_when_the_flag_is_raised_before_the_commit()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
-        var drained = await ToDrainedAsync(kit);
-        var inFlight = await TransitOnlyAsync(kit, drained, "S1", "rev", 1);
+        var copied = await ToCopiedAsync(kit);
+        var inFlight = await TransitOnlyAsync(kit, copied, "S1", "rev", 1);
         kit.Fleet.All(n => n.Fl = 4);
 
         var outcome = await kit.StepAsync();
@@ -68,8 +68,8 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         await kit.PrepareAsync();
-        var ready = await kit.StepUntilAsync("S1");
-        var inFlight = await TransitOnlyAsync(kit, ready, "S3", "fwd", 1);
+        var preparing = await kit.StepUntilAsync("S1");
+        var inFlight = await TransitOnlyAsync(kit, preparing, "S3", "fwd", 1);
 
         (await kit.StepAsync(TimeSpan.FromSeconds(9)))!.Plan.Kind.Should().Be(StepKind.None);
         (await kit.StepAsync(TimeSpan.FromSeconds(1)))!.Plan.Kind.Should().Be(StepKind.None, "nine seconds have passed since the leader first saw it");
@@ -86,7 +86,7 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         using var overrides = new KeyMoveMeterRecorder("cache.keymove.gate_overrides", kit.Group);
-        var drained = await ToDrainedAsync(kit);
+        var copied = await ToCopiedAsync(kit);
         kit.Mover.Report = FakeMoverStatus.Drained(1, ("a", 0));
         await kit.Commands.ApproveAsync(kit.Group, ApprovalKinds.CloseForce, ApprovalKinds.ConfirmTexts[ApprovalKinds.CloseForce], "op", CancellationToken.None);
         for (var n = 0; n < 4; n++)
@@ -101,8 +101,8 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
 
         outcome!.Plan.Spec!.Code.Should().Be("X5");
         var after = await kit.StateAsync();
-        after.Should().Match<StateRecord>(s => s.State == "S4" && s.Durable && s.Ep > drained.Ep);
-        after.Field(StateFields.ClosedAt).Should().BeEmpty();
+        after.Should().Match<StateRecord>(s => s.State == "S4" && s.Durable && s.Ep > copied.Ep);
+        after.Field(StateFields.DoneAt).Should().BeEmpty();
         kit.Alerts.Should().Contain(("gate_override", "close.canary"));
         overrides.Measured.Should().BeEmpty();
     }
@@ -183,25 +183,25 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
         var lease = new LeaderLease(kit.Kit.Scripts, key, kit.Kit.Options, kit.Kit.Time);
         await lease.TryHoldAsync();
         kit.Fence = lease.Fence;
-        var ready = await kit.StepUntilAsync("S1");
+        var preparing = await kit.StepUntilAsync("S1");
         await kit.Commands.HoldAsync(kit.Group, "pause");
         await kit.Kit.Store.SetHoldAsync(kit.Group, HoldKind.Automatic, "no_km:n9");
 
         kit.Fence = new LeaseFence(key, "stale");
         await kit.StepAsync();
         var refused = await kit.StateAsync();
-        refused.AllAck.Should().NotBe(ready.Id);
+        refused.AllAck.Should().NotBe(preparing.Id);
         refused.HoldAuto.Should().Be("no_km:n9");
 
         kit.Fence = lease.Fence;
         await kit.StepAsync();
         var done = await kit.StateAsync();
-        done.AllAck.Should().Be(ready.Id);
+        done.AllAck.Should().Be(preparing.Id);
         done.HoldAuto.Should().BeEmpty();
         await kit.Kit.Db.KeyDeleteAsync(key);
     }
 
-    private static async Task<StateRecord> ToDrainedAsync(DriverKit kit)
+    private static async Task<StateRecord> ToCopiedAsync(DriverKit kit)
     {
         await kit.PrepareAsync();
         await kit.StepUntilAsync("S3");

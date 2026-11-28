@@ -13,10 +13,10 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task A_live_cache_reaches_closed_without_losing_data() => await MoveToClosedAsync(cluster: false);
+    public async Task A_live_cache_reaches_done_without_losing_data() => await MoveToDoneAsync(cluster: false);
 
     [Fact]
-    public async Task A_live_cache_moves_across_the_three_cluster_primaries() => await MoveToClosedAsync(cluster: true);
+    public async Task A_live_cache_moves_across_the_three_cluster_primaries() => await MoveToDoneAsync(cluster: true);
 
     [Fact]
     public async Task Preparing_a_move_completes_inventory_after_a_topology_retry()
@@ -39,7 +39,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         await using var host = await MovingCacheHost.CreateAsync(
             fixture, wrapInventoryTopology: inner => topology = new SettlingInventoryTopology(inner.ReadLayoutAsync));
 
-        await EnterMovingAsync(host);
+        await EnterCopyingAsync(host);
 
         Assert.NotNull(topology);
         topology.Reads.Should().Be(3);
@@ -50,10 +50,10 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
     [InlineData(true, -1)]
     [InlineData(false, 1)]
     [InlineData(true, 1)]
-    public async Task Moving_writes_refresh_UTC_without_advancing_fake_timers(bool expires, int offsetMinutes)
+    public async Task Copying_writes_refresh_UTC_without_advancing_fake_timers(bool expires, int offsetMinutes)
     {
         await using var host = await MovingCacheHost.CreateAsync(fixture);
-        await EnterMovingAsync(host);
+        await EnterCopyingAsync(host);
         var deadline = expires ? await KeyMoveKit.ServerTimeAsync(host.Db) + TimeSpan.FromMinutes(5) : (DateTimeOffset?)null;
         host.Clock.UtcOffset += TimeSpan.FromMinutes(offsetMinutes);
         var timestamp = host.Clock.GetTimestamp();
@@ -80,7 +80,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
     {
         await using var host = await MovingCacheHost.CreateAsync(fixture);
         await host.SeedAsync("contended", [1]);
-        await EnterMovingAsync(host);
+        await EnterCopyingAsync(host);
 
         var ledger = new Dictionary<string, List<long>?>();
         var promotion = new PausingSchedule(SchedulePointStep.Publish);
@@ -111,7 +111,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         var count = new KeyMoveOptions().MaxValueBytes / 20 + 1;
         List<long> oversized = [.. Enumerable.Repeat(long.MaxValue, count)];
         await host.SeedAsync("oversized", oversized);
-        await EnterMovingAsync(host);
+        await EnterCopyingAsync(host);
         await host.StartMoverAsync();
         await host.WaitForMoverPassAsync();
         (await ProgressAsync(host, "skipped:too_large")).Should().BePositive("the mover must classify the oversized key");
@@ -135,7 +135,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         await using var host = await MovingCacheHost.CreateAsync(fixture);
         await host.SeedAsync("untouched", [17]);
         await host.SeedAsync("read-through", [23]);
-        await EnterMovingAsync(host);
+        await EnterCopyingAsync(host);
         var health = new UnresponsiveMoveHealth();
         var before = await ReadProgressAsync();
         var movedBefore = (long?)before.SingleOrDefault(entry => entry.Name == "moved").Value ?? 0;
@@ -173,15 +173,15 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
     {
         await using var host = await MovingCacheHost.CreateAsync(fixture, acceptRefill: true);
         await host.SeedAsync("movable", [17]);
-        await EnterMovingAsync(host);
+        await EnterCopyingAsync(host);
         await host.StartMoverAsync();
         await host.WaitForMoverPassAsync();
         await host.StopMoverAsync();
 
         await host.Db.StringSetAsync(host.Legacy("cached-null"), RedisValue.EmptyString).WaitAsync(Ct);
         await host.SetStageAsync(4);
-        var drained = await host.AdvanceAsync("S4");
-        drained.Residue.Should().ContainKey(MovingCacheHost.CacheId).WhoseValue.Should().Be(1);
+        var copied = await host.AdvanceAsync("S4");
+        copied.Residue.Should().ContainKey(MovingCacheHost.CacheId).WhoseValue.Should().Be(1);
         await host.ApproveAsync(ApprovalKinds.Close);
         await host.SetStageAsync(5);
         await host.AdvanceAsync("S5");
@@ -191,7 +191,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
         await host.AssertNativeLedgerAsync(new Dictionary<string, List<long>?> { ["movable"] = [17], ["cached-null"] = null });
     }
 
-    private static async Task EnterMovingAsync(MovingCacheHost host)
+    private static async Task EnterCopyingAsync(MovingCacheHost host)
     {
         await host.PrepareMoveAsync();
         await host.SetStageAsync(3);
@@ -218,7 +218,7 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
     private static async Task<long> ProgressAsync(MovingCacheHost host, string field) =>
         (long?)(await host.Db.HashGetAsync(host.Names.Progress(MovingCacheHost.Group), field, CommandFlags.DemandMaster).WaitAsync(Ct)) ?? 0;
 
-    private async Task MoveToClosedAsync(bool cluster)
+    private async Task MoveToDoneAsync(bool cluster)
     {
         await using var host = await MovingCacheHost.CreateAsync(fixture, cluster);
         const int writerCount = 4;
@@ -293,13 +293,13 @@ public sealed class KeyMoveLifecycleTests(RedisFixture fixture)
             removals.Should().Be(2 * deletes.Length);
         }
 
-        var drained = await host.AdvanceAsync("S4");
-        drained.Residue.Should().ContainKey(MovingCacheHost.CacheId).WhoseValue.Should().Be(0);
+        var copied = await host.AdvanceAsync("S4");
+        copied.Residue.Should().ContainKey(MovingCacheHost.CacheId).WhoseValue.Should().Be(0);
         (await host.LegacyKeysAsync()).Should().BeEmpty();
 
         await host.SetStageAsync(3);
         var resumed = await host.AdvanceAsync("S3");
-        resumed.MoveId.Should().NotBe(drained.MoveId);
+        resumed.MoveId.Should().NotBe(copied.MoveId);
         await host.SetStageAsync(4);
         await host.AdvanceAsync("S4");
 

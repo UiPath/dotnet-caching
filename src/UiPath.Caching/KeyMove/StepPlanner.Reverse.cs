@@ -4,11 +4,11 @@ internal static partial class StepPlanner
 {
     private const string StagePending = "stage_pending";
 
-    // X6: ready or barrier back to not-started; nothing was moved. A group releases any held claim on the way.
+    // X6: preparing or switching back to off; nothing was moved. A group releases any held claim on the way.
     private static StepPlan Reverse6(StepInput i) =>
-        new(StepKind.Transit, new TransitionSpec("X6", KeyMoveStates.NotStarted, "none", 0, WayBack: true, ReleaseClaim: i.State.Claim.Length > 0, Binding: BindingChange.ClearAll));
+        new(StepKind.Transit, new TransitionSpec("X6", KeyMoveStates.Off, "none", 0, WayBack: true, ReleaseClaim: i.State.Claim.Length > 0, Binding: BindingChange.ClearAll));
 
-    // X7: moving or drained to ready(rev) through the reverse gates, or a stored forced reverse.
+    // X7: copying or copied to returning through the reverse gates, or a stored forced reverse.
     private static StepPlan Reverse7(StepInput i, StageDriverOptions options)
     {
         var (failures, overrides) = StartGates.Reverse(i, options);
@@ -17,19 +17,19 @@ internal static partial class StepPlanner
             return StepPlan.Wait("reverse_blocked", string.Join(',', failures));
         }
 
-        var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X7", KeyMoveStates.Ready, "rev", 1, NewMoveId: true, WayBack: true, Binding: BindingChange.Retire));
+        var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X7", KeyMoveStates.Preparing, "rev", 1, NewMoveId: true, WayBack: true, Binding: BindingChange.Retire));
         return overrides.Count == 0 ? plan : plan.WithOverrides(ApprovalKinds.ForceReverse, overrides);
     }
 
-    // ready(rev) is the NoOrigin barrier; every fresh advert acknowledges it. Retirement requires no markers of the retiring generation, or operator consent to leave them.
-    private static async Task<StepPlan> FromReverseReadyAsync(StepInput i, StageDriverOptions options)
+    // returning is the NoOrigin barrier; every fresh advert acknowledges it. Retirement requires no markers of the retiring generation, or operator consent to leave them.
+    private static async Task<StepPlan> FromReturningAsync(StepInput i, StageDriverOptions options)
     {
         if (!AllAcknowledge(i))
         {
             return StepPlan.Wait(StagePending, $"ack:{Outstanding(i)}");
         }
 
-        var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X8", KeyMoveStates.Moving, "rev", 1, WayBack: true, Binding: BindingChange.ClearRetiring));
+        var plan = new StepPlan(StepKind.Transit, new TransitionSpec("X8", KeyMoveStates.Copying, "rev", 1, WayBack: true, Binding: BindingChange.ClearRetiring));
         if (Approval.ValidFor(i.State, ApprovalKinds.RetireMarkers) is not null)
         {
             return plan.WithOverrides(ApprovalKinds.RetireMarkers, [KeyMoveGateIds.ReverseRetire]);
@@ -51,22 +51,22 @@ internal static partial class StepPlanner
     }
 
     // The reverse pass inventories native keys and is independent of the canary and holds.
-    private static async Task<StepPlan> FromReverseMovingAsync(StepInput i)
+    private static async Task<StepPlan> FromCopyingBackAsync(StepInput i)
     {
         var drain = await i.Drain().ConfigureAwait(false);
         var pending = DrainFailures(i, drain);
         if (pending.Count > 0)
         {
-            return StepPlan.Wait(StagePending, $"drained:{string.Join(',', pending)}");
+            return StepPlan.Wait(StagePending, $"copied-back:{string.Join(',', pending)}");
         }
 
         // The residue of the reverse is the inventory of N: it replaces whatever the forward move stored.
         var (post, delete) = ResidueFields(i.State, drain!.Residue);
-        return new StepPlan(StepKind.Transit, new TransitionSpec("X9", KeyMoveStates.Drained, "rev", 1, WayBack: true, PostFields: post, PostDelete: delete));
+        return new StepPlan(StepKind.Transit, new TransitionSpec("X9", KeyMoveStates.Copied, "rev", 1, WayBack: true, PostFields: post, PostDelete: delete));
     }
 
     // Sweep only after a complete inventory under this identity. Changed counts invalidate release consent.
-    private static StepPlan FromReverseDrained(StepInput i, StepSide side)
+    private static StepPlan FromCopiedBack(StepInput i, StepSide side)
     {
         if (i.State.Field(StateFields.ResidueId) != i.State.Id)
         {
@@ -88,7 +88,7 @@ internal static partial class StepPlanner
             return StepPlan.Wait(StagePending, "release_consent");
         }
 
-        return new StepPlan(StepKind.Transit, new TransitionSpec("X10", KeyMoveStates.NotStarted, "none", 0, WayBack: true, ReleaseClaim: i.State.Claim.Length > 0, Pre: PreStep.SweepNative, Binding: BindingChange.ClearAll));
+        return new StepPlan(StepKind.Transit, new TransitionSpec("X10", KeyMoveStates.Off, "none", 0, WayBack: true, ReleaseClaim: i.State.Claim.Length > 0, Pre: PreStep.SweepNative, Binding: BindingChange.ClearAll));
     }
 
     private static (List<(string Field, string Value)> Set, List<string> Delete) ResidueFields(StateRecord state, IReadOnlyDictionary<string, long> residue)
