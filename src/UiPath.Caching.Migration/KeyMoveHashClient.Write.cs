@@ -196,25 +196,22 @@ internal sealed partial class KeyMoveHashClient<T>
         }
     }
 
-    // A write with a deadline carries it as an absolute expiry; one whose life has passed is a delete.
     private WriteRun StartRun(WriteRun run)
     {
-        if (run.Kind is HashWriteKind.Replace or HashWriteKind.Merge && run.Options.Deadline is { } at)
+        if (run.Kind == HashWriteKind.Replace && IsExpired(run.Options.Deadline))
         {
-            // A remaining life that is a count below 1 ms is a delete; none is not.
-            if ((long)Math.Ceiling((at - _p.Clock.GetUtcNow()).TotalMilliseconds) < 1)
-            {
-                run.Kind = HashWriteKind.Delete;
-            }
-            else
-            {
-                run.ExpireAt = at.ToUnixTimeMilliseconds();
-                run.Absolute = at;
-            }
+            run.Kind = HashWriteKind.Delete;
+        }
+        else if (run.Options.Deadline is { } at)
+        {
+            run.ExpireAt = at.ToUnixTimeMilliseconds();
+            run.Absolute = at;
         }
 
         return run;
     }
+
+    private bool IsExpired(DateTimeOffset? deadline) => deadline is { } at && at <= _p.Clock.GetUtcNow();
 
     // One pass of a logical write: the state is settled, the source probed, the steps built, admitted and sent.
     private async ValueTask<Turn> WriteTurnAsync(WriteRun run, CancellationToken cancellationToken)
@@ -240,6 +237,11 @@ internal sealed partial class KeyMoveHashClient<T>
     private async ValueTask<Turn> SettleAndProbeAsync(WriteRun run, CancellationToken cancellationToken)
     {
         run.Plan = await SettleWaitAsync(run.Plan, cancellationToken).ConfigureAwait(false);
+        if (run.Kind == HashWriteKind.Merge && IsExpired(run.Absolute))
+        {
+            return Turn.Done(run.Applied ? Typed(WriteOutcome.Unknown) : WriteOutcome.NotSent);
+        }
+
         if (run.Plan.Mode == KeyMoveMode.Plain)
         {
             return Turn.Done(await PlainAsync(run.KeyName, run.Kind, run.Fields, run.Options, run.Names, cancellationToken).ConfigureAwait(false));
@@ -501,6 +503,11 @@ internal sealed partial class KeyMoveHashClient<T>
             return index != 0 ? (Pending(form, index), false) : (Typed(FirstStepFailure(form, failed)), false);
         }
 
+        if (form.Mode == HashCacheSetOption.HashReplace && sent.Code == MoveScripts.Late)
+        {
+            return (index == 0 && !form.Prior ? WriteOutcome.NotSent : Typed(WriteOutcome.Unknown), false);
+        }
+
         if (form.Steps[index] == HashWriteStep.DstWriteMarked && sent.Code is MoveScripts.RecordFull or MoveScripts.Late or MoveScripts.NoBinding)
         {
             return (MarkedWriteRefused(form, sent.Code), false);
@@ -611,10 +618,9 @@ internal sealed partial class KeyMoveHashClient<T>
             return StepSent.NotSent;
         }
 
-        // A retry of a write whose life has passed is never sent.
-        if (retry && form.Deadline is { } deadline && (long)Math.Ceiling((deadline - _p.Clock.GetUtcNow()).TotalMilliseconds) < 1 && step is HashWriteStep.SrcWrite or HashWriteStep.DstWrite or HashWriteStep.NativeWrite or HashWriteStep.DstWriteMarked)
+        if (ExpiredStep(form, step, retry) is { } expired)
         {
-            return new StepSent(MoveScripts.Superseded);
+            return expired;
         }
 
         var n = Native(form.KeyName);
@@ -632,6 +638,23 @@ internal sealed partial class KeyMoveHashClient<T>
         {
             return StepSent.Unknown;
         }
+    }
+
+    private StepSent? ExpiredStep(Form form, HashWriteStep step, bool retry)
+    {
+        if (!IsExpired(form.Deadline))
+        {
+            return null;
+        }
+
+        if (form.Mode == HashCacheSetOption.HashReplace)
+        {
+            return new StepSent(retry ? MoveScripts.Superseded : MoveScripts.Late);
+        }
+
+        return retry && step is HashWriteStep.SrcWrite or HashWriteStep.DstWrite or HashWriteStep.NativeWrite or HashWriteStep.DstWriteMarked
+            ? new StepSent(MoveScripts.Superseded)
+            : null;
     }
 
     private async ValueTask<long> StepScriptAsync(KeyMoveData data, Form form, HashWriteStep step, bool retry)

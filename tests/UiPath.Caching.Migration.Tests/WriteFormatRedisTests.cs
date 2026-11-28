@@ -52,6 +52,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
         {
             var server = _redis.GetServer(_redis.GetEndPoints()[0]);
             var keys = server.Keys(pattern: $"n:{_cacheName},c:*")
+                .Concat(server.Keys(pattern: $"h:{_cacheName},c:*"))
                 .Concat(server.Keys(pattern: $"mg:{{{ScopeTokens.For(_app)}:*"))
                 .Concat(server.Keys(pattern: $"{_app}:mg:*"));
             foreach (var key in keys)
@@ -71,6 +72,38 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
 
             await _redis.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task Plain_hash_writes_fills_and_metadata_refreshes_use_the_selected_group_format()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var format = "messagepack";
+        var clock = new ManualTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var node = NewNode("hash", () => true, () => format, clock: clock, includeHash: true);
+        var router = (Router)node.GetRequiredService<IRouter>();
+        var hash = router.GetHash<List<long>>("hash");
+        var value = new List<long> { 1, 2, 3 };
+        var fields = new Dictionary<string, List<long>?> { ["field"] = value };
+        var source = new LegacyHashSource(_redis!, _cacheName);
+        var early = source.RedisKey("early");
+        (await hash.SetAsync("early", fields, Lifetime, Ct)).Should().BeTrue();
+        ((byte[]?)await Db.HashGetAsync(early, "field")).Should().Equal(LegacyEnvelope.Write(value));
+
+        await UseSwitchedFormatAsync(router, clock);
+
+        var written = source.RedisKey("written");
+        (await hash.SetAsync("written", fields, Lifetime, Ct)).Should().BeTrue();
+        ((byte[]?)await Db.HashGetAsync(written, "field"))![0].Should().Be(TestFormatSerializer.Id);
+        (await hash.GetOrAddAsync("fill", _ => Task.FromResult<IDictionary<string, List<long>?>>(fields), Lifetime, Ct)).Should().BeEquivalentTo(fields);
+        ((byte[]?)await Db.HashGetAsync(source.RedisKey("fill"), "field"))![0].Should().Be(TestFormatSerializer.Id);
+        var metadata = new Dictionary<string, string?> { ["name"] = "value" };
+        (await hash.RefreshAsync("written", new HashCacheEntryOptions(TimeToLive: Lifetime, Metadata: metadata), Ct)).Should().BeTrue();
+        ((byte[]?)await Db.HashGetAsync(written, KnownFieldNames.MetadataKey))![0].Should().Be(TestFormatSerializer.Id);
+
+        format = "json";
+        (await hash.SetAsync("written", fields, Lifetime, Ct)).Should().BeTrue();
+        ((byte[]?)await Db.HashGetAsync(written, "field")).Should().Equal(LegacyEnvelope.Write(value));
     }
 
     [Fact]
@@ -323,7 +356,7 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
 
     private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
 
-    private ServiceProvider NewNode(string name, Func<bool> pinned, Func<string?> format, Func<bool>? useLibrary = null, bool deadLibrary = false, ISourceCache<List<long>>? source = null, Action<KeyMoveAlert>? moveAlert = null, TimeProvider? clock = null)
+    private ServiceProvider NewNode(string name, Func<bool> pinned, Func<string?> format, Func<bool>? useLibrary = null, bool deadLibrary = false, ISourceCache<List<long>>? source = null, Action<KeyMoveAlert>? moveAlert = null, TimeProvider? clock = null, bool includeHash = false)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -370,6 +403,12 @@ public sealed class WriteFormatRedisTests(RedisFixture fixture) : IAsyncLifetime
                     .UseEnvelope(new LegacyEnvelopeProxy())
                     .UseValueSerializers(stack => stack.AddValueSerializer("messagepack", [TestFormatSerializer.Id], _ => new TestFormatSerializer()))
                     .UseWriteFormatWhen(_ => format());
+                if (includeHash)
+                {
+                    var hash = new LegacyHashSource(_redis!, _cacheName);
+                    router.AddHash(new RouterHashCacheRegistration<List<long>> { Name = "hash", Group = "g", Source = hash, RedisKey = hash.RedisKey });
+                }
+
                 if (deadLibrary)
                 {
                     router.UseSourceConnection(() => Db);

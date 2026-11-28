@@ -49,11 +49,7 @@ internal sealed partial class RoutedHashCache<T> : IRouterParticipant, IRouterCl
 
     public async ValueTask ClearAsync(CancellationToken cancellationToken = default)
     {
-        if (_library.Moving)
-        {
-            throw new NotSupportedException($"Cache '{_registration.Name}' cannot be cleared by the router while its group's keys move: the move has its own clear, which closes the cache's gate on both sides.");
-        }
-
+        ThrowIfMoving();
         using var admission = _core.Admit();
         cancellationToken.ThrowIfCancellationRequested();
         Forget();
@@ -62,12 +58,19 @@ internal sealed partial class RoutedHashCache<T> : IRouterParticipant, IRouterCl
         await _fence.EnterClearAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfMoving();
             await _registration.Source.ClearAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            _fence.ExitClear();
-            Forget();
+            try
+            {
+                Forget();
+            }
+            finally
+            {
+                _fence.ExitClear();
+            }
         }
     }
 
@@ -98,10 +101,19 @@ internal sealed partial class RoutedHashCache<T> : IRouterParticipant, IRouterCl
 
     public Task FlushAsync() => _pending.FlushAsync();
 
+    private void ThrowIfMoving()
+    {
+        if (_library.Moving)
+        {
+            throw new NotSupportedException($"Cache '{_registration.Name}' cannot be cleared by the router while its group's keys move: the move has its own clear, which closes the cache's gate on both sides.");
+        }
+    }
+
     private IHashPathClient<T> LibraryClient(LibraryParts library)
     {
         var store = library.HashStore ?? throw new InvalidOperationException($"The router has no library hash cache for '{_registration.Name}'.");
-        var plain = new LibraryHashPathClient<T>(store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin) { Cache = library.HashCache, Tier = library.HashTier };
+        Func<WriteLease>? writePolicy = _core.WriteFormats is { } formats && _pin is { } pin ? () => formats.Select(pin) : null;
+        var plain = new LibraryHashPathClient<T>(store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin) { Cache = library.HashCache, Tier = library.HashTier, WritePolicy = writePolicy };
 
         // A registration that carries its own binding keeps it; otherwise the key move setup binds the library's codecs.
         var binding = _registration.KeyMove ?? library.Binder?.BindHash<T>(_registration.Name, _registration.MaxHashFields);
@@ -141,9 +153,9 @@ internal sealed partial class RoutedHashCache<T> : IRouterParticipant, IRouterCl
     /// <summary>A caller that starts now must not join a load that began before, and a load that began before must not write.</summary>
     private void DetachKey(string key)
     {
+        _keys.Advance(key);
         _library.KeyChanged(key);
         _flights.TryRemove(key, out _);
-        _keys.Advance(key);
     }
 
     private IHashPathClient<T> Client(RoutePath path) => path == RoutePath.Library ? _library : _source;

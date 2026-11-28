@@ -45,7 +45,7 @@ internal sealed class SourceHashPathClient<T>(ISourceHashCache<T> source, string
 
         try
         {
-            return await source.SetAsync(key, fields, options.Mode, options.Deadline is { } at ? CacheExpiry.At(at) : CacheExpiry.Default, cancellationToken).ConfigureAwait(false);
+            return await source.SetAsync(key, fields, options.Mode, CacheExpiry.At(options.Deadline ?? DateTimeOffset.MaxValue), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {

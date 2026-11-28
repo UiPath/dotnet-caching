@@ -76,7 +76,7 @@ public sealed class HashCacheContractTests : RouterTestBase
         (await node.Surface.SetAsync("k", fields, Life, Ct)).Should().BeTrue();
         target.LastOptions.Should().Be(new HashWriteOptions(HashCacheSetOption.KeyReplace, Clock.GetUtcNow() + Life));
         (await node.Surface.SetAsync("k", fields, new HashCacheEntryOptions(SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
-        target.LastOptions.Should().Be(new HashWriteOptions(HashCacheSetOption.HashReplace, null));
+        target.LastOptions.Should().Be(new HashWriteOptions(HashCacheSetOption.HashReplace, mode == "library" ? null : DateTimeOffset.MaxValue));
         (await node.Surface.SetAsync("k", fields, new HashCacheEntryOptions(TimeToLive: Life, SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
         target.LastOptions.Should().Be(new HashWriteOptions(HashCacheSetOption.HashReplace, Clock.GetUtcNow() + Life));
         (await node.Surface.SetAsync("k", fields, Clock.GetUtcNow().AddHours(1), Ct)).Should().BeTrue();
@@ -181,7 +181,7 @@ public sealed class HashCacheContractTests : RouterTestBase
 
         await node.Surface.SetAsync("k", new Dictionary<string, Item?> { ["a"] = new Item("1") }, DateTimeOffset.MaxValue, Ct);
 
-        target.LastOptions.GetValueOrDefault().Deadline.Should().BeNull();
+        target.LastOptions.GetValueOrDefault().Deadline.Should().Be(mode == "library" ? null : DateTimeOffset.MaxValue);
     }
 
     [Theory]
@@ -696,6 +696,157 @@ public sealed class HashCacheContractTests : RouterTestBase
 
             others.Should().OnlyContain(f => f.Count == 1 && f.ContainsKey("g"), $"round {round}");
         }
+    }
+
+    [Fact]
+    public async Task A_fill_started_during_clear_stays_fenced_until_its_epoch_is_invalidated()
+    {
+        var (node, library, source) = Node("library");
+        var generated = new TaskCompletionSource<IDictionary<string, Item?>>();
+        Task<IDictionary<string, Item?>>? fill = null;
+        source.BeforeClear = () =>
+        {
+            fill = node.Surface.GetOrAddAsync("key", _ => generated.Task, Ct).AsTask();
+            library.OnGap = () => generated.SetResult(new Dictionary<string, Item?> { ["field"] = new Item("old") });
+        };
+
+        await Task.Run(() => node.Router.ClearAsync(node.CacheName, Ct), Ct);
+        (await fill!).Should().ContainKey("field");
+
+        library.Fills.Should().Be(0);
+        Hashes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task An_unknown_fallback_write_uses_the_fallback_clients_retry_task()
+    {
+        var (node, source, library) = Node("source");
+        source.WriteOutcome = WriteOutcome.NotSent;
+        library.WriteOutcome = WriteOutcome.Unknown;
+        var retry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var settledKeys = new List<string>();
+        library.Settled = key =>
+        {
+            settledKeys.Add(key);
+            return retry.Task;
+        };
+
+        (await node.Surface.SetAsync("key", new Dictionary<string, Item?> { ["field"] = new("value") }, Ct)).Should().BeFalse();
+        retry.SetResult();
+
+        settledKeys.Should().Equal("key");
+    }
+
+    [Fact]
+    public async Task A_merge_that_expires_behind_another_write_leaves_the_hash_alone()
+    {
+        var (node, library, _) = Node("library");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        library.BeforeWrite = () => release.Task;
+        var first = node.Surface.SetAsync("key", new Dictionary<string, Item?> { ["kept"] = new("value") }, Ct).AsTask();
+        var options = new HashCacheEntryOptions(ExpireTime: Clock.GetUtcNow() + Life, SetOption: HashCacheSetOption.HashReplace);
+        var merge = node.Surface.SetAsync("key", new Dictionary<string, Item?> { ["late"] = new("value") }, options, Ct).AsTask();
+
+        Clock.Advance(Life);
+        release.SetResult();
+
+        (await first).Should().BeTrue();
+        (await merge).Should().BeFalse();
+        Hashes["key"].Fields.Keys.Should().Equal("kept");
+        library.Writes.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_clear_waiting_for_a_write_refuses_when_the_keys_begin_moving()
+    {
+        var (node, library, source) = Node("library");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        library.BeforeWrite = () => release.Task;
+        var write = node.Surface.SetAsync("key", new Dictionary<string, Item?> { ["field"] = new("value") }, Ct).AsTask();
+        var clear = node.Router.ClearAsync(node.CacheName, Ct);
+
+        library.Moving = true;
+        release.SetResult();
+
+        (await write).Should().BeTrue();
+        await FluentActions.Awaiting(() => clear).Should().ThrowAsync<NotSupportedException>();
+        source.Clears.Should().Be(0);
+        (await node.Surface.ContainsAsync("key", Ct)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_key_eviction_invalidates_a_load_before_the_client_drops_its_hint()
+    {
+        var (node, library, _) = Node("library");
+        var generated = new TaskCompletionSource<IDictionary<string, Item?>>();
+        var fill = node.Surface.GetOrAddAsync("key", _ => generated.Task, Ct).AsTask();
+        library.OnKeyChanged = () => generated.TrySetResult(new Dictionary<string, Item?> { ["field"] = new("old") });
+
+        await Task.Run(() => node.Cache.EvictLocal("key"), Ct);
+        (await fill).Should().ContainKey("field");
+
+        library.Fills.Should().Be(0);
+        Hashes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_library_empty_marker_answers_an_unreadable_source_without_running_a_generator()
+    {
+        var (node, source, _) = Node("source");
+        source.ReadOverride = ReadOutcome.Unreadable;
+        var expires = Clock.GetUtcNow() + Life;
+        Hashes["marker"] = new StoredHash { CachedEmpty = true, Expiration = expires };
+
+        var entry = await node.Surface.GetCacheEntryAsync("marker", Ct);
+        entry.Found.Should().BeTrue();
+        entry.Expiration.Should().Be(expires);
+        (await node.Surface.GetOrAddAsync("marker", _ => throw new InvalidOperationException("The marker already answered."), Ct)).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("source")]
+    [InlineData("bypass")]
+    public async Task A_selected_read_distinguishes_a_source_timeout_from_a_confirmed_miss(string mode)
+    {
+        var (node, source, _) = Node(mode);
+
+        (await node.Surface.GetAsync("key", ["field"], Ct)).Should().Contain("field", null);
+        source.Failure = new TimeoutException("Read timed out.");
+
+        (await node.Surface.GetAsync("key", ["field"], Ct)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task The_flight_leader_gets_a_private_copy_of_the_generated_dictionary()
+    {
+        var (node, _, _) = Node("library");
+        IDictionary<string, Item?> generated = new Dictionary<string, Item?> { ["field"] = new("value") };
+
+        var result = await node.Surface.GetOrAddAsync("key", _ => Task.FromResult(generated), Ct);
+        result.Clear();
+
+        generated.Should().ContainKey("field");
+    }
+
+    [Fact]
+    public async Task Closure_overloads_reject_a_null_generator_even_on_a_hit()
+    {
+        var (node, library, _) = Node("library");
+        Seed("key", ("field", "value"));
+        Func<CancellationToken, Task<IDictionary<string, Item?>>> generator = null!;
+        var calls = new Func<Task>[]
+        {
+            () => node.Surface.GetOrAddAsync("key", generator, Ct).AsTask(),
+            () => node.Surface.GetOrAddAsync("key", generator, Life, Ct).AsTask(),
+            () => node.Surface.GetOrAddAsync("key", generator, Clock.GetUtcNow() + Life, Ct).AsTask(),
+        };
+
+        foreach (var call in calls)
+        {
+            await call.Should().ThrowAsync<ArgumentNullException>().WithParameterName("generator");
+        }
+
+        library.Reads.Should().Be(0);
     }
 
     [Fact]

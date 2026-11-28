@@ -90,7 +90,6 @@ internal sealed partial class RoutedHashCache<T>
             return expiry;
         }
 
-        // No default means no expiry, told as the maximum date, which every client takes.
         return _registration.DefaultExpiry is { } life ? CacheExpiry.After(life) : CacheExpiry.At(DateTimeOffset.MaxValue);
     }
 
@@ -199,15 +198,18 @@ internal sealed partial class RoutedHashCache<T>
     {
         HashFields.ValidateForWrite(values);
         using var admission = Admit(out var route);
-        var deadline = Deadline(expiry);
+        token.ThrowIfCancellationRequested();
+        if (mode == HashCacheSetOption.HashReplace && values.Count == 0)
+        {
+            return true;
+        }
 
+        var options = new HashWriteOptions(mode, Deadline(expiry), metadata);
         // The source cannot keep metadata, so a write that carries it never goes there from the library.
         var path = metadata is null ? route : route with { NoFallback = true };
         try
         {
-            var outcome = deadline is { } at && at <= _core.Clock.GetUtcNow()
-                ? await PastWriteAsync(key, mode, path, token).ConfigureAwait(false)
-                : await MutateAsync(key, path, (client, ct) => client.SetAsync(key, values, new HashWriteOptions(mode, deadline, metadata), ct), null, token).ConfigureAwait(false);
+            var outcome = await MutateAsync(key, path, (client, ct) => StoreOnClientAsync(client, key, values, options, ct), null, token).ConfigureAwait(false);
             return outcome == WriteOutcome.Committed;
         }
         catch (CacheUnavailableException)
@@ -216,9 +218,15 @@ internal sealed partial class RoutedHashCache<T>
         }
     }
 
-    // A deadline that has passed replaces the key with nothing, as the older client ends up doing; a merge has nothing to replace and writes nothing.
-    private ValueTask<WriteOutcome> PastWriteAsync(string key, HashCacheSetOption mode, Route route, CancellationToken token) =>
-        mode == HashCacheSetOption.KeyReplace ? MutateAsync(key, route, (client, ct) => client.RemoveAsync(key, ct), null, token) : ValueTask.FromResult(WriteOutcome.NotSent);
+    private ValueTask<WriteResult> StoreOnClientAsync(IHashPathClient<T> client, string key, IDictionary<string, T?> values, HashWriteOptions options, CancellationToken token)
+    {
+        if (options.Deadline is not { } at || at > _core.Clock.GetUtcNow())
+        {
+            return client.SetAsync(key, values, options, token);
+        }
+
+        return options.Mode == HashCacheSetOption.KeyReplace ? client.RemoveAsync(key, token) : ValueTask.FromResult<WriteResult>(WriteOutcome.NotSent);
+    }
 
     private async ValueTask<bool> RefreshedAsync(string key, CacheExpiry expiry, bool withMetadata, IDictionary<string, string?>? metadata, CancellationToken token)
     {

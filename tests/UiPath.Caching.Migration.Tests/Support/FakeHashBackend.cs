@@ -46,6 +46,14 @@ internal sealed class FakeHashBackend(Dictionary<string, StoredHash> store, Manu
 
     public Func<Task>? AfterRead { get; set; }
 
+    public Func<Task>? BeforeWrite { get; set; }
+
+    public Action? OnGap { get; set; }
+
+    public Action? OnKeyChanged { get; set; }
+
+    public Action? BeforeClear { get; set; }
+
     public bool KeepsStoredOnFill => true;
 
     public int Reads { get; private set; }
@@ -130,6 +138,11 @@ internal sealed class FakeHashBackend(Dictionary<string, StoredHash> store, Manu
         ThrowIfFailing();
         LastOptions = options;
         Note($"set:{key}:{options.Mode}");
+        if (BeforeWrite is { } gate)
+        {
+            await gate().ConfigureAwait(false);
+        }
+
         await Task.Yield();
         return Result(Apply(WriteOutcome, () => Put(key, fields, options)));
     }
@@ -184,6 +197,10 @@ internal sealed class FakeHashBackend(Dictionary<string, StoredHash> store, Manu
 
     public Task SettledAsync(string key) => Settled?.Invoke(key) ?? PathClientTasks.NoPendingRetry;
 
+    public void Gap() => OnGap?.Invoke();
+
+    public void KeyChanged(string key) => OnKeyChanged?.Invoke();
+
     async ValueTask<SourceRead<IDictionary<string, Item?>>> ISourceHashCache<Item>.GetAsync(string key, string[]? fields, CancellationToken cancellationToken)
     {
         var read = await ReadAsync(key, fields, cancellationToken).ConfigureAwait(false);
@@ -202,6 +219,7 @@ internal sealed class FakeHashBackend(Dictionary<string, StoredHash> store, Manu
     public ValueTask ClearAsync(CancellationToken cancellationToken)
     {
         Clears++;
+        BeforeClear?.Invoke();
         lock (store)
         {
             store.Clear();

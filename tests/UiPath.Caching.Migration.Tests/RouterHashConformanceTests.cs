@@ -26,16 +26,60 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private TimeProvider Clock => _nodes[^1].GetRequiredService<TimeProvider>();
+    private ManualTimeProvider Clock => (ManualTimeProvider)_nodes[^1].GetRequiredService<TimeProvider>();
 
     private IDatabase Db => _redis!.GetDatabase();
+
+    [Fact]
+    public async Task An_empty_merge_preserves_the_fields_and_expiry()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        _library = true;
+        var cache = Cache(NewNode());
+        var deadline = Clock.GetUtcNow() + Life;
+        var original = Fields(("kept", "1"));
+        (await cache.SetAsync("key", original, deadline, Ct)).Should().BeTrue();
+
+        Clock.Advance(TimeSpan.FromMinutes(1));
+        (await cache.SetAsync("key", Fields(), new HashCacheEntryOptions(SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
+
+        (await cache.GetAsync("key", Ct)).Should().BeEquivalentTo(original);
+        (await cache.ExpireTimeAsync("key", Ct)).Should().BeCloseTo(deadline, TimeSpan.FromSeconds(1));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Source_and_library_merges_agree_on_default_explicit_and_unbounded_lifetimes(bool hasDefault)
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var cache = Cache(NewNode(hasDefault));
+        var seededDeadline = Clock.GetUtcNow() + TimeSpan.FromHours(1);
+        var explicitDeadline = Clock.GetUtcNow() + TimeSpan.FromMinutes(10);
+        var key = RedisKeyOf("key");
+        foreach (var library in new[] { false, true })
+        {
+            _library = library;
+            foreach (var expiration in new DateTimeOffset?[] { null, DateTimeOffset.MaxValue, explicitDeadline })
+            {
+                (await cache.SetAsync("key", Fields(("kept", "1")), seededDeadline, Ct)).Should().BeTrue();
+                Clock.Advance(TimeSpan.FromMinutes(1));
+                var merge = new HashCacheEntryOptions(ExpireTime: expiration, SetOption: HashCacheSetOption.HashReplace);
+                (await cache.SetAsync("key", Fields(("added", "2")), merge, Ct)).Should().BeTrue();
+
+                var expected = expiration ?? (hasDefault ? Clock.GetUtcNow() + Life : DateTimeOffset.MaxValue);
+                (await Db.KeyExpireTimeAsync(key)).Should().Be(expected == DateTimeOffset.MaxValue ? null : expected.UtcDateTime);
+            }
+        }
+    }
 
     public async ValueTask InitializeAsync()
     {
         if (fixture.Enabled)
         {
             _redis = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
-            _serverTime = await _redis.GetServer(_redis.GetEndPoints()[0]).TimeAsync();
+            var serverTime = await _redis.GetServer(_redis.GetEndPoints()[0]).TimeAsync();
+            _serverTime = DateTimeOffset.FromUnixTimeMilliseconds(new DateTimeOffset(serverTime).ToUnixTimeMilliseconds());
         }
     }
 
@@ -116,7 +160,7 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
         await SameHashAsync("viasource", "vialibrary");
         _library = true;
         (await cache.RefreshAsync("vialibrary", later, Ct)).Should().BeTrue();
-        (await Db.KeyTimeToLiveAsync(RedisKeyOf("vialibrary")))!.Value.Should().BeCloseTo(later - Clock.GetUtcNow(), TimeSpan.FromSeconds(5));
+        (await Db.KeyExpireTimeAsync(RedisKeyOf("vialibrary"))).Should().Be(later.UtcDateTime);
         (await cache.GetAsync("vialibrary", Ct)).Keys.Should().BeEquivalentTo("b", "c", "d");
     }
 
@@ -142,6 +186,7 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
         var routed = (RoutedHashCache<List<long>>)Cache(node);
         await RouterTestBase.WaitForLibraryAsync(node.GetRequiredService<IRouter>(), Ct);
 
+        routed.IsSubscribed.Should().BeTrue();
         _library = true;
         IHashCache<List<long>> surface = routed;
         var native = ((LibraryHashPathClient<List<long>>)routed.Library).Cache!;
@@ -197,16 +242,11 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
             b[name].Should().Equal(bytes, $"the same bytes in field {name}");
         }
 
-        var ttlA = await Db.KeyTimeToLiveAsync(RedisKeyOf(expected));
-        var ttlB = await Db.KeyTimeToLiveAsync(RedisKeyOf(actual));
-        (ttlA is null).Should().Be(ttlB is null);
-        if (ttlA is { } left && ttlB is { } right)
-        {
-            right.Should().BeCloseTo(left, TimeSpan.FromSeconds(2));
-        }
+        var deadline = await Db.KeyExpireTimeAsync(RedisKeyOf(expected));
+        (await Db.KeyExpireTimeAsync(RedisKeyOf(actual))).Should().Be(deadline);
     }
 
-    private ServiceProvider NewNode()
+    private ServiceProvider NewNode(bool hasDefault = true)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -226,7 +266,7 @@ public sealed class RouterHashConformanceTests(RedisFixture fixture) : IAsyncLif
         services.AddCachingRouter(
             configuration,
             router => router
-                .AddHash(new RouterHashCacheRegistration<List<long>> { Name = "lists", Group = "g", Source = source, RedisKey = source.RedisKey, DefaultExpiry = Life })
+                .AddHash(new RouterHashCacheRegistration<List<long>> { Name = "lists", Group = "g", Source = source, RedisKey = source.RedisKey, DefaultExpiry = hasDefault ? Life : null })
                 .UseLibraryWhen(_ => _library)
                 .UseEnvelope(new LegacyEnvelopeProxy()));
         var provider = services.BuildServiceProvider();
